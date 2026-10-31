@@ -1458,11 +1458,17 @@ class _DocGen:
     """Builds a document line by line together with the value it must parse to (T2 oracle).
 
     The rules here are the generator's own reading of the brief and the ruled grammar; they
-    never call parse or emit. Alphabet (per value, owner ruling Q-yamlsub-2): every P2 character;
-    each P5 indicator (':', '- ', ',', '#', '|', '|-') followed by space, tab, end of line, NBSP
-    and another indicator; every P6 first character, '- ' and '? ' included; the P10 block forms
-    with leading, whitespace-only, over-indented and tabbed blank lines; CRLF through load.
+    never call parse or emit. Alphabet (owner rulings Q-yamlsub-2 and Q-yamlsub-3), each item
+    recorded in ``seen`` as it is generated and asserted complete by TestOracle.test_oracle_fuzz:
+    every (P5 indicator, P5 follower) pair, indicators ':', '-', ',', '#', '|', '|-' and followers
+    space, tab, end of line, NBSP, another indicator; every P6 first character, '- ', '? ' and ': '
+    included; the P10 forms (|+, |2, >, >- headers; leading, whitespace-only, over-indented and tabbed
+    blank lines). The test also checks every P2 code point in an accepted document and every P3 code
+    point in a refused one, and loads every accepted document with CRLF line ends.
     """
+    FOLLOW = {" ": "space", "\t": "tab", "": "eol", "\xa0": "nbsp"}
+    IND_CHARS = set(":-,#|?[]{}&*!>%@`'\"")
+    PAIRS = {(i, f) for i in (":", "-", ",", "#", "|", "|-") for f in ("space", "tab", "eol", "nbsp", "indicator")}
     LETTERS = "abcxyz"
     UNI = ["\xa0", "　", " ", " ", "\x85", "​", "﻿"]  # P2 minus space and tab
     INNER = list("-?'\"&*!|>%@`.") + ["#"]  # never first; '#' only after a non-blank
@@ -1471,12 +1477,22 @@ class _DocGen:
     def __init__(self, rnd):
         self.r = rnd
         self.lines = []  # [text, tags]; tags: dict with 'sep', 'item', 'bhead', 'val' column indexes
+        self.seen = set()  # ('pair', indicator, follower class), ('P6', start), ('P10', form)
+
+    def pair(self, ind, nxt):
+        """Record that indicator ind was generated followed by the character nxt ('' = end of line)."""
+        f = self.FOLLOW.get(nxt) or ("indicator" if nxt in self.IND_CHARS else None)
+        if f is not None:
+            self.seen.add(("pair", ind, f))
 
     # ---- scalars
     def plain(self, flow=False):
         r = self.r
         first = r.choice([r.choice(self.LETTERS), r.choice(self.UNI), r.choice("-?:") + r.choice(self.LETTERS),
-                          r.choice("-?:") + r.choice(self.UNI)])  # P5/P6: '-', '?', ':' then NBSP etc.: plain
+                          r.choice("-?:") + r.choice(self.UNI),  # P5/P6: '-', '?', ':' then NBSP etc.: plain
+                          "-" + r.choice("#|:?") + r.choice(self.LETTERS)])  # '-' then another indicator: plain
+        if first[0] in "-:" and len(first) > 1:
+            self.pair(first[0], first[1])
         out = [first]
         for _ in range(r.randint(0, 6)):
             k = r.random()
@@ -1490,6 +1506,7 @@ class _DocGen:
                 # P5: ':' then a non-blank (letter, NBSP and friends, another indicator) is content
                 out.append(":" + r.choice([r.choice(self.LETTERS), r.choice(self.UNI),
                                            r.choice("-:#" if flow else "-:#,[") + r.choice(self.LETTERS)]))
+                self.pair(":", out[-1][1])
             else:
                 c = r.choice(self.INNER)
                 out.append(c)
@@ -1544,8 +1561,10 @@ class _DocGen:
         r = self.r
         if r.random() < 0.6:
             return ""
-        body = "".join(r.choice(self.UNI + list(self.LETTERS) + [" ", "\t", "#", ":", "-", "|"]) for _ in range(4))
-        # after '- ' a tab is refused (TestTabSeparators.test_tab_after_dash), so never ' \t' there
+        body = "".join(r.choice(self.UNI + list(self.LETTERS) + [" ", "\t", "#", ":", "-", "|"])
+                       for _ in range(r.randint(0, 4)))
+        self.pair("#", body[:1])
+        # after ':' or '- ' a tab is refused (U1), so never ' \t' there
         return r.choice([" ", "  "] if after_indicator else [" ", "  ", "\t", " \t"]) + "#" + body
 
     # ---- nodes
@@ -1557,7 +1576,11 @@ class _DocGen:
         if r.random() < 0.15:
             # a blank line of at most one space: never deeper than a block scalar's content indent,
             # where it would be content (TestBlockScalarBlankLines)
-            self.add(r.choice(["", " ", "# " + r.choice(self.UNI) + "\t#"]))
+            line = r.choice(["", " ", "# " + r.choice(self.UNI) + "\t#"])
+            if line.startswith("#"):
+                self.pair("#", " ")
+                self.pair("#", "")
+            self.add(line)
 
     def block_str(self):
         """(header, body lines, value) for a | or |- block scalar; '' marks a blank line.
@@ -1566,6 +1589,8 @@ class _DocGen:
         ' #' stays content (Q-yamlsub-1)."""
         r = self.r
         lines = [""] * (r.randint(1, 2) if r.random() < 0.25 else 0)
+        if lines:
+            self.seen.add(("P10", "leading blank"))
         n = r.randint(1, 4)
         for i in range(n):
             if 0 < i < n - 1 and r.random() < 0.2:
@@ -1582,7 +1607,10 @@ class _DocGen:
     def block_body(self, body, ci):
         """Add the body lines at content indent ci; a blank line is '' or at most ci spaces."""
         for ln in body:
-            self.add(" " * ci + ln if ln else " " * self.r.choice([0, 0, self.r.randint(0, ci)]))
+            blank = " " * self.r.choice([0, 0, self.r.randint(0, ci)])
+            if not ln and blank:
+                self.seen.add(("P10", "whitespace-only blank"))
+            self.add(" " * ci + ln if ln else blank)
 
     def value_after(self, prefix, indent, depth, tags):
         """Emit the line starting with prefix ('k:' or '-') and the value after it; return the value."""
@@ -1592,9 +1620,13 @@ class _DocGen:
             text, v = self.scalar()
             sp = r.choice([" ", "  "])
             self.add(prefix + sp + text + self.comment(), val=len(prefix) + len(sp), ws=len(prefix), **tags)
+            self.pair(prefix[-1], " ")
             return v
         if k < 0.55:
             items = [self.scalar(flow=True) for _ in range(r.randint(0, 3))]
+            if items and r.random() < 0.3:  # an item starting with NBSP: after ',' it is content (P5)
+                c = r.choice(self.LETTERS)
+                items.insert(r.randint(1, len(items)), ("\xa0" + c, "\xa0" + c))
             sep = r.choice([", ", ",", " , "])
             text = "[" + sep.join(t for t, _ in items) + "]"
             base = len(prefix) + 1
@@ -1605,21 +1637,28 @@ class _DocGen:
                 if n + 1 < len(items):
                     commas.append(at + len(t) + sep.index(","))
                 at += len(t) + len(sep)
-            self.add(prefix + " " + text + self.comment(), val=base, ws=len(prefix),
-                     flow=(starts or [base + 1], commas, bool(items), ends), **tags)
+            line = prefix + " " + text + self.comment()
+            for c in commas:
+                self.pair(",", line[c + 1])
+            self.pair(prefix[-1], " ")
+            self.add(line, val=base, ws=len(prefix), flow=(starts or [base + 1], commas, bool(items), ends), **tags)
             return [v for _, v in items]
         if k < 0.65:
             header, body, v = self.block_str()
             ci = indent + r.randint(1, 3)
             # P5: '|' / '|-' then space, tab or end of line, before an optional comment
-            self.add(prefix + " " + header + r.choice(["", "", " ", "\t", " \t"]) + self.comment(),
+            after = r.choice(["", "", " ", "\t", " \t"]) + self.comment()
+            self.pair(header, after[:1])
+            self.pair(prefix[-1], " ")
+            self.add(prefix + " " + header + after,
                      val=len(prefix) + 1, ws=len(prefix), bhead=len(prefix) + 1, bbody=(ci, len(body)), **tags)
             self.block_body(body, ci)
             return v
-        if k < 0.7:
-            self.add(prefix + self.comment(True), **tags)  # empty value
+        after = self.comment(True)
+        self.pair(prefix[-1], after[:1])
+        self.add(prefix + after, empty=len(prefix), **tags)
+        if k < 0.7:  # empty value
             return None
-        self.add(prefix + self.comment(True), **tags)
         child = indent + r.randint(1, 3)
         if r.random() < 0.5:
             return self.mapping(child, depth + 1)
@@ -1688,7 +1727,9 @@ class _DocGen:
             self.add(text + self.comment(), val=0)
         else:
             header, body, v = self.block_str()
-            self.add(header + self.r.choice(["", " ", "\t"]), val=0, bhead=0, bbody=(2, len(body)))
+            after = self.r.choice(["", " ", "\t"])
+            self.pair(header, after)
+            self.add(header + after, val=0, bhead=0, bbody=(2, len(body)))
             self.block_body(body, 2)
         self.maybe_noise()
         return "\n".join(t for t, _ in self.lines) + self.r.choice(["", "\n"]), v
@@ -1704,7 +1745,9 @@ class _DocGen:
         if tags.get("item") is not None and text[tags["item"] + 1:tags["item"] + 2] == " ":
             kinds.append("tabdash")
         if tags.get("bhead") is not None:
-            kinds.append("bhead")
+            kinds += ["bhead", "bheadtail", "bheadtail"]
+        if tags.get("empty") is not None:
+            kinds.append("tabeol")  # U1
         if tags.get("val") is not None:
             kinds.append("badval")
         if tags.get("key") is not None:
@@ -1713,30 +1756,48 @@ class _DocGen:
         if lead:
             kinds += ["tablead", "indstart"]  # D5; P6 '- ' / '? ' / ': ' starts
         if tags.get("flow") is not None:
-            kinds += ["flowcomment", "tabcomma", "flowstart"]
+            kinds += ["flowcomment", "tabcomma", "flowstart", "commaeol"]
         if tags.get("bbody") is not None:
             kinds += ["bdeep", "btab"]
         kind = r.choice(kinds)
         fragment = None
         if kind == "ctl":
-            c = r.choice([chr(i) for i in range(0x20) if i not in (9, 10)] + ["\x7f", "\ud800", "\r"])
+            c = r.choice([chr(i) for i in range(0x20) if i not in (9, 10)] + ["\x7f", "\ud800", "\udfff", "\r"])
             p = r.randint(0, len(text))
             text = text[:p] + c + text[p:]
         elif kind == "tabsep":
             p = tags["sep"]
             text, fragment = text[:p + 1] + "\t" + text[p + 2:], "tab"
+            self.pair(":", "\t")
         elif kind == "tabdash":
             p = tags["item"]
             text, fragment = text[:p + 1] + "\t" + text[p + 2:], "tab"
+            self.pair("-", "\t")
         elif kind == "bhead":
+            p, bad = tags["bhead"], r.choice([">", "|+", "|2", ">-"])
+            text = text[:p] + bad + text[p + (2 if text[p:p + 2] == "|-" else 1):]
+            self.seen.add(("P10", bad))
+        elif kind == "bheadtail":  # U2: after '|'/'|-' only spaces, a tab, ' #' or the end of the line
             p = tags["bhead"]
-            text = text[:p] + r.choice([">", "|+", "|2", ">-"]) + text[p + (2 if text[p:p + 2] == "|-" else 1):]
+            hdr = "|-" if text[p:p + 2] == "|-" else "|"
+            c = r.choice(["\xa0", r.choice(self.UNI + list("#|:,>?[") + (["-"] if hdr == "|-" else []))])
+            text, fragment = text[:p + len(hdr)] + c + text[p + len(hdr):], "block scalar header"
+            self.pair(hdr, c)
+        elif kind == "tabeol":  # U1: a tab after ':' or '-' with nothing (or only a comment) after it
+            p = tags["empty"]
+            self.pair(text[p - 1], "\t")
+            text, fragment = text[:p] + r.choice(["\t", " \t", "\t "]) + text[p:], "tab"
+        elif kind == "commaeol" and tags["flow"][1]:  # ',' then end of line: unterminated (D7)
+            p = r.choice(tags["flow"][1]) + 1
+            text, fragment = text[:p], "unterminated"
+            self.pair(",", "")
         elif kind == "tablead":  # a tab anywhere in the whitespace between ':'/'-' and the value
             p = r.randint(tags["ws"] + 1, tags["val"])
             text, fragment = text[:p] + "\t" + text[p:], "tab"
         elif kind == "indstart":
             ind = r.choice(["- ", "? ", ": "] if tags.get("sep") is not None else ["? ", ": "])
             text = text[:tags["val"]] + ind + text[tags["val"]:]
+            self.seen.add(("P6", ind))
         elif kind == "flowcomment":  # ' #' in a flow sequence starts a comment, which it cannot hold
             p = r.choice(tags["flow"][0] + tags["flow"][3])  # before an item, or after one
             text = text[:p] + " #" + r.choice(self.LETTERS) + text[p:]
@@ -1745,6 +1806,7 @@ class _DocGen:
         elif kind == "tabcomma" and tags["flow"][1]:
             p = r.choice(tags["flow"][1]) + 1
             text, fragment = text[:p] + "\t" + text[p:], "tab"
+            self.pair(",", "\t")
         elif kind == "flowstart" and tags["flow"][2]:  # D4: '#' or '|' first in a flow item
             p, c = r.choice(tags["flow"][0]), r.choice("#|")
             fragment = "comment" if c == "#" and text[p - 1] == " " else "may not start with"
@@ -1753,16 +1815,19 @@ class _DocGen:
             ci, nbody = tags["bbody"]
             if kind == "bdeep":
                 at, ln, fragment = idx + 1, " " * (ci + r.randint(1, 2)), "deeper"
+                self.seen.add(("P10", "over-indented leading blank"))
             else:
+                self.seen.add(("P10", "tab in a blank line"))
                 at, fragment = idx + 1 + r.randint(0, nbody), "tab"
                 ln = r.choice(["\t", " \t", "\t ", " " * ci + "\t"])
             self.lines.insert(at, [ln, {}])
             return "\n".join(t for t, _ in self.lines) + "\n", at + 1, fragment
-        elif kind in ("tabcomma", "flowstart"):  # no ',' or no item on this flow line: a control character
+        elif kind in ("tabcomma", "flowstart", "commaeol"):  # no ',' or no item on this line: a control character
             text = text[:1] + "\x01" + text[1:]
         else:
-            p = tags["val"] if kind == "badval" else tags["key"]
-            text = text[:p] + r.choice(self.BAD_START) + text[p:]
+            p, c = (tags["val"] if kind == "badval" else tags["key"]), r.choice(self.BAD_START)
+            text = text[:p] + c + text[p:]
+            self.seen.add(("P6", c))
         self.lines[idx][0] = text
         return "\n".join(t for t, _ in self.lines) + "\n", idx + 1, fragment
 
@@ -1773,6 +1838,7 @@ class TestOracle(unittest.TestCase):
     def test_oracle_fuzz(self):
         rnd = random.Random(20261031)
         accepted = refused = 0
+        seen, accepted_chars, refused_chars = set(), set(), set()
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "crlf.yml")
             for _ in range(1500):
@@ -1787,7 +1853,10 @@ class TestOracle(unittest.TestCase):
                     fh.write(data)
                 self.assertEqual(load(p, "crlf.yml"), want, repr(data))
                 accepted += 1
+                accepted_chars.update(text)
                 bad, line, fragment = g.refusal()
+                refused_chars.update(bad)
+                seen |= g.seen
                 with self.assertRaises(YamlError, msg=repr(bad)) as cm:
                     parse(bad)
                 self.assertEqual(cm.exception.line, line, repr(bad) + " " + str(cm.exception))
@@ -1795,6 +1864,14 @@ class TestOracle(unittest.TestCase):
                     self.assertIn(fragment, cm.exception.reason, repr(bad))
                 refused += 1
         self.assertEqual((accepted, refused), (1500, 1500))
+        # Q-yamlsub-3: the alphabet the _DocGen docstring claims, each item generated at least once
+        self.assertEqual({x[1:] for x in seen if x[0] == "pair"}, _DocGen.PAIRS)
+        self.assertEqual({x[1] for x in seen if x[0] == "P6"}, set(_DocGen.BAD_START) | {"- ", "? ", ": "})
+        self.assertEqual({x[1] for x in seen if x[0] == "P10"},
+                         {"|+", "|2", ">", ">-", "leading blank", "whitespace-only blank",
+                          "over-indented leading blank", "tab in a blank line"})
+        self.assertEqual(set(P2_CHARS) - accepted_chars, set())
+        self.assertEqual(set(P3_CHARS) - refused_chars, set())
 
     def test_oracle_round_trip_through_a_file(self):
         rnd = random.Random(31102026)
