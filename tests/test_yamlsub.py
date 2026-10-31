@@ -386,6 +386,16 @@ class TestTabSeparators(unittest.TestCase):
         self._refuse("k: -\ta\n", 1)
         self._refuse("- \ta\n", 1)
 
+    def test_tab_in_leading_whitespace_of_a_value(self):
+        """D5: a tab anywhere in the whitespace between ': ' or '- ' and the value is refused."""
+        for value in ["v", "'v'", '"v"', "[v]", "|\n  v", "1"]:
+            for lead in [" \t", "  \t", " \t ", " \t\t"]:
+                self._refuse("x: 1\nk:" + lead + value + "\n", 2)
+                self._refuse("- x\n-" + lead + value + "\n", 2)
+                self._refuse("- x\n- k:" + lead + value + "\n", 2)
+                self._refuse("x: 1\n\"k\":" + lead + value + "\n", 2)
+                self._refuse("x:\n  - - y\n  - -" + lead + value + "\n", 3)
+
     def test_tab_in_flow_sequence(self):
         self._refuse("[1,\t2]\n", 1)
         self._refuse("[\t1]\n", 1)
@@ -766,8 +776,10 @@ class TestDomain(unittest.TestCase):
             for text, want in [(f"k: {c}x\n", {"k": c + "x"}), (f"k: x{c}\n", {"k": "x" + c}),
                                (f"k: {c}\n", {"k": c}), (f"k: x{c} # n\n", {"k": "x" + c})]:
                 self.assertEqual(parse(text), want, repr(text))
-        # space and tab around a plain scalar are separators, not content
-        self.assertEqual(parse("k:  \t x \t\n"), {"k": "x"})
+        # spaces around a plain scalar and a tab after it are separators, not content
+        self.assertEqual(parse("k:   x \t\n"), {"k": "x"})
+        # a tab in the whitespace before a value is refused with the line (D5)
+        _refused(self, "x: 1\nk:  \t x \t\n", 2, "tab")
 
     def test_p3_refused_characters_with_line(self):
         for c in P3_CHARS:
@@ -848,9 +860,13 @@ class TestDomain(unittest.TestCase):
             for text, want in [(f"k: {c}x\n", {"k": c + "x"}), (f"- {c}x\n", [c + "x"]), (f"{c}x\n", c + "x"),
                                (f"{c}x: 1\n", {c + "x": 1}), (f"k: [{c}x]\n", {"k": [c + "x"]})]:
                 self.assertEqual(parse(text), want, repr(text))
-        # '#' and '|' not preceded by whitespace start a plain scalar in a flow sequence (brief's list)
-        self.assertEqual(parse("k: [#x, |y]\n"), {"k": ["#x", "|y"]})
-        self.assertEqual(parse("k: [a,#x]\n"), {"k": ["a", "#x"]})
+        # '#' and '|' starting a flow item are refused with the line, like the other indicators (D4)
+        for text in ["k: [#x]\n", "k: [a,#x]\n", "k: [|y]\n", "k: [ |y]\n", "k: [a, |y]\n", "k: [a,|]\n",
+                     "k: [#]\n", "k: [|]\n", "k: [#\"q\"]\n", "- [#x]\n", "[|y]\n"]:
+            _refused(self, "x: 1\n" + text if not text.startswith(("-", "[")) else text, 2 if text.startswith("k") else 1,
+                     "may not start with")
+        # inside an item they stay content
+        self.assertEqual(parse("k: [a#x, a|y, '#x', \"|y\"]\n"), {"k": ["a#x", "a|y", "#x", "|y"]})
 
     def test_p7_scalar_resolution(self):
         cases = {"true": True, "false": False, "null": None, "~": None, "0": 0, "-0": 0, "007": "007",

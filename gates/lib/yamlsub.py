@@ -144,6 +144,8 @@ def _plain(text: str, lineno: int, flow: bool = False) -> object:
     if not text:
         raise YamlError(lineno, "empty scalar")
     _check_start(text, lineno)
+    if flow and text[0] in "#|":  # c-indicators: refused first in a flow item too (owner ruling D4)
+        raise YamlError(lineno, f"plain scalar may not start with {text[0]!r}")
     if re.search(r":\t", text):
         raise YamlError(lineno, "tab used as a separator after ':'")
     if re.search(r":([ \t]|\Z)", text):
@@ -335,6 +337,8 @@ class _Parser:
             if key in result:
                 raise YamlError(lineno, f"duplicate key {key!r}")
             self.pos = idx + 1
+            if "\t" in rest[:len(rest) - len(rest.lstrip(_WS))]:  # owner ruling D5
+                raise YamlError(lineno, "tab in the whitespace after ':'")
             rest = rest.strip(_WS)
             if rest == "" or rest.startswith("#"):
                 result[key] = self.nested(indent, lineno, True)
