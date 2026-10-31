@@ -725,6 +725,309 @@ class TestEmitMatchesParser(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout, "0 state/m.yml: cannot read file (not a regular file)\n")
 
+P2_CHARS = [" ", "\t", "\xa0", "\u3000", "\u2028", "\u2029", "\x85", "\u200b", "\ufeff"]
+P2_UNICODE = P2_CHARS[2:]  # not YAML whitespace: content in every position
+P3_CHARS = [chr(c) for c in range(0x20) if c not in (0x09, 0x0A)] + ["\x7f", "\ud800", "\udfff"]
+
+
+def _refused(test, text, line, fragment=None):
+    with test.assertRaises(YamlError, msg=repr(text)) as cm:
+        parse(text)
+    test.assertEqual(cm.exception.line, line, repr(text) + " " + str(cm.exception))
+    if fragment is not None:
+        test.assertIn(fragment, cm.exception.reason, repr(text))
+
+
+class TestDomain(unittest.TestCase):
+    """One test per row of task-1a.1-domain.md (P1-P12, E1-E6); L rows are in TestLoadDomain."""
+
+    def test_p1_argument_type(self):
+        class S(str):
+            pass
+
+        self.assertEqual(parse(S("a: [x]\nb: c\n")), {"a": ["x"], "b": "c"})
+        v = parse(S("k: v\n"))
+        self.assertIs(type(next(iter(v))), str)
+        self.assertIs(type(v["k"]), str)
+        # The row allows either YamlError line 0 or TypeError; which one is a controller decision.
+        for bad in (b"a: 1\n", None, 5):
+            with self.assertRaises((YamlError, TypeError), msg=repr(bad)) as cm:
+                parse(bad)
+            if isinstance(cm.exception, YamlError):
+                self.assertEqual(cm.exception.line, 0)
+
+    def test_p2_characters_in_values_are_content(self):
+        for c in P2_CHARS:
+            for text, want in [(f"k: a{c}b\n", {"k": f"a{c}b"}), (f"- a{c}b\n", [f"a{c}b"]), (f"a{c}b\n", f"a{c}b"),
+                               (f"k: 'a{c}b'\n", {"k": f"a{c}b"}), (f'k: "a{c}b"\n', {"k": f"a{c}b"}),
+                               (f"k: '{c}'\n", {"k": c}), (f'k: "{c}"\n', {"k": c})]:
+                self.assertEqual(parse(text), want, repr(text))
+        for c in P2_UNICODE:  # also leading and trailing: not stripped as whitespace
+            for text, want in [(f"k: {c}x\n", {"k": c + "x"}), (f"k: x{c}\n", {"k": "x" + c}),
+                               (f"k: {c}\n", {"k": c}), (f"k: x{c} # n\n", {"k": "x" + c})]:
+                self.assertEqual(parse(text), want, repr(text))
+        # space and tab around a plain scalar are separators, not content
+        self.assertEqual(parse("k:  \t x \t\n"), {"k": "x"})
+
+    def test_p3_refused_characters_with_line(self):
+        for c in P3_CHARS:
+            for text, line in [(f"k: a{c}b\n", 1), (f"x: 1\nk{c}: 1\n", 2), (f"x: 1\ny: 2\nk: [a{c}]\n", 3),
+                               (f"k: |\n  a\n  b{c}\n", 3), (f"k: 1 # c{c}\n", 1), (f"k: '{c}'\n", 1),
+                               (f'k: "{c}"\n', 1), (f"# {c}\n", 1)]:
+                _refused(self, text, line, "control character")
+        # a bare CR is refused through load too (only CRLF is normalised)
+        with self.assertRaises(YamlError) as cm:
+            _load_bytes(b"a: 1\nb: x\ry\n", "s.yml")
+        self.assertEqual((cm.exception.line, cm.exception.reason), (2, "s.yml: control character not allowed"))
+
+    def test_p4_characters_in_keys_flow_block_and_comments(self):
+        for c in P2_UNICODE + [" "]:
+            self.assertEqual(parse(f"a{c}b: 1\n"), {f"a{c}b": 1}, repr(c))
+            self.assertEqual(parse(f"'{c}': 1\n"), {c: 1}, repr(c))
+            self.assertEqual(parse(f"k: [a{c}b, '{c}']\n"), {"k": [f"a{c}b", c]}, repr(c))
+            self.assertEqual(parse(f"k: |\n  a{c}b\n  x{c}\n"), {"k": f"a{c}b\nx{c}\n"}, repr(c))
+            self.assertEqual(parse(f"k: 1 # a{c}b\n# {c}\n"), {"k": 1}, repr(c))
+        for c in P2_UNICODE:
+            self.assertEqual(parse(f"{c}a: 1\n"), {c + "a": 1}, repr(c))
+            self.assertEqual(parse(f"k: [{c}x, x{c}]\n"), {"k": [c + "x", "x" + c]}, repr(c))
+            self.assertEqual(parse(f"k: |\n  {c}x\n"), {"k": c + "x\n"}, repr(c))
+        # tab: content inside keys, flow items, block-scalar lines and comments
+        self.assertEqual(parse("a\tb: 1\n"), {"a\tb": 1})
+        self.assertEqual(parse("k: [a\tb]\n"), {"k": ["a\tb"]})
+        self.assertEqual(parse("k: |\n  a\tb\n"), {"k": "a\tb\n"})
+        self.assertEqual(parse("k: 1 # a\tb\n"), {"k": 1})
+
+    def test_p5_character_after_each_indicator(self):
+        ok = [
+            # ':' then space / end of line: separator; NBSP or another indicator: content
+            ("k: v\n", {"k": "v"}), ("k:\n", {"k": None}), ("k: a:\xa0b\n", {"k": "a:\xa0b"}),
+            ("k:\xa0v\n", "k:\xa0v"), ("k: a::b\n", {"k": "a::b"}), ("k: a:-b\n", {"k": "a:-b"}),
+            ("k: a:#b\n", {"k": "a:#b"}), ("k: a:,b\n", {"k": "a:,b"}), ("k: a:[b\n", {"k": "a:[b"}),
+            # '-' then space / end of line: item; NBSP or another indicator: content
+            ("- v\n", ["v"]), ("-\n", [None]), ("-\xa0v\n", "-\xa0v"), ("--v\n", "--v"), ("k: -#\n", {"k": "-#"}),
+            ("k: -,\n", {"k": "-,"}), ("k: -|\n", {"k": "-|"}), ("- - v\n", [["v"]]),
+            # ',' in a flow sequence
+            ("k: [a, b]\n", {"k": ["a", "b"]}), ("k: [a,b]\n", {"k": ["a", "b"]}), ("k: [a,\xa0b]\n", {"k": ["a", "\xa0b"]}),
+            ("k: [a,-b]\n", {"k": ["a", "-b"]}), ("k: [a,:b]\n", {"k": ["a", ":b"]}), ("k: [a,'b']\n", {"k": ["a", "b"]}),
+            # '#': a comment only after whitespace; anything may follow it
+            ("k: v # c\n", {"k": "v"}), ("k: v #\n", {"k": "v"}), ("k: v #\tc\n", {"k": "v"}),
+            ("k: v #\xa0c\n", {"k": "v"}), ("k: v ##\n", {"k": "v"}), ("k: v#c\n", {"k": "v#c"}),
+            # '|' and '|-' then space or end of line
+            ("k: |\n  x\n", {"k": "x\n"}), ("k: | \n  x\n", {"k": "x\n"}), ("k: |- \n  x\n", {"k": "x"}),
+            ("k: | # c\n  x\n", {"k": "x\n"}),
+        ]
+        for text, want in ok:
+            self.assertEqual(parse(text), want, repr(text))
+        refused = [
+            ("k:\tv\n", "tab"), ("-\tv\n", "tab"), ("k: [a,\tb]\n", "tab"), ("k: [a\t, b]\n", "tab"),
+            ("k: [a,,b]\n", "empty scalar"), ("k: [a,]\n", "trailing comma"), ("k: [a,\n", "unterminated"),
+            ("k: |\xa0\n  x\n", "block scalar header"), ("k: |-\xa0\n  x\n", "block scalar header"),
+            ("k: |#\n  x\n", "block scalar header"), ("k: ||\n  x\n", "block scalar header"),
+            ("k: |--\n  x\n", "block scalar header"), ("k: -:\n", "':' followed by whitespace"),
+            # ' #' starts a comment outside quotes, in a flow sequence too
+            ("k: [a, #b]\n", "comment"), ("k: [ #b]\n", "comment"), ("k: [a #b]\n", "comment"),
+            ("k: [a,\t#b]\n", "tab"),
+        ]
+        for text, fragment in refused:
+            _refused(self, "x: 1\n" + text, 2, fragment)
+
+    def test_p6_plain_scalar_first_character(self):
+        bad = {"&": "anchor", "*": "alias", "!": "tag", "{": "flow mapping", ">": "folded"}
+        bad.update({c: f"may not start with {c!r}" for c in "%@`,]}"})
+        for c, fragment in bad.items():
+            for text in [f"k: {c}x\n", f"- {c}x\n", f"{c}x\n", f"{c}x: 1\n", f"k: {c}\n"]:
+                _refused(self, "x: 1\n" + text if not text.startswith("- ") else "- y\n" + text, 2, fragment)
+            if c not in ",]":
+                _refused(self, f"k: [y, {c}x]\n", 1, fragment)
+        for c in "-?":  # followed by space or end of line: refused; by anything else: plain
+            for text in [f"k: {c}\n", f"k: {c} x\n"]:
+                _refused(self, text, 1, "may not start with")
+        _refused(self, "k: :\n", 1, "':' followed by whitespace")
+        _refused(self, "k: : x\n", 1, "':' followed by whitespace")
+        for c in "-?:":
+            for text, want in [(f"k: {c}x\n", {"k": c + "x"}), (f"- {c}x\n", [c + "x"]), (f"{c}x\n", c + "x"),
+                               (f"{c}x: 1\n", {c + "x": 1}), (f"k: [{c}x]\n", {"k": [c + "x"]})]:
+                self.assertEqual(parse(text), want, repr(text))
+        # '#' and '|' not preceded by whitespace start a plain scalar in a flow sequence (brief's list)
+        self.assertEqual(parse("k: [#x, |y]\n"), {"k": ["#x", "|y"]})
+        self.assertEqual(parse("k: [a,#x]\n"), {"k": ["a", "#x"]})
+
+    def test_p7_scalar_resolution(self):
+        cases = {"true": True, "false": False, "null": None, "~": None, "0": 0, "-0": 0, "007": "007",
+                 "1.0": "1.0", "yes": "yes", "2026-10-31": "2026-10-31", "0x1F": "0x1F", "True": "True",
+                 "+1": "+1", "12": 12, "-12": -12}
+        for s, want in cases.items():
+            self.assertEqual(parse(f"k: {s}\n"), {"k": want}, s)
+            self.assertIs(type(parse(f"k: {s}\n")["k"]), type(want), s)
+            self.assertEqual(parse(f"k: [{s}]\n"), {"k": [want]}, s)
+            self.assertEqual(parse(f"k: '{s}'\n"), {"k": s}, s)
+        self.assertEqual(parse("k:\n"), {"k": None})
+        self.assertEqual(parse("k: ''\n"), {"k": ""})
+        self.assertEqual(parse("k: " + "9" * 1000 + "\n"), {"k": int("9" * 1000)})
+        self.assertEqual(parse("k: -" + "9" * 999 + "\n"), {"k": -int("9" * 999)})
+        _refused(self, "x: 1\nk: " + "9" * 1001 + "\n", 2, "integer too large")
+        _refused(self, "k: [-" + "9" * 1000 + "]\n", 1, "integer too large")
+
+    def test_p8_nesting_depth(self):
+        def text(n, kind, leaf):
+            # n containers; the innermost is a mapping {'k': leaf}; leaf '[]' adds one level
+            lines = []
+            for i in range(n - 1):
+                if kind == "list" or (kind == "mixed" and i % 2 == 0):
+                    lines.append(" " * (2 * i) + "-")
+                else:
+                    lines.append(" " * (2 * i) + "k:")
+            lines.append(" " * (2 * (n - 1)) + "k: " + leaf)
+            return "\n".join(lines) + "\n"
+
+        for kind in ("list", "dict", "mixed"):
+            for leaf, extra in (("x", 0), ("[]", 1)):
+                for n in (49, 50, 51):
+                    t = text(n - extra, kind, leaf)
+                    if n <= 50:
+                        self.assertIsNotNone(parse(t), (kind, leaf, n))
+                    else:
+                        _refused(self, t, n - extra, "nesting too deep")
+        self.assertEqual(parse("- " * 49 + "[]\n"), TestEmitMatchesParser._nest(49, [], "list"))
+        _refused(self, "- " * 50 + "[]\n", 1, "nesting too deep")
+        _refused(self, "- " * 51 + "x\n", 1, "nesting too deep")
+        self.assertEqual(parse("- " * 50 + "x\n"), TestEmitMatchesParser._nest(50, "x", "list"))
+
+    def test_p9_indentation(self):
+        self.assertEqual(parse("a:\n  b: 1\n  c:\n    - 2\n"), {"a": {"b": 1, "c": [2]}})
+        self.assertEqual(parse("a:\n- 1\n- 2\nb: 3\n"), {"a": [1, 2], "b": 3})
+        self.assertEqual(parse("- a:\n  - 1\n"), [{"a": [1]}])
+        _refused(self, "a:\n    b: 1\n  c: 2\n", 3, "indentation")
+        _refused(self, "a: 1\n  b: 2\n", 2, "indentation")
+        _refused(self, "- a\n - b\n", 2, "indentation")
+        _refused(self, "- k: 1\n   j: 2\n", 2, "indentation")
+        _refused(self, "a:\n\t- 1\n", 2, "tab in indentation")
+        _refused(self, "a:\n  b: 1\n \tc: 2\n", 3, "tab in indentation")
+        _refused(self, "a:\n  x\n", 2, "expected a mapping or a sequence")
+
+    def test_p10_block_scalars(self):
+        self.assertEqual(parse("k: |\n  a\n  b\n"), {"k": "a\nb\n"})
+        self.assertEqual(parse("k: |-\n  a\n  b\n"), {"k": "a\nb"})
+        self.assertEqual(parse("k: |\n\n  \n  a\n"), {"k": "\n\na\n"})
+        self.assertEqual(parse("k: |\n  a\n# c\nj: 1\n"), {"k": "a\n", "j": 1})
+        self.assertEqual(parse("k: |\n  a\n  # c\n"), {"k": "a\n# c\n"})
+        self.assertEqual(_load_bytes(b"k: |\r\n  a\r\n  b\r\nj: 1\r\n"), {"k": "a\nb\n", "j": 1})
+        _refused(self, "x: 1\nk: |+\n  a\n", 2, "block scalar header")
+        _refused(self, "x: 1\nk: >\n  a\n", 2, "folded")
+        _refused(self, "x: 1\nk: >-\n  a\n", 2, "folded")
+        _refused(self, "k: |\n    \n  a\n", 2, "blank line indented deeper")
+        _refused(self, "k: |\n  a\n \t\n  b\n", 3, "tab in indentation")
+        _refused(self, "k: |\n  a\r\n  b\n", 2, "control character")
+
+    def test_p11_document_structure(self):
+        self.assertIsNone(parse(""))
+        self.assertIsNone(parse("\n\n"))
+        self.assertIsNone(parse("# c\n  # d\n"))
+        self.assertEqual(parse("hello\n"), "hello")
+        self.assertEqual(parse("12\n"), 12)
+        self.assertEqual(parse("'q'\n"), "q")
+        self.assertEqual(parse("|\n  x\n"), "x\n")
+        self.assertEqual(parse("[a]\n"), ["a"])
+        for text, line in [("---\na: 1\n", 1), ("a: 1\n---\n", 2), ("a: 1\n...\n", 2), ("--- a\n", 1),
+                           ("a: 1\n---\nb: 2\n", 2), ("a: 1\n...\n---\nb: 2\n", 2)]:
+            _refused(self, text, line, "document markers")
+        _refused(self, "a\nb\n", 2, "second node")
+        _refused(self, "- a\nb: 1\n", 2)
+
+    def test_p12_duplicates_and_keys(self):
+        _refused(self, "a: 1\nb: 2\na: 3\n", 3, "duplicate key 'a'")
+        _refused(self, "a: 1\n'a': 2\n", 2, "duplicate key 'a'")
+        _refused(self, 'a: 1\n"a": 2\n', 2, "duplicate key 'a'")
+        _refused(self, "a: 1\n<<: 2\n", 2, "merge keys")
+        _refused(self, "a:\n  <<: 2\n", 2, "merge keys")
+        self.assertEqual(parse("'<<': 1\n"), {"<<": 1})
+        self.assertEqual(parse('"<<": 1\n'), {"<<": 1})
+        for k in ("1", "-3", "true", "null", "~"):
+            v = parse(f"{k}: x\n")
+            self.assertEqual(v, {k: "x"}, k)
+            self.assertIs(type(next(iter(v))), str)
+        _refused(self, "1: a\n'1': b\n", 2, "duplicate key '1'")
+
+    def test_e1_value_type(self):
+        for v in ({"a": 1}, ["a"], "a", 1, True, False, None):
+            self.assertEqual(parse(emit(v)), v, repr(v))
+
+        class D(dict):
+            pass
+
+        class Color(enum.IntEnum):
+            R = 1
+
+        for bad in (D(a=1), Color.R, 1.5, (1,), b"x", {1: "a"}, {("k",): 1}, bytearray(b"x"), set(), object()):
+            with self.assertRaises(EmitError, msg=repr(bad)):
+                emit(bad)
+            with self.assertRaises(EmitError, msg=repr(bad)):
+                emit({"k": [bad]})
+
+    def test_e2_output_position(self):
+        # one value per position that needs quoting there and is plain elsewhere
+        bom, mark = "\ufeffx", "--- a"
+        self.assertEqual(emit(bom), '"\\ufeffx"\n')                       # top-level
+        self.assertEqual(emit({bom: 1}), '"\\ufeffx": 1\n')                # first key of the file
+        self.assertEqual(emit({"a": 1, bom: 2}), f"a: 1\n{bom}: 2\n")      # later column-0 key
+        self.assertEqual(emit({"a": 1, mark: 2}), f'a: 1\n"{mark}": 2\n')  # later column-0 key
+        self.assertEqual(emit({"p": {mark: 1}}), f"p:\n  {mark}: 1\n")     # nested key
+        self.assertEqual(emit([{mark: 1}]), f"- {mark}: 1\n")              # '- k:' key
+        self.assertEqual(emit({"k": bom}), f"k: {bom}\n")                  # value
+        self.assertEqual(emit([mark]), f"- {mark}\n")                      # list item
+        self.assertEqual(emit(mark), f'"{mark}"\n')                        # top-level marker
+        self.assertEqual(emit({"k": [mark, "a b"]}), f"k:\n  - {mark}\n  - a b\n")  # items (no flow form emitted)
+        for v in ({"k": "x: y"}, ["x: y"], {"x: y": 1}, "x: y"):
+            self.assertIn('"x: y"', emit(v), repr(v))
+
+    def test_e3_string_content_through_a_file(self):
+        values = []
+        for c in P2_CHARS:
+            values += [c, "a" + c + "b", c + "x", "x" + c, c * 3]
+        values += [c for c in P3_CHARS if not 0xD800 <= ord(c) <= 0xDFFF]
+        values += ["a\nb", "a\n", "a\n\n", "a\n\n\n", "\n", "\n\n", " lead", "trail ", " both ", "", "\r\n", "x\r"]
+        for s in values:
+            for v in (s, {"k": s}, [s], {s: 1}, [{"k": s, s: 2}] if s != "k" else [s]):
+                self.assertEqual(_load_bytes(emit(v).encode("utf-8")), v, repr(v))
+        for s in ("\ud800", "a\udfffb"):
+            for v in (s, {"k": s}, {s: 1}, [s]):
+                with self.assertRaises(EmitError, msg=repr(v)):
+                    emit(v)
+
+    def test_e4_limits(self):
+        for kind in ("list", "dict", "mixed"):
+            for leaf, lv in (("x", 0), ([], 1)):
+                ok = TestEmitMatchesParser._nest(50 - lv, leaf, kind)
+                self.assertEqual(_load_bytes(emit(ok).encode()), ok, (kind, leaf))
+                with self.assertRaises(EmitError, msg=(kind, leaf)):
+                    emit(TestEmitMatchesParser._nest(51 - lv, leaf, kind))
+        for n in (10 ** 999, -(10 ** 998)):  # 1000 characters
+            self.assertEqual(len(str(n)), 1000)
+            self.assertEqual(_load_bytes(emit({"k": n}).encode()), {"k": n})
+        for n in (10 ** 1000, -(10 ** 999)):  # 1001 characters
+            with self.assertRaises(EmitError):
+                emit({"k": n})
+
+    E5_CORPUS_SHA256 = "f3ae93fb4cb0dd8ad8591a0eb12e9f77e52e3faf5f9c96ce9ab1858dc20dc618"
+
+    def _e5_corpus(self):
+        return TestEmit.CORPUS + [10 ** 999, TestEmitMatchesParser._nest(50, "x", "mixed")] + [
+            {"k" + c: c, "l": [c + "x", "x" + c]} for c in P2_CHARS + P3_CHARS[:5]]
+
+    def test_e5_emit_is_byte_identical_across_interpreters(self):
+        import hashlib
+        h = hashlib.sha256()
+        for v in self._e5_corpus():
+            h.update(emit(v).encode("utf-8") + b"\0")
+        # Pinned digest: the same on python3.9 and python3.13, so both suites pass only if emit agrees.
+        self.assertEqual(h.hexdigest(), self.E5_CORPUS_SHA256)
+
+    def test_e6_canonical(self):
+        for v in self._e5_corpus():
+            text = emit(v)
+            self.assertEqual(emit(_load_bytes(text.encode("utf-8"))), text, repr(v))
+
+
 def _open_fds():
     """The set of this process's open file descriptors, from /dev/fd (no upper bound)."""
     fds = {int(n) for n in os.listdir("/dev/fd")}
@@ -828,6 +1131,248 @@ class TestLoadResources(unittest.TestCase):
                             else self.assertRaises(YamlError):
                         load(good, "state/m.yml")
             self.assertEqual(_open_fds() - before, set())
+
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Child for the FIFO rows (L2, L3, L4): run in a subprocess so a regression that opens a FIFO
+# cannot hang the suite. It prints one line per case: name, distinct reasons, fds leaked.
+_FIFO_CHILD = r"""
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from gates.lib.yamlsub import YamlError, load
+d = sys.argv[2]
+good, fifo, link = (os.path.join(d, n) for n in ("a.yml", "f.yml", "link.yml"))
+aside = os.path.join(d, "aside.yml")
+def fds():
+    return {fd for fd in map(int, os.listdir("/dev/fd")) if _open(fd)}
+def _open(fd):
+    try:
+        os.fstat(fd)
+        return True
+    except OSError:
+        return False
+real_stat = os.stat
+def race(p, *a, **k):
+    st = real_stat(p, *a, **k)
+    if p == good:
+        os.rename(good, aside)
+        os.rename(fifo, good)
+    return st
+def restore():
+    os.rename(good, fifo)
+    os.rename(aside, good)
+for name, path, swap in (("fifo", fifo, False), ("symlink-to-fifo", link, False), ("race-to-fifo", good, True)):
+    before, reasons = fds(), set()
+    for _ in range(50):
+        if swap:
+            os.stat = race
+        try:
+            load(path, "state/m.yml")
+            reasons.add("RETURNED")
+        except YamlError as e:
+            reasons.add("%d %s" % (e.line, e.reason))
+        finally:
+            os.stat = real_stat
+        if swap:
+            restore()
+    print(name, sorted(reasons), len(fds() - before))
+"""
+
+
+class TestLoadDomain(unittest.TestCase):
+    """Rows L1-L6 of task-1a.1-domain.md."""
+
+    SHOWN = "state/m.yml"
+
+    def _refused(self, path, calls=1):
+        before = _open_fds()
+        for _ in range(calls):
+            with self.assertRaises(YamlError, msg=repr(path)) as cm:
+                load(path, self.SHOWN)
+            self.assertEqual(cm.exception.line, 0, repr(path))
+            self.assertTrue(cm.exception.reason.startswith(self.SHOWN + ": "), cm.exception.reason)
+        self.assertEqual(_open_fds() - before, set(), repr(path))  # L4
+        return cm.exception.reason
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.d = self._dir.name
+        self.good = os.path.join(self.d, "a.yml")
+        with open(self.good, "wb") as fh:
+            fh.write(b"a: 1\n")
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def test_l1_path_types(self):
+        import pathlib
+        for path in (self.good, self.good.encode(), pathlib.Path(self.good), _FsPath(self.good),
+                     _FsPath(self.good.encode())):
+            self.assertEqual(load(path, self.SHOWN), {"a": 1}, repr(path))
+        for path in (True, False, None, 1.5, ["a"], object(), _FsPath(3), _FsPath(None), _FsPath(1.5),
+                     _FsPath(RuntimeError("boom")), _FsPath(ValueError("v")), _FsPath(OSError(2, "x"))):
+            self.assertIn("invalid path", self._refused(path, 50), repr(path))
+        r, w = os.pipe()  # an int is never read as a descriptor, nor closed
+        try:
+            os.write(w, b"a: 1\n")
+            self.assertIn("invalid path: TypeError", self._refused(r, 50))
+            os.fstat(r)
+        finally:
+            os.close(r)
+            os.close(w)
+
+    def test_l2_path_kinds(self):
+        import socket
+        sock_path = os.path.join(self.d, "s.sock")
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.bind(sock_path)
+            loop = os.path.join(self.d, "loop.yml")
+            os.symlink(loop, loop)
+            cases = [
+                (os.path.join(self.d, "missing.yml"), "No such file"), (self.d, "not a regular file"),
+                (sock_path, "not a regular file"), (os.devnull, "not a regular file"),
+                ("a\0b", "invalid path: ValueError"), (b"a\0b", "invalid path: ValueError"),
+                ("\ud800x", "invalid path: UnicodeEncodeError"), ("x" * 5000, "too long"),
+                (os.path.join(self.d, "n" * 300), "too long"), (os.path.join(self.good, "x"), "Not a directory"),
+                (loop, "symbolic links"),
+            ]
+            for path, fragment in cases:
+                self.assertIn(fragment, self._refused(path, 50), repr(path))
+        finally:
+            s.close()
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses file permissions")
+        os.chmod(self.good, 0)
+        try:
+            self.assertIn("Permission denied", self._refused(self.good, 50))
+        finally:
+            os.chmod(self.good, 0o600)
+        sub = os.path.join(self.d, "sub")
+        os.mkdir(sub)
+        inner = os.path.join(sub, "b.yml")
+        with open(inner, "wb") as fh:
+            fh.write(b"a: 1\n")
+        os.chmod(sub, 0)
+        try:
+            self.assertIn("Permission denied", self._refused(inner, 50))
+        finally:
+            os.chmod(sub, 0o700)
+
+    def test_l2_l3_l4_fifo_cases_never_block_and_leak_nothing(self):
+        import subprocess
+        import sys
+        fifo = os.path.join(self.d, "f.yml")
+        os.mkfifo(fifo)
+        os.symlink(fifo, os.path.join(self.d, "link.yml"))
+        try:
+            r = subprocess.run([sys.executable, "-c", _FIFO_CHILD, _ROOT, self.d],
+                               capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            self.fail("load() blocked on a FIFO")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        want = "['0 state/m.yml: cannot read file (not a regular file)'] 0"
+        self.assertEqual(r.stdout.splitlines(),
+                         [f"fifo {want}", f"symlink-to-fifo {want}", f"race-to-fifo {want}"])
+
+    def _race(self, swap, restore):
+        from unittest import mock
+        real_stat = os.stat
+
+        def stat_then_swap(p, *a, **k):
+            st = real_stat(p, *a, **k)
+            if p == self.good:
+                swap()
+            return st
+
+        before = _open_fds()
+        reasons = set()
+        for _ in range(50):
+            with mock.patch.object(os, "stat", stat_then_swap):
+                with self.assertRaises(YamlError) as cm:
+                    load(self.good, self.SHOWN)
+            restore()
+            self.assertEqual(cm.exception.line, 0)
+            reasons.add(cm.exception.reason)
+        self.assertEqual(_open_fds() - before, set())
+        return reasons
+
+    def test_l3_race_between_stat_and_open(self):
+        aside = os.path.join(self.d, "aside.yml")
+
+        def to_dir():
+            os.rename(self.good, aside)
+            os.mkdir(self.good)
+
+        def from_dir():
+            os.rmdir(self.good)
+            os.rename(aside, self.good)
+
+        def to_devnull():
+            os.rename(self.good, aside)
+            os.symlink(os.devnull, self.good)
+
+        def from_link():
+            os.unlink(self.good)
+            os.rename(aside, self.good)
+
+        def removed():
+            os.rename(self.good, aside)
+
+        def back():
+            os.rename(aside, self.good)
+
+        nrf = {self.SHOWN + ": cannot read file (not a regular file)"}
+        self.assertEqual(self._race(to_dir, from_dir), nrf)
+        self.assertEqual(self._race(to_devnull, from_link), nrf)
+        self.assertEqual(self._race(removed, back), {self.SHOWN + ": cannot read file (No such file or directory)"})
+
+    def test_l4_decode_and_parse_errors_leak_nothing(self):
+        for data, line, reason in ((b"a: \xff\n", 0, "not valid UTF-8"), (b"a: 1\na: 2\n", 2, "duplicate key 'a'")):
+            with open(self.good, "wb") as fh:
+                fh.write(data)
+            before = _open_fds()
+            for _ in range(50):
+                with self.assertRaises(YamlError) as cm:
+                    load(self.good, self.SHOWN)
+                self.assertEqual((cm.exception.line, cm.exception.reason), (line, f"{self.SHOWN}: {reason}"))
+            self.assertEqual(_open_fds() - before, set())
+
+    def test_l5_encoding(self):
+        def load_data(data):
+            with open(self.good, "wb") as fh:
+                fh.write(data)
+            return load(self.good, self.SHOWN)
+
+        self.assertEqual(load_data(b"\xef\xbb\xbfa: 1\n"), {"a": 1})
+        self.assertEqual(load_data(b"\xef\xbb\xbf\xef\xbb\xbfa: 1\n"), {"﻿a": 1})  # only one is stripped
+        self.assertEqual(load_data(b"a: 1\nb: \xef\xbb\xbfx\n"), {"a": 1, "b": "﻿x"})
+        self.assertEqual(load_data(b"a: 1\r\nb: 2\r\n"), {"a": 1, "b": 2})
+        self.assertEqual(load_data(b"\xef\xbb\xbf"), None)
+        for data, line, reason in ((b"a: 1\nb: x\ry\n", 2, "control character not allowed"),
+                                   (b"a: 1\r", 1, "control character not allowed"),
+                                   (b"a: \xff\n", 0, "not valid UTF-8"), (b"\xff\xfea\x00", 0, "not valid UTF-8"),
+                                   (b"\xfe\xff\x00a", 0, "not valid UTF-8"), (b"a: \xed\xa0\x80\n", 0, "not valid UTF-8")):
+            with self.assertRaises(YamlError, msg=repr(data)) as cm:
+                load_data(data)
+            self.assertEqual((cm.exception.line, cm.exception.reason), (line, f"{self.SHOWN}: {reason}"), repr(data))
+
+    def test_l6_interrupts_escape_unchanged(self):
+        from unittest import mock
+        for exc_type in (KeyboardInterrupt, SystemExit):
+            exc = exc_type()
+            with self.assertRaises(exc_type) as cm:
+                load(_FsPath(exc), self.SHOWN)
+            self.assertIs(cm.exception, exc)
+            for target in ("stat", "open", "fstat", "read"):
+                exc = exc_type()
+                before = _open_fds()
+                with mock.patch.object(os, target, side_effect=exc):
+                    with self.assertRaises(exc_type, msg=target) as cm:
+                        load(self.good, self.SHOWN)
+                self.assertIs(cm.exception, exc, target)
+                self.assertEqual(_open_fds() - before, set(), target)
 
 
 if __name__ == "__main__":

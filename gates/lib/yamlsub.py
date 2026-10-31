@@ -174,6 +174,8 @@ def _flow(s: str, lineno: int) -> list:
             i = skip(i)
             if i >= n:
                 raise YamlError(lineno, "unterminated flow sequence")
+            if s[i] == "#" and s[i - 1] in _WS:  # ' #' starts a comment, which a flow line cannot hold
+                raise YamlError(lineno, "comment inside a flow sequence")
             if s[i] in "\"'":
                 v, i = _quoted(s, i, lineno)
             else:
