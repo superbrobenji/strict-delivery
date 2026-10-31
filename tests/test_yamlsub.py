@@ -868,6 +868,15 @@ class TestDomain(unittest.TestCase):
         ]
         for text, fragment in refused:
             _refused(self, "x: 1\n" + text, 2, fragment)
+        # owner ruling U2: after '|' or '|-' only spaces, a tab, a ' #' comment or the end of the line; NBSP and
+        # friends are not content there (content starts on the next line), nor is another indicator
+        for header in ["|", "|-"]:
+            for follower in P2_UNICODE + list("#|-:,>[]{}&*!%@`'\"?") + ["+", "2"]:
+                if header + follower == "|-":
+                    continue
+                for text in [f"k: {header}{follower}\n  x\n", f"- {header}{follower}\n  x\n", f"{header}{follower}\n x\n"]:
+                    _refused(self, "x: 1\n" + text if text.startswith("k") else "- y\n" + text if text.startswith("-")
+                             else text, 1 if text.startswith("|") else 2, "block scalar header")
         for text in ["- \tv\n", "-  \tv\n", "- \t v\n", "- k: \tv\n", "- \t|\n  x\n", "- \t[v]\n",
                      "-\t\n", "- \t\n", "- \t# c\n", "- k:\t\n"]:
             _refused(self, "- y\n" + text, 2, "tab")

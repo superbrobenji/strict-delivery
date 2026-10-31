@@ -400,7 +400,8 @@ class _Parser:
         return _plain(_cut_comment(text), lineno)
 
     def block_scalar(self, header: str, lineno: int, parent_indent: int) -> str:
-        m = re.match(r"\|(-?)(?:[ \t]+#.*)?[ \t]*\Z", header)
+        # header is rstripped by every caller (peek, mapping, seq), so no trailing-whitespace branch
+        m = re.match(r"\|(-?)(?:[ \t]+#.*)?\Z", header)
         if not m:
             raise YamlError(lineno, "unsupported block scalar header (only '|' and '|-')")
         strip = m.group(1) == "-"
