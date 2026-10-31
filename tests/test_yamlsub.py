@@ -851,6 +851,31 @@ class TestDomain(unittest.TestCase):
         for text in ["- \tv\n", "-  \tv\n", "- \t v\n", "- k: \tv\n", "- \t|\n  x\n", "- \t[v]\n"]:
             _refused(self, "- y\n" + text, 2, "tab")
 
+    def test_comment_start_in_every_position(self):
+        """Q-yamlsub-1 (owner): ' #' starts a comment outside quoted scalars and block-scalar bodies."""
+        for text, want in [
+            ("k: v #c\n", {"k": "v"}), ("k: v\t#c\n", {"k": "v"}), ("k: #c\n", {"k": None}), ("k: a #b: c\n", {"k": "a"}),
+            ("- v #c\n", ["v"]), ("- #c\n", [None]), ("- k: v #c\n", [{"k": "v"}]), ("- - v #c\n", [["v"]]),
+            ("k: 'v' #c\n", {"k": "v"}), ('"k": "v" #c\n', {"k": "v"}), ("k: [a, b] #c\n", {"k": ["a", "b"]}),
+            ("k: | #c\n  x\n", {"k": "x\n"}), ("k: |- #c\n  x\n", {"k": "x"}), ("v #c\n", "v"), ("a #b: c\n", "a"),
+            ("'a' #b: c\n", "a"), ("k:\n  #c\n  j: 1 #c\n", {"k": {"j": 1}}), ("k: #c\n  - x\n", {"k": ["x"]}),
+            ("- #c\n  - x\n", [["x"]]), ("k: |\n  x\n #c\nj: 1\n", {"k": "x\n", "j": 1}),
+        ]:
+            self.assertEqual(parse(text), want, repr(text))
+        # in a flow sequence: a comment, which a flow line cannot hold, so refused with the line
+        for text in ["k: [a, #b]\n", "k: [ #b]\n", "k: [a #b]\n", "k: [a #b, c]\n", "k: ['a' #b]\n", "k: [a, b #c]\n"]:
+            _refused(self, "x: 1\n" + text, 2)
+        # inside quoted scalars and block-scalar bodies ' #' is content
+        for text, want in [
+            ("k: 'a #b'\n", {"k": "a #b"}), ('k: "a #b"\n', {"k": "a #b"}), ("k: ['a #b', \"c #d\"]\n", {"k": ["a #b", "c #d"]}),
+            ("'a #b': c\n", {"a #b": "c"}), ("k: |\n  a #b\n  #c\n", {"k": "a #b\n#c\n"}), ("k: |-\n  a #b\n", {"k": "a #b"}),
+            ("- |\n  x #y\n   #z\n", ["x #y\n #z\n"]), ("k: |\n  a\t#b\n", {"k": "a\t#b\n"}),
+        ]:
+            self.assertEqual(parse(text), want, repr(text))
+        # emit relies on the body case: such a string is written as a block scalar and loads back identical
+        self.assertEqual(emit({"k": "a #b\nc\n"}), "k: |\n  a #b\n  c\n")
+        self.assertEqual(_load_bytes(emit({"k": "a #b\nc\n"}).encode("utf-8")), {"k": "a #b\nc\n"})
+
     def test_p6_plain_scalar_first_character(self):
         bad = {"&": "anchor", "*": "alias", "!": "tag", "{": "flow mapping", ">": "folded"}
         bad.update({c: f"may not start with {c!r}" for c in "%@`,]}"})
@@ -1403,8 +1428,10 @@ class _DocGen:
     """Builds a document line by line together with the value it must parse to (T2 oracle).
 
     The rules here are the generator's own reading of the brief and the ruled grammar; they
-    never call parse or emit. Alphabet: every P2 character, the P5 indicators and separators
-    (':', '- ', ',', '#', '|', '|-'), the P6 first characters, and the P10 block-scalar forms.
+    never call parse or emit. Alphabet (per value, owner ruling Q-yamlsub-2): every P2 character;
+    each P5 indicator (':', '- ', ',', '#', '|', '|-') followed by space, tab, end of line, NBSP
+    and another indicator; every P6 first character, '- ' and '? ' included; the P10 block forms
+    with leading, whitespace-only, over-indented and tabbed blank lines; CRLF through load.
     """
     LETTERS = "abcxyz"
     UNI = ["\xa0", "　", " ", " ", "\x85", "​", "﻿"]  # P2 minus space and tab
@@ -1418,7 +1445,8 @@ class _DocGen:
     # ---- scalars
     def plain(self, flow=False):
         r = self.r
-        first = r.choice([r.choice(self.LETTERS), r.choice(self.UNI), r.choice("-?:") + r.choice(self.LETTERS)])
+        first = r.choice([r.choice(self.LETTERS), r.choice(self.UNI), r.choice("-?:") + r.choice(self.LETTERS),
+                          r.choice("-?:") + r.choice(self.UNI)])  # P5/P6: '-', '?', ':' then NBSP etc.: plain
         out = [first]
         for _ in range(r.randint(0, 6)):
             k = r.random()
@@ -1427,9 +1455,11 @@ class _DocGen:
             elif k < 0.5:
                 out.append(r.choice(self.UNI))
             elif k < 0.65:
-                out.append(r.choice([" ", "\t"] if not flow else [" ", "  "]) + r.choice(self.LETTERS))
+                out.append(r.choice([" ", "\t"] if not flow else [" ", "  ", "\t"]) + r.choice(self.LETTERS))
             elif k < 0.75:
-                out.append(":" + r.choice(self.LETTERS))
+                # P5: ':' then a non-blank (letter, NBSP and friends, another indicator) is content
+                out.append(":" + r.choice([r.choice(self.LETTERS), r.choice(self.UNI),
+                                           r.choice("-:#" if flow else "-:#,[") + r.choice(self.LETTERS)]))
             else:
                 c = r.choice(self.INNER)
                 out.append(c)
@@ -1500,21 +1530,29 @@ class _DocGen:
             self.add(r.choice(["", " ", "# " + r.choice(self.UNI) + "\t#"]))
 
     def block_str(self):
-        """(header, body lines, value) for a | or |- block scalar."""
+        """(header, body lines, value) for a | or |- block scalar; '' marks a blank line.
+
+        Leading blank lines are allowed (P10); the last line is content. A body line holding
+        ' #' stays content (Q-yamlsub-1)."""
         r = self.r
-        lines = []
-        for i in range(r.randint(1, 4)):
-            if i > 0 and r.random() < 0.2:
+        lines = [""] * (r.randint(1, 2) if r.random() < 0.25 else 0)
+        n = r.randint(1, 4)
+        for i in range(n):
+            if 0 < i < n - 1 and r.random() < 0.2:
                 lines.append("")
                 continue
             first = r.choice(list(self.LETTERS) + self.UNI + ["#", "-", "'", "&", ":"])
-            rest = "".join(r.choice(list(self.LETTERS) + self.UNI + [" ", "\t", "#", ": ", "|"]) for _ in range(r.randint(0, 5)))
+            rest = "".join(r.choice(list(self.LETTERS) + self.UNI + [" ", "\t", "#", " #", ": ", "|"])
+                           for _ in range(r.randint(0, 5)))
             lines.append(first + rest if i == 0 or r.random() < 0.7 else "  " + first + rest)
-        while lines[-1] == "":
-            lines.pop()
         if r.random() < 0.5:
             return "|", lines, "\n".join(lines) + "\n"
         return "|-", lines, "\n".join(lines)
+
+    def block_body(self, body, ci):
+        """Add the body lines at content indent ci; a blank line is '' or at most ci spaces."""
+        for ln in body:
+            self.add(" " * ci + ln if ln else " " * self.r.choice([0, 0, self.r.randint(0, ci)]))
 
     def value_after(self, prefix, indent, depth, tags):
         """Emit the line starting with prefix ('k:' or '-') and the value after it; return the value."""
@@ -1523,20 +1561,30 @@ class _DocGen:
         if depth >= 4 or k < 0.45:
             text, v = self.scalar()
             sp = r.choice([" ", "  "])
-            self.add(prefix + sp + text + self.comment(), val=len(prefix) + len(sp), **tags)
+            self.add(prefix + sp + text + self.comment(), val=len(prefix) + len(sp), ws=len(prefix), **tags)
             return v
         if k < 0.55:
             items = [self.scalar(flow=True) for _ in range(r.randint(0, 3))]
             sep = r.choice([", ", ",", " , "])
             text = "[" + sep.join(t for t, _ in items) + "]"
-            self.add(prefix + " " + text + self.comment(), val=len(prefix) + 1, **tags)
+            base = len(prefix) + 1
+            starts, ends, commas, at = [], [], [], base + 1  # columns of each item start and end, each ','
+            for n, (t, _) in enumerate(items):
+                starts.append(at)
+                ends.append(at + len(t))
+                if n + 1 < len(items):
+                    commas.append(at + len(t) + sep.index(","))
+                at += len(t) + len(sep)
+            self.add(prefix + " " + text + self.comment(), val=base, ws=len(prefix),
+                     flow=(starts or [base + 1], commas, bool(items), ends), **tags)
             return [v for _, v in items]
         if k < 0.65:
             header, body, v = self.block_str()
-            self.add(prefix + " " + header + self.comment(), val=len(prefix) + 1, bhead=len(prefix) + 1, **tags)
-            pad = " " * (indent + r.randint(1, 3))
-            for ln in body:
-                self.add(pad + ln if ln else "")
+            ci = indent + r.randint(1, 3)
+            # P5: '|' / '|-' then space, tab or end of line, before an optional comment
+            self.add(prefix + " " + header + r.choice(["", "", " ", "\t", " \t"]) + self.comment(),
+                     val=len(prefix) + 1, ws=len(prefix), bhead=len(prefix) + 1, bbody=(ci, len(body)), **tags)
+            self.block_body(body, ci)
             return v
         if k < 0.7:
             self.add(prefix + self.comment(True), **tags)  # empty value
@@ -1610,14 +1658,13 @@ class _DocGen:
             self.add(text + self.comment(), val=0)
         else:
             header, body, v = self.block_str()
-            self.add(header, val=0, bhead=0)
-            for ln in body:
-                self.add("  " + ln if ln else "")
+            self.add(header + self.r.choice(["", " ", "\t"]), val=0, bhead=0, bbody=(2, len(body)))
+            self.block_body(body, 2)
         self.maybe_noise()
         return "\n".join(t for t, _ in self.lines) + self.r.choice(["", "\n"]), v
 
     def refusal(self):
-        """Mutate one line so the document must be refused; return (text, line)."""
+        """Mutate one line so the document must be refused; return (text, line, reason fragment or None)."""
         r = self.r
         idx = r.randrange(len(self.lines))
         text, tags = self.lines[idx]
@@ -1632,25 +1679,62 @@ class _DocGen:
             kinds.append("badval")
         if tags.get("key") is not None:
             kinds.append("badkey")
+        lead = tags.get("ws") is not None and (tags.get("sep") is not None or tags.get("item") is not None)
+        if lead:
+            kinds += ["tablead", "indstart"]  # D5; P6 '- ' / '? ' / ': ' starts
+        if tags.get("flow") is not None:
+            kinds += ["flowcomment", "tabcomma", "flowstart"]
+        if tags.get("bbody") is not None:
+            kinds += ["bdeep", "btab"]
         kind = r.choice(kinds)
+        fragment = None
         if kind == "ctl":
             c = r.choice([chr(i) for i in range(0x20) if i not in (9, 10)] + ["\x7f", "\ud800", "\r"])
             p = r.randint(0, len(text))
             text = text[:p] + c + text[p:]
         elif kind == "tabsep":
             p = tags["sep"]
-            text = text[:p + 1] + "\t" + text[p + 2:]
+            text, fragment = text[:p + 1] + "\t" + text[p + 2:], "tab"
         elif kind == "tabdash":
             p = tags["item"]
-            text = text[:p + 1] + "\t" + text[p + 2:]
+            text, fragment = text[:p + 1] + "\t" + text[p + 2:], "tab"
         elif kind == "bhead":
             p = tags["bhead"]
             text = text[:p] + r.choice([">", "|+", "|2", ">-"]) + text[p + (2 if text[p:p + 2] == "|-" else 1):]
+        elif kind == "tablead":  # a tab anywhere in the whitespace between ':'/'-' and the value
+            p = r.randint(tags["ws"] + 1, tags["val"])
+            text, fragment = text[:p] + "\t" + text[p:], "tab"
+        elif kind == "indstart":
+            ind = r.choice(["- ", "? ", ": "] if tags.get("sep") is not None else ["? ", ": "])
+            text = text[:tags["val"]] + ind + text[tags["val"]:]
+        elif kind == "flowcomment":  # ' #' in a flow sequence starts a comment, which it cannot hold
+            p = r.choice(tags["flow"][0] + tags["flow"][3])  # before an item, or after one
+            text = text[:p] + " #" + r.choice(self.LETTERS) + text[p:]
+            # after a quoted item the '#' is where ',' or ']' must be
+            fragment = "comment" if text[p - 1] not in "'\"" else None
+        elif kind == "tabcomma" and tags["flow"][1]:
+            p = r.choice(tags["flow"][1]) + 1
+            text, fragment = text[:p] + "\t" + text[p:], "tab"
+        elif kind == "flowstart" and tags["flow"][2]:  # D4: '#' or '|' first in a flow item
+            p, c = r.choice(tags["flow"][0]), r.choice("#|")
+            fragment = "comment" if c == "#" and text[p - 1] == " " else "may not start with"
+            text = text[:p] + c + text[p:]
+        elif kind in ("bdeep", "btab"):  # P10: an over-indented leading blank line, a tab in a blank line
+            ci, nbody = tags["bbody"]
+            if kind == "bdeep":
+                at, ln, fragment = idx + 1, " " * (ci + r.randint(1, 2)), "deeper"
+            else:
+                at, fragment = idx + 1 + r.randint(0, nbody), "tab"
+                ln = r.choice(["\t", " \t", "\t ", " " * ci + "\t"])
+            self.lines.insert(at, [ln, {}])
+            return "\n".join(t for t, _ in self.lines) + "\n", at + 1, fragment
+        elif kind in ("tabcomma", "flowstart"):  # no ',' or no item on this flow line: a control character
+            text = text[:1] + "\x01" + text[1:]
         else:
             p = tags["val"] if kind == "badval" else tags["key"]
             text = text[:p] + r.choice(self.BAD_START) + text[p:]
         self.lines[idx][0] = text
-        return "\n".join(t for t, _ in self.lines) + "\n", idx + 1
+        return "\n".join(t for t, _ in self.lines) + "\n", idx + 1, fragment
 
 
 class TestOracle(unittest.TestCase):
@@ -1659,16 +1743,27 @@ class TestOracle(unittest.TestCase):
     def test_oracle_fuzz(self):
         rnd = random.Random(20261031)
         accepted = refused = 0
-        for _ in range(1500):
-            g = _DocGen(rnd)
-            text, want = g.document()
-            self.assertEqual(parse(text), want, repr(text))
-            accepted += 1
-            bad, line = g.refusal()
-            with self.assertRaises(YamlError, msg=repr(bad)) as cm:
-                parse(bad)
-            self.assertEqual(cm.exception.line, line, repr(bad) + " " + str(cm.exception))
-            refused += 1
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "crlf.yml")
+            for _ in range(1500):
+                g = _DocGen(rnd)
+                text, want = g.document()
+                self.assertEqual(parse(text), want, repr(text))
+                # the same document with CRLF line ends (and maybe a BOM) through load
+                data = text.replace("\n", "\r\n").encode("utf-8")
+                if text.startswith("\ufeff") or rnd.random() < 0.3:
+                    data = b"\xef\xbb\xbf" + data  # load strips exactly one leading BOM
+                with open(p, "wb") as fh:
+                    fh.write(data)
+                self.assertEqual(load(p, "crlf.yml"), want, repr(data))
+                accepted += 1
+                bad, line, fragment = g.refusal()
+                with self.assertRaises(YamlError, msg=repr(bad)) as cm:
+                    parse(bad)
+                self.assertEqual(cm.exception.line, line, repr(bad) + " " + str(cm.exception))
+                if fragment is not None:
+                    self.assertIn(fragment, cm.exception.reason, repr(bad))
+                refused += 1
         self.assertEqual((accepted, refused), (1500, 1500))
 
     def test_oracle_round_trip_through_a_file(self):
