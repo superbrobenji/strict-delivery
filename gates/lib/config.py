@@ -7,6 +7,7 @@ import posixpath
 import re
 
 from gates.lib import yamlsub
+from gates.lib.gitinfo import LONG_HEX
 from gates.lib.result import GateError
 
 CONFIG_PATH = ".strict-delivery/config.yml"
@@ -106,6 +107,9 @@ def _validate(cfg: dict) -> None:
     bb = cfg["base_branch"]
     if not isinstance(bb, str) or bb == "":
         raise _bad("base_branch", "must be a non-empty string")
+    if LONG_HEX.search(bb):
+        raise _bad("base_branch", "must not hold more than 40 hex digits in a row "
+                   "(gitinfo refuses such a revision)")
     _text_list(cfg["decisions"]["scan"], "decisions.scan", allow_empty=True)
     for k, v in cfg["models"]["tiers"].items():
         if not isinstance(v, str) or v == "":

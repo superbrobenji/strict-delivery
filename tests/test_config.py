@@ -379,6 +379,15 @@ class ScalarKeysTest(ConfigCase):
             with self.subTest(bad=bad):
                 self.refused({"base_branch": bad}, "base_branch")
 
+    def test_base_branch_over_long_hex_run(self):  # C13, F-1a2r-6, Q-1a2r-8
+        for ok in ("a" * 40, "A" * 40, "release-" + "0" * 40, "x" + "f" * 40 + "-y", "a" * 40 + "/" + "b" * 40, "main", "feat/12345"):
+            with self.subTest(ok=ok):
+                self.assertEqual(self.with_extra({"base_branch": ok})["base_branch"], ok)
+        mixed = "aB" * 20 + "c"
+        for bad in ("a" * 41, "F" * 41, mixed, "a" * 60, "release-" + "0" * 41 + "-x", "x" + mixed, mixed + "z"):
+            with self.subTest(bad=bad):
+                self.refused({"base_branch": bad}, "base_branch", "40 hex digits in a row", "gitinfo")
+
     def test_decisions_scan(self):  # C14
         self.assertEqual(self.with_extra({"decisions": {"scan": []}})["decisions"]["scan"], [])
         self.assertEqual(self.with_extra({"decisions": {"scan": ["docs/**"]}})["decisions"]["scan"],

@@ -16,7 +16,7 @@ from gates.lib.result import GateError, GitNotFound
 
 _REGULAR = ("100644", "100755")
 _HEX = "0123456789abcdefABCDEF"
-_LONG_HEX = re.compile(r"[0-9a-fA-F]{41,}")  # longer than a sha-1: git would match it zero-padded (F-1a2r-5)
+LONG_HEX = re.compile(r"[0-9a-fA-F]{41,}")  # longer than a sha-1: git would match it zero-padded (F-1a2r-5)
 
 
 def _env() -> dict:
@@ -60,7 +60,7 @@ def _check_ref(ref: str) -> None:
 def _check_rev(ref: str) -> None:
     """_check_ref, and a ref holding more than 40 hex digits in a row is refused."""
     _check_ref(ref)
-    if _LONG_HEX.search(ref):
+    if LONG_HEX.search(ref):
         raise GateError("ref must not hold more than 40 hex digits in a row")
 
 
@@ -100,7 +100,7 @@ def commit_exists(root: str, sha: str) -> bool:
     and it is a prefix of more than one object (owner Q-1a2r-2). Any other value is git's own verdict
     (owner Q-1a2r-7). More than 40 hex digits in a row is refused (F-1a2r-5)."""
     _ensure_repo(root)
-    if sha.startswith("-") or _LONG_HEX.search(sha):
+    if sha.startswith("-") or LONG_HEX.search(sha):
         return False
     bare_hex = all(c in _HEX for c in sha)
     p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options", sha],
@@ -115,7 +115,7 @@ def commit_exists(root: str, sha: str) -> bool:
 
 def blob_exists(root: str, sha: str, path: str) -> bool:
     _ensure_repo(root)
-    if sha.startswith("-") or _LONG_HEX.search(sha):
+    if sha.startswith("-") or LONG_HEX.search(sha):
         return False
     p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", sha, "--", path], ok=None, literal=True)
     return any(mode in _REGULAR and name == path for mode, _, name in _entries(p.stdout, "ls-tree"))
