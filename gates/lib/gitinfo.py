@@ -89,6 +89,10 @@ def commit_exists(root: str, sha: str) -> bool:
     if p.returncode != 0:
         return False
     if len(sha) < 40 and all(c in "0123456789abcdefABCDEF" for c in sha):
+        ref = _run(root, "rev-parse --symbolic-full-name", ["rev-parse", "--symbolic-full-name", sha],
+                   ok=None)  # exit 128 for an ambiguous bare prefix: not a ref
+        if ref.returncode == 0 and ref.stdout.strip():
+            return True  # git resolves the value as a ref (branch, tag): the prefix rule does not apply
         d = _run(root, "rev-parse --disambiguate", ["rev-parse", "--disambiguate=" + sha])
         return len(d.stdout.split()) <= 1  # a prefix naming several objects (any type) is ambiguous
     return True

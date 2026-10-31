@@ -198,6 +198,39 @@ class CommitExistsTest(Fixture):
         self.assertIs(gitinfo.commit_exists(self.root, head[:4]), False)
         self.assertIs(gitinfo.commit_exists(self.root, head), True)  # the full sha is not ambiguous
         self.assertIs(gitinfo.commit_exists(self.root, head[:12]), True)
+        mixed = head[:4].upper()
+        mixed = mixed[:2] + mixed[2:].lower() if mixed != head[:4] else head[:4]
+        for value in (head[:4].upper(), mixed, head[:4].upper() + head[4:12]):  # case of the prefix
+            with self.subTest(value=value):
+                want = len(value) > 4
+                self.assertIs(gitinfo.commit_exists(self.root, value), want)
+
+    def test_hex_named_ref_resolves_as_a_ref(self):  # G3, F-1a2r-3
+        seen, i = {}, 0
+        while True:
+            data = b"ref%d\n" % i
+            h = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+            if h[:4] in seen:
+                pair = (seen[h[:4]], data)
+                break
+            seen[h[:4]] = data
+            i += 1
+        for data in pair:
+            subprocess.run(["git", "-C", self.root, "hash-object", "-w", "--stdin"], input=data,
+                           stdout=subprocess.PIPE, check=True)
+        name = h[:4]
+        self.assertIs(gitinfo.commit_exists(self.root, name), False)  # a pure prefix: ambiguous
+        git(self.root, "tag", name)
+        self.assertEqual(git(self.root, "rev-parse", "--verify", name + "^{commit}"),
+                         git(self.root, "rev-parse", "HEAD"))
+        self.assertIs(gitinfo.commit_exists(self.root, name), True)  # a tag git resolves
+        git(self.root, "tag", "-d", name)
+        self.assertIs(gitinfo.commit_exists(self.root, name), False)
+        git(self.root, "branch", name)
+        self.assertIs(gitinfo.commit_exists(self.root, name), True)  # a branch git resolves
+        git(self.root, "branch", "-D", name)
+        self.assertIs(gitinfo.commit_exists(self.root, name), False)
+        self.assertIs(gitinfo.commit_exists(self.root, git(self.root, "rev-parse", "HEAD")), True)
 
     def test_dash_value_is_never_passed_to_git(self):
         calls, patch = spy_runs()
