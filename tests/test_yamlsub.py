@@ -1,4 +1,5 @@
 """Tests for the strict YAML subset (gates.lib.yamlsub), through its public API."""
+import enum
 import os
 import random
 import tempfile
@@ -248,7 +249,9 @@ class TestEmit(unittest.TestCase):
         self.assertEqual(emit({"k": "12"}), 'k: "12"\n')
         self.assertEqual(emit({"k": "true"}), 'k: "true"\n')
         self.assertEqual(emit({"k": "a: b"}), 'k: "a: b"\n')
-        self.assertEqual(emit({"k": "a\tb"}), 'k: "a\\tb"\n')
+        self.assertEqual(emit({"k": "a\tb"}), 'k: a\tb\n')
+        self.assertEqual(emit({"k": "\ta"}), 'k: "\\ta"\n')
+        self.assertEqual(emit({"k": "a\t"}), 'k: "a\\t"\n')
         self.assertEqual(emit({"k": "two\n\n"}), 'k: "two\\n\\n"\n')
         self.assertEqual(emit({"k": "True"}), "k: True\n")
 
@@ -292,6 +295,196 @@ class TestEmit(unittest.TestCase):
             self.assertEqual(parse(out), v, repr(text))
             self.assertEqual(emit(parse(out)), out, repr(text))
         self.assertGreater(accepted, 100)
+
+
+class TestUnicodeWhitespaceIsContent(unittest.TestCase):
+    """F1: only space and tab are YAML whitespace; other Unicode whitespace is content."""
+    CHARS = ["\xa0", "\u3000", "\x85", "\u2028", "\u2029", "\u1680", "\u2003"]
+
+    def test_plain_values(self):
+        for c in self.CHARS:
+            for text, want in [(f"a: {c}x\n", c + "x"), (f"a: x{c}\n", "x" + c), (f"a: {c}\n", c),
+                               (f"a: x{c}y # note\n", "x" + c + "y")]:
+                self.assertEqual(parse(text), {"a": want}, repr(text))
+
+    def test_keys(self):
+        for c in self.CHARS:
+            self.assertEqual(parse(f"a{c}: 1\n"), {"a" + c: 1}, repr(c))
+            self.assertEqual(parse(f"{c}a: 1\n"), {c + "a": 1}, repr(c))
+
+    def test_flow_items(self):
+        for c in self.CHARS:
+            self.assertEqual(parse(f"[{c}a, b{c}, {c}]\n"), [c + "a", "b" + c, c], repr(c))
+
+    def test_after_quoted_scalar_is_refused(self):
+        for c in self.CHARS:
+            with self.assertRaises(YamlError, msg=repr(c)):
+                parse(f"a: 'x'{c}\n")
+
+    def test_block_scalar_lines(self):
+        for c in self.CHARS:
+            # an unindented Unicode-whitespace line is content of the document, not a blank line
+            with self.assertRaises(YamlError, msg=repr(c)):
+                parse(f"k: |\n  a\n{c}\n  b\n")
+            self.assertEqual(parse(f"k: |\n  a\n  {c}\n  b\n"), {"k": f"a\n{c}\nb\n"}, repr(c))
+
+    def test_round_trip(self):
+        for c in self.CHARS:
+            for v in [c, c + "x", "x" + c, {"k" + c: c}, [c], {"k": f"a\n{c}\nb\n"}]:
+                self.assertEqual(parse(emit(v)), v, repr(v))
+
+    def test_c1_is_not_a_refused_control_character(self):
+        self.assertEqual(parse("a: \x85\n"), {"a": "\x85"})
+
+
+class TestTabSeparators(unittest.TestCase):
+    """F2: a tab used as a separator after ':', '-' or ',' is refused with a line."""
+
+    def _refuse(self, text, line):
+        with self.assertRaises(YamlError, msg=repr(text)) as cm:
+            parse(text)
+        self.assertEqual(cm.exception.line, line, str(cm.exception))
+        self.assertIn("tab", cm.exception.reason)
+
+    def test_tab_after_colon(self):
+        self._refuse("a:\t1\n", 1)
+        self._refuse("x: 1\na:\t1\n", 2)
+        self._refuse("- a:\t1\n", 1)
+        self._refuse("k:\n  - a:\t1\n", 2)
+        self._refuse("\"a\":\t1\n", 1)
+        self._refuse("k: a:\tb\n", 1)
+
+    def test_tab_after_dash(self):
+        self._refuse("-\t1\n", 1)
+        self._refuse("- a\n-\tb\n", 2)
+        self._refuse("k:\n-\ta\n", 2)
+        self._refuse("k: -\ta\n", 1)
+        self._refuse("- \ta\n", 1)
+
+    def test_tab_in_flow_sequence(self):
+        self._refuse("[1,\t2]\n", 1)
+        self._refuse("[\t1]\n", 1)
+        self._refuse("k: [1\t, 2]\n", 1)
+        self._refuse("k: [1, 2\t]\n", 1)
+
+    def test_tab_inside_scalars_is_content(self):
+        self.assertEqual(parse("a: x\ty\n"), {"a": "x\ty"})
+        self.assertEqual(parse("a: \"x\\ty\"\n"), {"a": "x\ty"})
+        self.assertEqual(parse("a: [x\ty]\n"), {"a": ["x\ty"]})
+        self.assertEqual(parse("a: 1 \t# c\n"), {"a": 1})
+
+
+class TestBlockScalarBlankLines(unittest.TestCase):
+    """F3: leading blank-line indentation rule and tabs in blank lines."""
+
+    def test_over_indented_leading_blank_line_refused(self):
+        with self.assertRaises(YamlError) as cm:
+            parse("k: |\n     \n  a\n")
+        self.assertEqual(cm.exception.line, 2)
+
+    def test_leading_blank_line_within_indent_is_empty(self):
+        self.assertEqual(parse("k: |\n  \n\n  a\n"), {"k": "\n\na\n"})
+
+    def test_tab_in_blank_line_refused_not_dropped(self):
+        for text, line in [("k: |\n  a\n \t\n  b\n", 3), ("k: |\n  a\n  \t\n  b\n", 3),
+                           ("k: |\n\t\n  a\n", 2), ("k: |\n  a\n\t\n", 3)]:
+            with self.assertRaises(YamlError, msg=repr(text)) as cm:
+                parse(text)
+            self.assertEqual(cm.exception.line, line, repr(text))
+
+    def test_deeper_blank_line_after_content_is_preserved(self):
+        self.assertEqual(parse("k: |\n  a\n    \n  b\n"), {"k": "a\n  \nb\n"})
+
+
+class TestEmitMatchesParser(unittest.TestCase):
+    """F4, F5, F6 and R8."""
+
+    @staticmethod
+    def _nest(n, leaf, kind):
+        v = leaf
+        for i in range(n):
+            v = [v] if kind == "list" or (kind == "mixed" and i % 2 == 0) else {"k": v}
+        return v
+
+    def test_depth_boundary_matches_parser(self):
+        for kind in ("list", "dict", "mixed"):
+            for leaf in ("x", [], None, "a\nb\n"):
+                depth_leaf = 1 if leaf == [] else 0
+                ok = self._nest(50 - depth_leaf, leaf, kind)
+                self.assertEqual(parse(emit(ok)), ok, (kind, leaf))
+                with self.assertRaises(EmitError, msg=(kind, leaf)):
+                    emit(self._nest(51 - depth_leaf, leaf, kind))
+
+    def test_parser_refuses_exactly_what_emit_refuses_at_the_boundary(self):
+        too_deep = "- " * 50 + "[]\n"
+        with self.assertRaises(YamlError):
+            parse(too_deep)
+        self.assertEqual(parse("- " * 49 + "[]\n"), self._nest(49, [], "list"))
+
+    def test_emit_refuses_subclasses(self):
+        class Color(enum.IntEnum):
+            R = 1
+
+        class MyInt(int):
+            pass
+
+        class MyStr(str):
+            pass
+
+        class MyBool(int):
+            pass
+
+        class MyDict(dict):
+            pass
+
+        class MyList(list):
+            pass
+
+        for bad in [Color.R, MyInt(3), MyStr("x"), MyBool(1), MyDict(a=1), MyList([1]),
+                    {"a": Color.R}, [MyStr("x")], {MyStr("k"): 1}]:
+            with self.assertRaises(EmitError, msg=repr(bad)):
+                emit(bad)
+
+    def test_plain_when_it_reparses(self):
+        for s in ["?x", ":x", "a\tb", "-x", "<<x", "a:b", "a#b", "x ]", "}x"[1:], "it's", "\u2028x", "\xa0x"]:
+            self.assertEqual(emit({"k": s}), f"k: {s}\n", repr(s))
+            self.assertEqual(emit([s]), f"- {s}\n", repr(s))
+            self.assertEqual(emit(s), f"{s}\n", repr(s))
+        for s in ["?x", ":x", "a:b", "a#b"]:
+            self.assertEqual(emit({s: 1}), f"{s}: 1\n", repr(s))
+
+    def test_quoted_when_it_would_not_reparse(self):
+        for s in ["", "?", "? x", "- x", "-", "-\tx", "&a", "*a", "!a", "|", ">", "{a}", "[a]", "%", "@", "`", ",x",
+                  "]", "}", "'q'", '"q"', "#c", "a #b", "a: b", "a:", " a", "a ", "\ta", "a\t", "true", "false", "null",
+                  "~", "0", "-12", "---", "...", "--- x", "... x", "\x01", "\r", "\x7f"]:
+            self.assertEqual(emit({"k": s})[:4], 'k: "', repr(s))
+        for s in ["<<", "", "a: b", "- x"]:
+            self.assertEqual(emit({s: 1})[0], '"', repr(s))
+
+    def test_quoting_matches_parser_exhaustively_on_short_strings(self):
+        alphabet = ["a", " ", "\t", ":", "-", "?", "#", "[", "'", "~", "1"]
+        import itertools
+        for n in range(1, 4):
+            for combo in itertools.product(alphabet, repeat=n):
+                s = "".join(combo)
+                for v in ({"k": s}, [s], s, {s: 1}):
+                    self.assertEqual(parse(emit(v)), v, repr(v))
+                text = emit({"k": s})
+                if text != "k: " + s + "\n":  # quoted: the plain form must not have worked
+                    try:
+                        plain_ok = parse("k: " + s + "\n") == {"k": s} and parse("- " + s + "\n") == [s] \
+                            and parse(s + "\n") == s
+                    except YamlError:
+                        plain_ok = False
+                    self.assertFalse(plain_ok, repr(s))
+
+    def test_load_missing_and_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            for path in (os.path.join(d, "missing.yml"), d):
+                with self.assertRaises(YamlError, msg=path) as cm:
+                    load(path, "state/m.yml")
+                self.assertIn("state/m.yml", str(cm.exception))
+                self.assertEqual(cm.exception.line, 0)
 
 
 if __name__ == "__main__":

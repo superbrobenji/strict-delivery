@@ -14,6 +14,7 @@ MAX_DEPTH = 50
 MAX_INT_CHARS = 1000
 _INT = re.compile(r"-?(0|[1-9][0-9]*)\Z")
 _BAD_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f\ud800-\udfff]")
+_WS = " \t"  # YAML whitespace: space and tab only, never Unicode whitespace
 _HEX = set("0123456789abcdefABCDEF")
 _PLAIN_BAD_START = {
     "&": "anchors are not supported",
@@ -23,8 +24,6 @@ _PLAIN_BAD_START = {
     ">": "folded scalars are not supported",
 }
 _PLAIN_GENERIC_BAD = "%@`,]}"
-_EMIT_QUOTE_FIRST = "&*!>{}[]%@`|'\"#,?:"
-_RESERVED = ("true", "false", "null", "~", "<<", "---", "...")
 
 
 class YamlError(Exception):
@@ -47,8 +46,10 @@ def _check_start(text: str, lineno: int) -> None:
     c = text[0]
     if c in _PLAIN_BAD_START:
         raise YamlError(lineno, _PLAIN_BAD_START[c])
-    if c in _PLAIN_GENERIC_BAD or (c == "?" and (len(text) == 1 or text[1] == " ")):
+    if c in _PLAIN_GENERIC_BAD or (c == "?" and (len(text) == 1 or text[1] in _WS)):
         raise YamlError(lineno, f"plain scalar may not start with {c!r}")
+    if text.startswith("-\t"):
+        raise YamlError(lineno, "tab used as a separator after '-'")
     if text == "-" or text.startswith("- "):
         raise YamlError(lineno, "plain scalar may not start with '- '")
 
@@ -120,9 +121,9 @@ def _quoted(s: str, pos: int, lineno: int) -> tuple:
 
 def _only_comment(rest: str, lineno: int, what: str) -> None:
     """Require that rest is blank or a comment preceded by whitespace."""
-    if rest.strip() == "":
+    if rest.strip(_WS) == "":
         return
-    if rest[0] in " \t" and rest.lstrip().startswith("#"):
+    if rest[0] in _WS and rest.lstrip(_WS).startswith("#"):
         return
     raise YamlError(lineno, f"unexpected text after {what}")
 
@@ -130,19 +131,21 @@ def _only_comment(rest: str, lineno: int, what: str) -> None:
 def _cut_comment(text: str) -> str:
     """Cut a plain scalar at the first whitespace-preceded '#'."""
     for i, c in enumerate(text):
-        if c == "#" and i > 0 and text[i - 1] in " \t":
+        if c == "#" and i > 0 and text[i - 1] in _WS:
             return text[:i]
     return text
 
 
 def _plain(text: str, lineno: int, flow: bool = False) -> object:
     """Validate and resolve a plain scalar (comment already removed)."""
-    text = text.strip()
+    text = text.strip(_WS)
     if not text:
         raise YamlError(lineno, "empty scalar")
     _check_start(text, lineno)
-    if ": " in text or text.endswith(":"):
-        raise YamlError(lineno, "':' followed by a space is not allowed in a plain scalar")
+    if re.search(r":\t", text):
+        raise YamlError(lineno, "tab used as a separator after ':'")
+    if re.search(r":([ \t]|\Z)", text):
+        raise YamlError(lineno, "':' followed by whitespace is not allowed in a plain scalar")
     if flow and any(c in "[{}" for c in text):
         raise YamlError(lineno, "nested flow collections are not supported")
     return _resolve(text, lineno)
@@ -155,7 +158,9 @@ def _flow(s: str, lineno: int) -> list:
     out = []
 
     def skip(j):
-        while j < n and s[j] in " \t":
+        while j < n and s[j] in _WS:
+            if s[j] == "\t":
+                raise YamlError(lineno, "tab used as a separator in a flow sequence")
             j += 1
         return j
 
@@ -176,6 +181,8 @@ def _flow(s: str, lineno: int) -> list:
                 if j >= n:
                     raise YamlError(lineno, "unterminated flow sequence")
                 chunk = s[i:j]
+                if chunk.endswith("\t"):
+                    raise YamlError(lineno, "tab used as a separator in a flow sequence")
                 if _cut_comment(chunk) != chunk:
                     raise YamlError(lineno, "comment inside a flow sequence")
                 v = _plain(chunk, lineno, flow=True)
@@ -197,8 +204,20 @@ def _flow(s: str, lineno: int) -> list:
     return out
 
 
-def _is_item(content: str) -> bool:
+def _is_item(content: str, lineno: int) -> bool:
+    """True for a '- ' sequence item line; a tab after '-' is refused."""
+    if content.startswith("-\t"):
+        raise YamlError(lineno, "tab used as a separator after '-'")
     return content == "-" or content.startswith("- ")
+
+
+def _colon_sep(content: str, j: int, lineno: int) -> bool:
+    """True if the ':' at content[j] is a key separator; a tab after it is refused."""
+    if j + 1 == len(content) or content[j + 1] == " ":
+        return True
+    if content[j + 1] == "\t":
+        raise YamlError(lineno, "tab used as a separator after ':'")
+    return False
 
 
 class _Parser:
@@ -216,13 +235,13 @@ class _Parser:
                 ind, content = self.over[i]
                 return i, i + 1, ind, content
             raw = self.lines[i]
-            if raw.strip() == "" or raw.strip().startswith("#"):
+            if raw.strip(_WS) == "" or raw.strip(_WS).startswith("#"):
                 i += 1
                 continue
             ind = len(raw) - len(raw.lstrip(" "))
             if raw[ind] == "\t":
                 raise YamlError(i + 1, "tab in indentation")
-            content = raw[ind:].rstrip()
+            content = raw[ind:].rstrip(_WS)
             if ind == 0 and (content in ("---", "...") or content.startswith(("--- ", "... "))):
                 raise YamlError(i + 1, "document markers are not supported")
             return i, i + 1, ind, content
@@ -234,9 +253,9 @@ class _Parser:
         if c in "\"'":
             key, end = _quoted(content, 0, lineno)
             j = end
-            while j < len(content) and content[j] in " \t":
+            while j < len(content) and content[j] in _WS:
                 j += 1
-            if j < len(content) and content[j] == ":" and (j + 1 == len(content) or content[j + 1] == " "):
+            if j < len(content) and content[j] == ":" and _colon_sep(content, j, lineno):
                 return key, content[j + 1:]
             return None
         if c == "[":
@@ -245,10 +264,10 @@ class _Parser:
             return None
         _check_start(content, lineno)
         for j, ch in enumerate(content):
-            if ch == "#" and j > 0 and content[j - 1] in " \t":
+            if ch == "#" and j > 0 and content[j - 1] in _WS:
                 return None
-            if ch == ":" and (j + 1 == len(content) or content[j + 1] == " "):
-                key = content[:j].rstrip()
+            if ch == ":" and _colon_sep(content, j, lineno):
+                key = content[:j].rstrip(_WS)
                 if key == "":
                     raise YamlError(lineno, "empty key")
                 if key == "<<":
@@ -263,7 +282,7 @@ class _Parser:
         if self.depth > MAX_DEPTH:
             raise YamlError(lineno, "nesting too deep")
         try:
-            if _is_item(content):
+            if _is_item(content, lineno):
                 return self.seq(indent)
             if self.detect_key(content, lineno) is not None:
                 return self.mapping(indent)
@@ -279,10 +298,10 @@ class _Parser:
         p = self.peek()
         if p is None:
             return None
-        _, _, ind, content = p
+        _, plineno, ind, content = p
         if ind > parent_indent:
             return self.block(ind, False)
-        if seq_at_parent and ind == parent_indent and _is_item(content):
+        if seq_at_parent and ind == parent_indent and _is_item(content, plineno):
             self.depth += 1
             try:
                 if self.depth > MAX_DEPTH:
@@ -303,7 +322,7 @@ class _Parser:
                 break
             if ind > indent:
                 raise YamlError(lineno, "inconsistent indentation")
-            if _is_item(content):
+            if _is_item(content, lineno):
                 raise YamlError(lineno, "unexpected sequence item in a mapping")
             kv = self.detect_key(content, lineno)
             if kv is None:
@@ -312,7 +331,7 @@ class _Parser:
             if key in result:
                 raise YamlError(lineno, f"duplicate key {key!r}")
             self.pos = idx + 1
-            rest = rest.strip()
+            rest = rest.strip(_WS)
             if rest == "" or rest.startswith("#"):
                 result[key] = self.nested(indent, lineno, True)
             else:
@@ -330,15 +349,17 @@ class _Parser:
                 break
             if ind > indent:
                 raise YamlError(lineno, "inconsistent indentation")
-            if not _is_item(content):
+            if not _is_item(content, lineno):
                 break
             after = content[1:]
             rest = after.lstrip(" ")
+            if rest.startswith("\t"):
+                raise YamlError(lineno, "tab used as a separator after '-'")
             col = indent + 1 + (len(after) - len(rest))
             if rest == "" or rest.startswith("#"):
                 self.pos = idx + 1
                 result.append(self.nested(indent, lineno, False))
-            elif _is_item(rest) or self.detect_key(rest, lineno) is not None:
+            elif _is_item(rest, lineno) or self.detect_key(rest, lineno) is not None:
                 self.over[idx] = (col, rest)
                 self.pos = idx
                 result.append(self.block(col, False))
@@ -372,12 +393,16 @@ class _Parser:
         ci = None
         end = start
         body = []
+        lead = []  # (lineno, length) of blank lines before the first content line
         while end < len(self.lines):
             raw = self.lines[end]
-            if raw.strip() == "":
-                if ci is not None and len(raw) > ci:
-                    if "\t" in raw:
-                        raise YamlError(end + 1, "tab in indentation")
+            if raw.strip(_WS) == "":
+                if "\t" in raw:
+                    raise YamlError(end + 1, "tab in indentation")
+                if ci is None:
+                    lead.append((end + 1, len(raw)))
+                    body.append("")
+                elif len(raw) > ci:
                     body.append(raw[ci:])
                 else:
                     body.append("")
@@ -388,6 +413,9 @@ class _Parser:
                 if ind < min_ind:
                     break
                 ci = ind
+                for ln, length in lead:
+                    if length > ci:
+                        raise YamlError(ln, "blank line indented deeper than the block scalar content")
             elif ind < ci:
                 break
             if raw[ind] == "\t":
@@ -420,8 +448,11 @@ def parse(text: str) -> object:
 
 def load(path: str, shown: str) -> object:
     """Read, decode and parse a file; every YamlError names ``shown``."""
-    with open(path, "rb") as fh:
-        data = fh.read()
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as e:
+        raise YamlError(0, f"{shown}: cannot read file ({e.strerror or type(e).__name__})") from None
     if data.startswith(b"\xef\xbb\xbf"):
         data = data[3:]
     try:
@@ -437,15 +468,23 @@ def load(path: str, shown: str) -> object:
 
 # ---------------------------------------------------------------- emitting
 
-def _plain_ok(s: str) -> bool:
-    """True if s written plain re-parses as the same str (conservative)."""
-    if s == "" or s in _RESERVED or _INT.match(s):
+def _reparses(text: str, expected: object) -> bool:
+    try:
+        return parse(text) == expected
+    except YamlError:
         return False
-    if not s.isprintable() or s != s.strip(" "):
+
+
+def _plain_ok(s: str, key: bool = False) -> bool:
+    """True if s written plain re-parses, in every position, as the same str.
+
+    The decision runs the real parser on the plain form, so it can never drift
+    from it."""
+    if s == "" or "\n" in s:
         return False
-    if s[0] in _EMIT_QUOTE_FIRST or s == "-" or s.startswith("- "):
-        return False
-    return ": " not in s and " #" not in s and not s.endswith(":") and not s.startswith(("--- ", "... "))
+    if key:
+        return _reparses(s + ": v", {s: "v"})
+    return _reparses("k: " + s, {"k": s}) and _reparses("- " + s, [s]) and _reparses(s, s)
 
 
 def _dq(s: str) -> str:
@@ -467,8 +506,8 @@ def _dq(s: str) -> str:
     return "".join(out)
 
 
-def _str_text(s: str) -> str:
-    return s if _plain_ok(s) else _dq(s)
+def _str_text(s: str, key: bool = False) -> str:
+    return s if _plain_ok(s, key) else _dq(s)
 
 
 def _block_form(s: str):
@@ -499,7 +538,7 @@ def _scalar_text(v: object) -> str:
         return "true"
     if v is False:
         return "false"
-    if isinstance(v, int):
+    if type(v) is int:
         try:
             text = str(v)
         except ValueError:
@@ -507,7 +546,7 @@ def _scalar_text(v: object) -> str:
         if len(text) > MAX_INT_CHARS:
             raise EmitError("integer too large")
         return text
-    if isinstance(v, str):
+    if type(v) is str:
         _check_str(v)
         return _str_text(v)
     raise EmitError(f"cannot emit {type(v).__name__}")
@@ -517,15 +556,17 @@ def _value_lines(v: object, indent: int, depth: int):
     """Lines for a non-container or container value placed after 'key:' or '- '.
 
     Returns (inline_text or None, following_lines)."""
-    if isinstance(v, dict):
+    if type(v) is dict:
         if not v:
             raise EmitError("empty mapping cannot be emitted")
         return None, _lines(v, indent, depth + 1)
-    if isinstance(v, list):
+    if type(v) is list:
         if not v:
+            if depth + 1 > MAX_DEPTH:  # the parser counts a flow '[]' as one level
+                raise EmitError("nesting too deep")
             return "[]", []
         return None, _lines(v, indent, depth + 1)
-    if isinstance(v, str):
+    if type(v) is str:
         _check_str(v)
         bf = _block_form(v)
         if bf is not None:
@@ -540,13 +581,13 @@ def _lines(v: object, indent: int, depth: int):
         raise EmitError("nesting too deep")
     pad = " " * indent
     out = []
-    if isinstance(v, dict):
+    if type(v) is dict:
         for k, val in v.items():
-            if not isinstance(k, str):
+            if type(k) is not str:
                 raise EmitError("mapping keys must be str")
             _check_str(k)
             inline, rest = _value_lines(val, indent + 2, depth)
-            out.append(pad + _str_text(k) + ":" + (" " + inline if inline is not None else ""))
+            out.append(pad + _str_text(k, True) + ":" + (" " + inline if inline is not None else ""))
             out.extend(rest)
         return out
     for item in v:
@@ -563,9 +604,9 @@ def _lines(v: object, indent: int, depth: int):
 def emit(value: object) -> str:
     """Canonical text for value, ending in one newline."""
     try:
-        if isinstance(value, (dict, list)) and value:
+        if type(value) in (dict, list) and value:
             return "\n".join(_lines(value, 0, 1)) + "\n"
-        inline, rest = _value_lines(value, 2, 1)
+        inline, rest = _value_lines(value, 2, 0)
         if inline is None or rest:
             return "\n".join([inline] + rest) + "\n"
         return inline + "\n"
