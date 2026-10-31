@@ -206,7 +206,9 @@ Lean tree. Three kinds of path:
   the effort that resolved them). After a merge, and at a program's close, the cleanup step
   deletes them from the tree. They stay in git history. Evidence that cites them uses the form
   `<sha>:<path>`, resolved with `git cat-file` (and required to name a commit in the
-  repository), never a file at HEAD.
+  repository), never a file at HEAD. A finding's evidence entry is a commit sha, a
+  `<sha>:<path>`, or a plain path tracked at HEAD that lies outside every per-effort path and
+  outside the findings directory, open findings included (owner answers 2026-10-31).
 - Ignored, never committed: generated files (state indexes, `in-force.md`, `INDEX.md`), read
   receipts, agent scratch workspaces. The SessionStart hook, `python3 -m gates index` and CI
   (when installed) regenerate the generated files before use.
@@ -217,7 +219,12 @@ Lean tree. Three kinds of path:
 
 ## 6. Config and the YAML subset
 
-`config.yml` keys (required unless marked):
+`config.yml` keys. Only `schema`, `framework_version` and `profile` are required in the file;
+every other key may be omitted. The keys with a fixed default are `paths`, `ids`,
+`models.tiers`, `decision_classes.owner_only`, `drift.estimate_factor_pct`, `base_branch` and
+`decisions.scan`, as listed below; a profile presets some others, such as the block size cap
+(section 12). A key whose reader has not landed yet is optional in `config/1` and becomes
+required, if at all, in a later schema version with a migration (owner answer 2026-10-31).
 
 - `framework_version`, `profile` (light | standard | strict).
 - `commands`: `test`, `test_one` (a template holding `{id}`), `lint`, `build` (each a shell
@@ -226,12 +233,21 @@ Lean tree. Three kinds of path:
 - `paths`: every path in section 5.
 - `ids`: the id format of section 7.2 (`<PREFIX>-<YYYYMMDD>-<xxxx>`, prefixes `DEC`, `F`,
   `C`, `R`).
-- `models.tiers`: tier name to model id (defaults: tier1 haiku, tier2 sonnet, tier3 opus,
-  tier4 the top-tier model). `roles` (section 10). `top_tier_roles`, `top_tier_fallback`.
+- `models.tiers`: tier name to model id (defaults: tier1 haiku, tier2 sonnet, tier3 opus;
+  tier4 has no default: a project that uses top-tier roles sets it). `roles` (section 10).
+  `top_tier_roles`, `top_tier_fallback`.
 - `decision_classes.owner_only`: default list in section 7.1; projects add their own
-  (for example `hardware`).
+  (for example `hardware`). The project's list is added to the defaults, a union: a project
+  cannot drop a default class (owner answer 2026-10-31).
 - `block.max_tasks`, `rulings.max_per_block`, `dispatch.max_prompt_chars`, budgets per role.
-- `drift.estimate_factor` (optional, default 1.5; `gate_drift`, section 9).
+- `drift.estimate_factor_pct` (optional, default 150, an integer percent: the YAML subset has
+  no floats; `gate_drift`, section 9).
+- `base_branch` (optional, default `main`): the base branch. Gates default `--base` to it; they
+  check deletions and immutability against the merge base with it and id collisions against its
+  tip (section 7.2; owner answer 2026-10-31).
+- `decisions.scan` (optional, default `docs/**`, `CLAUDE.md`, `.strict-delivery/playbooks/**`):
+  the tracked files `gate_decisions` scans for references to unanswered decision ids; files under
+  the state directory are never scanned (section 7.1; owner answer 2026-10-31).
 - `overrides`: profile keys changed for this repository; each entry names the owner decision
   that authorised it.
 
@@ -260,7 +276,8 @@ owner's exact words. In a plain plan the same holds for the controller's session
 records the git identity (`git config user.email`) as `answered_at.by`. A hand edit of a record
 cannot be told apart from a tool write; it is valid when the schema holds, and pull-request review
 is where a human checks who answered. Nothing may reference an unanswered decision id
-(`gate_decisions`).
+(`gate_decisions`, over the tracked files matching `decisions.scan`, section 6; the state
+directory, where handoffs, status pages and records list open ids by design, is not scanned).
 
 Default owner-only classes: audit triage, spec-vs-code direction, plan scope, merge grants,
 model and cost policy, closing an issue, narrowing or widening a finding's class, rule
@@ -273,30 +290,46 @@ approved plan, only plan-vs-spec or task-vs-task conflicts the spec settles, at 
 Row fields: `id`, `status` (open | answered | withdrawn), `class`, `question`,
 `options[{label, cost}]`, `asked_at`, `asked_by`, `topics`, `applies_to` (path globs),
 `checked_against` (ids), `effect` (lasting | one-off), `supersedes` (optional id), then on
-answer `answer`, `answered_at{at, by}`, `landed_in` (required when `effect: lasting`).
-Superseded is not a status: a decision is superseded when a later decision names it in
-`supersedes`. The decision schema (appendix A) holds the exact shape. Grants use class
+answer `answer`, `answered_at{at, by}`, `landed_in` (required when `effect: lasting`) and the
+optional `rule` (a one-line rule summary, written at `decide`); on withdrawal
+`withdrawn{at, by, reason}` instead of the answer fields (owner answers 2026-10-31).
+`asked_at`, `answered_at.at` and `withdrawn.at` are commit shas checked for shape only (7 to 40
+lowercase hex characters), never for existence; `decide` and `withdraw` refuse when
+`git config user.email` is unset (owner answers 2026-10-31).
+Superseded is not a status: a decision is superseded when a later answered decision names it
+in `supersedes`. At most one open or answered decision may name a given id in `supersedes`;
+a withdrawn one is ignored, and `ask` refuses a second (owner answer 2026-10-31). The decision schema (appendix A) holds the exact shape. Grants use class
 `merge-grant` and name the plan; a grant inside a program also names the program and the
-stream.
+stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant; `program` and
+`stream` together or not at all; none of the three on any other class; owner answer 2026-10-31).
 
 ### 7.2 Storage and ids
 
 - Ids: `<PREFIX>-<YYYYMMDD>-<xxxx>`: prefix `DEC` (decision), `F` (finding), `C` (claim) or
   `R` (cross-stream request); the UTC creation date; four characters from the lowercase base32
-  alphabet without `0`, `1`, `l`, `o`, drawn at random. Example `DEC-20261031-k3f9`. No
-  person's name or handle appears in any id. Within one program only the program controller
-  mints ids; a plain plan's controller mints its own.
+  alphabet without `0`, `1`, `l`, `o`, drawn at random. Example `DEC-20261031-k3f9`. The date
+  must be a valid calendar date and is never compared with the clock (owner answer
+  2026-10-31). No person's name or handle appears in any id. Within one program only the
+  program controller mints ids; a plain plan's controller mints its own.
 - One file per record, named by id. Decisions and findings carry `status`; a record stays in
   its folder whatever its status, and no status has a folder of its own.
 - Shapes: `gate_decisions` and `gate_register` read record fields from the decision and
   finding schemas, and `gate_claims` from the claim schema (appendix A), never from
   hand-coded field lists.
 - Invariants (`gate_decisions`, `gate_register`): no id appears twice across the tree, and a
-  pull request's ids are checked against the base branch too; a resolved record is immutable
-  (a change is a new decision with `supersedes`); a decision's `landed_in` is never a spec.
+  pull request's ids are checked against the base branch too (config `base_branch`, section 6;
+  deletions and immutability are checked against the merge base with it); a resolved record is
+  immutable (a change is a new decision with `supersedes`), except that a finding's status moves
+  from `closed` to `merged`, set only by the cleanup step (owner answer 2026-10-31); a
+  decision's `landed_in` is never a spec. `gate_register` also reads every tracked file under
+  `paths.reviews` whose first line is a `review-report` schema line, and fails when a finding
+  id in it names no finding record (owner answer 2026-10-31).
 - No-delete rule: a decision, open finding or claim file present on the base branch may not be
   deleted by a branch. The only deletions allowed are the cleanup step's (resolved findings and
-  per-effort files, section 5).
+  per-effort files, section 5). Until `gate_cleanup` lands (programs block), `gate_register`
+  lets a branch delete a resolved finding only when an answered `merge-grant` names its
+  `resolved_by` plan; the merge-commit check arrives with `gate_cleanup` (owner answer
+  2026-10-31).
 - "Resolved" covers answered, withdrawn and superseded decisions; resolved decisions are
   permanent, and resolved rulings stay binding.
 - Findings: an open finding (status open, planned, in-progress, fixed-unpinned, pinned or
@@ -322,7 +355,9 @@ step. Hand edits remain valid when the schema holds; gates check them.
    playbook, CLAUDE.md or `architecture.md`; the decision's `landed_in` cites that place and
    the place cites the decision id. Specs may cite decision ids to mark where and why a
    decision was made, but a spec is never a `landed_in`, because specs are cleaned. Gate:
-   `effect: lasting` requires `landed_in`, the cite resolves, and it is not a spec.
+   `effect: lasting` requires `landed_in`, the cite resolves, and it is not a spec. The cite is
+   a file under `paths.playbooks`, `CLAUDE.md` or `paths.architecture` that contains the
+   decision id; its anchor is checked by `gate_cites` (owner answer 2026-10-31).
 2. Scope tags: `applies_to` path globs and `topics`. At dispatch, the brief's file list is
    matched and in-force decisions are listed in the dispatch check output. On Edit/Write, the
    PreToolUse hook prints matching in-force decisions once per session.
@@ -331,8 +366,9 @@ step. Hand edits remain valid when the schema holds; gates check them.
 4. `decisions ask` runs `find` on the new question's topics, paths and keywords and prints
    candidates; the row must carry `checked_against`. Whether a candidate is a true duplicate
    is reviewer judgment.
-5. `in-force.md`, generated: one line per lasting decision still in effect (id, topic, rule
-   summary, landed_in). Grants, one-off triage and superseded rows are excluded.
+5. `in-force.md`, generated: one table row per lasting decision still in effect (id, topic,
+   rule summary, landed_in); the rule summary is the decision's `rule` field. Grants, one-off
+   triage and superseded rows are excluded.
 
 Default session load: `in-force.md` and the open decisions. Everything else via `find` or path
 surfacing.
@@ -407,7 +443,7 @@ SessionStart lists active overrides. Project rules live in `.strict-delivery/pla
   when available, GitHub; pending decisions on a status page match open decision records; a
   stream branch behind `<program>/integration`, or an integration branch behind main, fails
   until a sync (a sync merges main into the integration branch, section 8); a block past
-  `drift.estimate_factor` of its estimate is reported to the owner.
+  `drift.estimate_factor_pct` percent of its estimate is reported to the owner.
 - `gate_index`: `docs/strict-delivery/INDEX.md` and the state indexes regenerate without error,
   and none of them is tracked (a tracked generated file fails).
 - `gate_checkpoint`: handoff front matter matches its schema (plan, spec, branch, head, base,
@@ -653,6 +689,15 @@ gate or tool that produces that kind lands. `gate_schema` fails when a required 
 schema file, or when a schema file is not named in this table; kinds whose producer has not
 landed are not checked. A kind's producer has landed when a gate or tool in the installed
 framework version declares that kind in its `produces` list; `gate_schema` reads those lists.
+One stated exception: `gate_schema` always checks the config kind, though no gate or tool
+produces it before `init` (owner answer 2026-10-31). Every schema refuses a key it does not
+declare. A generated file (in-force, decision-index, finding-index, overview) that is absent on
+disk is skipped, since it is regenerated before use (owner answers 2026-10-31). The decision
+schema carries the optional `rule`, the `withdrawn{at, by, reason}` map and the grant fields
+`plan`, `program` and `stream` (section 7.1). The first overview version, `overview/1`, holds
+only the sections block 1 can fill (architecture, open findings, in-force decisions); the
+specs-and-plans and live-program sections come in `overview/2` with a migration (owner answer
+2026-10-31).
 Block 1 carries the config, decision and finding schemas, plus the generated in-force,
 decision-index, finding-index and overview kinds, because block 1's tools produce them
 (section 17).

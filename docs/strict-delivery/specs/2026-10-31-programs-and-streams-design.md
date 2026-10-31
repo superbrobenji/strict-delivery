@@ -297,7 +297,7 @@ branches never carry a copy, so rows never conflict at a merge.
 - `gate_drift`: status-row branches and heads match git; pending decisions match open records;
   a stream branch behind `<program>/integration`, or an integration branch behind main, fails
   until a sync; a block past
-  `drift.estimate_factor` (default 1.5) of its estimate is reported to the owner.
+  `drift.estimate_factor_pct` percent (default 150) of its estimate is reported to the owner.
 - `gate_index`: INDEX.md and indexes regenerate without error and none is tracked.
 - `gate_cleanup` (post-merge and at program close): the merged plan's or closed program's
   per-effort files are gone from the tree, and every lasting decision they produced has a
@@ -388,6 +388,6 @@ rules above.
 - Stacking declared as `stacked_on` in `streams.yml`.
 - Child worktree and branch naming in section 4.1.
 - Decisions and findings carry `status` (decisions: `open | answered | withdrawn`; superseded is
-  derived from a later `supersedes`); resolved findings stay in `state/findings/` with a resolved
-  status until the cleanup removes them.
+  derived from a later answered decision's `supersedes`); resolved findings stay in
+  `state/findings/` with a resolved status until the cleanup removes them.
 - `gate_cleanup` is delivered in the programs block and covers both programs and plain plans.
