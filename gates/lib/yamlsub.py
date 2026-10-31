@@ -446,6 +446,13 @@ def parse(text: str) -> object:
     return value
 
 
+def _file_text(data: bytes) -> str:
+    """The text load() hands to parse: one leading BOM stripped, CRLF normalised."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    return data.decode("utf-8").replace("\r\n", "\n")
+
+
 def load(path: str, shown: str) -> object:
     """Read, decode and parse a file; every YamlError names ``shown``."""
     try:
@@ -453,13 +460,10 @@ def load(path: str, shown: str) -> object:
             data = fh.read()
     except OSError as e:
         raise YamlError(0, f"{shown}: cannot read file ({e.strerror or type(e).__name__})") from None
-    if data.startswith(b"\xef\xbb\xbf"):
-        data = data[3:]
     try:
-        text = data.decode("utf-8")
+        text = _file_text(data)
     except UnicodeDecodeError:
         raise YamlError(0, f"{shown}: not valid UTF-8") from None
-    text = text.replace("\r\n", "\n")
     try:
         return parse(text)
     except YamlError as e:
@@ -469,22 +473,27 @@ def load(path: str, shown: str) -> object:
 # ---------------------------------------------------------------- emitting
 
 def _reparses(text: str, expected: object) -> bool:
+    """True if text, written to a file and read back by load(), parses to expected."""
     try:
-        return parse(text) == expected
-    except YamlError:
+        return parse(_file_text(text.encode("utf-8"))) == expected
+    except (YamlError, UnicodeError):
         return False
 
 
-def _plain_ok(s: str, key: bool = False) -> bool:
-    """True if s written plain re-parses, in every position, as the same str.
+def _plain_ok(s: str, pos: str) -> bool:
+    """True if s written plain at pos ('key', 'value', 'item', 'top') comes back as the same str.
 
-    The decision runs the real parser on the plain form, so it can never drift
-    from it."""
+    The decision runs the real parser (through load's byte path) on the plain
+    form, so it cannot drift from either."""
     if s == "" or "\n" in s:
         return False
-    if key:
+    if pos == "key":
         return _reparses(s + ": v", {s: "v"})
-    return _reparses("k: " + s, {"k": s}) and _reparses("- " + s, [s]) and _reparses(s, s)
+    if pos == "value":
+        return _reparses("k: " + s, {"k": s})
+    if pos == "item":
+        return _reparses("- " + s, [s])
+    return _reparses(s, s)
 
 
 def _dq(s: str) -> str:
@@ -506,8 +515,8 @@ def _dq(s: str) -> str:
     return "".join(out)
 
 
-def _str_text(s: str, key: bool = False) -> str:
-    return s if _plain_ok(s, key) else _dq(s)
+def _str_text(s: str, pos: str) -> str:
+    return s if _plain_ok(s, pos) else _dq(s)
 
 
 def _block_form(s: str):
@@ -531,7 +540,7 @@ def _check_str(s: str) -> None:
         raise EmitError("string contains a lone surrogate")
 
 
-def _scalar_text(v: object) -> str:
+def _scalar_text(v: object, pos: str) -> str:
     if v is None:
         return "null"
     if v is True:
@@ -548,11 +557,11 @@ def _scalar_text(v: object) -> str:
         return text
     if type(v) is str:
         _check_str(v)
-        return _str_text(v)
+        return _str_text(v, pos)
     raise EmitError(f"cannot emit {type(v).__name__}")
 
 
-def _value_lines(v: object, indent: int, depth: int):
+def _value_lines(v: object, indent: int, depth: int, pos: str):
     """Lines for a non-container or container value placed after 'key:' or '- '.
 
     Returns (inline_text or None, following_lines)."""
@@ -572,7 +581,7 @@ def _value_lines(v: object, indent: int, depth: int):
         if bf is not None:
             header, body = bf
             return header, [" " * indent + ln if ln else "" for ln in body]
-    return _scalar_text(v), []
+    return _scalar_text(v, pos), []
 
 
 def _lines(v: object, indent: int, depth: int):
@@ -586,12 +595,12 @@ def _lines(v: object, indent: int, depth: int):
             if type(k) is not str:
                 raise EmitError("mapping keys must be str")
             _check_str(k)
-            inline, rest = _value_lines(val, indent + 2, depth)
-            out.append(pad + _str_text(k, True) + ":" + (" " + inline if inline is not None else ""))
+            inline, rest = _value_lines(val, indent + 2, depth, "value")
+            out.append(pad + _str_text(k, "key") + ":" + (" " + inline if inline is not None else ""))
             out.extend(rest)
         return out
     for item in v:
-        inline, rest = _value_lines(item, indent + 2, depth)
+        inline, rest = _value_lines(item, indent + 2, depth, "item")
         if inline is not None:
             out.append(pad + "- " + inline)
             out.extend(rest)
@@ -606,7 +615,7 @@ def emit(value: object) -> str:
     try:
         if type(value) in (dict, list) and value:
             return "\n".join(_lines(value, 0, 1)) + "\n"
-        inline, rest = _value_lines(value, 2, 0)
+        inline, rest = _value_lines(value, 2, 0, "top")
         if inline is None or rest:
             return "\n".join([inline] + rest) + "\n"
         return inline + "\n"

@@ -8,6 +8,10 @@ import unittest
 from gates.lib.yamlsub import EmitError, YamlError, emit, load, parse
 
 
+def _dq_text(s):
+    return '"' + s + '"\n'
+
+
 def _load_bytes(data, shown="x.yml"):
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "f.yml")
@@ -17,6 +21,15 @@ def _load_bytes(data, shown="x.yml"):
 
 
 class TestParse(unittest.TestCase):
+    def test_unicode_whitespace_line_is_not_blank_or_comment(self):
+        """N2: kills an argument-less strip() in the blank/comment skip."""
+        self.assertEqual(parse("\xa0\n"), "\xa0")
+        self.assertEqual(parse("\xa0# c\n"), "\xa0# c")
+        self.assertEqual(parse("\u3000\n"), "\u3000")
+        with self.assertRaises(YamlError) as cm:
+            parse("a: 1\n\u3000\n")
+        self.assertEqual(cm.exception.line, 2)
+
     def test_mapping_sequence_and_scalars(self):
         text = "a: 1\nb: [x, \"y z\"]\nc:\n  - k: v\n    n: null\nd: |\n  line1\n  line2\n"
         self.assertEqual(parse(text), {"a": 1, "b": ["x", "y z"], "c": [{"k": "v", "n": None}], "d": "line1\nline2\n"})
@@ -456,7 +469,7 @@ class TestEmitMatchesParser(unittest.TestCase):
     def test_quoted_when_it_would_not_reparse(self):
         for s in ["", "?", "? x", "- x", "-", "-\tx", "&a", "*a", "!a", "|", ">", "{a}", "[a]", "%", "@", "`", ",x",
                   "]", "}", "'q'", '"q"', "#c", "a #b", "a: b", "a:", " a", "a ", "\ta", "a\t", "true", "false", "null",
-                  "~", "0", "-12", "---", "...", "--- x", "... x", "\x01", "\r", "\x7f"]:
+                  "~", "0", "-12", "\x01", "\r", "\x7f"]:
             self.assertEqual(emit({"k": s})[:4], 'k: "', repr(s))
         for s in ["<<", "", "a: b", "- x"]:
             self.assertEqual(emit({s: 1})[0], '"', repr(s))
@@ -469,14 +482,39 @@ class TestEmitMatchesParser(unittest.TestCase):
                 s = "".join(combo)
                 for v in ({"k": s}, [s], s, {s: 1}):
                     self.assertEqual(parse(emit(v)), v, repr(v))
-                text = emit({"k": s})
-                if text != "k: " + s + "\n":  # quoted: the plain form must not have worked
-                    try:
-                        plain_ok = parse("k: " + s + "\n") == {"k": s} and parse("- " + s + "\n") == [s] \
-                            and parse(s + "\n") == s
+                for text, plain, want in [(emit({"k": s}), "k: " + s + "\n", {"k": s}),
+                                          (emit([s]), "- " + s + "\n", [s]),
+                                          (emit(s), s + "\n", s)]:
+                    if text == plain:
+                        continue
+                    try:  # quoted or block: the plain form must not have worked
+                        plain_ok = parse(plain) == want
                     except YamlError:
                         plain_ok = False
-                    self.assertFalse(plain_ok, repr(s))
+                    self.assertFalse(plain_ok and "\n" not in s, (repr(s), text))
+
+    def test_document_markers_quoted_only_where_they_would_not_reparse(self):
+        for m in ["---", "...", "--- a", "... a"]:
+            self.assertEqual(emit({"k": m}), f"k: {m}\n", m)
+            self.assertEqual(emit([m]), f"- {m}\n", m)
+            self.assertEqual(emit(m), _dq_text(m), m)
+            want_key = f"{m}: 1\n" if " " not in m else f'"{m}": 1\n'
+            self.assertEqual(emit({m: 1}), want_key, m)
+
+    def test_written_file_loads_back_identical(self):
+        """N1: every transformation load() applies (BOM strip, CRLF) is covered by the quoting decision."""
+        values = ["\ufeffx", "\ufeff", "x\ufeff", "a\ufeffb", "\r", "a\rb", "a\r\nb", "\r\n", "x\r\ny\r\n",
+                  {"\ufeffa": 1}, {"a": "\ufeffx"}, ["\ufeffx"], {"a": {"\ufeffb": "\ufeff"}},
+                  {"k": "a\r\nb"}, ["\r\nz\n"], {"\r": 1}]
+        for v in values:
+            data = emit(v).encode("utf-8")
+            self.assertEqual(_load_bytes(data), v, repr(v))
+
+    def test_leading_bom_is_quoted_top_level_key_and_first_value(self):
+        self.assertEqual(emit("\ufeffx"), '"\\ufeffx"\n')
+        self.assertEqual(emit({"\ufeffa": 1}), '"\\ufeffa": 1\n')
+        self.assertEqual(emit({"a": "\ufeffx"}), "a: \ufeffx\n")
+        self.assertEqual(emit("a\ufeffx"), "a\ufeffx\n")
 
     def test_load_missing_and_directory(self):
         with tempfile.TemporaryDirectory() as d:
