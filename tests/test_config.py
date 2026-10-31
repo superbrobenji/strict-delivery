@@ -249,7 +249,8 @@ class RequiredKeysTest(ConfigCase):
         self.assertEqual(self.with_extra({}), EXPECTED)
 
     def test_schema_values(self):  # C5
-        for value in ("config/2", "decision/1", "config/1 ", "Config/1", 1, None, True, ["config/1"]):
+        for value in ("config/2", "decision/1", "config/1 ", "Config/1", 1, None, True, ["config/1"],
+                      {"a": 1}):
             with self.subTest(value=value):
                 self.refused({"schema": value}, "schema")
         self.assertEqual(self.with_extra({"schema": "config/1"}), EXPECTED)
@@ -258,7 +259,7 @@ class RequiredKeysTest(ConfigCase):
         for ok in ("0.0.0", "abc", "1.2.3-rc1"):
             with self.subTest(ok=ok):
                 self.assertEqual(self.with_extra({"framework_version": ok})["framework_version"], ok)
-        for bad in ("", 1, None, True, ["0"]):
+        for bad in ("", 1, None, True, ["0"], {"a": 1}):
             with self.subTest(bad=bad):
                 self.refused({"framework_version": bad}, "framework_version")
 
@@ -266,7 +267,7 @@ class RequiredKeysTest(ConfigCase):
         for ok in ("light", "standard", "strict"):
             with self.subTest(ok=ok):
                 self.assertEqual(self.with_extra({"profile": ok})["profile"], ok)
-        for bad in ("Strict", " strict", "strict ", "loose", "", 1, None, True, ["strict"]):
+        for bad in ("Strict", " strict", "strict ", "loose", "", 1, None, True, ["strict"], {"a": 1}):
             with self.subTest(bad=bad):
                 self.refused({"profile": bad}, "profile")
 
@@ -364,7 +365,7 @@ class ScalarKeysTest(ConfigCase):
         for ok in ("main", "develop", "release/1.0"):
             with self.subTest(ok=ok):
                 self.assertEqual(self.with_extra({"base_branch": ok})["base_branch"], ok)
-        for bad in ("", 1, None, True, ["main"]):
+        for bad in ("", 1, None, True, ["main"], {"a": 1}):
             with self.subTest(bad=bad):
                 self.refused({"base_branch": bad}, "base_branch")
 
@@ -382,7 +383,7 @@ class ScalarKeysTest(ConfigCase):
         cfg = self.with_extra({"models": {"tiers": {"tier2": "other"}}})
         self.assertEqual(cfg["models"]["tiers"], {"tier1": "haiku", "tier2": "other", "tier3": "opus"})
         for tier in ("tier1", "tier2", "tier3", "tier4", "tier9"):
-            for bad in ("", 1, None, True, ["x"]):
+            for bad in ("", 1, None, True, ["x"], {"a": 1}):
                 with self.subTest(tier=tier, bad=bad):
                     self.refused({"models": {"tiers": {tier: bad}}}, "models.tiers." + tier)
 
@@ -391,7 +392,7 @@ class ScalarKeysTest(ConfigCase):
             with self.subTest(ok=ok):
                 self.assertEqual(self.with_extra({"drift": {"estimate_factor_pct": ok}})["drift"],
                                  {"estimate_factor_pct": ok})
-        for bad in (0, -5, True, False, "1.5", 1.5 if False else "150", None, [150]):
+        for bad in (0, -5, True, False, "1.5", 1.5 if False else "150", None, [150], {"a": 1}):
             with self.subTest(bad=bad):
                 self.refused({"drift": {"estimate_factor_pct": bad}}, "drift.estimate_factor_pct")
         self.put_bytes(b"schema: config/1\nframework_version: '0'\nprofile: strict\n"

@@ -341,6 +341,7 @@ class RepoRootTest(GitIsolatedTestCase):
             repo_root()
         self.assertIn("git rev-parse --show-toplevel", str(e.exception))
         self.assertNotIn(self.plain, str(e.exception))
+        self.assertIn("run /strict-delivery:init", str(e.exception))
 
     def test_outside_a_repo_through_run_gate(self):
         os.chdir(self.plain)
@@ -351,6 +352,8 @@ class RepoRootTest(GitIsolatedTestCase):
         code, out, err = run("x", check, [])
         self.assertEqual(code, 1)
         self.assertTrue(out.startswith("FAIL x.input: "), out)
+        self.assertIn("/strict-delivery:init", out)
+        self.assertEqual(len(out.splitlines()), 1)
         self.assertNotIn("Traceback", err)
 
 

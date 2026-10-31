@@ -141,4 +141,7 @@ def repo_root() -> str:
             raise GateError("CLAUDE_PROJECT_DIR is not a directory")
         return env
     from gates.lib import gitinfo
-    return gitinfo.toplevel(".")
+    try:
+        return gitinfo.toplevel(".")
+    except GateError as e:
+        raise GateError("%s; run /strict-delivery:init" % e) from None
