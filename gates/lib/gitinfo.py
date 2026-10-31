@@ -11,7 +11,7 @@ import posixpath
 import subprocess
 from typing import List, Optional
 
-from gates.lib.result import GateError
+from gates.lib.result import GateError, GitNotFound
 
 _REGULAR = ("100644", "100755")
 
@@ -20,6 +20,7 @@ def _env() -> dict:
     env = dict(os.environ)
     env.pop("GIT_DIR", None)
     env.pop("GIT_WORK_TREE", None)
+    # GIT_INDEX_FILE stays inherited on purpose: a pre-commit hook reads the index being committed.
     env["LC_ALL"] = "C"
     return env
 
@@ -32,7 +33,7 @@ def _run(root: str, name: str, args: List[str], ok: Optional[tuple] = (0,),
         p = subprocess.run(argv, env=_env(), stdin=subprocess.DEVNULL, check=False,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError:
-        raise GateError("git: command not found") from None
+        raise GitNotFound("git not found on PATH; install git") from None
     except (OSError, ValueError):
         raise GateError("git %s failed: unusable argument" % name) from None
     if ok is not None and p.returncode not in ok:
@@ -85,7 +86,12 @@ def commit_exists(root: str, sha: str) -> bool:
     if sha.startswith("-"):
         return False
     p = _run(root, "cat-file -e", ["cat-file", "-e", sha + "^{commit}"], ok=None)
-    return p.returncode == 0
+    if p.returncode != 0:
+        return False
+    if len(sha) < 40 and all(c in "0123456789abcdefABCDEF" for c in sha):
+        d = _run(root, "rev-parse --disambiguate", ["rev-parse", "--disambiguate=" + sha])
+        return len(d.stdout.split()) <= 1  # a prefix naming several objects (any type) is ambiguous
+    return True
 
 
 def blob_exists(root: str, sha: str, path: str) -> bool:
@@ -121,6 +127,8 @@ def show(root: str, ref: str, path: str) -> Optional[str]:
 def ls_tree(root: str, ref: str, directory: str) -> list:
     _check_ref(ref)
     d = directory.rstrip("/")
+    if ".." in d.split("/"):
+        raise GateError("ls-tree: directory must not hold a '..' segment")
     args = ["ls-tree", "-z", "--full-tree", ref]
     if d:
         args += ["--", d + "/"]

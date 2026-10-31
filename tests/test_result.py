@@ -66,6 +66,16 @@ class ResultApiTest(unittest.TestCase):
             {"status": "FAIL", "id": "g.q", "reason": 'say "hi" é中\n\x00'}]})
         self.assertEqual(len(r.render(True).splitlines()), 1)
 
+    def test_render_json_shape_exact(self):  # X6, owner Q-1a2r-4
+        r = Result("g", [])
+        r.passed("g.a")
+        r.fail("g.b", "why\\n")
+        self.assertEqual(r.render(True),
+                         '{"gate": "g", "ok": false, "lines": [{"status": "PASS", "id": "g.a", "reason": ""}, '
+                         '{"status": "FAIL", "id": "g.b", "reason": "why\\\\n"}]}\n')
+        self.assertEqual(list(json.loads(r.render(True))), ["gate", "ok", "lines"])
+        self.assertEqual(list(json.loads(r.render(True))["lines"][0]), ["status", "id", "reason"])
+
     def test_render_json_reason_is_a_string(self):
         r = Result("g", [])
         r.fail("g.a", 1)
@@ -91,11 +101,21 @@ class SafeTextTest(unittest.TestCase):
             ("\ud800", "\\ud800"),
             ("\U000e0001", "\\U000e0001"),
             ("plain é中", "plain é中"),
+            ("\\", "\\\\"),
+            ("\\n", "\\\\n"),
         ]
         for raw, want in cases:
             with self.subTest(raw=raw):
                 self.assertEqual(safe_text(raw), want)
                 self.assertEqual(len(safe_text(raw).splitlines()), 1)
+
+    def test_backslash_n_and_newline_differ(self):  # X4, owner Q-1a2r-4
+        self.assertNotEqual(safe_text("a\\nb"), safe_text("a\nb"))
+        self.assertEqual(safe_text("a\\nb"), "a\\\\nb")
+        self.assertEqual(safe_text("a\nb"), "a\\nb")
+        r = Result("g", [])
+        r.fail("g\\x", "p\\q")
+        self.assertEqual(r.render(False), "FAIL g\\\\x: p\\\\q\n")
 
     def test_non_str_goes_through_str(self):  # X5
         class Obj:
@@ -342,6 +362,22 @@ class RepoRootTest(GitIsolatedTestCase):
         self.assertIn("git rev-parse --show-toplevel", str(e.exception))
         self.assertNotIn(self.plain, str(e.exception))
         self.assertIn("run /strict-delivery:init", str(e.exception))
+
+    def test_git_missing_has_no_init_hint(self):  # R2, owner Q-1a2r-6
+        os.chdir(self.plain)
+        with mock.patch.dict(os.environ, {"PATH": os.path.join(self.plain, "nowhere")}):
+            with self.assertRaises(GateError) as e:
+                repo_root()
+        self.assertEqual(str(e.exception), "git not found on PATH; install git")
+
+        def check(args):
+            repo_root()
+            return one_pass([])
+        with mock.patch.dict(os.environ, {"PATH": os.path.join(self.plain, "nowhere")}):
+            code, out, err = run("x", check, [])
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "FAIL x.input: git not found on PATH; install git\n")
+        self.assertNotIn("init", out)
 
     def test_outside_a_repo_through_run_gate(self):
         os.chdir(self.plain)

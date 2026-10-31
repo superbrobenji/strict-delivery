@@ -13,6 +13,10 @@ class GateError(Exception):
     """A problem with a gate's input or environment; the message is the FAIL reason."""
 
 
+class GitNotFound(GateError):
+    """git is not on PATH (no repository hint can help)."""
+
+
 @dataclass
 class Line:
     status: str
@@ -21,11 +25,14 @@ class Line:
 
 
 def safe_text(s: object) -> str:
-    """``s`` as one line: every non-printable character is escaped (``\\n``, ``\\xNN``, ``\\uNNNN``, ``\\UNNNNNNNN``)."""
+    """``s`` as one line: a backslash becomes ``\\\\`` and every non-printable character is escaped
+    (``\\n``, ``\\xNN``, ``\\uNNNN``, ``\\UNNNNNNNN``), so the output is unambiguous."""
     text = s if isinstance(s, str) else str(s)
     out = []
     for c in text:
-        if c.isprintable():
+        if c == "\\":
+            out.append("\\\\")
+        elif c.isprintable():
             out.append(c)
         elif c == "\n":
             out.append("\\n")
@@ -143,5 +150,7 @@ def repo_root() -> str:
     from gates.lib import gitinfo
     try:
         return gitinfo.toplevel(".")
+    except GitNotFound:
+        raise
     except GateError as e:
         raise GateError("%s; run /strict-delivery:init" % e) from None

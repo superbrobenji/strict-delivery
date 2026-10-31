@@ -1,6 +1,7 @@
 """Tests for the git helpers (gates.lib.gitinfo), on real repositories built with plain git."""
 import hashlib
 import os
+import shutil
 import subprocess
 import unittest
 from unittest import mock
@@ -120,7 +121,7 @@ class RootKindsTest(Fixture):
         with mock.patch.dict(os.environ, {"PATH": os.path.join(self.tmp, "nowhere")}):
             with self.assertRaises(GateError) as e:
                 gitinfo.head_sha(self.root)
-        self.assertEqual(str(e.exception), "git: command not found")
+        self.assertEqual(str(e.exception), "git not found on PATH; install git")  # owner Q-1a2r-6
 
 
 class HeadTest(GitIsolatedTestCase):
@@ -178,6 +179,25 @@ class CommitExistsTest(Fixture):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertNotEqual(bad.returncode, 0)  # git itself calls it ambiguous
         self.assertIs(gitinfo.commit_exists(self.root, prefix), False)
+
+    def test_prefix_shared_by_commit_and_blob_is_false(self):  # owner Q-1a2r-2
+        head = git(self.root, "rev-parse", "HEAD")
+        i = 0
+        while True:
+            data = b"cb%d\n" % i
+            h = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+            if h[:4] == head[:4]:
+                break
+            i += 1
+            if i > 2000000:
+                self.skipTest("no blob found")
+        subprocess.run(["git", "-C", self.root, "hash-object", "-w", "--stdin"], input=data,
+                       stdout=subprocess.PIPE, check=True)
+        self.assertEqual(subprocess.run(["git", "-C", self.root, "cat-file", "-e", head[:4] + "^{commit}"]
+                                        ).returncode, 0)  # plain git says commit
+        self.assertIs(gitinfo.commit_exists(self.root, head[:4]), False)
+        self.assertIs(gitinfo.commit_exists(self.root, head), True)  # the full sha is not ambiguous
+        self.assertIs(gitinfo.commit_exists(self.root, head[:12]), True)
 
     def test_dash_value_is_never_passed_to_git(self):
         calls, patch = spy_runs()
@@ -253,6 +273,16 @@ class TrackedFilesTest(Fixture):
         git(self.root, "add", "new.txt")
         self.assertIn("new.txt", gitinfo.tracked_files(self.root))
 
+    def test_git_index_file_is_honoured(self):  # owner Q-1a2r-5
+        alt = os.path.join(self.tmp, "alt-index")
+        shutil.copy(os.path.join(self.root, ".git", "index"), alt)
+        with open(os.path.join(self.root, "new.txt"), "w") as fh:
+            fh.write("n")
+        git(self.root, "add", "new.txt", env={"GIT_INDEX_FILE": alt})
+        self.assertNotIn("new.txt", gitinfo.tracked_files(self.root))
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": alt}):
+            self.assertIn("new.txt", gitinfo.tracked_files(self.root))
+
     def test_index_not_head(self):
         git(self.root, "rm", "-q", "--cached", "a.txt")
         self.assertNotIn("a.txt", gitinfo.tracked_files(self.root))
@@ -277,7 +307,7 @@ class ShowTest(Fixture):
         self.assertIsNone(gitinfo.show(self.root, "HEAD", "gl*"))
         self.assertIsNone(gitinfo.show(self.root, "HEAD", "dir/../a.txt"))
 
-    def test_directory_symlink_gitlink_are_none(self):  # owner Q-1a2-5
+    def test_directory_symlink_gitlink_are_none(self):  # owner Q-1a2-5, Q-1a2r-1
         for p in ("dir", "dir/", "link", "dir/lnk", "subm"):
             with self.subTest(path=p):
                 self.assertIsNone(gitinfo.show(self.root, "HEAD", p))
@@ -317,8 +347,16 @@ class LsTreeTest(Fixture):
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "nope"), [])
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "a.txt"), [])
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "subm"), [])
-        self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "dir/../bin"), [])
         self.assertEqual(gitinfo.ls_tree(self.root, self.config_sha, "dir"), [])
+
+    def test_dotdot_segment_is_gate_error(self):  # owner Q-1a2r-1
+        for d in ("dir/../bin", "..", "../x", "a/..", "dir/..", "dir/../"):
+            with self.subTest(directory=d):
+                with self.assertRaises(GateError) as e:
+                    gitinfo.ls_tree(self.root, "HEAD", d)
+                self.assertIn("..", str(e.exception))
+        self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "..x"), [])  # only a whole '..' segment
+        self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "/"), gitinfo.ls_tree(self.root, "HEAD", ""))
 
     def test_repo_root_directory(self):
         top = gitinfo.ls_tree(self.root, "HEAD", "")

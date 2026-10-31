@@ -319,6 +319,16 @@ class PathsTest(ConfigCase):
             with self.subTest(bad=bad):
                 self.refused({"paths": {"state": bad}}, "paths.state")
 
+    def test_paths_refuse_non_printable(self):  # C11, owner Q-1a2r-3
+        bad = ["a\x00b", "a\nb", "a\tb", "a\rb", "\x01", "a\x1fb", "a\x7fb", "a\x85b", "a\u2028b",
+               "a\u200bb", "a\U000e0001b", "\x00"]
+        for v in bad:
+            with self.subTest(bad=v):
+                self.refused({"paths": {"state": v}}, "paths.state")
+        for key in EXPECTED["paths"]:
+            with self.subTest(key=key):
+                self.refused({"paths": {key: "x\x00y"}}, "paths." + key)
+
     def test_each_paths_key_is_checked(self):
         for key in EXPECTED["paths"]:
             with self.subTest(key=key):
