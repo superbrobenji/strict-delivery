@@ -516,6 +516,56 @@ class TestEmitMatchesParser(unittest.TestCase):
         self.assertEqual(emit({"a": "\ufeffx"}), "a: \ufeffx\n")
         self.assertEqual(emit("a\ufeffx"), "a\ufeffx\n")
 
+    def test_key_quoting_uses_the_keys_real_context(self):
+        """N3: BOM matters only at byte 0, '--- ' only at column 0."""
+        bom, d1, d2 = "\ufeffb", "--- a", "... a"
+        # BOM: quoted only as the very first key of the file
+        self.assertEqual(emit({"x": 1, bom: 2}), f"x: 1\n{bom}: 2\n")
+        self.assertEqual(emit({bom: 1, "x": 2}), f'"\\ufeffb": 1\nx: 2\n')
+        self.assertEqual(emit({"p": {bom: 1}}), f"p:\n  {bom}: 1\n")
+        self.assertEqual(emit([{bom: 1}]), f"- {bom}: 1\n")
+        # marker-looking keys: quoted only at column 0
+        for m in (d1, d2):
+            self.assertEqual(emit({m: 1}), f'"{m}": 1\n')
+            self.assertEqual(emit({"x": 1, m: 2}), f'x: 1\n"{m}": 2\n')
+            self.assertEqual(emit({"p": {m: 1}}), f"p:\n  {m}: 1\n")
+            self.assertEqual(emit([{"x": 1, m: 2}]), f"- x: 1\n  {m}: 2\n")
+            self.assertEqual(emit([{m: 1}]), f"- {m}: 1\n")
+        # key "k" at column 0 after another key (probe must not collide with the key itself)
+        self.assertEqual(emit({"j": 1, "k": 2}), "j: 1\nk: 2\n")
+
+    def test_key_contexts_load_back_identical(self):
+        keys = ["\ufeffb", "--- a", "... a", "---", "...", "k", "j", "a: b", "- x"]
+        for k in keys:
+            for v in [{k: 1}, {"x": 1, k: 2}, {k: 1, "x": 2}, {"p": {k: 1}}, {"p": {"x": 1, k: 2}},
+                      [{k: 1}], [{"x": 1, k: 2}], [{"p": [{k: 1}]}], {"k": 1, k: 2}, {"j": 1, k: 2}]:
+                self.assertEqual(_load_bytes(emit(v).encode("utf-8")), v, repr(v))
+
+    def test_fuzz_emit_file_load(self):
+        rnd = random.Random(7)
+        atoms = ["a", "k", "j", "x", "\ufeff", "\ufeffb", "---", "...", "--- a", "... a", "a: b", "- x", "#", "\t",
+                 " ", "", "1", "true", "\r", "\r\n", "\n", "'", '"', "\xa0", "?", ":"]
+
+        def atom():
+            return "".join(rnd.choice(atoms) for _ in range(rnd.randint(0, 3)))
+
+        def gen(depth):
+            r = rnd.random()
+            if depth > 3 or r < 0.3:
+                return rnd.choice([None, True, 0, 5, atom(), atom()])
+            if r < 0.65:
+                return {atom(): gen(depth + 1) for _ in range(rnd.randint(1, 3))}
+            return [gen(depth + 1) for _ in range(rnd.randint(0, 3))]
+
+        for _ in range(3000):
+            v = gen(0)
+            try:
+                text = emit(v)
+            except EmitError:
+                continue
+            self.assertEqual(_load_bytes(text.encode("utf-8")), v, repr(v))
+            self.assertEqual(emit(parse(text)), text, repr(v))
+
     def test_load_missing_and_directory(self):
         with tempfile.TemporaryDirectory() as d:
             for path in (os.path.join(d, "missing.yml"), d):

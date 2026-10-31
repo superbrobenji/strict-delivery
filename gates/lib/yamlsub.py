@@ -481,14 +481,19 @@ def _reparses(text: str, expected: object) -> bool:
 
 
 def _plain_ok(s: str, pos: str) -> bool:
-    """True if s written plain at pos ('key', 'value', 'item', 'top') comes back as the same str.
+    """True if s written plain at pos ('key@start', 'key@col0', 'key@in', 'value', 'item', 'top') comes back as the same str.
 
     The decision runs the real parser (through load's byte path) on the plain
     form, so it cannot drift from either."""
     if s == "" or "\n" in s:
         return False
-    if pos == "key":
+    if pos == "key@start":  # first line of the file: a BOM strip applies
         return _reparses(s + ": v", {s: "v"})
+    if pos == "key@col0":  # later line at column 0: document-marker lines apply
+        o = "j" if s == "k" else "k"
+        return _reparses(o + ": 1\n" + s + ": v", {o: 1, s: "v"})
+    if pos == "key@in":  # indented or after '- ': neither applies
+        return _reparses("- " + s + ": v", [{s: "v"}])
     if pos == "value":
         return _reparses("k: " + s, {"k": s})
     if pos == "item":
@@ -591,12 +596,17 @@ def _lines(v: object, indent: int, depth: int):
     pad = " " * indent
     out = []
     if type(v) is dict:
-        for k, val in v.items():
+        def kpos(n):
+            if indent > 0:
+                return "key@in"
+            return "key@start" if n == 0 else "key@col0"
+
+        for n, (k, val) in enumerate(v.items()):
             if type(k) is not str:
                 raise EmitError("mapping keys must be str")
             _check_str(k)
             inline, rest = _value_lines(val, indent + 2, depth, "value")
-            out.append(pad + _str_text(k, "key") + ":" + (" " + inline if inline is not None else ""))
+            out.append(pad + _str_text(k, kpos(n)) + ":" + (" " + inline if inline is not None else ""))
             out.extend(rest)
         return out
     for item in v:
