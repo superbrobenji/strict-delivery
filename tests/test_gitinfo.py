@@ -611,6 +611,20 @@ class MergeBaseTest(Fixture):
                     gitinfo.merge_base(self.root, a, b)
                 self.assertIn("git merge-base", str(e.exception))
 
+    def test_overlong_hex_is_refused(self):  # F-1a2r-5 widened by the owner (round 6)
+        H = git(self.root, "rev-parse", "HEAD")
+        self.assertEqual(git(self.root, "merge-base", H + "0", "HEAD"), H)  # git itself would accept it
+        self.assertEqual(gitinfo.merge_base(self.root, H, "HEAD"), H)  # 40 digits still accepted
+        calls, patch = spy_runs()
+        with patch:
+            for a, b in ((H + "0", "HEAD"), ("HEAD", H + "0"), (H.upper() + "0" * 24, "HEAD"),
+                         ("HEAD", H + "0~0"), ("a" * 41, "HEAD")):
+                with self.subTest(a=a, b=b):
+                    with self.assertRaises(GateError) as e:
+                        gitinfo.merge_base(self.root, a, b)
+                    self.assertEqual(str(e.exception), "ref must not hold more than 40 hex digits in a row")
+        self.assertEqual([argv for argv, _ in calls if "merge-base" in argv], [])  # git never ran merge-base
+
 
 class UserEmailTest(GitIsolatedTestCase):
     def repo(self):

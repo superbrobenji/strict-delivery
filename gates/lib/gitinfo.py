@@ -157,8 +157,8 @@ def ls_tree(root: str, ref: str, directory: str) -> list:
 
 
 def merge_base(root: str, a: str, b: str) -> str:
-    _check_ref(a)
-    _check_ref(b)
+    _check_rev(a)
+    _check_rev(b)
     p = _run(root, "merge-base", ["merge-base", a, b])
     return _text(p.stdout, "merge-base").strip()
 
