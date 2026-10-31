@@ -458,9 +458,10 @@ def _file_text(data: bytes) -> str:
 def _read_regular_file(path: object, shown: str) -> bytes:
     """The bytes of the regular file at ``path``; any problem is a YamlError naming ``shown``.
 
-    Only ``str``, ``bytes`` and ``os.PathLike`` are paths: ``os.open`` refuses
-    the rest with TypeError, an ``int`` included (``open`` would read it as a
-    descriptor).
+    Only ``str``, ``bytes`` and ``os.PathLike`` are paths: ``os.fspath`` refuses
+    the rest, an ``int`` included (``open`` would read it as a descriptor), and
+    any ``Exception`` from a PathLike's ``__fspath__`` is refused too
+    (KeyboardInterrupt and SystemExit still escape).
     Anything but a regular file (directory, FIFO, device, socket) is refused
     before it is opened, and again on the descriptor opened non-blocking, so a
     path swapped to a FIFO between the two checks cannot block the read.
@@ -469,12 +470,16 @@ def _read_regular_file(path: object, shown: str) -> bytes:
         return YamlError(0, f"{shown}: cannot read file ({why})")
 
     try:
-        if not stat.S_ISREG(os.stat(path).st_mode):
+        name = os.fspath(path)
+    except Exception as e:  # not a path type, or a PathLike whose __fspath__ fails
+        raise refuse(f"invalid path: {type(e).__name__}") from None
+    try:
+        if not stat.S_ISREG(os.stat(name).st_mode):
             raise refuse("not a regular file")
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(name, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     except OSError as e:
         raise refuse(e.strerror or type(e).__name__) from None
-    except (ValueError, TypeError) as e:  # NUL, unencodable name, not a path type
+    except ValueError as e:  # embedded NUL, unencodable name
         raise refuse(f"invalid path: {type(e).__name__}") from None
     try:
         with os.fdopen(fd, "rb") as fh:

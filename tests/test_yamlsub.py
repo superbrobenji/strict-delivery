@@ -27,6 +27,8 @@ class _FsPath:
         self.value = value
 
     def __fspath__(self):
+        if isinstance(self.value, BaseException):
+            raise self.value
         return self.value
 
 
@@ -605,6 +607,7 @@ class TestEmitMatchesParser(unittest.TestCase):
                 os.path.join(good, "x"),    # ENOTDIR
                 _FsPath(3), _FsPath(None),  # PathLike yielding a non-path (TypeError)
                 _FsPath("a\0b"),            # PathLike yielding NUL (ValueError)
+                _FsPath(RuntimeError("boom")),  # __fspath__ raising RuntimeError
             ]
             loop = os.path.join(d, "loop.yml")
             os.symlink(loop, loop)
@@ -624,6 +627,11 @@ class TestEmitMatchesParser(unittest.TestCase):
             import pathlib
             for path in (good, good.encode(), pathlib.Path(good)):
                 self.assertEqual(load(path, "state/m.yml"), {"a": 1})
+
+    def test_load_fspath_keyboardinterrupt_and_systemexit_escape(self):
+        for exc in (KeyboardInterrupt, SystemExit):
+            with self.assertRaises(exc):
+                load(_FsPath(exc()), "state/m.yml")
 
     def test_load_permission_denied(self):
         if os.geteuid() == 0:
@@ -682,7 +690,7 @@ class TestEmitMatchesParser(unittest.TestCase):
                 bspy.assert_not_called()
 
     def test_load_path_swapped_to_fifo_after_stat_does_not_block(self):
-        # A PathLike naming a regular file at stat time and a FIFO at open time.
+        # The regular file is replaced by a FIFO between load's stat and open.
         import subprocess
         import sys
         with tempfile.TemporaryDirectory() as d:
@@ -692,15 +700,17 @@ class TestEmitMatchesParser(unittest.TestCase):
             fifo = os.path.join(d, "f.yml")
             os.mkfifo(fifo)
             code = (
-                "import sys\n"
+                "import os, sys\n"
                 "from gates.lib.yamlsub import YamlError, load\n"
-                "class Swap:\n"
-                "    def __init__(self):\n"
-                "        self.names = [sys.argv[1], sys.argv[2]]\n"
-                "    def __fspath__(self):\n"
-                "        return self.names.pop(0) if len(self.names) > 1 else self.names[0]\n"
+                "real_stat = os.stat\n"
+                "def stat_then_swap(p, *a, **k):\n"
+                "    st = real_stat(p, *a, **k)\n"
+                "    if p == sys.argv[1]:\n"
+                "        os.replace(sys.argv[2], sys.argv[1])\n"
+                "    return st\n"
+                "os.stat = stat_then_swap\n"
                 "try:\n"
-                "    print('RETURNED', load(Swap(), 'state/m.yml'))\n"
+                "    print('RETURNED', load(sys.argv[1], 'state/m.yml'))\n"
                 "except YamlError as e:\n"
                 "    print(e.line, e.reason)\n"
             )
@@ -714,7 +724,6 @@ class TestEmitMatchesParser(unittest.TestCase):
                 self.fail("load() blocked on a FIFO swapped in after stat")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout, "0 state/m.yml: cannot read file (not a regular file)\n")
-
 
 if __name__ == "__main__":
     unittest.main()
