@@ -725,5 +725,110 @@ class TestEmitMatchesParser(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout, "0 state/m.yml: cannot read file (not a regular file)\n")
 
+def _open_fds():
+    """The set of this process's open file descriptors, from /dev/fd (no upper bound)."""
+    fds = {int(n) for n in os.listdir("/dev/fd")}
+    return {fd for fd in fds if _fd_open(fd)}  # drops listdir's own, now closed, fd
+
+
+def _fd_open(fd):
+    try:
+        os.fstat(fd)
+    except OSError:
+        return False
+    return True
+
+
+class TestLoadResources(unittest.TestCase):
+    """L4 / N4: every refusal path in load releases every fd it opened."""
+
+    def _swap_after_stat(self, target, swap, restore, calls=50):
+        """Call load(target) `calls` times; os.stat swaps target right after load's stat."""
+        from unittest import mock
+        real_stat = os.stat
+
+        def stat_then_swap(p, *a, **k):
+            st = real_stat(p, *a, **k)
+            if p == target:
+                swap()
+            return st
+
+        before = _open_fds()
+        reasons = set()
+        for _ in range(calls):
+            with mock.patch.object(os, "stat", stat_then_swap):
+                with self.assertRaises(YamlError) as cm:
+                    load(target, "state/m.yml")
+            restore()
+            self.assertEqual(cm.exception.line, 0)
+            self.assertIn("state/m.yml", cm.exception.reason)
+            reasons.add(cm.exception.reason)
+        self.assertEqual(_open_fds() - before, set())
+        return reasons
+
+    def test_path_swapped_to_directory_after_stat_leaks_no_fd(self):
+        with tempfile.TemporaryDirectory() as d:
+            good = os.path.join(d, "a.yml")
+            aside = os.path.join(d, "aside.yml")
+            with open(good, "wb") as fh:
+                fh.write(b"a: 1\n")
+
+            def swap():
+                os.rename(good, aside)
+                os.mkdir(good)
+
+            def restore():
+                os.rmdir(good)
+                os.rename(aside, good)
+
+            reasons = self._swap_after_stat(good, swap, restore)
+            self.assertEqual(reasons, {"state/m.yml: cannot read file (not a regular file)"})
+
+    def test_file_larger_than_one_read_loads_whole(self):
+        lines = [f"k{i}: {'v' * 90}" for i in range(3000)]  # about 290 KB
+        data = ("\n".join(lines) + "\n").encode()
+        self.assertGreater(len(data), 4 * (1 << 16))
+        v = _load_bytes(data)
+        self.assertEqual(len(v), 3000)
+        self.assertEqual(v["k2999"], "v" * 90)
+
+    def test_close_failure_is_a_yamlerror_and_the_fd_is_released(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            good = os.path.join(d, "a.yml")
+            with open(good, "wb") as fh:
+                fh.write(b"a: 1\n")
+            real_close = os.close
+            seen = []
+
+            def close_then_fail(fd):
+                seen.append(fd)
+                real_close(fd)
+                raise OSError(5, "Input/output error")
+
+            before = _open_fds()
+            with mock.patch.object(os, "close", close_then_fail):
+                with self.assertRaises(YamlError) as cm:
+                    load(good, "state/m.yml")
+            self.assertEqual(cm.exception.line, 0)
+            self.assertEqual(cm.exception.reason, "state/m.yml: cannot read file (Input/output error)")
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(_open_fds() - before, set())
+
+    def test_read_failure_releases_the_fd(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            good = os.path.join(d, "a.yml")
+            with open(good, "wb") as fh:
+                fh.write(b"a: 1\n")
+            before = _open_fds()
+            for exc in (OSError(5, "Input/output error"), KeyboardInterrupt()):
+                with mock.patch.object(os, "read", side_effect=exc):
+                    with self.assertRaises(type(exc)) if isinstance(exc, KeyboardInterrupt) \
+                            else self.assertRaises(YamlError):
+                        load(good, "state/m.yml")
+            self.assertEqual(_open_fds() - before, set())
+
+
 if __name__ == "__main__":
     unittest.main()

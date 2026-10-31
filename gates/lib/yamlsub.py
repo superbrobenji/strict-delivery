@@ -464,7 +464,8 @@ def _read_regular_file(path: object, shown: str) -> bytes:
     (KeyboardInterrupt and SystemExit still escape).
     Anything but a regular file (directory, FIFO, device, socket) is refused
     before it is opened, and again on the descriptor opened non-blocking, so a
-    path swapped to a FIFO between the two checks cannot block the read.
+    path swapped to a FIFO between the two checks cannot block the read. The
+    descriptor is closed on every exit path, refusals included.
     """
     def refuse(why: str) -> YamlError:
         return YamlError(0, f"{shown}: cannot read file ({why})")
@@ -482,10 +483,17 @@ def _read_regular_file(path: object, shown: str) -> bytes:
     except ValueError as e:  # embedded NUL, unencodable name
         raise refuse(f"invalid path: {type(e).__name__}") from None
     try:
-        with os.fdopen(fd, "rb") as fh:
-            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+        try:  # fd is owned here and closed on every exit, before anything else can fail
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise refuse("not a regular file")
-            return fh.read()
+            chunks = []
+            while True:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    return b"".join(chunks)
+                chunks.append(chunk)
+        finally:
+            os.close(fd)
     except OSError as e:
         raise refuse(e.strerror or type(e).__name__) from None
 
