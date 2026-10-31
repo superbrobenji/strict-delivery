@@ -1375,5 +1375,290 @@ class TestLoadDomain(unittest.TestCase):
                 self.assertEqual(_open_fds() - before, set(), target)
 
 
+class _DocGen:
+    """Builds a document line by line together with the value it must parse to (T2 oracle).
+
+    The rules here are the generator's own reading of the brief and the ruled grammar; they
+    never call parse or emit. Alphabet: every P2 character, the P5 indicators and separators
+    (':', '- ', ',', '#', '|', '|-'), the P6 first characters, and the P10 block-scalar forms.
+    """
+    LETTERS = "abcxyz"
+    UNI = ["\xa0", "　", " ", " ", "\x85", "​", "﻿"]  # P2 minus space and tab
+    INNER = list("-?'\"&*!|>%@`.") + ["#"]  # never first; '#' only after a non-blank
+    BAD_START = "&*!{>%@`,]}"
+
+    def __init__(self, rnd):
+        self.r = rnd
+        self.lines = []  # [text, tags]; tags: dict with 'sep', 'item', 'bhead', 'val' column indexes
+
+    # ---- scalars
+    def plain(self, flow=False):
+        r = self.r
+        first = r.choice([r.choice(self.LETTERS), r.choice(self.UNI), r.choice("-?:") + r.choice(self.LETTERS)])
+        out = [first]
+        for _ in range(r.randint(0, 6)):
+            k = r.random()
+            if k < 0.3:
+                out.append(r.choice(self.LETTERS + "019"))
+            elif k < 0.5:
+                out.append(r.choice(self.UNI))
+            elif k < 0.65:
+                out.append(r.choice([" ", "\t"] if not flow else [" ", "  "]) + r.choice(self.LETTERS))
+            elif k < 0.75:
+                out.append(":" + r.choice(self.LETTERS))
+            else:
+                c = r.choice(self.INNER)
+                out.append(c)
+        return "".join(out)
+
+    def any_str(self):
+        r = self.r
+        pool = list(self.LETTERS) + self.UNI + [" ", "\t", "\n", ":", "#", "-", "'", '"', "\\", ",", "[", "]",
+                                                 "{", "|", ">", "\x01", "\x1f", "\x7f", "\r", "&", "?"]
+        return "".join(r.choice(pool) for _ in range(r.randint(0, 6)))
+
+    @staticmethod
+    def dq(s, literal_tab):
+        out = []
+        for c in s:
+            if c == "\\":
+                out.append("\\\\")
+            elif c == '"':
+                out.append('\\"')
+            elif c == "\n":
+                out.append("\\n")
+            elif c == "\t":
+                out.append("\t" if literal_tab else "\\t")
+            elif ord(c) < 0x20 or c == "\x7f":
+                out.append("\\u%04X" % ord(c))
+            else:
+                out.append(c)
+        return '"' + "".join(out) + '"'
+
+    def scalar(self, flow=False):
+        """(text, value) for a one-line scalar."""
+        r = self.r
+        k = r.random()
+        if k < 0.08:
+            return r.choice(["null", "~"]), None
+        if k < 0.14:
+            b = r.random() < 0.5
+            return ("true" if b else "false"), b
+        if k < 0.22:
+            n = r.choice([0, 7, -3, 12345, -(10 ** 20)])
+            return str(n), n
+        if k < 0.6:
+            s = self.plain(flow)
+            return s, s
+        s = self.any_str()
+        if k < 0.8 and not any(c in s for c in "\n\r\x01\x1f\x7f"):
+            return "'" + s.replace("'", "''") + "'", s
+        return self.dq(s, r.random() < 0.5), s
+
+    def comment(self, after_indicator=False):
+        """'' or a trailing comment; right after ':' or '-' it must start with a space (F2)."""
+        r = self.r
+        if r.random() < 0.6:
+            return ""
+        body = "".join(r.choice(self.UNI + list(self.LETTERS) + [" ", "\t", "#", ":", "-", "|"]) for _ in range(4))
+        # after '- ' a tab is refused (TestTabSeparators.test_tab_after_dash), so never ' \t' there
+        return r.choice([" ", "  "] if after_indicator else [" ", "  ", "\t", " \t"]) + "#" + body
+
+    # ---- nodes
+    def add(self, text, **tags):
+        self.lines.append([text, tags])
+
+    def maybe_noise(self):
+        r = self.r
+        if r.random() < 0.15:
+            # a blank line of at most one space: never deeper than a block scalar's content indent,
+            # where it would be content (TestBlockScalarBlankLines)
+            self.add(r.choice(["", " ", "# " + r.choice(self.UNI) + "\t#"]))
+
+    def block_str(self):
+        """(header, body lines, value) for a | or |- block scalar."""
+        r = self.r
+        lines = []
+        for i in range(r.randint(1, 4)):
+            if i > 0 and r.random() < 0.2:
+                lines.append("")
+                continue
+            first = r.choice(list(self.LETTERS) + self.UNI + ["#", "-", "'", "&", ":"])
+            rest = "".join(r.choice(list(self.LETTERS) + self.UNI + [" ", "\t", "#", ": ", "|"]) for _ in range(r.randint(0, 5)))
+            lines.append(first + rest if i == 0 or r.random() < 0.7 else "  " + first + rest)
+        while lines[-1] == "":
+            lines.pop()
+        if r.random() < 0.5:
+            return "|", lines, "\n".join(lines) + "\n"
+        return "|-", lines, "\n".join(lines)
+
+    def value_after(self, prefix, indent, depth, tags):
+        """Emit the line starting with prefix ('k:' or '-') and the value after it; return the value."""
+        r = self.r
+        k = r.random()
+        if depth >= 4 or k < 0.45:
+            text, v = self.scalar()
+            sp = r.choice([" ", "  "])
+            self.add(prefix + sp + text + self.comment(), val=len(prefix) + len(sp), **tags)
+            return v
+        if k < 0.55:
+            items = [self.scalar(flow=True) for _ in range(r.randint(0, 3))]
+            sep = r.choice([", ", ",", " , "])
+            text = "[" + sep.join(t for t, _ in items) + "]"
+            self.add(prefix + " " + text + self.comment(), val=len(prefix) + 1, **tags)
+            return [v for _, v in items]
+        if k < 0.65:
+            header, body, v = self.block_str()
+            self.add(prefix + " " + header + self.comment(), val=len(prefix) + 1, bhead=len(prefix) + 1, **tags)
+            pad = " " * (indent + r.randint(1, 3))
+            for ln in body:
+                self.add(pad + ln if ln else "")
+            return v
+        if k < 0.7:
+            self.add(prefix + self.comment(True), **tags)  # empty value
+            return None
+        self.add(prefix + self.comment(True), **tags)
+        child = indent + r.randint(1, 3)
+        if r.random() < 0.5:
+            return self.mapping(child, depth + 1)
+        if prefix.endswith(":") and r.random() < 0.4:
+            child = indent  # sequence at the parent key's indent
+        return self.sequence(child, depth + 1)
+
+    def key(self):
+        r = self.r
+        k = r.random()
+        if k < 0.7:
+            while True:
+                s = self.plain()
+                if s != "<<":
+                    return s, s
+        s = self.any_str().replace("\n", "")
+        s = "".join(c for c in s if c not in "\r\x01\x1f\x7f")
+        if k < 0.85:
+            return "'" + s.replace("'", "''") + "'", s
+        return self.dq(s, False), s
+
+    def mapping(self, indent, depth, first_prefix=None):
+        r = self.r
+        out = {}
+        for n in range(r.randint(1, 3)):
+            ktext, kv = self.key()
+            if kv in out:
+                continue
+            if n == 0 and first_prefix is not None:
+                lead = first_prefix
+            else:
+                self.maybe_noise()
+                lead = " " * indent
+            out[kv] = self.value_after(lead + ktext + ":", indent, depth,
+                                       {"key": len(lead), "sep": len(lead) + len(ktext)})
+        return out
+
+    def sequence(self, indent, depth, first_prefix=None):
+        r = self.r
+        out = []
+        for n in range(r.randint(1, 3)):
+            lead = first_prefix if (n == 0 and first_prefix is not None) else " " * indent
+            if n or first_prefix is None:
+                self.maybe_noise()
+            k = r.random()
+            if depth < 4 and k < 0.25:
+                gap = r.choice([" ", "   "])
+                out.append(self.mapping(indent + 1 + len(gap), depth + 1, lead + "-" + gap))
+                self.lines[-1][1].setdefault("item", None)
+                continue
+            if depth < 4 and k < 0.35:
+                out.append(self.sequence(indent + 2, depth + 1, lead + "- "))
+                continue
+            out.append(self.value_after(lead + "-", indent, depth, {"item": len(lead)}))
+        return out
+
+    def document(self):
+        r = self.r
+        k = r.random()
+        if k < 0.45:
+            v = self.mapping(0, 1)
+        elif k < 0.85:
+            v = self.sequence(0, 1)
+        elif k < 0.92:
+            text, v = self.scalar()
+            self.add(text + self.comment(), val=0)
+        else:
+            header, body, v = self.block_str()
+            self.add(header, val=0, bhead=0)
+            for ln in body:
+                self.add("  " + ln if ln else "")
+        self.maybe_noise()
+        return "\n".join(t for t, _ in self.lines) + self.r.choice(["", "\n"]), v
+
+    def refusal(self):
+        """Mutate one line so the document must be refused; return (text, line)."""
+        r = self.r
+        idx = r.randrange(len(self.lines))
+        text, tags = self.lines[idx]
+        kinds = ["ctl"]
+        if text and tags.get("sep") is not None and text[tags["sep"] + 1:tags["sep"] + 2] == " ":
+            kinds.append("tabsep")
+        if tags.get("item") is not None and text[tags["item"] + 1:tags["item"] + 2] == " ":
+            kinds.append("tabdash")
+        if tags.get("bhead") is not None:
+            kinds.append("bhead")
+        if tags.get("val") is not None:
+            kinds.append("badval")
+        if tags.get("key") is not None:
+            kinds.append("badkey")
+        kind = r.choice(kinds)
+        if kind == "ctl":
+            c = r.choice([chr(i) for i in range(0x20) if i not in (9, 10)] + ["\x7f", "\ud800", "\r"])
+            p = r.randint(0, len(text))
+            text = text[:p] + c + text[p:]
+        elif kind == "tabsep":
+            p = tags["sep"]
+            text = text[:p + 1] + "\t" + text[p + 2:]
+        elif kind == "tabdash":
+            p = tags["item"]
+            text = text[:p + 1] + "\t" + text[p + 2:]
+        elif kind == "bhead":
+            p = tags["bhead"]
+            text = text[:p] + r.choice([">", "|+", "|2", ">-"]) + text[p + (2 if text[p:p + 2] == "|-" else 1):]
+        else:
+            p = tags["val"] if kind == "badval" else tags["key"]
+            text = text[:p] + r.choice(self.BAD_START) + text[p:]
+        self.lines[idx][0] = text
+        return "\n".join(t for t, _ in self.lines) + "\n", idx + 1
+
+
+class TestOracle(unittest.TestCase):
+    """T2: documents generated with their expected value; refusals with their line."""
+
+    def test_oracle_fuzz(self):
+        rnd = random.Random(20261031)
+        accepted = refused = 0
+        for _ in range(1500):
+            g = _DocGen(rnd)
+            text, want = g.document()
+            self.assertEqual(parse(text), want, repr(text))
+            accepted += 1
+            bad, line = g.refusal()
+            with self.assertRaises(YamlError, msg=repr(bad)) as cm:
+                parse(bad)
+            self.assertEqual(cm.exception.line, line, repr(bad) + " " + str(cm.exception))
+            refused += 1
+        self.assertEqual((accepted, refused), (1500, 1500))
+
+    def test_oracle_round_trip_through_a_file(self):
+        rnd = random.Random(31102026)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "rt.yml")
+            for _ in range(600):
+                _, v = _DocGen(rnd).document()
+                text = emit(v)
+                with open(p, "wb") as fh:
+                    fh.write(text.encode("utf-8"))
+                self.assertEqual(load(p, "rt.yml"), v, repr(v))
+                self.assertEqual(emit(load(p, "rt.yml")), text, repr(v))
+
+
 if __name__ == "__main__":
     unittest.main()
