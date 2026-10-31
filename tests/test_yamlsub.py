@@ -20,6 +20,16 @@ def _load_bytes(data, shown="x.yml"):
         return load(p, shown)
 
 
+class _FsPath:
+    """An os.PathLike whose __fspath__ returns an arbitrary value."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __fspath__(self):
+        return self.value
+
+
 class TestParse(unittest.TestCase):
     def test_unicode_whitespace_line_is_not_blank_or_comment(self):
         """N2: kills an argument-less strip() in the blank/comment skip."""
@@ -573,6 +583,137 @@ class TestEmitMatchesParser(unittest.TestCase):
                     load(path, "state/m.yml")
                 self.assertIn("state/m.yml", str(cm.exception))
                 self.assertEqual(cm.exception.line, 0)
+
+    def _assert_load_refused(self, path):
+        with self.assertRaises(YamlError, msg=repr(path)) as cm:
+            load(path, "state/m.yml")
+        self.assertIn("state/m.yml", str(cm.exception))
+        self.assertEqual(cm.exception.line, 0)
+
+    def test_load_bad_path_values_fail_closed(self):
+        # R8-b: every problem obtaining the bytes is a YamlError naming shown.
+        with tempfile.TemporaryDirectory() as d:
+            good = os.path.join(d, "a.yml")
+            with open(good, "wb") as fh:
+                fh.write(b"a: 1\n")
+            bad = [
+                "a\0b", b"a\0b",          # embedded NUL (ValueError)
+                "\ud800",                  # unencodable str (UnicodeEncodeError)
+                None, 1.5, ["a"], object(),  # not str/bytes/PathLike (TypeError)
+                "x" * 5000,                 # ENAMETOOLONG
+                os.path.join(d, "n" * 300),  # ENAMETOOLONG on one component
+                os.path.join(good, "x"),    # ENOTDIR
+                _FsPath(3), _FsPath(None),  # PathLike yielding a non-path (TypeError)
+                _FsPath("a\0b"),            # PathLike yielding NUL (ValueError)
+            ]
+            loop = os.path.join(d, "loop.yml")
+            os.symlink(loop, loop)
+            bad.append(loop)                # ELOOP
+            for path in bad:
+                self._assert_load_refused(path)
+            # An int is not a path: open() would read it as a file descriptor.
+            r, w = os.pipe()
+            try:
+                os.write(w, b"a: 1\n")
+                os.close(w)
+                self._assert_load_refused(r)
+                os.fstat(r)  # still open: load did not adopt and close it
+            finally:
+                os.close(r)
+            # Valid path types still load.
+            import pathlib
+            for path in (good, good.encode(), pathlib.Path(good)):
+                self.assertEqual(load(path, "state/m.yml"), {"a": 1})
+
+    def test_load_permission_denied(self):
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses file permissions")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "a.yml")
+            with open(p, "wb") as fh:
+                fh.write(b"a: 1\n")
+            os.chmod(p, 0)
+            try:
+                self._assert_load_refused(p)
+            finally:
+                os.chmod(p, 0o600)
+
+    def test_load_fifo_refused_without_blocking(self):
+        # Run in a subprocess so a regression that opens the FIFO cannot hang.
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            fifo = os.path.join(d, "f.yml")
+            os.mkfifo(fifo)
+            link = os.path.join(d, "link.yml")
+            os.symlink(fifo, link)
+            code = (
+                "import sys\n"
+                "from gates.lib.yamlsub import YamlError, load\n"
+                "try:\n"
+                "    load(sys.argv[1], 'state/m.yml')\n"
+                "except YamlError as e:\n"
+                "    print(e.line, e.reason)\n"
+            )
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            for path in (fifo, link):
+                try:
+                    r = subprocess.run(
+                        [sys.executable, "-c", code, path], cwd=root,
+                        capture_output=True, text=True, timeout=10,
+                    )
+                except subprocess.TimeoutExpired:
+                    self.fail(f"load() blocked on a FIFO: {path}")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertTrue(r.stdout.startswith("0 state/m.yml: "), r.stdout)
+
+    def test_load_never_opens_a_non_regular_file(self):
+        # Both openers are spies that raise, so a regression fails, never hangs.
+        import builtins
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            fifo = os.path.join(d, "f.yml")
+            os.mkfifo(fifo)
+            for path in (fifo, d, os.devnull):
+                with mock.patch.object(os, "open", side_effect=AssertionError("opened")) as spy, \
+                        mock.patch.object(builtins, "open", side_effect=AssertionError("opened")) as bspy:
+                    self._assert_load_refused(path)
+                spy.assert_not_called()
+                bspy.assert_not_called()
+
+    def test_load_path_swapped_to_fifo_after_stat_does_not_block(self):
+        # A PathLike naming a regular file at stat time and a FIFO at open time.
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            good = os.path.join(d, "a.yml")
+            with open(good, "wb") as fh:
+                fh.write(b"a: 1\n")
+            fifo = os.path.join(d, "f.yml")
+            os.mkfifo(fifo)
+            code = (
+                "import sys\n"
+                "from gates.lib.yamlsub import YamlError, load\n"
+                "class Swap:\n"
+                "    def __init__(self):\n"
+                "        self.names = [sys.argv[1], sys.argv[2]]\n"
+                "    def __fspath__(self):\n"
+                "        return self.names.pop(0) if len(self.names) > 1 else self.names[0]\n"
+                "try:\n"
+                "    print('RETURNED', load(Swap(), 'state/m.yml'))\n"
+                "except YamlError as e:\n"
+                "    print(e.line, e.reason)\n"
+            )
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            try:
+                r = subprocess.run(
+                    [sys.executable, "-c", code, good, fifo], cwd=root,
+                    capture_output=True, text=True, timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                self.fail("load() blocked on a FIFO swapped in after stat")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, "0 state/m.yml: cannot read file (not a regular file)\n")
 
 
 if __name__ == "__main__":

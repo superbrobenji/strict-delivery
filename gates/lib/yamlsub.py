@@ -8,7 +8,9 @@ scalars, document markers, duplicate keys, tab indentation) is refused with a
 """
 from __future__ import annotations
 
+import os
 import re
+import stat
 
 MAX_DEPTH = 50
 MAX_INT_CHARS = 1000
@@ -453,13 +455,39 @@ def _file_text(data: bytes) -> str:
     return data.decode("utf-8").replace("\r\n", "\n")
 
 
+def _read_regular_file(path: object, shown: str) -> bytes:
+    """The bytes of the regular file at ``path``; any problem is a YamlError naming ``shown``.
+
+    Only ``str``, ``bytes`` and ``os.PathLike`` are paths: ``os.open`` refuses
+    the rest with TypeError, an ``int`` included (``open`` would read it as a
+    descriptor).
+    Anything but a regular file (directory, FIFO, device, socket) is refused
+    before it is opened, and again on the descriptor opened non-blocking, so a
+    path swapped to a FIFO between the two checks cannot block the read.
+    """
+    def refuse(why: str) -> YamlError:
+        return YamlError(0, f"{shown}: cannot read file ({why})")
+
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            raise refuse("not a regular file")
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError as e:
+        raise refuse(e.strerror or type(e).__name__) from None
+    except (ValueError, TypeError) as e:  # NUL, unencodable name, not a path type
+        raise refuse(f"invalid path: {type(e).__name__}") from None
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                raise refuse("not a regular file")
+            return fh.read()
+    except OSError as e:
+        raise refuse(e.strerror or type(e).__name__) from None
+
+
 def load(path: str, shown: str) -> object:
     """Read, decode and parse a file; every YamlError names ``shown``."""
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read()
-    except OSError as e:
-        raise YamlError(0, f"{shown}: cannot read file ({e.strerror or type(e).__name__})") from None
+    data = _read_regular_file(path, shown)
     try:
         text = _file_text(data)
     except UnicodeDecodeError:
