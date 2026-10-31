@@ -71,7 +71,7 @@ strict-delivery/
   templates/                          rendered into the target repository by init/upgrade
   profiles/light.yml standard.yml strict.yml
   tests/
-  docs/specs/ docs/plans/
+  docs/strict-delivery/specs/ docs/strict-delivery/plans/
 ```
 
 Runtime: Python 3.9 or newer, standard library only. No PyYAML; state and config use the
@@ -82,7 +82,9 @@ logic lives in shell, which keeps a later port cheap.
 
 Superpowers is a declared dependency. Precedence, highest first: the target repository's
 `CLAUDE.md` (managed block plus project text), the strict-delivery skill and prompt blocks,
-the project playbook, the base playbook, superpowers unmodified. Where superpowers
+the project playbook, the base playbook, superpowers unmodified. The skill and the CLAUDE.md
+managed block name the document locations (section 5), which override superpowers' default
+`docs/superpowers/` save paths. Where superpowers
 says otherwise (for example "do not re-run the suite" for reviewers), the higher layer wins.
 
 ## 4. Invocation and lifecycle
@@ -105,12 +107,25 @@ Install once per machine:
 3. Write `.strict-delivery/config.yml`, empty state directories, the CLAUDE.md managed block
    (between `<!-- strict-delivery:begin -->` and `<!-- strict-delivery:end -->`; the rest of
    CLAUDE.md is untouched), the CI workflow and the git hook shims.
+   - Init and upgrade never overwrite. They refuse to write any path that already exists
+     and is not framework-managed. Framework-managed means a managed block between the
+     framework's begin and end markers in CLAUDE.md or `.gitignore` (inserting the block into an
+     existing file for the first time is allowed; text outside the markers is never changed), or
+     a file carrying the framework's generated-file header. They list every conflict and
+     write nothing until the owner resolves it.
+   - Existing superpowers documents (`docs/superpowers/specs/` and `docs/superpowers/plans/`)
+     are proposed for migration into `docs/strict-delivery/specs/` and
+     `docs/strict-delivery/plans/`. Each move uses `git mv`, so history follows the file.
+     Every tracked reference to a moved path is rewritten.
+   - A migration whose target already exists is a conflict, as above. The migration is part
+     of the diff in step 5 and happens only on the owner's word.
 4. Run `doctor`.
 5. Show the diff. Nothing is committed without the owner's word.
 
 `/strict-delivery:doctor` prints `PASS id` / `FAIL id: reason` lines: Python version, git
 hooks installed and not foreign or bypassed, config valid, CLAUDE.md block matches the plugin
-version, CI pin matches the plugin version, every register parses and indexes are fresh.
+version, CI pin matches the plugin version, every register parses, the indexes regenerate without error, no generated file is tracked,
+and the `.gitignore` managed block matches the plugin version.
 
 `/strict-delivery:upgrade` moves the version pin, re-renders managed blocks and templates,
 runs state schema migrations, optionally changes profile (`--profile`), and shows the diff
@@ -145,25 +160,42 @@ Versioning: semver tags. The plugin version, the CLAUDE.md block version, the CI
   config.yml
   state/decisions/open/DEC-0001.yml
   state/decisions/resolved/DEC-0001-0050.yml
-  state/decisions/index.yml           generated
-  state/decisions/in-force.md         generated
+  state/decisions/index.yml           generated, git-ignored
+  state/decisions/in-force.md         generated, git-ignored
   state/findings/open/F-0001.yml
   state/findings/resolved/F-0001-0050.yml
-  state/findings/index.yml            generated
+  state/findings/index.yml            generated, git-ignored
   state/claims/<doc-slug>.yml
   state/plans/<plan>/ledger.md handoff.md mutations/
-  program/board.md                    stream board and sync log
+                                      live plans only; pruned after merge
+  program/status.md                   stream status and sync log
   program/context.yml                 required reads per session kind
   playbooks/                          project playbook (local rules)
   receipts/                           git-ignored read receipts
-docs/INDEX.md                         generated map of specs, plans, state
-docs/specs/ docs/plans/               configurable; superpowers layout by default
+docs/strict-delivery/INDEX.md         generated map of specs, plans, state; git-ignored
+docs/strict-delivery/specs/ plans/ reviews/
+                                      specs, plans and review reports; namespaced so a
+                                      project's own docs/ is never touched; a merged
+                                      plan's review reports are pruned after merge
 CLAUDE.md                             managed block + project text
 .github/workflows/strict-delivery.yml
 .git/hooks/pre-commit pre-push        shims
 ```
 
 All paths are config keys with these defaults.
+
+Lean tree. Only what CI, the git hooks or a collaborator needs is tracked: config,
+registers, claims, the status page, context, playbooks, specs and plans, plus the workspace
+and review reports of each live (unmerged) plan. The rest stays out:
+- Generated files (state indexes, `in-force.md`, `INDEX.md`) are git-ignored and never
+  committed. The SessionStart hook, `python3 -m gates index` and CI regenerate them before use.
+- After a merge, the post-merge step deletes the merged plan's workspace
+  (`state/plans/<plan>/`) and its review reports from the tree. They stay in git history.
+  Evidence that cites them uses the form `<sha>:<path>`, resolved with `git cat-file` (and
+  required to name a commit in the repository), never a file at HEAD.
+- `init` writes the ignore entries between `# strict-delivery:begin` and
+  `# strict-delivery:end` in `.gitignore`. The rest of `.gitignore` is untouched, and
+  `doctor` checks the block.
 
 ## 6. Config and the YAML subset
 
@@ -189,7 +221,10 @@ All paths are config keys with these defaults.
 The YAML subset (`gates/lib/yamlsub.py`, own parser and emitter): block mappings, block
 sequences, flow sequences of scalars, plain/single/double-quoted scalars, `|` block scalars,
 comments, integers, booleans, null. Refused with a line number: anchors, aliases, tags,
-merge keys, duplicate keys, tabs for indentation, flow mappings, multi-document streams.
+merge keys, duplicate keys, tabs for indentation, flow mappings, multi-document streams,
+integers longer than 1000 characters and nesting deeper than 50 levels (owner answer
+2026-10-31; the emitter refuses the same two limits with an error, since emitted text has
+no line yet). One nesting level is each mapping, block sequence or flow sequence.
 The emitter writes a canonical form so gate writes produce minimal diffs; parse(emit(x)) == x
 for every value the parser accepts.
 
@@ -285,6 +320,8 @@ Initial rule set, rewritten from lap-timer rulings without their history:
 - One block per context, at most `block.max_tasks` tasks, clean tree at every checkpoint, stop
   for the owner's `/clear`.
 - Merge only on all-green under an owner grant; the merge runs as its own command.
+- After a merge, prune the merged plan's workspace and review reports from the tree; evidence
+  cites them as `<sha>:<path>`.
 - Every agent reaps its background jobs before reporting; the controller checks for orphans.
 - Scripts that write files start with `set -eu` and assert they run inside their scratch path.
 - Owner rules go into spec, CLAUDE.md or playbooks; agent memory only points to them.
@@ -297,19 +334,20 @@ SessionStart lists active overrides. Project rules live in `.strict-delivery/pla
 ## 9. Program tooling (context and docs)
 
 - `program/context.yml` lists required reads per session kind (for example: every session
-  reads `in-force.md`, the board and its handoff; a reviewer additionally reads the brief and
+  reads `in-force.md`, the status page and its handoff; a reviewer additionally reads the brief and
   the review playbook). SessionStart prints the list for the session kind.
 - Read receipts: a PostToolUse hook on Read appends `{session, path, sha}` to
   `receipts/` (git-ignored). `gate_context` fails a dispatch or commit when a required read
   is missing or was read at a different content hash (strict); it warns only (light, standard).
 - `gate_cites`: every `path:line` and `path#anchor` cite in tracked docs resolves at HEAD.
-- `gate_drift`: board and handoff facts (branch heads, merged PRs, open blocks) match git and,
+- `gate_drift`: status-page and handoff facts (branch heads, merged PRs, open blocks) match git and,
   when available, GitHub.
-- `gate_index`: `docs/INDEX.md` and the state indexes are fresh (regenerated output equals the
-  tracked file).
+- `gate_index`: `docs/strict-delivery/INDEX.md` and the state indexes regenerate without error,
+  and none of them is tracked (a tracked generated file fails).
 - `gate_checkpoint`: handoff front matter matches its schema (plan, spec, branch, head, base,
   ledger, resume line, block, next task, findings in flight, open decisions, rulings, grant,
-  live subagents), the tree is clean, the ledger carries the `CHECKPOINT` line.
+  live subagents), the tree is clean, the ledger carries the `CHECKPOINT` line. After a merge it
+  checks that the merged plan's workspace and review reports are gone from the tree.
 
 ## 10. Agent management
 
@@ -334,7 +372,7 @@ Lifecycle: only a controller dispatches; fix loop rounds 1-3 resume the implemen
 Optional. Config `streams`: id, decision and finding id ranges, owned paths, shared
 append-only files. `gate_streams` checks that new ids fall inside the creating stream's range,
 that a stream's commits touch only its owned paths plus shared files, and that shared files
-are only appended to. The board shows one row per stream. Sync sessions are their own session
+are only appended to. The status page shows one row per stream. Sync sessions are their own session
 kind in `context.yml`.
 
 ## 12. Profiles
@@ -403,7 +441,9 @@ the gates behave on those layouts, not to say how such projects should test.
 - Init end-to-end: fixture repositories (node, rust, go, python, C with make, empty, monorepo);
   non-interactive init from an answers file; `doctor` and `run_all` green; then seeded
   violations (unanswered decision reference, `--no-verify`, missing owner, bad dispatch, shard
-  invariant broken, stale index) each turn the run red. Every gate has a red case.
+  invariant broken, a tracked generated index) each turn the run red. Every gate has a red case. A fixture
+  with existing `docs/superpowers/` documents and one with a colliding path prove the
+  migration and the no-overwrite rule.
 - Hooks: JSON event fixtures into each hook script.
 - Profiles: the same fixture repository under each profile runs exactly the gates the profile
   table names.
@@ -438,7 +478,8 @@ breaking changes are allowed with a migration; 1.0 freezes the config and state 
    tools (`ask`, `decide`, `find`, indexes, `in-force.md`).
 2. `gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption.
 3. Plugin: skill, role prompt blocks, base playbook, Claude Code hooks.
-4. `init`, `doctor`, `upgrade`, templates, CI workflow template, stack detection.
+4. `init`, `doctor`, `upgrade`, templates, CI workflow template, stack detection, the
+   no-overwrite rule and the superpowers document migration.
 5. Program tooling (`gate_context`, receipts, `gate_cites`, `gate_drift`, `gate_index`) and
    streams (`gate_streams`).
 6. `gate_checkpoint`, `gate_evidence` (section 13a), profile end-to-end tests, release 0.1.0.
