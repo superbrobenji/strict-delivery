@@ -877,6 +877,13 @@ class TestDomain(unittest.TestCase):
                 for text in [f"k: {header}{follower}\n  x\n", f"- {header}{follower}\n  x\n", f"{header}{follower}\n x\n"]:
                     _refused(self, "x: 1\n" + text if text.startswith("k") else "- y\n" + text if text.startswith("-")
                              else text, 1 if text.startswith("|") else 2, "block scalar header")
+        # U2-t: spaces or a tab, then text that is not a ' #' comment, is refused too
+        for header in ["|", "|-"]:
+            for ws in [" ", "\t", "  ", " \t", "\t "]:
+                for rest in ["x", "x #c", "1", "-", "|", "\xa0", "\xa0#c", "\u3000", "'q'", "[a]", "a#c"]:
+                    _refused(self, f"x: 1\nk: {header}{ws}{rest}\n  x\n", 2, "block scalar header")
+                    _refused(self, f"- y\n- {header}{ws}{rest}\n  x\n", 2, "block scalar header")
+                    _refused(self, f"{header}{ws}{rest}\n x\n", 1, "block scalar header")
         for text in ["- \tv\n", "-  \tv\n", "- \t v\n", "- k: \tv\n", "- \t|\n  x\n", "- \t[v]\n",
                      "-\t\n", "- \t\n", "- \t# c\n", "- k:\t\n"]:
             _refused(self, "- y\n" + text, 2, "tab")
@@ -1578,8 +1585,7 @@ class _DocGen:
             # where it would be content (TestBlockScalarBlankLines)
             line = r.choice(["", " ", "# " + r.choice(self.UNI) + "\t#"])
             if line.startswith("#"):
-                self.pair("#", " ")
-                self.pair("#", "")
+                self.pair("#", " ")  # the last '#' is comment text, not an indicator: no ('#', eol)
             self.add(line)
 
     def block_str(self):
@@ -1781,12 +1787,14 @@ class _DocGen:
             p = tags["bhead"]
             hdr = "|-" if text[p:p + 2] == "|-" else "|"
             c = r.choice(["\xa0", r.choice(self.UNI + list("#|:,>?[") + (["-"] if hdr == "|-" else []))])
+            if r.random() < 0.3:  # U2-t: spaces or a tab, then text that is not a ' #' comment
+                c = r.choice([" ", "\t", " \t"]) + r.choice(["x", "\xa0", "-", "|", "1"])
+            self.pair(hdr, c[0])  # the character written directly after the header
             text, fragment = text[:p + len(hdr)] + c + text[p + len(hdr):], "block scalar header"
-            self.pair(hdr, c)
         elif kind == "tabeol":  # U1: a tab after ':' or '-' with nothing (or only a comment) after it
-            p = tags["empty"]
-            self.pair(text[p - 1], "\t")
-            text, fragment = text[:p] + r.choice(["\t", " \t", "\t "]) + text[p:], "tab"
+            p, ins = tags["empty"], r.choice(["\t", " \t", "\t "])
+            self.pair(text[p - 1], ins[0])  # T2-c: a (separator, tab) pair only when the tab is directly after it
+            text, fragment = text[:p] + ins + text[p:], "tab"
         elif kind == "commaeol" and tags["flow"][1]:  # ',' then end of line: unterminated (D7)
             p = r.choice(tags["flow"][1]) + 1
             text, fragment = text[:p], "unterminated"
