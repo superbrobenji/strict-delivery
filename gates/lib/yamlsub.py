@@ -253,6 +253,11 @@ class _Parser:
             return i, i + 1, ind, content
         return None
 
+    def trail(self, idx: int) -> str:
+        """The whitespace peek stripped from the end of line idx."""
+        raw = self.lines[idx]
+        return raw[len(raw.rstrip(_WS)):]
+
     def detect_key(self, content: str, lineno: int):
         """Return (key, rest-after-colon) if content is 'key: ...', else None."""
         c = content[0]
@@ -337,7 +342,10 @@ class _Parser:
             if key in result:
                 raise YamlError(lineno, f"duplicate key {key!r}")
             self.pos = idx + 1
-            if "\t" in rest[:len(rest) - len(rest.lstrip(_WS))]:  # owner ruling D5
+            lead = rest[:len(rest) - len(rest.lstrip(_WS))]
+            if rest == "":  # nothing follows ':' (content is rstripped): the stripped tail is after ':'
+                lead = self.trail(idx)
+            if "\t" in lead:  # owner rulings D5, U1: whatever follows
                 raise YamlError(lineno, "tab in the whitespace after ':'")
             rest = rest.strip(_WS)
             if rest == "" or rest.startswith("#"):
@@ -361,7 +369,7 @@ class _Parser:
                 break
             after = content[1:]
             rest = after.lstrip(" ")
-            if rest.startswith("\t"):
+            if rest.startswith("\t") or (rest == "" and "\t" in self.trail(idx)):  # D5, U1
                 raise YamlError(lineno, "tab used as a separator after '-'")
             col = indent + 1 + (len(after) - len(rest))
             if rest == "" or rest.startswith("#"):

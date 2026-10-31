@@ -386,6 +386,24 @@ class TestTabSeparators(unittest.TestCase):
         self._refuse("k: -\ta\n", 1)
         self._refuse("- \ta\n", 1)
 
+    def test_tab_after_separator_whatever_follows(self):
+        """U1 (owner): a tab right after ':' or '-', or in the whitespace after them, is refused with the
+        line whatever follows: a value, a comment or the end of the line."""
+        for tail in ["\t", " \t", "  \t", "\t ", " \t ", " \t# c", "  \t # c", "\t# c", " \t#\tc"]:
+            self._refuse("x: 1\nk:" + tail + "\n", 2)
+            self._refuse("x: 1\n\"k\":" + tail + "\n", 2)
+            self._refuse("x: 1\nk:" + tail + "\n  j: 1\n", 2)
+            self._refuse("- x\n-" + tail + "\n", 2)
+            self._refuse("- x\n- k:" + tail + "\n", 2)
+            self._refuse("- x\n- -" + tail + "\n", 2)
+            self._refuse("k:\n  - x\n  -" + tail + "\n", 3)
+        # a tab after the value, or inside a comment, is not after the separator
+        self.assertEqual(parse("k: v\t\n"), {"k": "v"})
+        self.assertEqual(parse("k: # c\t\n"), {"k": None})
+        self.assertEqual(parse("- v \t\n"), ["v"])
+        self.assertEqual(parse("- # c\t\n"), [None])
+        self.assertEqual(parse("k: |\t\n  x\n"), {"k": "x\n"})
+
     def test_tab_in_leading_whitespace_of_a_value(self):
         """D5: a tab anywhere in the whitespace between ': ' or '- ' and the value is refused."""
         for value in ["v", "'v'", '"v"', "[v]", "|\n  v", "1"]:
@@ -845,10 +863,13 @@ class TestDomain(unittest.TestCase):
             # owner ruling D5: a tab anywhere in the whitespace between ': ' or '- ' and the value
             ("k: \tv\n", "tab"), ("k:  \tv\n", "tab"), ("k: \t v\n", "tab"),
             ("k: \t|\n  x\n", "tab"), ("k: \t[v]\n", "tab"), ("k: \t'v'\n", "tab"),
+            # owner ruling U1: whatever follows, a comment or the end of the line included
+            ("k:\t\n", "tab"), ("k: \t\n", "tab"), ("k: \t# c\n", "tab"),
         ]
         for text, fragment in refused:
             _refused(self, "x: 1\n" + text, 2, fragment)
-        for text in ["- \tv\n", "-  \tv\n", "- \t v\n", "- k: \tv\n", "- \t|\n  x\n", "- \t[v]\n"]:
+        for text in ["- \tv\n", "-  \tv\n", "- \t v\n", "- k: \tv\n", "- \t|\n  x\n", "- \t[v]\n",
+                     "-\t\n", "- \t\n", "- \t# c\n", "- k:\t\n"]:
             _refused(self, "- y\n" + text, 2, "tab")
 
     def test_comment_start_in_every_position(self):
