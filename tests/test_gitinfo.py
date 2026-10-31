@@ -13,6 +13,12 @@ from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo
 INVALID_UTF8 = b"ok \xff\xfe bad\n"
 
 
+def git_in(root, args, data):
+    """Run git with data on stdin; return stripped stdout."""
+    p = subprocess.run(["git", "-C", root] + args, input=data, stdout=subprocess.PIPE, check=True)
+    return p.stdout.decode("ascii").strip()
+
+
 def spy_runs():
     """Patch subprocess.run in gitinfo to record (argv, env) of each call and still run it."""
     calls = []
@@ -180,57 +186,88 @@ class CommitExistsTest(Fixture):
         self.assertNotEqual(bad.returncode, 0)  # git itself calls it ambiguous
         self.assertIs(gitinfo.commit_exists(self.root, prefix), False)
 
-    def test_prefix_shared_by_commit_and_blob_is_false(self):  # owner Q-1a2r-2
-        head = git(self.root, "rev-parse", "HEAD")
+    def _blob_with_prefix(self, prefix):
+        """Write a blob whose sha starts with prefix (lowercase hex); return its sha."""
         i = 0
         while True:
             data = b"cb%d\n" % i
-            h = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
-            if h[:4] == head[:4]:
-                break
+            if hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest().startswith(prefix):
+                return git_in(self.root, ["hash-object", "-w", "--stdin"], data)
             i += 1
-            if i > 2000000:
-                self.skipTest("no blob found")
-        subprocess.run(["git", "-C", self.root, "hash-object", "-w", "--stdin"], input=data,
-                       stdout=subprocess.PIPE, check=True)
-        self.assertEqual(subprocess.run(["git", "-C", self.root, "cat-file", "-e", head[:4] + "^{commit}"]
-                                        ).returncode, 0)  # plain git says commit
-        self.assertIs(gitinfo.commit_exists(self.root, head[:4]), False)
-        self.assertIs(gitinfo.commit_exists(self.root, head), True)  # the full sha is not ambiguous
-        self.assertIs(gitinfo.commit_exists(self.root, head[:12]), True)
-        mixed = head[:4].upper()
-        mixed = mixed[:2] + mixed[2:].lower() if mixed != head[:4] else head[:4]
-        for value in (head[:4].upper(), mixed, head[:4].upper() + head[4:12]):  # case of the prefix
-            with self.subTest(value=value):
-                want = len(value) > 4
-                self.assertIs(gitinfo.commit_exists(self.root, value), want)
 
-    def test_hex_named_ref_resolves_as_a_ref(self):  # G3, F-1a2r-3
-        seen, i = {}, 0
-        while True:
-            data = b"ref%d\n" % i
-            h = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
-            if h[:4] in seen:
-                pair = (seen[h[:4]], data)
-                break
-            seen[h[:4]] = data
-            i += 1
-        for data in pair:
-            subprocess.run(["git", "-C", self.root, "hash-object", "-w", "--stdin"], input=data,
-                           stdout=subprocess.PIPE, check=True)
-        name = h[:4]
+    def _ambiguous_commit_prefix(self):
+        """A 4-char prefix of a commit, holding at least two letters, shared with a blob; return (prefix, sha)."""
+        sha = git(self.root, "rev-parse", "HEAD")
+        n = 0
+        while sum(c in "abcdef" for c in sha[:4]) < 2:
+            n += 1
+            sha = commit_all(self.root, "letters %d" % n)
+        self._blob_with_prefix(sha[:4])
+        return sha[:4], sha
+
+    def test_prefix_shared_by_commit_and_blob_is_false(self):  # owner Q-1a2r-2, F-1a2r-4
+        prefix, sha = self._ambiguous_commit_prefix()
+        self.assertEqual(subprocess.run(["git", "-C", self.root, "cat-file", "-e", prefix + "^{commit}"]
+                                        ).returncode, 0)  # plain git picks the commit
+        letters = [i for i, c in enumerate(prefix) if c in "abcdef"]
+        mixed = "".join(c.upper() if i == letters[0] else c for i, c in enumerate(prefix))
+        self.assertNotIn(mixed, (mixed.lower(), mixed.upper()))  # truly mixed case
+        for value in (prefix, prefix.upper(), mixed):  # an ambiguous prefix in every letter case
+            with self.subTest(value=value):
+                self.assertIs(gitinfo.commit_exists(self.root, value), False)
+        for value in (sha, sha.upper(), sha[:12], sha[:12].upper(), mixed + sha[4:12]):  # unique: True
+            with self.subTest(value=value):
+                self.assertIs(gitinfo.commit_exists(self.root, value), True)
+        git(self.root, "config", "core.disambiguate", "commit")  # repo config does not lift the rule
+        self.assertIs(gitinfo.commit_exists(self.root, prefix), False)
+        self.assertEqual(git(self.root, "rev-parse", "--verify", prefix + "^{}"), sha)  # not a bare prefix:
+        self.assertIs(gitinfo.commit_exists(self.root, prefix + "^{}"), True)  # git's verdict, config included
+
+    def test_hex_named_ref_resolves_as_a_ref(self):  # G3, F-1a2r-3: a ref name wins over a prefix
+        prefix, sha = self._ambiguous_commit_prefix()
+        other = git(self.root, "rev-parse", "HEAD~1")
+        blob = self._blob_with_prefix(other[:4])
+        name = other[:4]
         self.assertIs(gitinfo.commit_exists(self.root, name), False)  # a pure prefix: ambiguous
-        git(self.root, "tag", name)
-        self.assertEqual(git(self.root, "rev-parse", "--verify", name + "^{commit}"),
-                         git(self.root, "rev-parse", "HEAD"))
-        self.assertIs(gitinfo.commit_exists(self.root, name), True)  # a tag git resolves
-        git(self.root, "tag", "-d", name)
+        layouts = [  # (refs created, all pointing at sha)
+            ["refs/tags/%s"], ["refs/heads/%s"], ["refs/%s"], ["refs/remotes/%s"], ["refs/remotes/%s/HEAD"],
+            ["refs/tags/%s", "refs/heads/%s"],  # git warns "refname is ambiguous", picks the tag
+            ["refs/heads/%s", "refs/remotes/%s/HEAD"],
+        ]
+        for layout in layouts:
+            with self.subTest(layout=layout):
+                for ref in layout:
+                    git(self.root, "update-ref", ref % name, sha)
+                self.assertEqual(git(self.root, "rev-parse", "--verify", name + "^{commit}"), sha)
+                self.assertIs(gitinfo.commit_exists(self.root, name), True)
+                for ref in layout:
+                    git(self.root, "update-ref", "-d", ref % name)
+                self.assertIs(gitinfo.commit_exists(self.root, name), False)
+        peel = ["rev-parse", "--verify", "--quiet", name + "^{commit}"]
+        git(self.root, "update-ref", "refs/tags/%s" % name, blob)  # a ref to a blob: git's verdict
+        self.assertEqual(git(self.root, *peel, check=False), "")
         self.assertIs(gitinfo.commit_exists(self.root, name), False)
-        git(self.root, "branch", name)
-        self.assertIs(gitinfo.commit_exists(self.root, name), True)  # a branch git resolves
-        git(self.root, "branch", "-D", name)
+        git(self.root, "update-ref", "refs/heads/%s" % name, sha)  # tag outranks branch: still the blob
+        self.assertEqual(git(self.root, *peel, check=False), "")
         self.assertIs(gitinfo.commit_exists(self.root, name), False)
-        self.assertIs(gitinfo.commit_exists(self.root, git(self.root, "rev-parse", "HEAD")), True)
+        git(self.root, "update-ref", "-d", "refs/tags/%s" % name)
+        self.assertEqual(git(self.root, *peel), sha)
+        self.assertIs(gitinfo.commit_exists(self.root, name), True)
+        git(self.root, "update-ref", "-d", "refs/heads/%s" % name)
+        self.assertIs(gitinfo.commit_exists(self.root, name), False)
+        with open(os.path.join(self.root, ".git", name), "w") as fh:  # first rule: $GIT_DIR/<name>
+            fh.write(sha + "\n")
+        self.assertEqual(git(self.root, *peel), sha)
+        self.assertIs(gitinfo.commit_exists(self.root, name), True)
+
+    def test_revision_expressions_resolve_as_git_does(self):  # G3, F-1a2r-3
+        prefix, sha = self._ambiguous_commit_prefix()
+        git(self.root, "tag", "-a", "-m", "t", "ttree", "HEAD^{tree}")
+        for value, want in (("HEAD~1", True), ("HEAD^{tree}", False), (prefix + "~0", True),
+                            (prefix + "^{commit}", True), ("HEAD:a.txt", False), ("ttree", False),
+                            ("main@{0}", True), ("x" + prefix, False)):
+            with self.subTest(value=value):
+                self.assertIs(gitinfo.commit_exists(self.root, value), want)
 
     def test_dash_value_is_never_passed_to_git(self):
         calls, patch = spy_runs()

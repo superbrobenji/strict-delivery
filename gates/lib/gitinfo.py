@@ -26,9 +26,10 @@ def _env() -> dict:
 
 
 def _run(root: str, name: str, args: List[str], ok: Optional[tuple] = (0,),
-         literal: bool = False) -> "subprocess.CompletedProcess":
-    """Run ``git -C root <args>``; with ``ok`` a tuple, any other exit status is a GateError naming ``name``."""
-    argv = ["git"] + (["--literal-pathspecs"] if literal else []) + ["-C", root] + args
+         literal: bool = False, opts: Optional[List[str]] = None) -> "subprocess.CompletedProcess":
+    """Run ``git [opts] -C root <args>``; with ``ok`` a tuple, any other exit status is a GateError naming
+    ``name``."""
+    argv = ["git"] + (opts or []) + (["--literal-pathspecs"] if literal else []) + ["-C", root] + args
     try:
         p = subprocess.run(argv, env=_env(), stdin=subprocess.DEVNULL, check=False,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -82,20 +83,23 @@ def head_sha(root: str) -> str:
 
 
 def commit_exists(root: str, sha: str) -> bool:
+    """True iff git resolves ``sha`` to a commit (an annotated tag is peeled).
+
+    A ref name wins over a hex-prefix reading, as in git. A bare hex value (any letter case) is resolved
+    with no type hint and ``core.disambiguate=none``, so git refuses it exactly when no ref rule matches
+    and it is a prefix of more than one object (owner Q-1a2r-2). Any other value is git's own verdict."""
     _ensure_repo(root)
     if sha.startswith("-"):
         return False
-    p = _run(root, "cat-file -e", ["cat-file", "-e", sha + "^{commit}"], ok=None)
-    if p.returncode != 0:
-        return False
-    if len(sha) < 40 and all(c in "0123456789abcdefABCDEF" for c in sha):
-        ref = _run(root, "rev-parse --symbolic-full-name", ["rev-parse", "--symbolic-full-name", sha],
-                   ok=None)  # exit 128 for an ambiguous bare prefix: not a ref
-        if ref.returncode == 0 and ref.stdout.strip():
-            return True  # git resolves the value as a ref (branch, tag): the prefix rule does not apply
-        d = _run(root, "rev-parse --disambiguate", ["rev-parse", "--disambiguate=" + sha])
-        return len(d.stdout.split()) <= 1  # a prefix naming several objects (any type) is ambiguous
-    return True
+    if all(c in "0123456789abcdefABCDEF" for c in sha):
+        p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options", sha],
+                 ok=None, opts=["-c", "core.disambiguate=none"])
+        if p.returncode != 0:
+            return False  # no ref of that name, and the prefix names no object or more than one
+        sha = _text(p.stdout, "rev-parse").strip()
+    p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                          sha + "^{commit}"], ok=None)
+    return p.returncode == 0
 
 
 def blob_exists(root: str, sha: str, path: str) -> bool:
