@@ -759,12 +759,11 @@ class TestDomain(unittest.TestCase):
         v = parse(S("k: v\n"))
         self.assertIs(type(next(iter(v))), str)
         self.assertIs(type(v["k"]), str)
-        # The row allows either YamlError line 0 or TypeError; which one is a controller decision.
-        for bad in (b"a: 1\n", None, 5):
-            with self.assertRaises((YamlError, TypeError), msg=repr(bad)) as cm:
+        # owner ruling D1: any non-str argument raises TypeError, never YamlError
+        for bad in (b"a: 1\n", bytearray(b"a: 1\n"), None, 5, 1.5, ["a: 1"]):
+            with self.assertRaises(TypeError, msg=repr(bad)) as cm:
                 parse(bad)
-            if isinstance(cm.exception, YamlError):
-                self.assertEqual(cm.exception.line, 0)
+            self.assertNotIsInstance(cm.exception, YamlError, repr(bad))
 
     def test_p2_characters_in_values_are_content(self):
         for c in P2_CHARS:
@@ -827,6 +826,10 @@ class TestDomain(unittest.TestCase):
             # '|' and '|-' then space or end of line
             ("k: |\n  x\n", {"k": "x\n"}), ("k: | \n  x\n", {"k": "x\n"}), ("k: |- \n  x\n", {"k": "x"}),
             ("k: | # c\n  x\n", {"k": "x\n"}),
+            # owner ruling D2: a tab after '#', '|' or '|-' is accepted
+            ("k: v #\t\n", {"k": "v"}), ("- v #\tc\n", ["v"]), ("k: 'v' #\tc\n", {"k": "v"}), ("k: [v] #\tc\n", {"k": ["v"]}),
+            ("k: |\t\n  x\n", {"k": "x\n"}), ("k: |-\t\n  x\n", {"k": "x"}), ("k: |\t# c\n  x\n", {"k": "x\n"}),
+            ("k: |-\t#\tc\n  x\n", {"k": "x"}), ("- |\t\n  x\n", ["x\n"]), ("|-\t\n x\n", "x"),
         ]
         for text, want in ok:
             self.assertEqual(parse(text), want, repr(text))
@@ -839,9 +842,14 @@ class TestDomain(unittest.TestCase):
             # ' #' starts a comment outside quotes, in a flow sequence too
             ("k: [a, #b]\n", "comment"), ("k: [ #b]\n", "comment"), ("k: [a #b]\n", "comment"),
             ("k: [a,\t#b]\n", "tab"),
+            # owner ruling D5: a tab anywhere in the whitespace between ': ' or '- ' and the value
+            ("k: \tv\n", "tab"), ("k:  \tv\n", "tab"), ("k: \t v\n", "tab"),
+            ("k: \t|\n  x\n", "tab"), ("k: \t[v]\n", "tab"), ("k: \t'v'\n", "tab"),
         ]
         for text, fragment in refused:
             _refused(self, "x: 1\n" + text, 2, fragment)
+        for text in ["- \tv\n", "-  \tv\n", "- \t v\n", "- k: \tv\n", "- \t|\n  x\n", "- \t[v]\n"]:
+            _refused(self, "- y\n" + text, 2, "tab")
 
     def test_p6_plain_scalar_first_character(self):
         bad = {"&": "anchor", "*": "alias", "!": "tag", "{": "flow mapping", ">": "folded"}
