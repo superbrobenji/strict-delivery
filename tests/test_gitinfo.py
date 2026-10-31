@@ -219,7 +219,10 @@ class CommitExistsTest(Fixture):
             with self.subTest(value=value):
                 self.assertIs(gitinfo.commit_exists(self.root, value), True)
         git(self.root, "config", "core.disambiguate", "commit")  # repo config does not lift the rule
-        self.assertIs(gitinfo.commit_exists(self.root, prefix), False)
+        self.assertEqual(git(self.root, "rev-parse", "--verify", mixed), sha)  # plain git now picks the commit
+        for value in (prefix, prefix.upper(), mixed):  # in any letter case
+            with self.subTest(config="commit", value=value):
+                self.assertIs(gitinfo.commit_exists(self.root, value), False)
         self.assertEqual(git(self.root, "rev-parse", "--verify", prefix + "^{}"), sha)  # not a bare prefix:
         self.assertIs(gitinfo.commit_exists(self.root, prefix + "^{}"), True)  # git's verdict, config included
 
@@ -264,7 +267,8 @@ class CommitExistsTest(Fixture):
         prefix, sha = self._ambiguous_commit_prefix()
         git(self.root, "tag", "-a", "-m", "t", "ttree", "HEAD^{tree}")
         for value, want in (("HEAD~1", True), ("HEAD^{tree}", False), (prefix + "~0", True),
-                            (prefix + "^{commit}", True), ("HEAD:a.txt", False), ("ttree", False),
+                            (prefix + "^{commit}", True), (prefix + "^0", True), (prefix.upper() + "~0", True),
+                            (prefix, False), ("HEAD:a.txt", False), ("ttree", False),
                             ("main@{0}", True), ("x" + prefix, False)):
             with self.subTest(value=value):
                 self.assertIs(gitinfo.commit_exists(self.root, value), want)
@@ -295,6 +299,124 @@ class CommitExistsTest(Fixture):
         with self.assertRaises(GateError) as e:
             gitinfo.merge_base(self.root, "HEAD", "-x")
         self.assertIn("ref", str(e.exception))
+
+
+ROOT, SUB, ERR = "root", "sub", "GateError"  # ls_tree verdicts: the HEAD root listing, ['x.txt'], GateError
+TXT = "alpha\n"
+
+
+class RevisionFormsTest(Fixture):
+    """Every gitrevisions form for the ref/sha argument of commit_exists, blob_exists, show, ls_tree (G3, G4,
+    G6, G7, round 5): each value pinned to the verdict the code gives, or refused (over-long hex, F-1a2r-5)."""
+
+    def setUp(self):
+        super().setUp()
+        r = self.root
+        git(r, "branch", "feature", "HEAD~1")
+        git(r, "config", "branch.main.remote", ".")
+        git(r, "config", "branch.main.merge", "refs/heads/feature")
+        git(r, "update-ref", "ORIG_HEAD", "HEAD~1")
+        with open(os.path.join(r, ".git", "FETCH_HEAD"), "w") as fh:
+            fh.write(self.head + "\t\tbranch 'main' of x\n")
+        self.listing = gitinfo.ls_tree(r, "HEAD", "")
+        self.assertIn("a.txt", self.listing)
+
+    def verdicts(self, value, path="a.txt", directory=""):
+        def guard(fn):
+            try:
+                return fn()
+            except GateError:
+                return ERR
+        ls = guard(lambda: gitinfo.ls_tree(self.root, value, directory))
+        ls = ROOT if ls == self.listing else SUB if ls == ["x.txt"] else ls
+        return (gitinfo.commit_exists(self.root, value), gitinfo.blob_exists(self.root, value, path),
+                guard(lambda: gitinfo.show(self.root, value, path)), ls)
+
+    def git_names_commit(self, value):
+        """Oracle from the git CLI: the value resolves (rev-parse --verify) and its object peels to a commit."""
+        p = subprocess.run(["git", "-C", self.root, "rev-parse", "--verify", "--quiet", "--end-of-options", value],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if p.returncode:
+            return False
+        oid = p.stdout.decode("ascii").strip()
+        return subprocess.run(["git", "-C", self.root, "cat-file", "-e", oid + "^{commit}"],
+                              stderr=subprocess.PIPE).returncode == 0
+
+    def test_revision_forms(self):
+        H = self.head
+        ok = (True, True, TXT, ROOT)
+        absent = (False, False, ERR, ERR)
+        old = (True, False, None, [])  # a commit older than a.txt (the config commit)
+        cases = [
+            (H, ok), (H.upper(), ok), (H[:7], ok), (H[:7].upper(), ok), (H[:7].upper()[:3] + H[3:7], ok),
+            ("HEAD", ok), ("FETCH_HEAD", ok), ("ORIG_HEAD", ok), ("@", ok), ("@{u}", ok), ("@{upstream}", ok),
+            ("main", ok), ("heads/main", ok), ("refs/heads/main", ok), ("feature", ok),
+            ("main@{0}", ok), ("main@{1}", ok), ("@{1}", ok), ("main@{2026-01-02}", ok),
+            ("main@{2025-01-01}", old),  # before the reflog: git takes the oldest entry
+            ("@{-1}", absent),  # no branch was checked out before
+            ("HEAD~1", ok), ("HEAD^", ok), ("HEAD^^", old), ("HEAD~1^1", old), ("HEAD^2", absent),
+            ("HEAD^{commit}", ok), ("HEAD^{}", ok), ("HEAD^{tree}", (False, True, TXT, ROOT)),
+            ("HEAD^{/fixture}", old), ("HEAD^{/nomatch}", absent),
+            (":/files", ok), (":/nomatch", absent),  # :/text names a commit
+            ("HEAD:dir", (False, False, None, SUB)),  # <rev>:<path> naming a tree is a tree-ish
+            ("HEAD:a.txt", absent), (":0:a.txt", absent), (":1:a.txt", absent), (":a.txt", absent),  # blobs
+            ("HEAD~1..HEAD", absent), ("HEAD...feature", absent), ("HEAD^@", absent), ("HEAD^!", absent),
+            ("", absent), (" ", absent), ("HEAD ", absent), (" HEAD", absent), ("\tHEAD", absent),
+            ("HEAD\n", absent), ("nonexistent", absent), ("0" * 40, absent),
+        ]
+        for value, want in cases:
+            with self.subTest(value=value):
+                self.assertEqual(self.verdicts(value), want)
+                self.assertIs(gitinfo.commit_exists(self.root, value), self.git_names_commit(value))
+
+    def test_overlong_hex_is_refused(self):  # F-1a2r-5: spec ids are 7-40 hex digits
+        H = self.head
+        refused = (False, False, ERR, ERR)
+        for value in (H + "0", H + "0" * 24, H.upper() + "0", H + "0~0", H + "0^{tree}", H + "0:dir",
+                      "HEAD:" + "a" * 41, H + "0" * 25, H + "1", "0" * 41, "a" * 41):
+            with self.subTest(value=value):
+                self.assertEqual(self.verdicts(value), refused)
+        self.assertTrue(self.git_names_commit(H + "0"))  # git itself would resolve it
+        self.assertTrue(self.git_names_commit(H + "0~0"))
+        tag = "t" + "a" * 41
+        git(self.root, "tag", tag)  # a ref name holding 41 hex digits in a row is refused too
+        self.assertTrue(self.git_names_commit(tag))
+        self.assertEqual(self.verdicts(tag), refused)
+        for fn in (lambda: gitinfo.show(self.root, H + "0", "a.txt"), lambda: gitinfo.ls_tree(self.root, H + "0", "")):
+            with self.assertRaises(GateError) as e:
+                fn()
+            self.assertIn("40 hex digits", str(e.exception))
+        self.assertEqual(self.verdicts(H), (True, True, TXT, ROOT))  # 40 digits still accepted
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.commit_exists(self.root, H + "0")
+            gitinfo.blob_exists(self.root, H + "0", "a.txt")
+        self.assertFalse([argv for argv, _ in calls if any(H + "0" in a for a in argv)])  # git never sees it
+
+    def test_path_forms(self):  # G4, G6, G7: the path argument (dir for ls_tree)
+        absolute = os.path.join(self.root, "a.txt")
+        cases = [  # path: (blob_exists, show, ls_tree with the path as directory)
+            ("a.txt", (True, TXT, [])), ("/a.txt", (False, ERR, ERR)), (absolute, (False, None, [])),
+            ("../a.txt", (False, ERR, ERR)), ("dir/../a.txt", (False, None, ERR)), ("./a.txt", (False, None, [])),
+            ("a.txt/", (False, None, [])), ("dir", (False, None, ["dir/x.txt"])), ("dir/", (False, None, ["dir/x.txt"])),
+            ("dir//x.txt", (False, None, [])), ("dir/./x.txt", (False, None, [])),
+            ("gl*ob/f.txt", (True, "g\n", [])), ("gl?ob/f.txt", (False, None, [])),
+            ("co:lon.txt", (True, "colon\n", [])), (":(top)tm.txt", (True, "magic\n", [])),
+            ("é/ü.txt", (True, "u\n", [])), ("nl\nname.txt", (True, "nl\n", [])), ("-lead.txt", (True, "lead\n", [])),
+            ("", (False, ERR, self.listing)), (" a.txt", (False, None, [])), ("a.txt ", (False, None, [])),
+            ("A.TXT", (False, None, [])), ("a\0b", (ERR, ERR, ERR)),
+        ]
+        for path, want in cases:
+            with self.subTest(path=path):
+                got = []
+                for fn in (lambda: gitinfo.blob_exists(self.root, "HEAD", path),
+                           lambda: gitinfo.show(self.root, "HEAD", path),
+                           lambda: gitinfo.ls_tree(self.root, "HEAD", path)):
+                    try:
+                        got.append(fn())
+                    except GateError:
+                        got.append(ERR)
+                self.assertEqual(tuple(got), want)
 
 
 class BlobExistsTest(Fixture):

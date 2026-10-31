@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import os
 import posixpath
+import re
 import subprocess
 from typing import List, Optional
 
 from gates.lib.result import GateError, GitNotFound
 
 _REGULAR = ("100644", "100755")
+_HEX = "0123456789abcdefABCDEF"
+_LONG_HEX = re.compile(r"[0-9a-fA-F]{41,}")  # longer than a sha-1: git would match it zero-padded (F-1a2r-5)
 
 
 def _env() -> dict:
@@ -54,6 +57,13 @@ def _check_ref(ref: str) -> None:
         raise GateError("ref must not start with '-'")
 
 
+def _check_rev(ref: str) -> None:
+    """_check_ref, and a ref holding more than 40 hex digits in a row is refused."""
+    _check_ref(ref)
+    if _LONG_HEX.search(ref):
+        raise GateError("ref must not hold more than 40 hex digits in a row")
+
+
 def _ensure_repo(root: str) -> None:
     _run(root, "rev-parse --git-dir", ["rev-parse", "--git-dir"])
 
@@ -83,28 +93,29 @@ def head_sha(root: str) -> str:
 
 
 def commit_exists(root: str, sha: str) -> bool:
-    """True iff git resolves ``sha`` to a commit (an annotated tag is peeled).
+    """True iff git resolves ``sha`` to an object that peels to a commit (an annotated tag is peeled).
 
     A ref name wins over a hex-prefix reading, as in git. A bare hex value (any letter case) is resolved
     with no type hint and ``core.disambiguate=none``, so git refuses it exactly when no ref rule matches
-    and it is a prefix of more than one object (owner Q-1a2r-2). Any other value is git's own verdict."""
+    and it is a prefix of more than one object (owner Q-1a2r-2). Any other value is git's own verdict
+    (owner Q-1a2r-7). More than 40 hex digits in a row is refused (F-1a2r-5)."""
     _ensure_repo(root)
-    if sha.startswith("-"):
+    if sha.startswith("-") or _LONG_HEX.search(sha):
         return False
-    if all(c in "0123456789abcdefABCDEF" for c in sha):
-        p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options", sha],
-                 ok=None, opts=["-c", "core.disambiguate=none"])
-        if p.returncode != 0:
-            return False  # no ref of that name, and the prefix names no object or more than one
-        sha = _text(p.stdout, "rev-parse").strip()
+    bare_hex = all(c in _HEX for c in sha)
+    p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options", sha],
+             ok=None, opts=["-c", "core.disambiguate=none"] if bare_hex else None)
+    if p.returncode != 0:
+        return False  # git resolves no object (for a bare hex value: no ref, and not a unique prefix)
+    oid = _text(p.stdout, "rev-parse").strip()
     p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options",
-                                          sha + "^{commit}"], ok=None)
+                                          oid + "^{commit}"], ok=None)
     return p.returncode == 0
 
 
 def blob_exists(root: str, sha: str, path: str) -> bool:
     _ensure_repo(root)
-    if sha.startswith("-"):
+    if sha.startswith("-") or _LONG_HEX.search(sha):
         return False
     p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", sha, "--", path], ok=None, literal=True)
     return any(mode in _REGULAR and name == path for mode, _, name in _entries(p.stdout, "ls-tree"))
@@ -117,7 +128,7 @@ def tracked_files(root: str) -> frozenset:
 
 
 def show(root: str, ref: str, path: str) -> Optional[str]:
-    _check_ref(ref)
+    _check_rev(ref)
     p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", ref, "--", path], literal=True)
     raw = None
     for mode, sha, name in _entries(p.stdout, "ls-tree"):
@@ -133,7 +144,7 @@ def show(root: str, ref: str, path: str) -> Optional[str]:
 
 
 def ls_tree(root: str, ref: str, directory: str) -> list:
-    _check_ref(ref)
+    _check_rev(ref)
     d = directory.rstrip("/")
     if ".." in d.split("/"):
         raise GateError("ls-tree: directory must not hold a '..' segment")
