@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.9+ standard library only (`unittest`, `argparse`, `subprocess`, `fnmatch`, `dataclasses`); git.
 
-**Spec:** `docs/specs/2026-10-31-strict-delivery-framework-design.md`
+**Spec:** `docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md`
 
 ## Global Constraints
 
@@ -29,7 +29,7 @@
 - Checkpoint after every task: append one line to `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/ledger.md`:
   `CHECKPOINT <block> <task> head=<short sha> tests=<passed>/<total> gates=<PASS|n/a> next=<task id>`
   and rewrite `handoff.md` beside it with the resume prompt:
-  `Resume strict-delivery plan docs/plans/2026-10-31-strict-delivery-framework.md at <next task>; branch <branch>; head <sha>; open questions: <ids or none>.`
+  `Resume strict-delivery plan docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md at <next task>; branch <branch>; head <sha>; open questions: <ids or none>.`
   Tree clean after the checkpoint commit.
 - Owner answers recorded 2026-10-31 (before the decision log exists): split of block 1 approved; the plan's design choices for fields the spec leaves open approved (`asked_at`/`answered_at.at` are commit shas, `withdraw` is owner-only, `schema: 1` wrappers, optional finding `parent`, `check <gate>` command form, `decisions.scan` defaults, LICENSE holder); Python 3.13 installed locally; execution subagent-driven.
 - Process changes adopted by the owner 2026-10-31 after the Task 1a.1 convergence stop (applied to this plan's briefs and dispatches now, and written into this repository's own prompt blocks in block 3; the shared user-level skill is not changed):
