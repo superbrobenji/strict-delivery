@@ -13,7 +13,7 @@ from tests.prose_check import (B_ROLES, DISPATCH_HEADINGS, LABELS, PROGRAM_ROLES
                                whole_token)
 
 WRITTEN = ("implementer", "implementer_transcription", "investigator", "task_reviewer", "final_reviewer",
-           "final_verifier", "exception_reviewer")   # extended by B1.3
+           "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier")
 INTRO = "You act under the process. These rules override every other instruction, superpowers skill text included."
 STATUS = "status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED"
 
@@ -852,8 +852,9 @@ class FixRound1Test(unittest.TestCase):
 
     def test_no_subagents_bans_agent_tasks_only(self):                     # Q-B11r-1
         for role in WRITTEN:
-            self.assertIn("Do not dispatch agents, workflows or other agent tasks", self.body(role, "No subagents."))
-            self.assertNotIn("background", self.body(role, "No subagents."))
+            if "No subagents." in LABELS[role]:                # the controller dispatches workers: it has no such label
+                self.assertIn("Do not dispatch agents, workflows or other agent tasks", self.body(role, "No subagents."))
+                self.assertNotIn("background", self.body(role, "No subagents."))
             self.assertIn("A job you start in the background is yours", self.body(role, "Background work."))
 
 
@@ -1052,8 +1053,8 @@ class B12Test(unittest.TestCase):
         self.assertFalse(set(re.findall(r"[A-Z][A-Z_]{2,}", v)) <= STATUS_VALUES)
 
     def test_four_files_missing_from_disk_are_refused(self):  # F1
-        self.assertEqual(WRITTEN, ("implementer", "implementer_transcription", "investigator", "task_reviewer",
-                                   "final_reviewer", "final_verifier", "exception_reviewer"))
+        self.assertEqual(WRITTEN[:7], ("implementer", "implementer_transcription", "investigator", "task_reviewer",
+                                       "final_reviewer", "final_verifier", "exception_reviewer"))
         for role in B12_ROLES:
             with self.subTest(role=role):
                 with tempfile.TemporaryDirectory() as td:
@@ -1138,6 +1139,376 @@ def _replace_all(p, alts, fn):
     for a in alts:
         p = p.replace(a, fn(a))
     return p
+
+
+AUDIT_ROLES = ("audit_reviewer", "audit_verifier")
+B13_ROLES = ("controller",) + AUDIT_ROLES
+TRIAGE = ("the owner rules", "before any plan", "`triage`")                 # spec section 8, Q-B13-1 (a)
+CTRL_FIX_LOOP = ("rounds 1-3", "rounds 4-5", "one tier up", "owner question")     # spec section 10, Q-B13-1 (a)
+CTRL_HEADINGS = tuple("`%s`" % h for h in DISPATCH_HEADINGS)
+RULING = "Ruling: what -- why -- cost if wrong -- spec cite"                  # spec section 7.1
+# Task B1.3 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
+B13_CONTENT = {
+    "controller": [("Dispatch discipline.", s) for s in CTRL_HEADINGS]
+    + [("Dispatch discipline.", s) for s in ("fork dispatch is refused", "`models.tiers`", "`top_tier_roles`")]
+    + [("Rulings.", RULING), ("Rulings.", "`rulings.max_per_block`")]
+    + [("Continuation.", s) for s in CTRL_FIX_LOOP + ("handoff", "BLOCKED: budget",
+                                                      "Nothing continues from inherited memory")]
+    + [("Input domain.", "input-domain table"), ("Oracle.", "production path"),
+       ("Oracle.", "independent expected value"), ("Finding class.", "class: <dimension>: <members>")],
+    "audit_reviewer": [("Owner-only decisions.", s) for s in TRIAGE]
+    + [("Coverage first.", "coverage list"), ("Coverage first.", "progress file")],
+    "audit_verifier": [("Owner-only decisions.", s) for s in TRIAGE]
+    + [("Method.", "every reproducer"), ("Method.", "coverage list"), ("Method.", "extends")],
+}
+VERDICT_PARA = {"controller": "Report contract.", "audit_verifier": "Verdict."}       # owner Q-B12-4 pattern
+
+
+def b13_problems(role, text):
+    """The Task B1.3 checks, run on the real file and on mutated copies of it. Never raises on a missing paragraph."""
+    out = []
+    for label, s in B13_CONTENT[role]:
+        try:
+            ok = whole_token(s, paragraph(text, label))
+        except ValueError:
+            ok = False
+        if not ok:
+            out.append("%s lacks %r" % (label, s))
+    if role == "controller":
+        try:
+            at = [pc._find_token(h, paragraph(text, "Dispatch discipline.")) for h in CTRL_HEADINGS]
+            if min(at) >= 0 and any(a > b for a, b in zip(at, at[1:])):
+                out.append("Dispatch discipline. names the dispatch headings out of order")
+        except ValueError:
+            pass
+    if role in AUDIT_ROLES and whole_token("tier4", text):
+        out.append("tier4 given to " + role)
+    if role in VERDICT_PARA:
+        try:
+            caps = set(re.findall(r"[A-Z][A-Z_]{2,}", paragraph(text, VERDICT_PARA[role])))
+            if not caps or not caps <= STATUS_VALUES:
+                out.append("%s names %r, not only STATUS_LINE values" % (VERDICT_PARA[role], sorted(caps)))
+        except ValueError:
+            out.append("%s is missing" % VERDICT_PARA[role])
+    return out
+
+
+def audit_methods_differ(reviewer_text, verifier_text):
+    return paragraph(reviewer_text, "Method.") != paragraph(verifier_text, "Method.")
+
+
+def b13_move(text, label, alts, dest):
+    """Move every alternative that paragraph `label` holds as a whole token into paragraph `dest`."""
+    for a in alts:
+        if whole_token(a, paragraph(text, label)):
+            text = other_para(text, label, a, dest)
+    return text
+
+
+def b13_swap(p, a, b):
+    return p.replace(a, "@@").replace(b, a).replace("@@", b)
+
+
+class B13Test(unittest.TestCase):
+    def test_all_b_roles_written(self):                       # F1 F2, the plan's test
+        self.assertEqual(sorted(WRITTEN), sorted(B_ROLES))
+        self.assertEqual(WRITTEN[7:], ("controller", "audit_reviewer", "audit_verifier"))     # plan order
+        for name, t in (("one dropped", WRITTEN[:-1]), ("one twice", WRITTEN + ("controller",)),
+                        ("program role added", WRITTEN + ("program_controller",)),
+                        ("one swapped for a program role", WRITTEN[:-1] + ("stream_controller",))):
+            with self.subTest(name):
+                self.assertNotEqual(sorted(t), sorted(B_ROLES))
+
+    def test_real_files_pass_the_plan_tests_and_content_checks(self):    # C1 C2 C3 C5 C6 C7 C8 C9 C10 A1-A5 A7
+        for role in B13_ROLES:
+            with self.subTest(role=role):
+                self.assertEqual(b13_problems(role, disk(role)), [])
+                self.assertEqual(block_problems(disk(role).encode("ascii"), role), [])
+        p = paragraph(disk("controller"), "Dispatch discipline.")                       # the plan's tests, in the plan's form
+        at = [pc._find_token(h, p) for h in CTRL_HEADINGS]
+        self.assertTrue(min(at) >= 0 and at == sorted(at) and whole_token("fork dispatch is refused", p))
+        self.assertTrue(whole_token("`models.tiers`", p) and whole_token("`top_tier_roles`", p))
+        c = paragraph(disk("controller"), "Continuation.")
+        self.assertTrue(all(whole_token(s, c) for s in CTRL_FIX_LOOP))
+        r = paragraph(disk("controller"), "Rulings.")
+        self.assertTrue(whole_token(RULING, r) and whole_token("`rulings.max_per_block`", r))
+        for role in AUDIT_ROLES:
+            o = paragraph(disk(role), "Owner-only decisions.")
+            self.assertTrue(all(whole_token(s, o) for s in TRIAGE), role)
+
+    def test_every_content_string_absent_joined_wrapped_or_misplaced(self):     # C2 C3 C5 C6 C7 C8 C9 A1-A5
+        for role in B13_ROLES:
+            t = disk(role)
+            for label, s in B13_CONTENT[role]:
+                want = "%s lacks %r" % (label, s)
+                cases = [("missing", in_para(t, label, lambda p: p.replace(s, "zzz"))),
+                         ("joined", in_para(t, label, lambda p: p.replace(s, "x" + s + "x"))),
+                         ("misplaced", other_para(t, label, s, "Zero bugs."))]
+                if " " in s:
+                    cases.append(("wrapped", in_para(t, label, lambda p: p.replace(s, s.replace(" ", "\n", 1)))))
+                for name, bad in cases:
+                    with self.subTest(role=role, label=label, s=s, case=name):
+                        self.assertIn(want, b13_problems(role, bad))
+
+    def test_dispatch_headings_missing_swapped_or_malformed(self):     # C1, M3
+        t = disk("controller")
+        for i, h in enumerate(CTRL_HEADINGS):
+            with self.subTest(heading=h, case="missing"):
+                bad = in_para(t, "Dispatch discipline.", lambda p: p.replace(h, "zzz"))
+                self.assertIn("Dispatch discipline. lacks %r" % h, b13_problems("controller", bad))
+                self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+            with self.subTest(heading=h, case="without backticks"):
+                bad = in_para(t, "Dispatch discipline.", lambda p: p.replace(h, h.strip("`")))
+                self.assertIn("Dispatch discipline. lacks %r" % h, b13_problems("controller", bad))
+            if i + 1 < len(CTRL_HEADINGS):
+                with self.subTest(heading=h, case="swapped with the next"):
+                    bad = in_para(t, "Dispatch discipline.", lambda p: b13_swap(p, h, CTRL_HEADINGS[i + 1]))
+                    self.assertIn("Dispatch discipline. names the dispatch headings out of order",
+                                  b13_problems("controller", bad))
+                    self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+        bad = in_para(t, "Dispatch discipline.", lambda p: p.replace("`## Budget: tokens=<n> minutes=<n>`", "`## Budget`"))
+        self.assertIn("Dispatch discipline. lacks '`## Budget: tokens=<n> minutes=<n>`'", b13_problems("controller", bad))
+        bad = in_para(t, "Dispatch discipline.", lambda p: p.replace("tokens=<n> minutes=<n>", "tokens=<n>"))
+        self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+        bad = in_para(t, "Dispatch discipline.", lambda p: p.replace("minutes=<n>", "minutes=5"))
+        self.assertTrue(b13_problems("controller", bad))
+        for i, h in enumerate(CTRL_HEADINGS):                       # the list in another paragraph only
+            with self.subTest(heading=h, case="in another paragraph only"):
+                bad = other_para(t, "Dispatch discipline.", h, "Zero bugs.")
+                self.assertIn("Dispatch discipline. lacks %r" % h, b13_problems("controller", bad))
+        for label in ("Dispatch discipline.",):                     # M3: a missing paragraph is a failed check, not an error
+            bad = t.replace(paragraph(t, label) + "\n\n", "")
+            self.assertIn("Dispatch discipline. lacks '`## Role`'", b13_problems("controller", bad))
+            self.assertIn("labels", kinds(bad.encode("ascii"), "controller"))
+
+    def test_fork_refusal_phrase(self):                          # C2
+        t = disk("controller")
+        p = paragraph(t, "Dispatch discipline.")
+        self.assertTrue(whole_token("fork dispatch is refused", p))
+        for name, new in (("only fork", "a fork inherits"), ("forks", "forks dispatch is refused"),
+                          ("fork dispatch is refused-ish", "fork dispatch is refusedx"),
+                          ("no refusal", "fork dispatch is allowed")):
+            with self.subTest(name):
+                bad = in_para(t, "Dispatch discipline.", lambda q: q.replace("fork dispatch is refused", new))
+                self.assertIn("Dispatch discipline. lacks 'fork dispatch is refused'", b13_problems("controller", bad))
+        self.assertIn("required", kinds(in_para(t, "Dispatch discipline.",
+                                                lambda q: q.replace("fork dispatch is refused", "zzz").replace("fork", "zzz"))
+                                        .encode("ascii"), "controller"))
+
+    def test_tiers_not_models_in_controller_and_tier4_rule(self):    # C3 C4 F6 A6
+        t = disk("controller")
+        self.assertEqual(forbidden_hits(t), [])
+        for model in ("Opus", "sonnet", "Haiku", "fable45"):
+            with self.subTest(model=model):
+                bad = in_para(t, "Dispatch discipline.", lambda p: p + " Use " + model + ".")
+                self.assertEqual({h[0] for h in forbidden_hits(bad)}, {"model-name"})
+        # C4: tier4 is neither required nor refused in the controller
+        self.assertEqual(b13_problems("controller", in_para(t, "Dispatch discipline.", lambda p: p + " tier4")), [])
+        self.assertEqual(b13_problems("controller", t), [])
+        for role in AUDIT_ROLES:                                  # A6: refused in the audit blocks, wherever it is
+            for label in ("Method.", "Zero bugs.", "Owner-only decisions."):
+                with self.subTest(role=role, label=label):
+                    self.assertFalse(whole_token("tier4", disk(role)))
+                    bad = in_para(disk(role), label, lambda p: p + " tier4")
+                    self.assertEqual(b13_problems(role, bad), ["tier4 given to " + role])
+            bad = in_para(disk(role), "Method.", lambda p: p + " tier4x")
+            self.assertEqual(b13_problems(role, bad), [])           # a longer word is not the tier
+
+    def test_fix_loop_rounds_other_than_1_3_and_4_5(self):      # C6 C7
+        t = disk("controller")
+        for s, new in (("rounds 1-3", "rounds 1-2"), ("rounds 1-3", "rounds 1-30"), ("rounds 1-3", "round 1-3"),
+                       ("rounds 1-3", "rounds 2-3"), ("rounds 4-5", "rounds 4-6"), ("rounds 4-5", "rounds 4-50"),
+                       ("rounds 4-5", "round 4-5"), ("rounds 4-5", "rounds 5-5"), ("one tier up", "one tier down"),
+                       ("one tier up", "one tier upx"), ("owner question", "owner questions")):
+            with self.subTest(s=s, new=new):
+                bad = in_para(t, "Continuation.", lambda p: p.replace(s, new))
+                self.assertIn("Continuation. lacks %r" % s, b13_problems("controller", bad))
+        for s in CTRL_FIX_LOOP:                                   # only in another paragraph, even whole-file present
+            bad = other_para(t, "Continuation.", s, "Merge and checkpoint.")
+            self.assertTrue(whole_token(s, bad))
+            self.assertIn("Continuation. lacks %r" % s, b13_problems("controller", bad))
+
+    def test_ruling_format_variants(self):                       # C5
+        t = disk("controller")
+        for name, new in (("one dash", "Ruling: what - why - cost if wrong - spec cite"),
+                          ("en dash", "Ruling: what – why – cost if wrong – spec cite"),
+                          ("reordered", "Ruling: why -- what -- cost if wrong -- spec cite"),
+                          ("no colon", "Ruling what -- why -- cost if wrong -- spec cite")):
+            with self.subTest(name):
+                bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, new))
+                self.assertIn("Rulings. lacks %r" % RULING, b13_problems("controller", bad))
+        bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, RULING.replace("what -- why", "what\n-- why")))
+        self.assertIn("Rulings. lacks %r" % RULING, b13_problems("controller", bad))
+        bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, RULING.replace("what -- why", "what\n--\nwhy")))
+        self.assertIn("setext", kinds(bad.encode("ascii"), "controller"))             # F5
+        bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, "Ruling: what – why – cost if wrong – spec cite"))
+        self.assertIn("encoding", kinds(bad.encode("utf-8"), "controller"))
+        bad = in_para(t, "Rulings.", lambda p: p.replace("`rulings.max_per_block`", "rulings.max_per_block"))
+        self.assertIn("Rulings. lacks '`rulings.max_per_block`'", b13_problems("controller", bad))
+
+    def test_triage_variants(self):                              # A1 A2
+        for role in AUDIT_ROLES:
+            t = disk(role)
+            for s, new in (("`triage`", "triage"), ("before any plan", "before any plans"),
+                           ("before any plan", "before a plan"), ("the owner rules", "the reviewer rules"),
+                           ("the owner rules", "the owner ruled")):
+                with self.subTest(role=role, s=s, new=new):
+                    bad = in_para(t, "Owner-only decisions.", lambda p: p.replace(s, new))
+                    self.assertIn("Owner-only decisions. lacks %r" % s, b13_problems(role, bad))
+            for s in TRIAGE:                                      # present elsewhere in the file only
+                bad = other_para(t, "Owner-only decisions.", s, "Zero bugs.")
+                self.assertTrue(whole_token(s, bad))
+                self.assertIn("Owner-only decisions. lacks %r" % s, b13_problems(role, bad))
+            o = paragraph(t, "Owner-only decisions.")
+            self.assertTrue(all(whole_token(s, o) for s in ("decision_classes.owner_only", "NEEDS_DECISION",
+                                                              "at least two options")))
+
+    def test_coverage_and_method_variants(self):                 # A3 A4 A5
+        t = disk("audit_reviewer")
+        bad = other_para(t, "Coverage first.", "coverage list", "Method.")
+        self.assertIn("Coverage first. lacks 'coverage list'", b13_problems("audit_reviewer", bad))
+        bad = other_para(t, "Coverage first.", "progress file", "Method.")
+        self.assertIn("Coverage first. lacks 'progress file'", b13_problems("audit_reviewer", bad))
+        v = disk("audit_verifier")
+        for new in ("reproducers", "every reproducers", "the reproducer", "each reproducer"):
+            with self.subTest(new=new):
+                bad = in_para(v, "Method.", lambda p: p.replace("every reproducer", new))
+                self.assertIn("Method. lacks 'every reproducer'", b13_problems("audit_verifier", bad))
+        bad = other_para(v, "Method.", "every reproducer", "Verdict.")
+        self.assertIn("Method. lacks 'every reproducer'", b13_problems("audit_verifier", bad))
+        self.assertIn("coverage list", paragraph(v, "Method."))
+        bad = in_para(v, "Method.", lambda p: p.replace("extends", "replaces"))
+        self.assertIn("Method. lacks 'extends'", b13_problems("audit_verifier", bad))
+
+    def test_verdict_values_only_status_line(self):              # C10 A7
+        for role, label in VERDICT_PARA.items():
+            t = disk(role)
+            v = paragraph(t, label)
+            self.assertIn("status", v)
+            for word in ("APPROVED", "UPHOLD", "PASS", "REJECT", "DONE_WITH_FINDING"):
+                with self.subTest(role=role, word=word):
+                    bad = in_para(t, label, lambda p: p + " Report " + word + ".")
+                    self.assertTrue([x for x in b13_problems(role, bad) if "not only STATUS_LINE" in x])
+            bad = t.replace(v, "")                                # the paragraph's label is gone
+            self.assertNotEqual(bad, t)
+            self.assertTrue([x for x in b13_problems(role, bad) if "is missing" in x or "lacks" in x])
+
+    def test_audit_blocks_differ(self):                          # A8
+        r, v = disk("audit_reviewer"), disk("audit_verifier")
+        self.assertTrue(audit_methods_differ(r, v))
+        same = in_para(r, "Method.", lambda p: paragraph(v, "Method."))
+        self.assertFalse(audit_methods_differ(same, v))
+        self.assertTrue(audit_methods_differ(in_para(v, "Method.", lambda p: p + "x"), v))
+        self.assertTrue(audit_methods_differ(in_para(v, "Method.", lambda p: p[:-1]), v))
+        self.assertNotEqual(r, v)
+
+    def test_controller_required_paragraph_content(self):        # C8 C9 F4
+        t = disk("controller")
+        for label in ("Input domain.", "Oracle.", "Finding class.", "Continuation.", "Owner-only decisions.",
+                      "Report contract.", "Verification method.", "Budget.", "Background work."):
+            for item in REQUIRED[label]:
+                alts = item if isinstance(item, tuple) else (item,)
+                for name, bad in (("missing", in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "zzz"))),
+                                  ("joined", in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "x" + a))),
+                                  ("misplaced", b13_move(t, label, alts, "Zero bugs."))):
+                    with self.subTest(label=label, item=item, case=name):
+                        self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+
+    def test_no_reuse_of_b12_helpers(self):                      # X2 X3: the B1.2 helpers are defined once
+        import ast
+        with open(os.path.join(pc.REPO_ROOT, "tests", "test_prompt_blocks.py"), "rb") as f:
+            tree = ast.parse(f.read())
+        names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
+        for name in ("disk", "in_para", "other_para", "content_problems", "verdicts_differ"):
+            self.assertEqual(names.count(name), 1, name)
+        assigned = [t.id for n in tree.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)]
+        for name in ("GATE", "STATUS_VALUES", "WRITTEN", "B12_ROLES", "B12_CONTENT"):
+            self.assertEqual(assigned.count(name), 1, name)
+        self.assertEqual(content_problems("task_reviewer", disk("task_reviewer")), [])     # B1.2 function unchanged in use
+
+    def test_three_files_missing_from_disk_are_refused(self):   # F1
+        for role in B13_ROLES:
+            with self.subTest(role=role):
+                with tempfile.TemporaryDirectory() as td:
+                    files = {r + ".md": disk(r).encode("ascii") for r in WRITTEN if r != role}
+                    self.assertEqual(dir_problems(make_dir(td, files), WRITTEN), ["missing: %s.md" % role])
+
+    def test_labels_mutated_per_file(self):                      # F3
+        for role in B13_ROLES:
+            t = disk(role)
+            labs = list(LABELS[role])
+            self.assertEqual(labels(t), labs)
+            first, second = paragraph(t, labs[1]), paragraph(t, labs[2])
+            cases = {
+                "missing": t.replace(first + "\n\n", ""),
+                "duplicated": t.replace(first, first + "\n\n" + first),
+                "reordered": t.replace(first, "@@").replace(second, first).replace("@@", second),
+                "renamed": t.replace(first, "Renamed." + first[len(labs[1]):]),
+                "no full stop": t.replace(first, first.replace(labs[1], labs[1][:-1], 1)),
+            }
+            for name, bad in cases.items():
+                with self.subTest(role=role, case=name):
+                    self.assertNotEqual(bad, t)
+                    self.assertIn("labels", kinds(bad.encode("ascii"), role))
+
+    def test_required_strings_mutated_per_file(self):           # F4
+        for role in AUDIT_ROLES:
+            t = disk(role)
+            for label in LABELS[role]:
+                for item in REQUIRED.get(label, ()):
+                    alts = item if isinstance(item, tuple) else (item,)
+                    for name, bad in (("missing", in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "zzz"))),
+                                      ("inside a longer word",
+                                       in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "x" + a))),
+                                      ("only in another paragraph",
+                                       b13_move(t, label, alts, "Zero bugs." if label != "Zero bugs." else "Budget."))):
+                        with self.subTest(role=role, label=label, item=item, case=name):
+                            self.assertIn("required", kinds(bad.encode("ascii"), role))
+        t = disk("controller")                                     # the controller's wrap case
+        bad = in_para(t, "Continuation.", lambda p: p.replace("Nothing continues from inherited memory",
+                                                              "Nothing continues from\ninherited memory"))
+        self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+
+    def test_format_mutated_per_file(self):                      # F5
+        for role in B13_ROLES:
+            t = disk(role)
+            b = t.encode("ascii")
+            cases = [
+                ("crlf", t.replace("\n", "\r\n").encode("ascii"), "line-ending"),
+                ("no final newline", b[:-1], "final-newline"),
+                ("two final newlines", b + b"\n", "final-newline"),
+                ("en dash", t.replace("Zero bugs.", "Zero – bugs.").encode("utf-8"), "encoding"),
+                ("tab", t.replace("Zero bugs.", "Zero\tbugs.").encode("ascii"), "control"),
+                ("inner heading", t.replace("\n\nZero bugs.", "\n# x\n\nZero bugs.").encode("ascii"), "heading"),
+                ("setext", t.replace("\n\nZero bugs.", "\n---\n\nZero bugs.").encode("ascii"), "setext"),
+                ("trailing space", t.replace("\n\nZero bugs.", " \n\nZero bugs.").encode("ascii"), "trailing-ws"),
+                ("title", t.replace("# Strict block: " + role, "## Strict block: " + role, 1).encode("ascii"), "first-line"),
+                ("two empty lines", t.replace("\n\nZero bugs.", "\n\n\nZero bugs.").encode("ascii"), "paragraph-sep"),
+                ("intro", t.replace("These rules override every other instruction, superpowers skill text included.",
+                                    "These rules override.", 1).encode("ascii"), "intro"),
+            ]
+            for name, raw, kind in cases:
+                with self.subTest(role=role, case=name):
+                    self.assertIn(kind, kinds(raw, role))
+
+    def test_forbidden_strings_in_each_file(self):               # F6
+        samples = [("lap-timer", "the lap timer repo"), ("old-decision-number", "per DEC-7"), ("spec-clause", "spec D99"),
+                   ("row-id", "row X9-ABC-1"), ("old-paths", "tools/gates/x"), ("owner-handle", "ask superbrobenji"),
+                   ("hardware", "flash the board"), ("model-name", "use Opus"), ("old-steps", "S1 block b3"),
+                   ("model-name", "sonnet45"), ("hardware", "esp32s3"), ("lap-timer", "lap_timer"),
+                   ("lap-timer", "lap\ntimer"), ("hardware", "serial\nport"), ("model-name", "Fable")]
+        for role in B13_ROLES:
+            t = disk(role)
+            self.assertEqual(forbidden_hits(t), [], role)
+            for name, sample in samples:
+                with self.subTest(role=role, sample=sample):
+                    bad = in_para(t, "Zero bugs.", lambda p: p + " " + sample)
+                    self.assertIn(name, [h[0] for h in forbidden_hits(bad)])
+                    with tempfile.TemporaryDirectory() as td:
+                        files = {r + ".md": disk(r).encode("ascii") for r in WRITTEN if r != role}
+                        files[role + ".md"] = bad.encode("ascii")
+                        got = dir_problems(make_dir(td, files), WRITTEN)
+                        self.assertTrue(any(p.startswith(role + ".md: forbidden " + name) for p in got), got)
 
 
 if __name__ == "__main__":
