@@ -20,17 +20,20 @@ SLOTS = ("test", "test_one", "lint", "build")
 _PROPOSED = ("test", "lint", "build")
 _MAKEFILE_NAMES = ("GNUmakefile", "makefile", "Makefile")  # the order GNU make looks for them
 
-_RULE = re.compile(r"^([A-Za-z0-9_.-]+(?:[ \t]+[A-Za-z0-9_.-]+)*)[ \t]*::?(?![:=])")
-# GNU Make 3.81: a define opens with `define` or `override define`; inside a body only a plain `define` nests.
-_DEFINE = re.compile(r"^(?:override[ \t]+)?define(?:[ \t]|$)")
-_NESTED_DEFINE = re.compile(r"^define(?:[ \t]|$)")
-_ENDEF = re.compile(r"^endef(?:[ \t]|$)")
-# A line GNU make reads as a rule (any targets), to know whether a tab-led line is a recipe line.
-_ANY_RULE = re.compile(r"^[^#=:]*::?(?![:=])")
-_CONDITIONAL = re.compile(r"^(?:ifdef|ifndef|ifeq|ifneq|else|endif)(?:[ \t(]|$)")
-# Directive words: a rule-looking line that starts with one is not a rule for the names after it.
+# The Makefile reader is a whitelist (owner Q-C11rr-3); see _makefile_proposals.
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*[ \t]*(?:=|:=|\?=|\+=)")
+_RULE = re.compile(r"^((?:[A-Za-z0-9_./-]+[ \t]+)*[A-Za-z0-9_./-]+)[ \t]*::?")
+# A rule line whose first word is one of these, with more targets after it, is a directive, not a rule.
 _DIRECTIVES = frozenset(("export", "unexport", "override", "private", "vpath", "include", "-include", "sinclude",
-                         "undefine"))
+                         "undefine", "define", "endef", "ifdef", "ifndef", "ifeq", "ifneq", "else", "endif"))
+
+_R_BACKSLASH = "line ends in a backslash"
+_R_RECIPE = "recipe line before the first rule"
+_R_ASSIGNMENT = "assignment after the colon"
+_R_SEMICOLON = "';' after the colon"
+_R_COLON_BACKSLASH = "backslash after the colon"
+_R_DIRECTIVE = "directive line"
+_R_OTHER = "not a blank, comment, assignment, rule or recipe line"
 
 
 @dataclass(frozen=True)
@@ -161,92 +164,56 @@ def _package_json(root: str) -> tuple:
     return tuple(out), ()
 
 
-def _odd_backslashes(s: str) -> bool:
-    """True if ``s`` ends in an odd number of backslashes (GNU make pairs them: ``\\\\`` is a literal)."""
-    n = len(s) - len(s.rstrip("\\"))
-    return n % 2 == 1
-
-
-def _logical_lines(text: str) -> list:
-    """(first physical line number, text) per logical line, split on ``\\n`` only.
-
-    A CR before the newline is part of the line end. A line ending in a backslash is joined with
-    the next: the backslash, the newline and the next line's leading blanks become one space; at
-    the end of the file the backslash is dropped."""
-    lines = [ln[:-1] if ln.endswith("\r") else ln for ln in text.split("\n")]
-    out = []
-    i = 0
-    while i < len(lines):
-        start = i + 1
-        cur = lines[i]
-        i += 1
-        while _odd_backslashes(cur):
-            if i < len(lines):
-                cur = cur[:-1] + " " + lines[i].lstrip(" \t")
-                i += 1
-            else:
-                cur = cur[:-1]
-        out.append((start, cur))
-    return out
-
-
-def _rule_names(line: str) -> tuple:
-    """The target names of a rule line, or ().
-
-    Refused, since GNU make does not define the names as targets: a line whose text after the colon
-    is an assignment (a target-specific variable: ``test: X = 1``, ``:=``, ``+=``, ``?=``, ``!=``;
-    the text up to the first ``;`` or ``#`` is examined) and a line that starts with a directive word
-    (``export test:``, ``override``, ``vpath``, ``include``)."""
-    if line.startswith("\t"):
-        return ()
-    if line.startswith(" "):
-        line = line.lstrip(" \t")
-    if line.startswith("#") or line.startswith("."):
-        return ()
-    m = _RULE.match(line)
-    if not m:
-        return ()
-    names = m.group(1).split()
-    if len(names) > 1 and names[0] in _DIRECTIVES:
-        return ()
-    after = re.split(r"[;#]", line[m.end():], maxsplit=1)[0]
-    if "=" in after:
-        return ()
-    return tuple(names)
-
-
 def _makefile_proposals(name: str, text: str) -> tuple:
+    """(proposals, problems) from a Makefile read as a whitelist (owner Q-C11rr-3).
+
+    Each physical line must be one of: blank; a comment; a simple assignment; a rule with literal
+    targets; a recipe line after a rule. The first other line gives no proposals and one Problem.
+    A target named test, lint or build gives its slot, the first definition only."""
     first = {}
-    depth = 0  # nesting depth inside a define body
-    in_recipe = False  # a rule line was read and no other kind of line since: a tab-led line is a recipe line
-    for lineno, line in _logical_lines(text):
-        body = "" if line.startswith("\t") else line.lstrip(" \t")
-        if depth:  # a tab-led line inside a body never opens or closes anything (GNU Make 3.81)
-            if _NESTED_DEFINE.match(body):
-                depth += 1
-            elif _ENDEF.match(body):
-                depth -= 1
+    in_recipe = False  # a rule line was read and no assignment since
+    for lineno, raw in enumerate(text.split("\n"), 1):
+        line = raw[:-1] if raw.endswith("\r") else raw
+
+        def unsupported(reason: str) -> tuple:
+            return (), (Problem(name, "unsupported line %d: %s" % (lineno, reason)),)
+
+        if line.endswith("\\"):
+            return unsupported(_R_BACKSLASH)
+        if not line.strip(" \t"):
             continue
         if line.startswith("\t"):
-            if not in_recipe and _DEFINE.match(line.lstrip(" \t")):
-                depth = 1
+            if not in_recipe:
+                return unsupported(_R_RECIPE)
             continue
-        if not body or body.startswith("#"):
+        body = line.lstrip(" \t")
+        if body.startswith("#"):
             continue
-        if _DEFINE.match(body):
-            depth = 1  # a define does not end the recipe context (GNU Make 3.81)
+        if _ASSIGNMENT.match(body):
+            in_recipe = False
             continue
-        if _CONDITIONAL.match(body):
-            continue
-        in_recipe = bool(_ANY_RULE.match(body))
-        for target in _rule_names(line):
+        m = _RULE.match(body)
+        if not m:
+            return unsupported(_R_OTHER)
+        targets = m.group(1).split()
+        if len(targets) > 1 and targets[0] in _DIRECTIVES:
+            return unsupported(_R_DIRECTIVE)
+        after = body[m.end():].split("#", 1)[0]
+        if "\\" in after:
+            return unsupported(_R_COLON_BACKSLASH)
+        if ";" in after:
+            return unsupported(_R_SEMICOLON)
+        if "=" in after:
+            return unsupported(_R_ASSIGNMENT)
+        in_recipe = True
+        for target in targets:
             first.setdefault(target, lineno)
     return tuple(Proposal(slot, "make " + slot, "%s:%d %s" % (name, first[slot], slot))
-                 for slot in _PROPOSED if slot in first)
+                 for slot in _PROPOSED if slot in first), ()
 
 
 def _makefile(root: str, listing: list) -> tuple:
-    """(proposals, problems) from the first Makefile name that exists, as GNU make reads it."""
+    """(proposals, problems) from the first Makefile name that exists, as GNU make picks it."""
     for probe in _MAKEFILE_NAMES:
         try:
             os.lstat(os.path.join(root, probe))
@@ -268,7 +235,7 @@ def _makefile(root: str, listing: list) -> tuple:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             return (), (Problem(name, "not valid UTF-8"),)
-        return _makefile_proposals(name, text), ()
+        return _makefile_proposals(name, text)
     return (), ()
 
 

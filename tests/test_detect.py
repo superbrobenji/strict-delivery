@@ -457,8 +457,10 @@ class MakefileNameTests(Base):
         self.write("Makefile", "# caf\u00e9\ntest:\n\t@echo \u00e9\n")
         self.assertEqual(detect(self.tmp).proposals, (Proposal("test", "make test", "Makefile:2 test"),))
 
-    def test_bom_makefile_first_line_is_not_a_rule(self):  # GNU Make 3.81: `\ufefftest:` -> "No rule to make target `test'"
-        self.assertEqual(self.rules("\ufefftest:\n"), [])
+    def test_bom_makefile_first_line_is_unsupported(self):  # U+FEFF is not a blank, comment, assignment or target
+        with tempfile.TemporaryDirectory() as d:
+            self.write("Makefile", "\ufefftest:\n", root=d)
+            self.assertEqual(detect(d), Detection((), (Problem("Makefile", "unsupported line 1: " + MakefileRuleTests.OTHER),)))
 
     def test_first_makefile_without_slot_targets_hides_later_ones(self):  # N2 (F-C11r-3a): make reads GNUmakefile only
         self.write("GNUmakefile", "all:\n\t@echo a\n")
@@ -532,172 +534,207 @@ class MakefileNameTests(Base):
 
 
 class MakefileRuleTests(Base):
-    def test_makefile_rules(self):  # R1 R2 R4 R6
+    """The Makefile reader is a whitelist (owner Q-C11rr-3): every physical line must be blank, a comment, a
+    simple assignment, a rule with literal targets, or a recipe line after a rule. Any other line gives no
+    proposals and one Problem naming the first such line."""
+
+    BACKSLASH = "line ends in a backslash"
+    RECIPE = "recipe line before the first rule"
+    ASSIGN = "assignment after the colon"
+    SEMI = "';' after the colon"
+    COLON_BS = "backslash after the colon"
+    DIRECTIVE = "directive line"
+    OTHER = "not a blank, comment, assignment, rule or recipe line"
+
+    def refused(self, makefile, line: int, reason: str, name: str = "Makefile"):
+        """detect() on a directory holding only this Makefile: no proposals and exactly the named Problem."""
+        with tempfile.TemporaryDirectory() as d:
+            self.write(name, makefile, root=d)
+            res = detect(d)
+        self.assertEqual(res, Detection((), (Problem(name, "unsupported line %d: %s" % (line, reason)),)),
+                         msg=repr(makefile))
+
+    # ---- the five accepted forms
+
+    def test_blank_and_whitespace_only_lines(self):  # form 1
+        self.assertEqual(self.rules("\n  \n\t\n \t \n\r\ntest:\n\n   \n"), [("test", "make test", "Makefile:6 test")])
+        self.assertEqual(self.rules(""), [])
+        self.assertEqual(self.rules("\n\n"), [])
+
+    def test_comment_lines(self):  # form 2
+        self.assertEqual(self.rules("# test:\n  # test:\n \t# test:\n#\n##build:\n"), [])
+
+    def test_simple_assignments(self):  # form 3: NAME op value, op one of = := ?= +=, spaces around op optional
+        for mk in ("test=x\n", "test:=x\n", "test := x\n", "test ?= x\n", "test += x\n", "test?=x\n", "test+=x\n",
+                   "  test := x\n", " \ttest := x\n", "_a.b-c9 = $(X) # c\n", "build =\n", "lint= a b c\n", "T = test\n"):
+            with self.subTest(mk=mk):
+                self.assertEqual(self.rules(mk), [])
+
+    def test_plain_rules(self):  # form 4
+        for line in ("test ::: x", "test:", "test::", "test: dep", "test : x", "test:dep", "test\t:\tx", "test:\t", "test::dep", "test: a b c",
+                     "test: | order", "test: dep # a comment", "test: # only a comment", "test:#c"):
+            with self.subTest(line=line):
+                self.assertEqual(self.rules(line + "\n\t@echo ran\n"), [("test", "make test", "Makefile:1 test")])
+
+    def test_several_targets_one_line(self):
+        self.assertEqual(self.rules("\nbuild test:\n"), [("test", "make test", "Makefile:2 test"),
+                                                        ("build", "make build", "Makefile:2 build")])
+        self.assertEqual(self.rules("a  \t b lint   c: x\n"), [("lint", "make lint", "Makefile:1 lint")])
+
+    def test_rule_after_leading_blanks(self):  # a leading space (then any blanks) is skipped; a leading tab is a recipe line
+        for mk in ("  test:\n", " \ttest:\n", " \t \ttest:\n"):
+            with self.subTest(mk=mk):
+                self.assertEqual(self.rules(mk), [("test", "make test", "Makefile:1 test")])
+
+    def test_literal_target_characters(self):
+        self.assertEqual(self.rules("out/test.o: a\n.PHONY: test\nsub-dir/lint: x\n./build:\n"), [])
+        self.assertEqual(self.rules("a/b.c-d_e: x\nlint:\n"), [("lint", "make lint", "Makefile:2 lint")])
+
+    def test_names_must_match_exactly(self):
+        self.assertEqual(self.rules("tests:\ntest-all:\nretest:\ntest_one:\nTest:\nbuilds:\nsub/test:\n"), [])
+
+    def test_recipe_lines_after_a_rule(self):  # form 5; recipe text is free
+        self.assertEqual(self.rules("test:\n\t@echo $(X) a=b; c $$ # d\n\t\n\t# note\n"), [("test", "make test", "Makefile:1 test")])
+        self.assertEqual(self.rules("all:\n\ttest:\n\tlint:\n\tdefine D\n\tinclude x\n"), [])
+
+    def test_recipe_context_survives_blank_and_comment_lines(self):
+        self.assertEqual(self.rules("all:\n\n# c\n  # d\n\t@echo\n\n\t@echo\ntest:\n"), [("test", "make test", "Makefile:8 test")])
+
+    def test_assignment_ends_recipe_context(self):
+        self.refused("all:\nx = 1\n\t@echo\n", 3, self.RECIPE)
+
+    def test_rule_restores_recipe_context(self):
+        self.assertEqual(self.rules("all:\nx = 1\nb:\n\t@echo\ntest:\n"), [("test", "make test", "Makefile:5 test")])
+
+    def test_crlf(self):
+        self.assertEqual(self.rules("test:\r\n\t@echo ran\r\n"), [("test", "make test", "Makefile:1 test")])
+        self.assertEqual(self.rules("x = 1\r\n# c\r\n\r\nlint: a\r\n"), [("lint", "make lint", "Makefile:4 lint")])
+
+    def test_no_final_newline(self):
+        self.assertEqual(self.rules("a:\ntest:"), [("test", "make test", "Makefile:2 test")])
+        self.assertEqual(self.rules("test: a # c"), [("test", "make test", "Makefile:1 test")])
+
+    def test_duplicate_definition(self):
+        self.assertEqual(self.rules("a:\ntest:\nb:\nc:\ntest::\n\t@echo\n"), [("test", "make test", "Makefile:2 test")])
+
+    def test_makefile_rules(self):
         mk = "VAR := test\n.PHONY: test\nbuild test: dep\n\t@echo\nlint:: x\n  check:\n# lint:\n"
         self.assertEqual(self.rules(mk), [("test", "make test", "Makefile:3 test"), ("lint", "make lint", "Makefile:5 lint"),
                                           ("build", "make build", "Makefile:3 build")])
 
-    def test_plain_rules(self):  # R1: GNU Make 3.81 rc 0 (or rc 2 naming the target as a rule)
-        for line in ("test:", "test::", "test: dep", "test : x", "test:dep", "test\t:\tx", "test:\t"):
-            with self.subTest(line=line):
-                self.assertEqual(self.rules(line + "\n\t@echo ran\n"), [("test", "make test", "Makefile:1 test")])
+    def test_line_numbers_are_physical_lines(self):
+        self.assertEqual(self.rules("\n\n\n# c\n\nx = 1\n\ntest:\n"), [("test", "make test", "Makefile:8 test")])
 
-    def test_several_targets_one_line(self):  # R2
-        self.assertEqual(self.rules("\nbuild test:\n"), [("test", "make test", "Makefile:2 test"),
-                                                        ("build", "make build", "Makefile:2 build")])
+    def test_single_word_directive_name_is_a_plain_target(self):  # `include:` is a rule whose target is called include
+        self.assertEqual(self.rules("include:\nexport: x\noverride:\ntest: include export\n"),
+                         [("test", "make test", "Makefile:4 test")])
 
-    def test_other_slot_names(self):
-        self.assertEqual(self.rules("lint:\nbuild:\n"), [("lint", "make lint", "Makefile:1 lint"),
-                                                         ("build", "make build", "Makefile:2 build")])
+    def test_target_characters_include_digits_and_upper_case(self):
+        self.assertEqual(self.rules("py3.9-Test_2/x1: y\nlint:\n"), [("lint", "make lint", "Makefile:2 lint")])
 
-    def test_names_must_match_exactly(self):  # R7 variants: only literal test, lint, build
-        self.assertEqual(self.rules("tests:\ntest-all:\nretest:\ntest_one:\nTest:\nbuilds:\n"), [])
+    def test_special_characters_in_a_trailing_comment_are_ignored(self):  # text after the first `#` is not examined
+        self.assertEqual(self.rules("test: dep # a=b; c \\ d\n"), [("test", "make test", "Makefile:1 test")])
 
-    def test_makefile_variable_and_recipe_lines_are_not_rules(self):  # R3 R4 R5 R6: GNU Make 3.81 rc 2 on each
-        for mk in ("test=x\n", "test:=x\n", "test := x\n", "test ?= x\n", "test += x\n", "test != x\n",
-                   "test ::= x\n", "test::=x\n", "test :::= x\n", "  test := x\n", "  # test:\n", "# test:\n",
-                   "\ttest:\n", "x = 1\n\ttest:\n", "all:\n\ttest:\n", "all:\n\t@echo a \\\ntest:\n",
-                   "define D\ntest:\nendef\n", ".PHONY: test\n", "$(T):\n", "%:\n", "test.o:\n", "T = test\n$(T):\n",
-                   "build ?= x\n", "lint = a\n"):
+    def test_every_directive_word_with_a_target_is_refused(self):
+        for word in ("export", "unexport", "override", "private", "vpath", "include", "-include", "sinclude", "undefine",
+                     "define", "endef", "ifdef", "ifndef", "ifeq", "ifneq", "else", "endif"):
+            with self.subTest(word=word):
+                self.refused(word + " test:\n", 1, self.DIRECTIVE)
+                self.assertEqual(self.rules(word + ":\n"), [])  # alone it is a plain target
+
+    # ---- refused constructs: no proposals, one Problem, the first such line wins
+
+    def test_refused_define_endef(self):
+        for mk, n in (("define D\ntest:\nendef\n", 1), ("test:\ndefine D\nendef\n", 2), ("override define D\n", 1),
+                      ("endef\n", 1), ("define D\ntest:\n", 1), ("export define D\n", 1), ("  define D\n", 1)):
             with self.subTest(mk=mk):
-                self.assertEqual(self.rules(mk), [])
+                self.refused(mk, n, self.OTHER)
 
-    def test_makefile_rule_after_leading_blanks(self):  # R4: GNU Make 3.81 rc 0, `ran`
-        for mk in ("  test:\n\t@echo ran\n", " \ttest:\n\t@echo ran\n", " \t \ttest:\n\t@echo ran\n"):
+    def test_refused_conditionals(self):
+        for mk, n in (("ifeq (a,b)\ntest:\nendif\n", 1), ("ifneq (a,b)\n", 1), ("ifdef X\n", 1), ("ifndef X\n", 1),
+                      ("test:\nelse\n", 2), ("endif\n", 1), ("ifeq ($(A),b)\ntest:\nelse\nlint:\nendif\n", 1),
+                      ("else ifdef X\n", 1)):
             with self.subTest(mk=mk):
-                self.assertEqual(self.rules(mk), [("test", "make test", "Makefile:1 test")])
+                self.refused(mk, n, self.OTHER)
 
-    def test_tab_first_is_recipe_even_after_rule(self):  # R5
-        self.assertEqual(self.rules("all:\n\ttest:\n\tlint:\n"), [])
-
-    def test_continued_rule_line_joins(self):  # R8 R10: `make test` runs this target
-        self.assertEqual(self.rules("x \\\ntest:\n\t@echo ran\n"), [("test", "make test", "Makefile:1 test")])
-
-    def test_continuation_leading_whitespace_and_chain(self):  # R10
-        self.assertEqual(self.rules("\nx \\\n \t  lint \\\n    build:\n"),
-                         [("lint", "make lint", "Makefile:2 lint"), ("build", "make build", "Makefile:2 build")])
-        # GNU Make 3.81: `x\` then `test:` joins to `x test:`, and `make test` runs
-        self.assertEqual(self.rules("x\\\ntest:\n\t@echo ran\n"), [("test", "make test", "Makefile:1 test")])
-
-    def test_continuation_odd_backslashes_only(self):  # GNU Make 3.81: `x = 1 \\` then `test:` runs test
-        self.assertEqual(self.rules("x = 1 \\\\\ntest:\n\t@echo ran\n"), [("test", "make test", "Makefile:2 test")])
-        self.assertEqual(self.rules("x = 1 \\\\\\\ntest:\n\t@echo ran\n"), [])  # three: continuation
-
-    def test_continued_recipe_line_stays_recipe(self):  # R9: `make test` finds no rule
-        self.assertEqual(self.rules("all:\n\t@echo a \\\ntest:\n"), [])
-        self.assertEqual(self.rules("all:\n\t@echo a \\\n\ttest:\n"), [])
-
-    def test_continued_comment_swallows_next_line(self):  # GNU Make 3.81: `# c \` then `test:` is a comment
-        self.assertEqual(self.rules("# c \\\ntest:\n"), [])
-
-    def test_continuation_at_end_of_file(self):  # R11: 3.81 reads `test: \` as target test, prerequisite `\`
-        self.assertEqual(self.rules("test: \\"), [("test", "make test", "Makefile:1 test")])
-        self.assertEqual(self.rules("x\ntest: \\\n"), [("test", "make test", "Makefile:2 test")])
-
-    def test_define_endef(self):  # R12
-        self.assertEqual(self.rules("define D\ntest:\nendef\nlint:\n"), [("lint", "make lint", "Makefile:4 lint")])
-
-    def test_define_variants_and_nesting(self):  # R12: 3.81 reads `override define` and nested defines like define
-        self.assertEqual(self.rules("override define D\ntest:\nendef\nlint:\n"), [("lint", "make lint", "Makefile:4 lint")])
-        self.assertEqual(self.rules("define D\ndefine E\nendef\ntest:\nendef\nbuild:\n"),
-                         [("build", "make build", "Makefile:6 build")])
-        self.assertEqual(self.rules("  define D\ntest:\n  endef\nlint:\n"), [("lint", "make lint", "Makefile:4 lint")])
-        self.assertEqual(self.rules("define D # c\ntest:\nendef # c\nlint:\n"), [("lint", "make lint", "Makefile:4 lint")])
-
-    def test_define_names_are_not_prefixes(self):
-        # `defined:` / `endefs:` are ordinary targets and never open or close a define
-        self.assertEqual(self.rules("defined:\ntest:\nendefs:\nlint:\n"),
-                         [("test", "make test", "Makefile:2 test"), ("lint", "make lint", "Makefile:4 lint")])
-
-    def test_non_literal_target_groups_are_not_rules(self):  # R7: the target group admits literal names only
-        for mk in ("test $X:\n", "build $(X) test:\n", "test %:\n", ".x test:\n", "#x test:\n", "test = a:\n", "$X test:\n", "%x test:\n", "a=b test:\n"):
+    def test_refused_directives(self):
+        for mk, reason in (("include x.mk\n", self.OTHER), ("-include x.mk\n", self.OTHER), ("sinclude x.mk\n", self.OTHER),
+                           ("include test:\n", self.DIRECTIVE), ("-include test:\n", self.DIRECTIVE),
+                           ("sinclude test:\n", self.DIRECTIVE), ("export test:\n", self.DIRECTIVE),
+                           ("unexport test:\n", self.DIRECTIVE), ("override test:\n", self.DIRECTIVE),
+                           ("private test:\n", self.DIRECTIVE), ("undefine test:\n", self.DIRECTIVE),
+                           ("include a:b\n", self.DIRECTIVE), ("  export test:\n", self.DIRECTIVE),
+                           ("export X\n", self.OTHER), ("export X = 1\n", self.OTHER), ("export X := 1\n", self.DIRECTIVE),
+                           ("unexport X\n", self.OTHER), ("override X = 1\n", self.OTHER), ("private X = 1\n", self.OTHER),
+                           ("vpath %.c src\n", self.OTHER), ("vpath test: x\n", self.DIRECTIVE), ("undefine X\n", self.OTHER)):
             with self.subTest(mk=mk):
-                self.assertEqual(self.rules(mk), [])
+                self.refused(mk, 1, reason)
 
-    def test_define_body_lines_that_only_start_like_endef(self):
-        self.assertEqual(self.rules("define D\nendefs:\ntest:\nendef\nlint:\n"), [("lint", "make lint", "Makefile:5 lint")])
-
-    def test_tab_led_define_and_endef_follow_make_381(self):  # F-C11r-2: each verdict is `make -n test` on 3.81
-        cases = [
-            ("tab endef inside a body does not close", "define D\n\tendef\ntest:\n\t@echo ran\nendef\n", []),
-            ("tab define before any rule opens", "\tdefine D\ntest:\n\t@echo ran\nendef\nlint:\n", [("lint", "Makefile:5 lint")]),
-            ("tab define after an assignment opens", "x = 1\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
-            ("tab define in a recipe is a recipe line", "all:\n\tdefine D\ntest:\n\t@echo ran\n", [("test", "Makefile:3 test")]),
-            ("tab define after blank and comment lines in a recipe", "all:\n\n# c\n\tdefine D\ntest:\n\t@echo ran\n",
-             [("test", "Makefile:5 test")]),
-            ("tab define after an include opens", "all:\ninclude /dev/null\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
-            ("tab define after a conditional stays a recipe line", "all:\nifdef X\nendif\n\tdefine D\ntest:\n\t@echo ran\n",
-             [("test", "Makefile:5 test")]),
-            ("tab define in a body does not nest", "define D\n\tdefine E\nendef\ntest:\n\t@echo ran\n", [("test", "Makefile:4 test")]),
-            ("space then tab endef closes", "define D\n \tendef\ntest:\n\t@echo ran\n", [("test", "Makefile:3 test")]),
-            ("space then tab define opens", " \tdefine D\ntest:\n\t@echo ran\nendef\nlint:\n", [("lint", "Makefile:5 lint")]),
-            ("override define does not nest in a body", "define D\noverride define E\nendef\ntest:\n\t@echo ran\n",
-             [("test", "Makefile:4 test")]),
-            ("export define is not a define", "export define D\ntest:\n", [("test", "Makefile:2 test")]),
-            ("private define is not a define", "private define D\ntest:\n", [("test", "Makefile:2 test")]),
-            ("rule then assignment then tab define", "all:\nx = 1\n\tdefine D\ntest:\nendef\n", []),
-            ("tab-led blank line outside a recipe opens nothing", "\t\ntest:\n\t@echo ran\n", [("test", "Makefile:2 test")]),
-            ("a define does not end the recipe context", "all:\ndefine D\nendef\n\tdefine E\ntest:\n\t@echo ran\nendef\n",
-             [("test", "Makefile:5 test")]),
-            ("assignment with a later colon ends the recipe context", "all:\nx = a:b\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
-            ("colon-equals ends the recipe context", "all:\nx := 1\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
-            ("double-colon rule keeps recipe context", "all::\n\tdefine D\ntest:\n", [("test", "Makefile:3 test")]),
-        ]
-        for label, mk, expect in cases:
-            with self.subTest(label):
-                self.assertEqual(self.rules(mk), [(sl, "make " + sl, src) for sl, src in expect])
-
-    def test_target_specific_variables_and_directives_are_not_rules(self):  # Q-C11r-1 (b): make 3.81 rc 2 "No rule"
+    def test_refused_target_specific_variables(self):
         for mk in ("test: X = 1\n", "test: X := 1\n", "test: X += 1\n", "test: X ?= 1\n", "test: X != 1\n", "test: a=b\n",
-                   "test:: X = 1\n", "test: export X = 1\n", "test: override X = 1\n", "export test:\n", "unexport test:\n",
-                   "override test:\n", "private test:\n", "vpath test: x\n", "include test:\n", "-include test:\n",
-                   "sinclude test:\n", "undefine test:\n", "  export test:\n", "build test: X = 1\n"):
+                   "test:: X = 1\n", "test: export X = 1\n", "test: override X = 1\n", "build test: X = 1\n",
+                   "test: $(Y:%.c=%.o)\n", "test ::= x\n", "test::=x\n", "test :::= x\n"):
             with self.subTest(mk=mk):
-                self.assertEqual(self.rules(mk), [])
+                self.refused(mk, 1, self.ASSIGN)
 
-    def test_target_specific_variable_does_not_hide_the_real_rule(self):  # source cites the rule line
-        self.assertEqual(self.rules("test: X = 1\ntest:\n\t@echo ran\n"), [("test", "make test", "Makefile:2 test")])
-
-    def test_equals_after_semicolon_or_comment_is_not_an_assignment(self):  # make 3.81 rc 0 on `test: ; FOO=1 echo ran`
-        for mk in ("test: ; FOO=1 echo ran\n", "test: dep # a=b\n", "test: dep ; a=b\n"):
+    def test_refused_other_assignment_operators(self):
+        for mk in ("test != x\n", "x !=y\n", "$(X) = 1\n"):
             with self.subTest(mk=mk):
-                self.assertEqual(self.rules(mk), [("test", "make test", "Makefile:1 test")])
+                self.refused(mk, 1, self.OTHER)
 
-    def test_directive_names_only_matter_as_first_word(self):  # a target called like a directive, and slots after one
-        self.assertEqual(self.rules("include:\ntest: include\nbuild export:\n"),
-                         [("test", "make test", "Makefile:2 test"), ("build", "make build", "Makefile:3 build")])
+    def test_refused_semicolon_after_colon(self):  # a recipe on the rule line
+        for mk in ("test: ; echo ran\n", "test:; echo\n", "test: dep ; FOO=1 echo\n", "a b: x;\n"):
+            with self.subTest(mk=mk):
+                self.refused(mk, 1, self.SEMI)
 
-    def test_conditionals_do_not_hide_rules(self):  # Q-C11r-2 (a): targets inside ifeq/ifdef are proposed
-        self.assertEqual(self.rules("ifeq (a,b)\ntest:\nelse\nlint:\nendif\n"),
-                         [("test", "make test", "Makefile:2 test"), ("lint", "make lint", "Makefile:4 lint")])
+    def test_refused_backslashes(self):
+        for mk, n, reason in (("x \\\ntest:\n", 1, self.BACKSLASH), ("test: \\\n", 1, self.BACKSLASH),
+                              ("test: \\", 1, self.BACKSLASH), ("# c \\\ntest:\n", 1, self.BACKSLASH),
+                              ("all:\n\t@echo a \\\ntest:\n", 2, self.BACKSLASH), ("x = 1 \\\\\ntest:\n", 1, self.BACKSLASH),
+                              ("x = 1\\\n", 1, self.BACKSLASH), ("test: a\\;b\n", 1, self.COLON_BS),
+                              ("test: a\\#b=c\n", 1, self.COLON_BS), ("test: a \\ b\n", 1, self.COLON_BS),
+                              ("test: dep # c \\\n", 1, self.BACKSLASH), ("test:\\\r\n", 1, self.BACKSLASH)):
+            with self.subTest(mk=mk):
+                self.refused(mk, n, reason)
 
-    def test_define_without_endef_skips_rest(self):  # R13: 3.81 stops with "missing `endef'"
-        self.assertEqual(self.rules("define D\ntest:\nlint:\n"), [])
+    def test_refused_tab_led_line_before_the_first_rule(self):
+        for mk, n in (("\ttest:\n", 1), ("x = 1\n\ttest:\n", 2), ("# c\n\n\t@echo a\n", 3), ("\t# c\n", 1),
+                      ("\tdefine D\n", 1), ("x = 1\n\t@echo\ntest:\n", 2)):
+            with self.subTest(mk=mk):
+                self.refused(mk, n, self.RECIPE)
 
-    def test_crlf(self):  # R14
-        self.assertEqual(self.rules("test:\r\n\t@echo ran\r\n"), [("test", "make test", "Makefile:1 test")])
-        self.assertEqual(self.rules("x \\\r\ntest:\r\n\t@echo ran\r\n"), [("test", "make test", "Makefile:1 test")])
-        self.assertEqual(self.rules("all:\r\n\t@echo a \\\r\ntest:\r\n"), [])
-        self.assertEqual(self.rules("test := x\r\n"), [])
+    def test_refused_non_literal_targets(self):
+        for mk in ("$(T):\n", "%:\n", "%.o: %.c\n", "test $(X):\n", "${T}:\n", "a$$b:\n", "test%:\n", "(x):\n", "a,b:\n",
+                   "\"test\":\n"):
+            with self.subTest(mk=mk):
+                self.refused(mk, 1, self.OTHER)
 
-    def test_no_final_newline(self):  # R15
-        self.assertEqual(self.rules("a:\ntest:"), [("test", "make test", "Makefile:2 test")])
+    def test_refused_anything_unmatched(self):
+        for mk in ("foo\n", "a b c\n", "test\n", ":\n", ": x\n", "test x\n", "x\x0ctest:\n", "x\u00a0test:\n", "\ufefftest:\n",
+                   "a\rtest:\n", "\x0ctest:\n", "$@\n", "@echo\n", "1 = 2\n"):
+            with self.subTest(mk=mk):
+                self.refused(mk, 1, self.OTHER)
 
-    def test_duplicate_definition(self):  # R16
-        self.assertEqual(self.rules("a:\ntest:\nb:\nc:\ntest::\n\t@echo\n"), [("test", "make test", "Makefile:2 test")])
+    def test_first_unsupported_line_wins_and_hides_earlier_proposals(self):
+        self.refused("test:\nlint:\ninclude x.mk\nbuild: X = 1\n", 3, self.OTHER)
+        self.refused("lint:\nbuild: X = 1\nifdef X\n", 2, self.ASSIGN)
+        self.refused("\n\ntest: ; x\n", 3, self.SEMI)
 
-    def test_line_splitting_on_newline_only(self):  # R17: 3.81 finds no rule `test` after \f or U+00A0
-        self.assertEqual(self.rules("x\x0ctest:\n"), [])
-        self.assertEqual(self.rules("x\u00a0test:\n"), [])
-        self.assertEqual(self.rules("a\x0c\ntest:\n"), [("test", "make test", "Makefile:2 test")])
-        self.assertEqual(self.rules("a\u2028b\u0085c\x1c\ntest:\n"), [("test", "make test", "Makefile:2 test")])
-        self.assertEqual(self.rules("# x\x0b\x0c\u2028\ntest:\n"), [("test", "make test", "Makefile:2 test")])
+    def test_refusal_names_the_spelled_file(self):
+        self.refused("include x\n", 1, self.OTHER, name="GNUmakefile")
+        self.refused("include x\n", 1, self.OTHER, name="makefile")
 
-    def test_lone_cr_is_not_a_line_end(self):
-        self.assertEqual(self.rules("a\rtest:\n"), [])
+    def test_reason_never_echoes_makefile_text(self):  # the reason is escaped once by Result.render; no user text in it
+        with tempfile.TemporaryDirectory() as d:
+            self.write("Makefile", "SECRET_TOKEN_123\n", root=d)
+            p = detect(d).problems[0]
+        self.assertNotIn("SECRET", p.reason)
 
-    def test_empty_makefile(self):
-        self.assertEqual(self.rules(""), [])
+    def test_problem_does_not_hide_package_json(self):
+        self.write("package.json", '{"scripts": {"test": "t"}}')
+        self.write("Makefile", "define D\n")
+        self.assertEqual(detect(self.tmp), Detection((Proposal("test", "npm run test", "package.json scripts.test"),),
+                                                     (Problem("Makefile", "unsupported line 1: " + self.OTHER),)))
 
 
 class OrderAndEffectTests(Base):
