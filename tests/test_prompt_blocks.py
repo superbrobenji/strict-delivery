@@ -867,16 +867,20 @@ DONE_RULE = (("Verdict.", "the change itself holds no finding"), ("Verdict.", "U
              ("Report contract.", "unrelated findings"),
              # F-B12rr-2: the subject of the rule, in Verdict. and in Zero bugs. (a reversed rule is refused)
              ("Verdict.", "did not cause"), ("Zero bugs.", "did not cause"), ("Zero bugs.", "Unrelated findings"),
-             ("Zero bugs.", "the change caused is a finding"))
+             ("Zero bugs.", "the change caused is a finding"),
+             ("Report contract.", "findings; unrelated findings"))
+# F-B12rr2-1: routing in No out-of-scope bucket. (the two reviewers), by cause
+OOS_RULE = (("No out-of-scope bucket.", "Unrelated findings"), ("No out-of-scope bucket.", "did not cause"),
+            ("No out-of-scope bucket.", "one the change caused goes in findings"))
 DONE_WITH_FINDINGS_WHEN = {"task_reviewer": "when the change itself holds a finding",
                            "final_reviewer": "when the change itself holds a finding",
                            "final_verifier": "when you broke the change itself"}
 # Task B1.2 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
 B12_CONTENT = {
-    "task_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("No out-of-scope bucket.", "Unrelated findings")]
+    "task_reviewer": [("Method.", GATE), ("Method.", "every claim")] + list(OOS_RULE)
     + list(DONE_RULE) + [("Verdict.", DONE_WITH_FINDINGS_WHEN["task_reviewer"])],
-    "final_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("Branch scope.", "whole branch"),
-                       ("No out-of-scope bucket.", "Unrelated findings")] + list(DONE_RULE)
+    "final_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("Branch scope.", "whole branch")]
+    + list(OOS_RULE) + list(DONE_RULE)
     + [("Verdict.", DONE_WITH_FINDINGS_WHEN["final_reviewer"])],
     "final_verifier": [("Adversarial scope.", GATE), ("Adversarial scope.", "tier4"),
                        ("Adversarial scope.", "top_tier_fallback")] + list(DONE_RULE)
@@ -1021,7 +1025,7 @@ class B12Test(unittest.TestCase):
         for role in ("task_reviewer", "final_reviewer", "final_verifier"):
             t = disk(role)
             rules = list(DONE_RULE) + [("Verdict.", DONE_WITH_FINDINGS_WHEN[role])] + (
-                [("No out-of-scope bucket.", "Unrelated findings")] if role != "final_verifier" else [])
+                list(OOS_RULE) if role != "final_verifier" else [])
             for label, s in rules:
                 want = "%s lacks %r" % (label, s)
                 for name, bad in (("missing", in_para(t, label, lambda p: p.replace(s, "zzz"))),
