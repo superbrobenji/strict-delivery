@@ -138,3 +138,21 @@ Task 1a.2 fix round 7 DONE 142fbfc (248 tests both, verified by controller). Sco
 Streams draft rev5 (F-r5-1..3 fixed). Owner answer 2026-11-01 Q-r5-1 (b): slugify uses a generated frozen table of the code points github-slugger strips (no unicodedata dependence), tested against github-slugger fixtures; same anchors on every Python.
 Task 1a.2: complete (d31fb9b..142fbfc; 7 fix rounds, round 6-7 owner-granted; final re-review DONE).
 CHECKPOINT 1a 1a.2 head=142fbfc tests=248/248 gates=n/a next=1a.3
+Owner answers 2026-11-01 Q-1a3-1..5 (all recommended): str subclass ids refused; mint exhaustion GateError naming prefix and date; symlinks in register folders refused; only <id>.yml, index.yml, in-force.md allowed; resolved records compared by parsed content.
+Owner answer 2026-11-01 Q-r6-1 (b): slug lowercasing uses a generated frozen case table (same anchors on every Python); may differ from GitHub for the few code points whose case mapping changed after the table's Unicode version.
+Task 1a.3 dispatched (sonnet implementer, BASE af002a1). Streams draft rev7 dispatched (opus drafter) to apply Q-r6-1 (b).
+Streams draft rev7 DONE (Q-r6-1 (b): frozen Unicode 13.0.0 case table gates/lib/case_table.py, Final_Sigma applied; limit U+A7CB, U+A7DC, sigma beside post-13 code points). Final full review dispatched.
+Streams final review7 part 1: DENIED (auto-mode classifier refused importing github-slugger index.js into Node: [Code from External]). Not re-run by controller. Reviewer resumed: no external code; Node figures verified by own re-implementation or flagged; checks 3-5 and prior fixes. F-r7-1 raised (UnicodeData.txt header claim false).
+Task 1a.3 DONE_WITH_FINDINGS 4aa05c9 (368 tests both, verified by controller; 49 mutants, 1 survivor killed by added test; 13 implementer calls where brief silent; ids tests not run red first). Task review dispatched (opus).
+Streams review7 Part 2 DONE_WITH_FINDINGS: no external code ran after denial (Node figures from reviewer's own script reading regex.js as text; all hold). F-r7-1..6. Rev 8 dispatched to drafter.
+Streams draft rev8 DONE (F-r7-1..6 fixed; simulated splice gives 0 cites). Full re-review (review8) dispatched.
+Task 1a.3 review NEEDS_DECISION: production code correct on all real-git scenarios; F-1a3r-1 (B6 merge-base half unpinned, M12), F-1a3r-2 (store.py:277 any() unpinned, M20), F-1a3r-3 (no table row for base-side entry kinds); owner Q-1a3r-1..3 presented. Splice of streams B/C held until 1a.3 completes (E16 edits Task 1a.3 text).
+Owner answers 2026-11-01 Q-1a3r-1 (a): refuse a symlink on any component of the register path inside the repo, in load and create, with a clear message; Q-1a3r-2 (a): keep type-strict comparison; Q-1a3r-3 (b): ignore base-side non-regular/non-record entries, add the table row with the rationale (base's own gate refuses them). Fix round 1 dispatched (resume implementer): F-1a3r-1..3 plus Q-1a3r-1 (a).
+Task 1a.3 fix round 1 DONE 8560a96 (376 tests both, verified by controller). Scoped re-review dispatched.
+Task 1a.3 re-review 1 NEEDS_DECISION: F-1a3r-1..3 closed (transcripts re-run); owner answers implemented; new F-1a3rr-1 (B9 gitlink untested); owner Q-1a3rr-1 (check-then-write symlink race in create/replace) presented.
+Owner answer 2026-11-01 Q-1a3rr-1 (a): accept the check-then-write symlink race; note it in code and domain table (next load refuses). Fix round 2 dispatched: F-1a3rr-1 + note.
+Task 1a.3 fix round 2 DONE d9441eb (377 tests both, verified). Scoped re-review dispatched.
+Task 1a.3 re-review 2 DONE: Spec, Quality, Claims-executed all pass; 377 tests both.
+Task 1a.3: complete (af002a1..d9441eb; 2 fix rounds; owner Q-1a3-1..5, Q-1a3r-1..3, Q-1a3rr-1).
+Streams B/C draft rev 8 spliced into the plan before "## Later blocks"; E1-E16 applied to spec and plan (each old once, new once, scripted); draft owner answers moved to "Owner answers" > "Streams B and C" with an E1-E16 location table; four draft-relative references ("Proposed spec edits", "this draft") reworded by the controller.
+CHECKPOINT 1a 1a.3 head=d9441eb tests=377/377 gates=n/a next=block-1a-end

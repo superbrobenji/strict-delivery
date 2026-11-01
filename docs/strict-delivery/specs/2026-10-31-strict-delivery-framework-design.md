@@ -293,6 +293,11 @@ Row fields: `id`, `status` (open | answered | withdrawn), `class`, `question`,
 answer `answer`, `answered_at{at, by}`, `landed_in` (required when `effect: lasting`) and the
 optional `rule` (a one-line rule summary, written at `decide`); on withdrawal
 `withdrawn{at, by, reason}` instead of the answer fields (owner answers 2026-10-31).
+A decision of class `rule-override` may carry the optional `overrides: SD-R<n>`, the base
+playbook rule it overrides, matching `SD-R[1-9][0-9]*`; no other class carries it, and the
+decision tools refuse a value that names a `fixed` rule (section 8). The field arrives in
+`decision/2`, with a migration from `decision/1`, before block 3's SessionStart reads it
+(owner answers 2026-10-31).
 `asked_at`, `answered_at.at` and `withdrawn.at` are commit shas checked for shape only (7 to 40
 lowercase hex characters), never for existence; `decide` and `withdraw` refuse when
 `git config user.email` is unset (owner answers 2026-10-31).
@@ -320,7 +325,10 @@ stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant
   pull request's ids are checked against the base branch too (config `base_branch`, section 6;
   deletions and immutability are checked against the merge base with it); a resolved record is
   immutable (a change is a new decision with `supersedes`), except that a finding's status moves
-  from `closed` to `merged`, set only by the cleanup step (owner answer 2026-10-31); a
+  from `closed` to `merged`, set only by the cleanup step (owner answer 2026-10-31), and that a
+  change which is exactly a registered schema migration of the base row is not an immutability
+  change: the gates migrate the base row with the registered migrations before comparing, so a
+  schema version change and `upgrade` can migrate resolved records (owner answer 2026-10-31); a
   decision's `landed_in` is never a spec. `gate_register` also reads every tracked file under
   `paths.reviews` whose first line is a `review-report` schema line, and fails when a finding
   id in it names no finding record (owner answer 2026-10-31).
@@ -424,8 +432,9 @@ Initial rule set, rewritten from lap-timer rulings without their history:
 - Dispatch only inside the role/model map; the top tier only for `top_tier_roles`.
 
 Rules marked `fixed` (owner-only classes, merge grants, the bypass block) cannot be
-overridden. Any other rule is overridden only by a project decision with `overrides: SD-R<n>`;
-SessionStart lists active overrides. Project rules live in `.strict-delivery/playbooks/`.
+overridden. Any other rule is overridden only by a project decision of class `rule-override`
+with `overrides: SD-R<n>` (section 7.1; decision schema `decision/2`); SessionStart lists active
+overrides. Project rules live in `.strict-delivery/playbooks/`.
 
 ## 9. Context, docs and drift tooling
 
@@ -438,7 +447,14 @@ SessionStart lists active overrides. Project rules live in `.strict-delivery/pla
   `receipts/<session>.yml` (git-ignored), a YAML file with a top-level `schema:` key and a
   `reads:` list. `gate_context` fails a dispatch or commit when a required read
   is missing or was read at a different content hash (strict); it warns only (light, standard).
-- `gate_cites`: every `path:line` and `path#anchor` cite in tracked docs resolves at HEAD.
+- `gate_cites`: every `path:line` and `path#anchor` cite in tracked docs resolves in the tree
+  being committed: docs and cited targets are the tracked files as read from the working tree,
+  not from `HEAD`, so a doc and the target it cites can land in one commit. The working tree
+  is the tree being committed for an agent's commit through the Claude Code PreToolUse Bash
+  hook, which refuses a `git commit` inside a compound command, or with a `GIT_INDEX_FILE` override, for a commit made outside Claude when the git pre-commit hook is installed and not
+  bypassed, and in CI, which checks out the commit itself; both hooks refuse a commit while a
+  tracked file has unstaged changes, and section 13 states the conditions (owner answers
+  2026-10-31).
 - `gate_drift`: status-page and handoff facts (branch heads, merged PRs, open blocks) match git and,
   when available, GitHub; pending decisions on a status page match open decision records; a
   stream branch behind `<program>/integration`, or an integration branch behind main, fails
@@ -539,7 +555,16 @@ Every gate: `check(args) -> Result`; prints `PASS id` or `FAIL id: reason` lines
 exits 0 only when at least one line exists and every line passes; a missing input fails
 (`<gate>.input`), an empty run fails (`<gate>.empty`); `--root` points at another tree.
 `run_all` runs the gates the profile enables; a missing or raising gate fails. Hooks fail
-closed on internal error.
+closed on internal error. Two hooks refuse a commit while any tracked file has unstaged
+changes, before any gate runs, so the gates they run read the tree being committed: the
+Claude Code PreToolUse Bash hook, for a commit an agent makes (section 4), and the git
+pre-commit hook, for a commit made outside Claude when that extra is installed (section 4).
+The PreToolUse hook refuses a Bash command that runs `git commit` inside a compound command, or with a `GIT_INDEX_FILE` override,
+so a commit runs as its own command, and its check runs before that command, so the index the
+commit records changes only through the commit itself (owner answers 2026-11-01). The bypass block refuses an agent's `--no-verify`; a
+human's `--no-verify`, or a repository without the git hooks, commits outside Claude with no
+gate run. CI checks out the pushed commit, so there the working tree is the commit
+(owner answers 2026-10-31).
 
 ## 13a. Evidence contract for target projects
 
@@ -621,7 +646,8 @@ freezes the config and state schemas.
    registers with the id format of section 7.2 and the no-delete rule, `gate_register`,
    `gate_decisions`, decisions/findings tools (`ask`,
    `decide`, `find`, indexes, `in-force.md`).
-2. `gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption.
+2. `gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption, and
+   the decision schema `decision/2` (the optional `overrides`, section 7.1) with its migration.
 
 Programs block, placed after block 2 so this repository can run its remaining blocks as a
 program: the program_controller and stream_controller prompt blocks, automatic continuation,
@@ -694,7 +720,9 @@ produces it before `init` (owner answer 2026-10-31). Every schema refuses a key 
 declare. A generated file (in-force, decision-index, finding-index, overview) that is absent on
 disk is skipped, since it is regenerated before use (owner answers 2026-10-31). The decision
 schema carries the optional `rule`, the `withdrawn{at, by, reason}` map and the grant fields
-`plan`, `program` and `stream` (section 7.1). The first overview version, `overview/1`, holds
+`plan`, `program` and `stream` (section 7.1). From `decision/2` it also carries the optional
+`overrides` (section 7.1), with a tested migration from `decision/1` that lands before block 3's
+SessionStart reads the field (owner answer 2026-10-31). The first overview version, `overview/1`, holds
 only the sections block 1 can fill (architecture, open findings, in-force decisions); the
 specs-and-plans and live-program sections come in `overview/2` with a migration (owner answer
 2026-10-31).
