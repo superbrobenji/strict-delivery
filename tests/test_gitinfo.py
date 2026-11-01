@@ -92,10 +92,42 @@ class RootKindsTest(Fixture):
         self.assertEqual(gitinfo.head_sha(self.root), self.head)
         self.assertEqual(gitinfo.head_sha(sub), self.head)
         self.assertTrue(gitinfo.commit_exists(sub, self.head))
-        self.assertTrue(gitinfo.blob_exists(sub, self.head, "dir/x.txt"))
-        self.assertEqual(gitinfo.show(sub, "HEAD", "dir/x.txt"), "x\n")
-        self.assertEqual(gitinfo.ls_tree(sub, "HEAD", "dir"), ["dir/x.txt"])
-        self.assertEqual(gitinfo.tracked_files(sub), gitinfo.tracked_files(self.root))
+        self.assertEqual(gitinfo.toplevel(sub), self.root)
+
+    def test_path_functions_refuse_non_toplevel_root(self):  # F-1a-fin-1, Q-1a-fin-1
+        sub = os.path.join(self.root, "dir")
+        for name, fn in (("blob_exists", lambda r: gitinfo.blob_exists(r, self.head, "dir/x.txt")),
+                         ("show", lambda r: gitinfo.show(r, "HEAD", "dir/x.txt")),
+                         ("ls_tree", lambda r: gitinfo.ls_tree(r, "HEAD", "dir")),
+                         ("tracked_files", gitinfo.tracked_files)):
+            with self.subTest(fn=name):
+                with self.assertRaises(GateError) as e:
+                    fn(sub)
+                self.assertIn("git rev-parse --show-toplevel", str(e.exception))
+                self.assertIn("top level", str(e.exception))
+                self.assertNotIn(self.root, str(e.exception))
+                fn(self.root)  # the top level itself is accepted
+
+    def test_symlinked_alias_of_toplevel_is_accepted(self):  # Q-1a-fin-1
+        alias = os.path.join(self.tmp, "alias")
+        os.symlink(self.root, alias)
+        self.assertEqual(gitinfo.show(alias, "HEAD", "dir/x.txt"), "x\n")
+        self.assertEqual(gitinfo.ls_tree(alias, "HEAD", "dir"), ["dir/x.txt"])
+        self.assertTrue(gitinfo.blob_exists(alias, self.head, "dir/x.txt"))
+        self.assertEqual(gitinfo.tracked_files(alias), gitinfo.tracked_files(self.root))
+
+    def test_non_normalised_paths_refused_per_function(self):  # F-1a-fin-2, Q-1a-fin-2
+        forms = [".", "./a", "a/.", "a//b", "dir/", "/dir", "dir//x.txt", "dir/./x.txt", "..", "dir/../x.txt",
+                 "./", "//", "/"]
+        for form in forms:
+            for name, fn in (("blob_exists", lambda f: gitinfo.blob_exists(self.root, "HEAD", f)),
+                             ("show", lambda f: gitinfo.show(self.root, "HEAD", f)),
+                             ("ls_tree", lambda f: gitinfo.ls_tree(self.root, "HEAD", f))):
+                with self.subTest(fn=name, form=form):
+                    with self.assertRaises(GateError) as e:
+                        fn(form)
+                    self.assertNotIn(self.root, str(e.exception))
+        self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "dir"), ["dir/x.txt"])  # normalised twin accepted
 
     def test_plain_missing_and_file_roots_are_gate_errors(self):
         plain = os.path.join(self.tmp, "plain")
@@ -396,10 +428,11 @@ class RevisionFormsTest(Fixture):
     def test_path_forms(self):  # G4, G6, G7: the path argument (dir for ls_tree)
         absolute = os.path.join(self.root, "a.txt")
         cases = [  # path: (blob_exists, show, ls_tree with the path as directory)
-            ("a.txt", (True, TXT, [])), ("/a.txt", (False, ERR, ERR)), (absolute, (False, None, [])),
-            ("../a.txt", (False, ERR, ERR)), ("dir/../a.txt", (False, None, ERR)), ("./a.txt", (False, None, [])),
-            ("a.txt/", (False, None, [])), ("dir", (False, None, ["dir/x.txt"])), ("dir/", (False, None, ["dir/x.txt"])),
-            ("dir//x.txt", (False, None, [])), ("dir/./x.txt", (False, None, [])),
+            ("a.txt", (True, TXT, [])), ("/a.txt", (ERR, ERR, ERR)), (absolute, (ERR, ERR, ERR)),
+            ("../a.txt", (ERR, ERR, ERR)), ("dir/../a.txt", (ERR, ERR, ERR)), ("./a.txt", (ERR, ERR, ERR)),
+            ("a.txt/", (ERR, ERR, ERR)), ("dir", (False, None, ["dir/x.txt"])), ("dir/", (ERR, ERR, ERR)),
+            (".", (ERR, ERR, ERR)), ("a/.", (ERR, ERR, ERR)), ("./a", (ERR, ERR, ERR)), ("/", (ERR, ERR, ERR)),
+            ("dir//x.txt", (ERR, ERR, ERR)), ("dir/./x.txt", (ERR, ERR, ERR)),  # Q-1a-fin-2
             ("gl*ob/f.txt", (True, "g\n", [])), ("gl?ob/f.txt", (False, None, [])),
             ("co:lon.txt", (True, "colon\n", [])), (":(top)tm.txt", (True, "magic\n", [])),
             ("é/ü.txt", (True, "u\n", [])), ("nl\nname.txt", (True, "nl\n", [])), ("-lead.txt", (True, "lead\n", [])),
@@ -424,8 +457,7 @@ class BlobExistsTest(Fixture):
         h = self.head
         yes = ["a.txt", "dir/x.txt", "dir/sub/y.txt", "bin/run", "empty.txt", "sp ace/f g.txt",
                "é/ü.txt", "-lead.txt", "co:lon.txt", "nl\nname.txt", "gl*ob/f.txt", ":(top)tm.txt", ":(top)md/f.txt"]
-        no = ["dir", "dir/", "nope", "link", "dir/lnk", "subm", "gl*", "gl?ob/f.txt", "a.txt/",
-              "dir/../a.txt", "./a.txt", "", "dir/x.tx", "gl*ob"]
+        no = ["dir", "nope", "link", "dir/lnk", "subm", "gl*", "gl?ob/f.txt", "", "dir/x.tx", "gl*ob"]
         for p in yes:
             with self.subTest(path=p, want=True):
                 self.assertIs(gitinfo.blob_exists(self.root, h, p), True)
@@ -497,10 +529,9 @@ class ShowTest(Fixture):
         self.assertIsNone(gitinfo.show(self.root, "HEAD", "nope"))
         self.assertIsNone(gitinfo.show(self.root, self.config_sha, "a.txt"))
         self.assertIsNone(gitinfo.show(self.root, "HEAD", "gl*"))
-        self.assertIsNone(gitinfo.show(self.root, "HEAD", "dir/../a.txt"))
 
     def test_directory_symlink_gitlink_are_none(self):  # owner Q-1a2-5, Q-1a2r-1
-        for p in ("dir", "dir/", "link", "dir/lnk", "subm"):
+        for p in ("dir", "link", "dir/lnk", "subm"):
             with self.subTest(path=p):
                 self.assertIsNone(gitinfo.show(self.root, "HEAD", p))
 
@@ -522,7 +553,6 @@ class ShowTest(Fixture):
 class LsTreeTest(Fixture):
     def test_regular_files_directly_in_directory(self):  # G7
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "dir"), ["dir/x.txt"])
-        self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "dir/"), ["dir/x.txt"])
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "dir/sub"), ["dir/sub/y.txt"])
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "bin"), ["bin/run"])
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "sp ace"), ["sp ace/f g.txt"])
@@ -548,7 +578,6 @@ class LsTreeTest(Fixture):
                     gitinfo.ls_tree(self.root, "HEAD", d)
                 self.assertIn("..", str(e.exception))
         self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "..x"), [])  # only a whole '..' segment
-        self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "/"), gitinfo.ls_tree(self.root, "HEAD", ""))
 
     def test_repo_root_directory(self):
         top = gitinfo.ls_tree(self.root, "HEAD", "")

@@ -226,6 +226,8 @@ class RunGateTest(unittest.TestCase):
                 self.assertEqual(len(out.splitlines()), 1)
         out = run("x", lambda a: (_ for _ in ()).throw(SystemExit("x")), [])[1]
         self.assertIn("'x'", out)
+        out = run("x", lambda a: (_ for _ in ()).throw(SystemExit("a\nb")), [])[1]  # F-1a-fin-3: escaped once
+        self.assertEqual(out, "FAIL x.input: exit requested ('a\\nb')\n")
 
     def test_keyboard_interrupt_propagates(self):
         def raising(args):

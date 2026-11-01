@@ -111,7 +111,7 @@ def run_check(name: str, check, args: list) -> Result:
     except GateError as e:
         return _input_fail(name, str(e))
     except SystemExit as e:
-        return _input_fail(name, "exit requested (%r)" % (e.code,))
+        return _input_fail(name, "exit requested (%s)" % ("'%s'" % e.code if isinstance(e.code, str) else e.code,))
     except Exception as e:
         return _input_fail(name, "%s: %s" % (type(e).__name__, e))
     if not isinstance(result, Result):

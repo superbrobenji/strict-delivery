@@ -68,7 +68,7 @@ class Store:
     def _check_id(self, id: object) -> None:
         problem = ids.id_problem(id, self.prefix)
         if problem:
-            raise GateError("cannot use id %s: %s" % (safe_text(id), problem))
+            raise GateError("cannot use id %s: %s" % (id, problem))
 
     def path_for(self, id: str) -> str:
         """The repo-relative path of the record file for ``id``; the id must pass ``id_problem``."""
@@ -225,7 +225,7 @@ def store_errors(records: list, prefix: str) -> list:
         stem = posixpath.basename(rec.file)[:-len(".yml")] if rec.file.endswith(".yml") else rec.file
         if stem != rec.id:
             out.append(("name." + rec.file, "file name %s.yml differs from the record id %s"
-                        % (stem, safe_text(rec.id))))
+                        % (stem, rec.id)))
         if type(rec.id) is str:
             files_by_id.setdefault(rec.id, []).append(rec.file)
     for id_ in sorted(files_by_id):

@@ -71,7 +71,7 @@ def _merge_map(default: dict, over: object, name: str) -> None:
         full = "%s.%s" % (name, k)
         if k not in default:
             if name not in _OPEN_MAPS:
-                raise GateError("%s: unknown key %r" % (CONFIG_PATH, full))
+                raise GateError("%s: unknown key '%s'" % (CONFIG_PATH, full))
             default[k] = copy.deepcopy(v)
         elif full == "decision_classes.owner_only":
             for slug in _text_list(v, full, allow_empty=False):
@@ -85,7 +85,7 @@ def _merge_map(default: dict, over: object, name: str) -> None:
 
 def _check_path(key: str, v: object) -> None:
     if (not isinstance(v, str) or not v.isprintable() or v.startswith("/") or ".." in v.split("/")
-            or posixpath.normpath(v) != v):
+            or v == "." or posixpath.normpath(v) != v):
         raise _bad(key, "must be a non-empty normalised repo-relative path of printable characters")
 
 
@@ -132,7 +132,7 @@ def load(root: str) -> dict:
         raise GateError("%s: the top level must be a mapping" % CONFIG_PATH)
     for k in data:
         if k not in CONFIG_KEYS:
-            raise GateError("%s: unknown key %r" % (CONFIG_PATH, k))
+            raise GateError("%s: unknown key '%s'" % (CONFIG_PATH, k))
     for k in _REQUIRED:
         if k not in data:
             raise _bad(k, "required key is missing")

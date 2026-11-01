@@ -1,5 +1,7 @@
 """Tests for the one-file-per-record store (gates.lib.store) on real directories and real git repositories.
 Expected suffix lists and file contents are written out per scenario, not derived from the code under test."""
+import contextlib
+import io
 import os
 import stat
 import subprocess
@@ -7,7 +9,7 @@ import unittest
 from unittest import mock
 
 from gates.lib import config, store as store_mod, yamlsub
-from gates.lib.result import GateError
+from gates.lib.result import GateError, Result, repo_root, run_gate
 from gates.lib.store import Record, Store, base_errors, store_errors
 from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, write_record
 
@@ -1028,3 +1030,66 @@ class BaseErrorsContentTest(GitCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NonToplevelRootTest(GitCase):
+    """F-1a-fin-1 (owner Q-1a-fin-1): a root that is not the git top level is refused, never read as empty."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.fork()
+        git(self.root, "rm", "-q", "--", "%s/%s.yml" % (DIR, A))
+        commit_all(self.root, "delete A")
+        self.sub = os.path.join(self.root, "pkg")
+        os.mkdir(self.sub)
+
+    def test_top_level_root_still_reports_the_deletion(self):
+        self.assertEqual(self.suffixes(), ["deleted." + A])
+
+    def test_explicit_subdirectory_root_is_refused(self):
+        with self.assertRaises(GateError) as e:
+            base_errors(self.sub, Store(self.sub, "decision", self.cfg), "main", resolved, never)
+        self.assertIn("git rev-parse --show-toplevel", str(e.exception))
+        self.assertIn("top level", str(e.exception))
+        self.assertNotIn(self.root, str(e.exception))
+
+    def test_claude_project_dir_subdirectory_gate_line(self):
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": self.sub}), contextlib.redirect_stdout(buf):
+            root = repo_root()
+            run_gate("x", lambda a: base_errors(root, Store(root, "decision", self.cfg), "main", resolved, never)
+                     and Result("x", []), [])
+        self.assertTrue(buf.getvalue().startswith("FAIL x.input: git rev-parse --show-toplevel"), buf.getvalue())
+
+    def test_symlinked_alias_of_top_level_is_accepted(self):
+        alias = os.path.join(self.tmp, "alias")
+        os.symlink(self.root, alias)
+        errs = base_errors(alias, Store(alias, "decision", self.cfg), "main", resolved, never)
+        self.assertEqual([s for s, _ in errs], ["deleted." + A])
+
+
+class EscapeOnceTest(Base):
+    """F-1a-fin-3 (owner Q-1a-fin-3): text is escaped once, by Result.render."""
+
+    def test_id_with_newline_in_cannot_use_id(self):
+        _, st = self.newstore()
+        buf = io.StringIO()
+
+        def check(args):
+            st.path_for("x\ny")
+        with contextlib.redirect_stdout(buf):
+            run_gate("x", check, [])
+        out = buf.getvalue()
+        self.assertEqual(len(out.splitlines()), 1)
+        self.assertTrue(out.startswith("FAIL x.input: cannot use id x\\ny: "), out)
+        self.assertNotIn("\\\\n", out)
+
+    def test_store_errors_name_reason_with_newline_id(self):
+        errs = store_errors([Record("a\nb", {"id": "a\nb"}, "d/c.yml")], "DEC")
+        name = [r for s, r in errs if s.startswith("name.")][0]
+        res = Result("x", [])
+        res.fail("x.store." + [s for s, _ in errs if s.startswith("name.")][0], name)
+        line = res.render(False).splitlines()
+        self.assertEqual(len(line), 1)
+        self.assertTrue(line[0].endswith("differs from the record id a\\nb"), line[0])

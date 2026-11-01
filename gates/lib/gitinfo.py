@@ -68,6 +68,26 @@ def _ensure_repo(root: str) -> None:
     _run(root, "rev-parse --git-dir", ["rev-parse", "--git-dir"])
 
 
+def _require_toplevel(root: str) -> None:
+    """Every function that maps a repo-relative path goes through here (owner Q-1a-fin-1): git reads
+    ``--full-tree`` paths from the top level, so a root that is a subdirectory would silently see another tree."""
+    if os.path.realpath(root) != os.path.realpath(toplevel(root)):
+        raise GateError("git rev-parse --show-toplevel: root must be the repository top level")
+
+
+def _check_norm(path: str, what: str, allow_empty: bool = False) -> None:
+    """A repo-relative path must be normalised (owner Q-1a-fin-2): no '.', '..' or empty segment, no leading
+    or trailing '/'. ``""`` is accepted only where ``allow_empty`` says it means the root."""
+    if allow_empty and path == "":
+        return
+    segs = path.split("/")
+    if ".." in segs:
+        raise GateError("%s must not hold a '..' segment" % what)
+    if any(s in ("", ".") for s in segs):
+        raise GateError("%s must be a normalised repo-relative path (no '.', empty segment, leading or "
+                        "trailing '/')" % what)
+
+
 def _entries(stdout: bytes, what: str) -> list:
     """Parse ``-z`` ls-tree or ls-files --stage output into (mode, third field, path) triples.
 
@@ -115,6 +135,8 @@ def commit_exists(root: str, sha: str) -> bool:
 
 def blob_exists(root: str, sha: str, path: str) -> bool:
     _ensure_repo(root)
+    _require_toplevel(root)
+    _check_norm(path, "ls-tree: path", allow_empty=True)
     if sha.startswith("-") or LONG_HEX.search(sha):
         return False
     p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", sha, "--", path], ok=None, literal=True)
@@ -122,6 +144,7 @@ def blob_exists(root: str, sha: str, path: str) -> bool:
 
 
 def tracked_files(root: str) -> frozenset:
+    _require_toplevel(root)
     top = toplevel(root)
     p = _run(top, "ls-files", ["ls-files", "-z", "--stage"])
     return frozenset(name for mode, _, name in _entries(p.stdout, "ls-files") if mode in _REGULAR)
@@ -129,6 +152,8 @@ def tracked_files(root: str) -> frozenset:
 
 def show(root: str, ref: str, path: str) -> Optional[str]:
     _check_rev(ref)
+    _require_toplevel(root)
+    _check_norm(path, "ls-tree: path", allow_empty=True)
     p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", ref, "--", path], literal=True)
     raw = None
     for mode, sha, name in _entries(p.stdout, "ls-tree"):
@@ -145,9 +170,9 @@ def show(root: str, ref: str, path: str) -> Optional[str]:
 
 def ls_tree(root: str, ref: str, directory: str) -> list:
     _check_rev(ref)
-    d = directory.rstrip("/")
-    if ".." in d.split("/"):
-        raise GateError("ls-tree: directory must not hold a '..' segment")
+    _require_toplevel(root)
+    _check_norm(directory, "ls-tree: directory", allow_empty=True)
+    d = directory
     args = ["ls-tree", "-z", "--full-tree", ref]
     if d:
         args += ["--", d + "/"]

@@ -1,5 +1,7 @@
 """Tests for the config loader (gates.lib.config), on fixture repositories made by make_repo."""
+import contextlib
 import copy
+import io
 import os
 import stat
 import unittest
@@ -275,7 +277,22 @@ class RequiredKeysTest(ConfigCase):
         for key, value in (("owner", {"handle": "x"}), ("profle", "strict"), ("Paths", {"state": "x"}),
                            ("owner", "someone"), ("", "x"), ("extra key", 1)):
             with self.subTest(key=key):
-                self.refused({key: value}, "unknown key " + repr(key))
+                self.refused({key: value}, "unknown key '%s'" % key)
+
+    def test_unknown_key_is_escaped_once_in_the_gate_line(self):  # F-1a-fin-3, Q-1a-fin-3
+        for extra, text in (({"a\nb": 1}, "a\\nb"), ({"paths": {"x\ny": "z"}}, "paths.x\\ny")):
+            with self.subTest(extra=extra):
+                cfg = minimal_config()
+                cfg.update(extra)
+                self.put(cfg)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = run_gate("x", lambda a: config.load(self.root) and Result("x", []), [])
+                self.assertEqual(code, 1)
+                out = buf.getvalue()
+                self.assertEqual(len(out.splitlines()), 1)
+                self.assertIn("unknown key '%s'" % text, out)
+                self.assertNotIn("\\\\n", out)
 
     def test_not_yet_landed_keys_accepted_unchecked(self):  # C18
         extra = {"commands": {"test": "make test"}, "roles": 5, "block": [1, 2], "rulings": None,
@@ -315,7 +332,7 @@ class MappingKeysTest(ConfigCase):
 class PathsTest(ConfigCase):
     def test_paths_must_be_relative_normalised(self):  # C11
         for bad in ("/abs", "a/../b", "..", "../a", "./a", "a//b", "a/", "", 1, None, True, ["a"],
-                    "a/./b", "a/..", "/", "//x"):
+                    "a/./b", "a/..", "/", "//x", ".", "./", "a/."):
             with self.subTest(bad=bad):
                 self.refused({"paths": {"state": bad}}, "paths.state")
 
