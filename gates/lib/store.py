@@ -75,16 +75,31 @@ class Store:
         self._check_id(id)
         return "%s/%s.yml" % (self.directory, id)
 
+    def _dir_exists(self) -> bool:
+        """True when the register directory exists; False when it or a parent is missing. Every component of
+        the path from the repo root down to the register directory must be a real directory: a symlink or a
+        non-directory is a GateError naming it (owner Q-1a3r-1). Components above the root are not checked."""
+        parts = self.directory.split("/")
+        for i in range(1, len(parts) + 1):
+            rel = "/".join(parts[:i])
+            try:
+                mode = os.lstat(self._abs(rel)).st_mode
+            except FileNotFoundError:
+                return False
+            except OSError as e:
+                raise GateError("%s: cannot read (%s) (register directory %s)"
+                                % (rel, _why(e), self.directory)) from None
+            if stat.S_ISLNK(mode):
+                raise GateError("%s: is a symlink; register paths must be real directories (register directory %s)"
+                                % (rel, self.directory))
+            if not stat.S_ISDIR(mode):
+                raise GateError("%s: is not a directory (register directory %s)" % (rel, self.directory))
+        return True
+
     def load(self) -> list:
         d = self._abs(self.directory)
-        try:
-            st = os.lstat(d)
-        except FileNotFoundError:
+        if not self._dir_exists():
             return []
-        except OSError as e:
-            raise GateError("%s: cannot read the register directory (%s)" % (self.directory, _why(e))) from None
-        if not stat.S_ISDIR(st.st_mode):
-            raise GateError("%s: the register directory is not a directory" % self.directory)
         try:
             names = sorted(os.listdir(d))
         except OSError as e:
@@ -124,6 +139,7 @@ class Store:
     def create(self, row: dict) -> str:
         """Write a new record file (exclusive create); return its repo-relative path."""
         rel, text = self._prepare(row)
+        self._dir_exists()
         try:
             os.makedirs(self._abs(self.directory), exist_ok=True)
         except OSError as e:
@@ -155,6 +171,8 @@ class Store:
     def replace(self, row: dict) -> str:
         """Rewrite an existing record file through a temp file and ``os.replace``; return its path."""
         rel, text = self._prepare(row)
+        if not self._dir_exists():
+            raise GateError("%s: does not exist; use create" % rel)
         path = self._abs(rel)
         try:
             st = os.lstat(path)

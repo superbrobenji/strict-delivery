@@ -89,15 +89,17 @@ class LoadTest(Base):
         root, s = self.newstore()
         os.makedirs(os.path.join(root, ".strict-delivery/state"))
         self.writefile(root, "decisions", "x\n", rel=".strict-delivery/state")
-        with self.assertRaises(GateError) as cm:
-            s.load()
-        self.assertIn(DIR, str(cm.exception))
+        for fn in (s.load, lambda: s.create(row(A)), lambda: s.replace(row(A))):
+            with self.assertRaises(GateError) as cm:
+                fn()
+            self.assertIn(DIR + ": is not a directory", str(cm.exception))
 
     def test_parent_that_is_a_file_refused(self):  # S1
         root, s = self.newstore()
         self.writefile(root, "state", "x\n", rel=".strict-delivery")
         with self.assertRaises(GateError) as cm:
             s.load()
+        self.assertIn(".strict-delivery/state: is not a directory", str(cm.exception))
         self.assertIn(DIR, str(cm.exception))
 
     def test_unreadable_dir_refused_naming_it(self):  # S1
@@ -108,15 +110,80 @@ class LoadTest(Base):
             s.load()
         self.assertIn(DIR, str(cm.exception))
 
-    def test_symlinked_dir_refused(self):  # S1 (controller call: a symlinked register directory is refused)
+    def symlinked(self, where):
+        """A root whose register path holds a symlink at ``where`` ("leaf" or "parent"); returns
+        (root, store, the symlinked repo-relative path, the real target directory)."""
         root, s = self.newstore()
         target = os.path.join(root, "elsewhere")
-        os.mkdir(target)
+        os.makedirs(os.path.join(target, "decisions") if where == "parent" else target)
+        if where == "leaf":
+            os.makedirs(os.path.join(root, ".strict-delivery/state"))
+            os.symlink(target, os.path.join(root, DIR))
+            return root, s, DIR, target
+        os.makedirs(os.path.join(root, ".strict-delivery"))
+        os.symlink(target, os.path.join(root, ".strict-delivery/state"))
+        return root, s, ".strict-delivery/state", target
+
+    def test_symlinked_register_path_refused_by_load(self):  # S1 (owner Q-1a3r-1)
+        for where in ("leaf", "parent", "top"):
+            with self.subTest(where):
+                if where == "top":
+                    root, s = self.newstore()
+                    elsewhere = os.path.join(root, "elsewhere", "state", "decisions")
+                    os.makedirs(elsewhere)
+                    os.symlink(os.path.join(root, "elsewhere"), os.path.join(root, ".strict-delivery"))
+                    link = ".strict-delivery"
+                else:
+                    root, s, link, _ = self.symlinked(where)
+                with self.assertRaises(GateError) as cm:
+                    s.load()
+                self.assertIn(link + ": is a symlink; register paths must be real directories", str(cm.exception))
+
+    def test_symlinked_register_path_refused_by_create_and_writes_nothing(self):  # S1, S5 (owner Q-1a3r-1)
+        for where in ("leaf", "parent"):
+            with self.subTest(where):
+                root, s, link, target = self.symlinked(where)
+                before = sorted(os.walk(root))
+                with self.assertRaises(GateError) as cm:
+                    s.create(row(A))
+                self.assertIn(link + ": is a symlink", str(cm.exception))
+                self.assertEqual(sorted(os.walk(root)), before)
+                for dirpath, _, files in os.walk(target):
+                    self.assertEqual(files, [])
+
+    def test_symlinked_register_path_refused_by_replace(self):  # S1, S6 (owner Q-1a3r-1)
+        for where in ("leaf", "parent"):
+            with self.subTest(where):
+                root, s, link, target = self.symlinked(where)
+                write_record(target, "decisions/%s.yml" % A if where == "parent" else "%s.yml" % A, row(A))
+                with self.assertRaises(GateError) as cm:
+                    s.replace(row(A, "resolved"))
+                self.assertIn(link + ": is a symlink", str(cm.exception))
+
+    def test_dangling_symlink_and_unreadable_parent_refused_by_load_create_replace(self):  # S1 dimensions
+        root, s = self.newstore()
         os.makedirs(os.path.join(root, ".strict-delivery/state"))
-        os.symlink(target, os.path.join(root, DIR))
-        with self.assertRaises(GateError) as cm:
-            s.load()
-        self.assertIn(DIR, str(cm.exception))
+        os.symlink(os.path.join(root, "nowhere"), os.path.join(root, DIR))
+        for fn in (s.load, lambda: s.create(row(A)), lambda: s.replace(row(A))):
+            with self.assertRaises(GateError) as cm:
+                fn()
+            self.assertIn(DIR + ": is a symlink", str(cm.exception))
+        root, s = self.newstore()
+        self.mkdir(root)
+        self.chmod(os.path.join(root, ".strict-delivery"), 0)
+        for fn in (s.load, lambda: s.create(row(A)), lambda: s.replace(row(A))):
+            with self.assertRaises(GateError) as cm:
+                fn()
+            self.assertIn(DIR, str(cm.exception))
+
+    def test_symlink_above_the_repo_root_is_not_checked(self):  # Q-1a3r-1: only components inside the repo
+        root, s = self.newstore()
+        alias = os.path.join(self.tmp, "alias")
+        os.symlink(root, alias)
+        via = Store(alias, "decision", self.cfg)
+        via.create(row(A))
+        self.assertEqual([r.id for r in via.load()], [A])
+        self.assertEqual([r.id for r in s.load()], [A])
 
     def test_loads_records_sorted_with_relative_file(self):  # S2
         root, s = self.newstore()
@@ -698,7 +765,7 @@ class BaseErrorsChangeTest(GitCase):
         self.assertNotEqual(read_bytes(path), yamlsub.emit(row(B, "resolved", note="x")).encode())
         self.assertEqual(self.errs(), [])
 
-    def test_type_change_with_equal_python_value_is_a_change(self):  # B5: 1 vs true vs 1.0 differ as parsed values
+    def test_type_change_with_equal_python_value_is_a_change(self):  # B5 (owner Q-1a3r-2): 1 vs true differ
         self.put(B, row(B, "resolved", n=1))
         commit_all(self.root, "n=1")
         git(self.root, "checkout", "-q", "main")
@@ -790,6 +857,20 @@ class BaseErrorsCollisionTest(GitCase):
         self.assertEqual([s for s, _ in errs], ["collision." + C])
         self.assertEqual(errs[0][1], "id %s already exists on main; mint a new id" % C)
 
+    def test_one_vs_true_is_a_collision(self):  # B7 (owner Q-1a3r-2): type-strict like B5
+        self.diverge(row(C, n=1), row(C, n=True))
+        self.assertEqual(self.suffixes(), ["collision." + C])
+
+    def test_one_of_several_differing_tip_rows_is_a_collision(self):  # F-1a3r-2: the id is in two files at the tip
+        self.put(C, row(C, note="same"))
+        commit_all(self.root, "feature adds C")
+        git(self.root, "checkout", "-q", "main")
+        self.put(C, row(C, note="same"))
+        write_record(self.root, "%s/other.yml" % DIR, row(C, note="different"))
+        commit_all(self.root, "main has C twice")
+        git(self.root, "checkout", "-q", "feature")
+        self.assertEqual(self.suffixes(), ["collision." + C])
+
     def test_same_content_cherry_pick_is_no_collision(self):  # B7
         self.diverge(row(C, note="same"), row(C, note="same"))
         self.assertEqual(self.errs(), [])
@@ -841,6 +922,33 @@ class BaseErrorsContentTest(GitCase):
         with self.assertRaises(GateError) as cm:
             self.errs()
         self.assertIn("main:%s/bad.yml" % DIR, str(cm.exception))
+
+    def test_unparsable_record_only_at_merge_base_refused(self):  # B6, F-1a3r-1: gone from the tip and the branch
+        self.seed()
+        with open(os.path.join(self.root, DIR, "bad.yml"), "w") as fh:
+            fh.write("a: [1\n")
+        commit_all(self.root, "bad at mb")
+        self.fork()
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "rm", "-q", "--", "%s/bad.yml" % DIR)
+        commit_all(self.root, "main drops bad")
+        git(self.root, "checkout", "-q", "feature")
+        git(self.root, "rm", "-q", "--", "%s/bad.yml" % DIR)
+        commit_all(self.root, "feature drops bad")
+        with self.assertRaises(GateError) as cm:
+            self.errs()
+        self.assertIn("main:%s/bad.yml (at the merge base)" % DIR, str(cm.exception))
+
+    def test_base_side_symlink_and_non_record_entries_are_ignored(self):  # B9 (owner Q-1a3r-3)
+        self.seed()
+        os.symlink("%s.yml" % A, os.path.join(self.root, DIR, "%s.yml" % C))
+        for name in (".x.yml", "x.yaml"):
+            with open(os.path.join(self.root, DIR, name), "w") as fh:
+                fh.write("a: [1\n")
+        commit_all(self.root, "symlink record and junk at the base")
+        self.fork()
+        git(self.root, "rm", "-q", "--", "%s/%s.yml" % (DIR, C), "%s/.x.yml" % DIR, "%s/x.yaml" % DIR)
+        self.assertEqual(self.errs(), [])
 
     def test_unparsable_record_at_base_tip_refused(self):  # B6
         self.seed()
