@@ -192,6 +192,11 @@ class ExtractBacktickTest(unittest.TestCase):
         for p in ("./a.md", "a//b.md", "a/", "../x.py", "/abs.md", "a/../b.py"):
             self.assertEqual(one("`%s:1`\n" % p).path, p)
 
+    def test_nfc_cite_against_nfd_tracked_file(self):       # row B10: exact string compare, no normalisation
+        nfc, nfd = "docs/café.md", "docs/café.md"
+        self.assertEqual(prob("`%s:1`\n" % nfc, tracked=frozenset({nfd}), read=lambda p: "x\n"), "%s: not a tracked file" % nfc)
+        self.assertEqual(prob("`%s:1`\n" % nfc, tracked=frozenset({nfc}), read=lambda p: "x\n"), "")
+
     def test_unicode_path(self):
         self.assertEqual(one("`docs/caf\u00e9.md:1`\n").path, "docs/caf\u00e9.md")
 
@@ -222,9 +227,24 @@ class ExtractLinkTest(unittest.TestCase):
     def test_link_forms_that_are_not_cites(self):
         for text in ('[t](b.md#c "T)\n', '[t](b.md#c x)\n', '[t](<b<.md#c>)\n', '[t](b.md#c\n"T")\n', '[t](<b.md#c\n>)\n',
                      '[t]\n(b.md#c)\n', '[t] (b.md#c)\n', '[t](<a.md#c>x)\n', '[t](a(b.md#c)\n',
-                     '[t](b.md#c "a\\"b")\n', '[t](b.md)\n', '[t]()\n', '[t](<>)\n', '[t](b.md#c \'T)\n', '[t](b.md#c (T)\n',
+                     '[t](b.md)\n', '[t]()\n', '[t](<>)\n', '[t](b.md#c \'T)\n', '[t](b.md#c (T)\n',
                      '[t](b.md#c\x01)\n', ')[t](<b.md#c)\n', '[t](<a.md#c>"T")\n', '[t](<a.md#c>(T))\n','[t](b.md#c "T" x)\n'):
             self.assertEqual(extract("d/a.md", text), [], repr(text))
+
+    def test_backslash_forms_are_read_literally(self):     # owner Q-C21r-1 (b)
+        for text in ('\\![t](b.md#c)\n', '[t](b.md#c "a\\"b")\n', "[t](b.md#c 'a\\'b')\n", '[t](b.md#c (a\\)b))\n'):
+            cs = extract("d/a.md", text)
+            self.assertEqual([(c.token, c.path, c.anchor) for c in cs], [("b.md#c", "d/b.md", "c")], text)
+        for dest in ("a\\)b.md#c", "a\\(b.md#c"):
+            c = one("[t](%s)\n" % dest)
+            self.assertEqual((c.token, c.path), (dest, "d/" + dest.split("#")[0]))
+            self.assertEqual(problem(c, frozenset({"d/a)b.md", "d/a(b.md"}), READ), "d/%s: not a tracked file" % dest.split("#")[0])
+        self.assertEqual(extract("d/a.md", '[t](b.md#c "a\\")\n'), [])               # the escaped quote leaves the title open
+        self.assertEqual(extract("d/a.md", '![t](b.md#c)\n'), [])                    # a plain image is still not a cite
+        for text in ('[t](a\\)\n', '[t](a\\ b.md#c)\n', '[t](a\\\x7fb.md#c)\n', '[t](#a\\'):    # backslash then space, DEL, end of line
+            self.assertEqual(extract("d/a.md", text), [], repr(text))
+        self.assertEqual([c.token for c in extract("d/a.md", '[t](b.md#c "a\\\\")\n')], ["b.md#c"])    # literal backslash pair
+        self.assertEqual([c.token for c in extract("d/a.md", '[t](b.md#c "\\"\\"x")\n')], ["b.md#c"])   # two escapes in a row
 
     def test_non_link_things(self):
         for text in ("[m](mailto:a@b)\n", "![i](img.png#a)\n", "[a][b]\n", "[b]: x.md#y\n", "<https://x#y>\n", '<a href="x.md#y">\n',
@@ -252,6 +272,7 @@ class ExtractLinkTest(unittest.TestCase):
     def test_percent_decoding(self):
         for dest, path in (("x%20y.md#a", "d/x y.md"), ("x%2Fy.md#a", "d/x/y.md"), ("%2E%2E/x.md#a", "x.md"),
                            ("%zz.md#a", "d/%zz.md"), ("%ff.md#a", "d/%ff.md"), ("a%00.md#a", "d/a\x00.md"), ("a%2.md#a", "d/a%2.md"),
+                           ("a%20%zz.md#a", "d/a%20%zz.md"), ("a%zz%20.md#a", "d/a%zz%20.md"),
                            ("caf%C3%A9.md#a", "d/caf\u00e9.md")):
             self.assertEqual(one("[t](%s)\n" % dest).path, path, dest)
         self.assertEqual(one("[t](b.md#caf%C3%A9)\n").anchor, "caf%C3%A9")            # the anchor is not decoded
@@ -304,13 +325,13 @@ class LowercaseSlugifyTest(unittest.TestCase):
             self.assertEqual(lowercase(text), low, text)
 
     def test_case_ignorable_and_cased_wins_while_skipping(self):
-        # U+00AA and U+00BA are both Cased and Case_Ignorable in Unicode 13.0.0: skipped, not counted as the cased neighbour
+        # U+02B0 is both Cased and Case_Ignorable in Unicode 13.0.0 (U+00AA and U+00BA are Cased only): skipped, not counted as the cased neighbour
         self.assertTrue(cites._in_ranges(0x2B0, case_table.CASED_RANGES) and cites._in_ranges(0x2B0, case_table.CASE_IGNORABLE_RANGES))
         self.assertEqual(lowercase("\u02b0\u03a3"), "\u02b0\u03c3")          # skipped: nothing cased before
         self.assertEqual(lowercase("\u0391\u03a3\u02b0"), "\u03b1\u03c2\u02b0")   # skipped: nothing cased after
         self.assertEqual(lowercase("\u0391\u02b0\u03a3"), "\u03b1\u02b0\u03c2")
 
-    def test_digest_slugify_does_not_use_unicodedata(self):
+    def test_slugify_does_not_use_unicodedata(self):
         for mod in (cites, slug_table, case_table):
             text = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
             tree = ast.parse(text)

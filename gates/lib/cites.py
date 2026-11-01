@@ -166,6 +166,9 @@ def _destination(line: str, pos: int) -> Optional[Tuple[str, int]]:
             c = line[pos]
             if c <= " " or c == "\x7f":
                 break
+            if c == "\\" and pos + 1 < n and line[pos + 1] > " " and line[pos + 1] != "\x7f":
+                pos += 2                            # a backslash is literal; it keeps the next character out of the depth count
+                continue
             if c == "(":
                 depth += 1
             elif c == ")":
@@ -183,8 +186,10 @@ def _destination(line: str, pos: int) -> Optional[Tuple[str, int]]:
     if gap == 0 or pos >= n or line[pos] not in "\"'(":
         return None
     closer = ")" if line[pos] == "(" else line[pos]
-    end = line.find(closer, pos + 1)
-    if end < 0:
+    end = pos + 1
+    while end < n and line[end] != closer:
+        end += 2 if line[end] == "\\" else 1       # a backslash is literal; it keeps the next character from closing
+    if end >= n:
         return None
     pos = end + 1
     while pos < n and line[pos] in " \t":
@@ -251,7 +256,7 @@ def extract(doc: str, text: str) -> list:
         masked_line = "".join(masked)
         for m in re.finditer(r"\]\(", masked_line):
             opener = _link_opener(masked_line, m.start())
-            if opener is None or (opener > 0 and masked_line[opener - 1] == "!"):
+            if opener is None or (opener > 0 and masked_line[opener - 1] == "!" and masked_line[opener - 2:opener - 1] != "\\"):
                 continue
             parsed = _destination(line, m.end())
             if parsed is None:
