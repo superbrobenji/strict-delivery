@@ -176,3 +176,6 @@ Block 1a verifier re-check DONE: APPROVED at 6027e4a (396 OK both; polluted env 
 CHECKPOINT 1a block-end head=6027e4a tests=396/396 gates=n/a next=merge-grant
 Owner merge grant 2026-11-01 (option a): block/b1a merged into main as 4c2f40f (--no-ff); suite 396 OK on both interpreters at the merge; main pushed; block/b1a deleted locally.
 CHECKPOINT 1a merged head=4c2f40f tests=396/396 gates=n/a next=1b.1 (stream A); stream C may start from main; stream B after its B1.1 dispatch
+Stream B: worktree ../strict-delivery-worktrees/b/sb1 on block/sb1 from main 4a37b3f; Task B1.1 implementer dispatched (sonnet; brief and domain in .superpowers/sdd/2026-10-31-strict-delivery-framework-b/). PC1 drafts for 1b.1 (stream A) and C1.1 (stream C) dispatched (opus).
+PC1 drafts done: 1b.1 (95 rows, Q-1b1-1..4), C1.1 (53 rows, Q-C11-1..3); batch presented.
+Owner answers 2026-11-01 (all recommended): Q-1b1-1 load_schema raises SchemaError for absent_when+required with no required_when; Q-1b1-2 table header matches canonical form byte for byte plus |---| separator; Q-1b1-3 non-regular dir+glob match is a FAIL line; Q-1b1-4 missing non-generated {path:} file FAILs 'missing'; Q-C11-1 unreadable root GateError naming root; Q-C11-2 whitespace-only script skipped (plan C1.1 text fixed); Q-C11-3 source names the on-disk spelling.

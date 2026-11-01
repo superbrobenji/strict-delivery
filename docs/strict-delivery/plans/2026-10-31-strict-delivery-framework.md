@@ -1368,7 +1368,7 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
     - The file must be a regular file (`os.lstat`; a symlink gives `Problem("package.json", "symlink; not read")`).
     - It is decoded as `utf-8-sig`, and it must parse with `json.loads` (with `object_pairs_hook` refusing duplicate keys) into an object.
     - `scripts`, when present, is an object.
-    - For each name in `("test", "lint", "build")` with a non-empty `str` value, the result is `Proposal(name, "npm run " + name, "package.json scripts." + name)`.
+    - For each name in `("test", "lint", "build")` with a `str` value that is not empty and not only whitespace (`str.isspace()`; owner Q-C11-2), the result is `Proposal(name, "npm run " + name, "package.json scripts." + name)`.
     - Any other failure gives one `Problem("package.json", <reason>)` and no proposals from that file.
   - Makefile:
     - Of `GNUmakefile`, `makefile` and `Makefile`, in the order GNU make looks for them, only the first name that exists (by `os.lstat`) is a candidate, since GNU make reads that one and never a later one. Checked with GNU Make 3.81: a symlinked `GNUmakefile` is followed and `Makefile` is ignored; a directory or a dangling symlink named `GNUmakefile` stops make with an error.
