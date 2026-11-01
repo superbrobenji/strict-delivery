@@ -220,8 +220,9 @@ def evidence_errors(row: object, root: str, cfg: dict, decision_records: list, t
         rec = by_id.get(ruling)
         if rec is None:
             errs.append("ruling: no decision record for %s" % ruling)
-        elif status == "deferred" and not _answered(rec, cfg):
-            errs.append("ruling: %s is not an answered, valid decision" % ruling)
+        elif status == "deferred" and (not _answered(rec, cfg)
+                                       or decisions._row(rec).get("class") == decisions.CLASS_GRANT):
+            errs.append("ruling: %s is not an answered, valid decision of a class other than merge-grant" % ruling)
     return errs
 
 

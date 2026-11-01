@@ -145,3 +145,13 @@ fields:
           - fixed-unpinned
           - pinned
           - deferred
+  review_round:
+    type: int
+    min: 1
+    required: false
+  caused_by_change:
+    type: bool
+    required: false
+  dimension:
+    type: str
+    required: false

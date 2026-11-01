@@ -290,6 +290,26 @@ class FieldTests(Base):
                                                    "history.2.status: merged is set only by the cleanup step"])
         self.assertEqual(validate(CLOSED, self.cfg), [])
 
+    def test_optional_review_fields(self):  # owner Q-ES
+        self.assertEqual(self.v({**FINDING, "review_round": 2, "caused_by_change": True, "dimension": "S5"}), [])
+        self.assertEqual(self.v({**FINDING, "review_round": 1}), [])
+        self.assertEqual(self.v({**FINDING, "caused_by_change": False}), [])
+        self.assertEqual(self.v(FINDING), [])  # absent is valid
+        for bad in (0, -1, True, "2", 1.5, None):
+            if isinstance(bad, float):
+                continue  # the yaml subset has no floats
+            self.check("review_round", bad, ["review_round: must not be null"] if bad is None else
+                       ["review_round: must be at least 1"] if bad in (0, -1) and bad is not True
+                       else ["review_round: must be an integer"])
+        for bad in (0, 1, "true", None):
+            self.check("caused_by_change", bad, ["caused_by_change: must not be null"] if bad is None
+                       else ["caused_by_change: must be true or false"])
+        for bad in ("", 1, None, ["x"]):
+            self.check("dimension", bad, ["dimension: must not be null"] if bad is None
+                       else ["dimension: must be a non-empty string"])
+        self.check("dimension", "owner kinds", [])
+        self.check("dimension", "x", [], {**FINDING, "review_round": 1})  # no cross-field rule
+
     def test_parent(self):  # V21
         self.check("parent", F2, [])
         self.check("parent", None, ["parent: must not be null"])
@@ -595,7 +615,12 @@ class RulingTests(EvidenceBase):
         for d in (DB, DC):
             with self.subTest(d):
                 self.assertEqual(self.ev(self.deferred(d), recs),
-                                 ["ruling: %s is not an answered, valid decision" % d])
+                                 ["ruling: %s is not an answered, valid decision of a class other than merge-grant" % d])
+
+    def test_merge_grant_is_not_a_ruling(self):  # Q-1b3r-1
+        self.assertEqual(self.ev(self.deferred(DA), [grant(DA)]),
+                         ["ruling: %s is not an answered, valid decision of a class other than merge-grant" % DA])
+        self.assertEqual(self.ev(self.deferred(DA), [rec(dec(DA, "answered", **{"class": "triage"}))]), [])
 
     def test_superseded_ruling_counts(self):  # E19, Q-1b3-1
         recs = [rec(dec(DA, "answered")), rec(dec(DB, "answered", supersedes=DA))]
@@ -603,7 +628,7 @@ class RulingTests(EvidenceBase):
 
     def test_invalid_ruling_record(self):  # E20
         recs = [rec(dec(DA, "answered", answer=None))]
-        self.assertEqual(self.ev(self.deferred(DA), recs), ["ruling: %s is not an answered, valid decision" % DA])
+        self.assertEqual(self.ev(self.deferred(DA), recs), ["ruling: %s is not an answered, valid decision of a class other than merge-grant" % DA])
         recs = [Record(DA, {"status": "answered"}, "x.yml")]
         self.assertEqual(len(self.ev(self.deferred(DA), recs)), 1)
 
@@ -685,6 +710,10 @@ class ResolutionTests(Base):
             with self.subTest(name):
                 self.assertIs(may_delete(CLOSED, "/x", self.cfg, decs), False)
         self.assertIs(may_delete(FINDING, "/x", self.cfg, [grant(DA)]), False)  # unresolved
+        for st in STATUSES:  # F-1b3r-1: an unresolved row that carries resolved_by must still be refused
+            if st not in RESOLVED:
+                with self.subTest("unresolved " + st):
+                    self.assertIs(may_delete({**mk(st), "resolved_by": "p"}, "/x", self.cfg, [grant(DA)]), False)
         self.assertIs(may_delete(drop(CLOSED, "resolved_by"), "/x", self.cfg, [grant(DA)]), False)
         self.assertIs(may_delete({**CLOSED, "resolved_by": 5}, "/x", self.cfg, [grant(DA)]), False)
         self.assertIs(may_delete(CLOSED, "/x", self.cfg, [Record(DA, "x", "a.yml")]), False)
