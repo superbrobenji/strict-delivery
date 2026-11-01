@@ -21,9 +21,17 @@ _PROPOSED = ("test", "lint", "build")
 _MAKEFILE_NAMES = ("GNUmakefile", "makefile", "Makefile")  # the order GNU make looks for them
 
 # The Makefile reader is a whitelist (owner Q-C11rr-3); see _makefile_proposals.
-_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*[ \t]*(?:=|:=|\?=|\+=)")
+_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)[ \t]*(?:=|:=|\?=|\+=)")
 _FIRST_WORD = re.compile(r"[^:=?+!\s]*")
-_RULE = re.compile(r"^((?:[A-Za-z0-9_./-]+[ \t]+)*[A-Za-z0-9_./-]+)[ \t]*(::?)")
+# Targets have no `/`, so no two spellings name one file (`test`, `./test`; owner Q-C11r4-0).
+_RULE = re.compile(r"^((?:[A-Za-z0-9_.-]+[ \t]+)*[A-Za-z0-9_.-]+)[ \t]*(::?)")
+# Owner Q-C11r4-0 (a), each refused wherever it appears in the file:
+# a Unicode Cc character other than TAB (a CR is part of the line end only directly before LF);
+_CONTROL = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f]")
+# a call to one of these make functions in `$(...)` or `${...}` form (also after `$$`: fail-closed);
+_CALL = re.compile(r"\$[({](?:eval|error|shell|file|call|value|info|warning)(?![A-Za-z0-9_-])")
+# an assignment to a variable make reads back as command-line switches.
+_SWITCH_VARIABLES = frozenset(("MAKEFLAGS", "MFLAGS"))
 # A line whose first word, or any target, is one of these is a directive line, not a rule or an assignment
 # (controller ruling R2 under owner Q-C11rr-3). The first word ends at a blank, `:`, `=`, `?`, `+` or `!`.
 _DIRECTIVES = frozenset(("export", "unexport", "override", "private", "vpath", "include", "-include", "sinclude",
@@ -38,6 +46,9 @@ _R_DIRECTIVE = "directive line"
 _R_SECOND_COLON = "second ':' after the colon"
 _R_MIXED_COLONS = "target defined with both ':' and '::'"
 _R_OTHER = "not a blank, comment, assignment, rule or recipe line"
+_R_CONTROL = "control character"
+_R_CALL = "make function call"
+_R_SWITCHES = "assignment to MAKEFLAGS or MFLAGS"
 
 
 @dataclass(frozen=True)
@@ -177,14 +188,20 @@ def _makefile_proposals(name: str, text: str) -> tuple:
     first = {}
     colons = {}  # target -> ":" or "::", for the first rule line that named it
     in_recipe = False  # a rule line was read and no assignment since
-    for lineno, raw in enumerate(text.split("\n"), 1):
-        line = raw[:-1] if raw.endswith("\r") else raw
+    lines = text.split("\n")
+    for lineno, raw in enumerate(lines, 1):
+        # A CR is part of the line end only before a LF; the last piece has no LF after it.
+        line = raw[:-1] if raw.endswith("\r") and lineno < len(lines) else raw
 
         def unsupported(reason: str) -> tuple:
             return (), (Problem(name, "unsupported line %d: %s" % (lineno, reason)),)
 
+        if _CONTROL.search(line):
+            return unsupported(_R_CONTROL)
         if line.endswith("\\"):
             return unsupported(_R_BACKSLASH)
+        if _CALL.search(line):
+            return unsupported(_R_CALL)
         if not line.strip(" \t"):
             continue
         if line.startswith("\t"):
@@ -196,7 +213,10 @@ def _makefile_proposals(name: str, text: str) -> tuple:
             continue
         if _FIRST_WORD.match(body).group() in _DIRECTIVES:
             return unsupported(_R_DIRECTIVE)
-        if _ASSIGNMENT.match(body):
+        assignment = _ASSIGNMENT.match(body)
+        if assignment:
+            if assignment.group(1) in _SWITCH_VARIABLES:
+                return unsupported(_R_SWITCHES)
             in_recipe = False
             continue
         m = _RULE.match(body)

@@ -588,12 +588,12 @@ class MakefileRuleTests(Base):
             with self.subTest(mk=mk):
                 self.assertEqual(self.rules(mk), [("test", "make test", "Makefile:1 test")])
 
-    def test_literal_target_characters(self):
-        self.assertEqual(self.rules("out/test.o: a\n.PHONY: test\nsub-dir/lint: x\n./build:\n"), [])
-        self.assertEqual(self.rules("a/b.c-d_e: x\nlint:\n"), [("lint", "make lint", "Makefile:2 lint")])
+    def test_literal_target_characters(self):  # targets are [A-Za-z0-9_.-]+ (owner Q-C11r4-0)
+        self.assertEqual(self.rules("out.test.o: a\n.PHONY: test\nsub-dir.lint: x\n_b: y\n.build:\n"), [])
+        self.assertEqual(self.rules("a.b.c-d_e9: x\nlint:\n"), [("lint", "make lint", "Makefile:2 lint")])
 
     def test_names_must_match_exactly(self):
-        self.assertEqual(self.rules("tests:\ntest-all:\nretest:\ntest_one:\nTest:\nbuilds:\nsub/test:\n"), [])
+        self.assertEqual(self.rules("tests:\ntest-all:\nretest:\ntest_one:\nTest:\nbuilds:\nsub.test:\n"), [])
 
     def test_recipe_lines_after_a_rule(self):  # form 5; recipe text is free
         self.assertEqual(self.rules("test:\n\t@echo $(X) a=b; c $$ # d\n\t\n\t# note\n"), [("test", "make test", "Makefile:1 test")])
@@ -636,7 +636,7 @@ class MakefileRuleTests(Base):
         self.assertEqual(self.rules("test: include export\n"), [("test", "make test", "Makefile:1 test")])  # words after the colon are text
 
     def test_target_characters_include_digits_and_upper_case(self):
-        self.assertEqual(self.rules("py3.9-Test_2/x1: y\nlint:\n"), [("lint", "make lint", "Makefile:2 lint")])
+        self.assertEqual(self.rules("py3.9-Test_2.x1: y\nlint:\n"), [("lint", "make lint", "Makefile:2 lint")])
 
     def test_special_characters_in_a_trailing_comment_are_ignored(self):  # text after the first `#` is not examined
         self.assertEqual(self.rules("test: dep # a=b; c \\ d\n"), [("test", "make test", "Makefile:1 test")])
@@ -723,10 +723,106 @@ class MakefileRuleTests(Base):
                 self.refused(mk, 1, self.OTHER)
 
     def test_refused_anything_unmatched(self):
-        for mk in ("foo\n", "a b c\n", "test\n", ":\n", ": x\n", "test x\n", "x\x0ctest:\n", "x\u00a0test:\n", "\ufefftest:\n",
-                   "a\rtest:\n", "\x0ctest:\n", "$@\n", "@echo\n", "1 = 2\n"):
+        for mk in ("foo\n", "a b c\n", "test\n", ":\n", ": x\n", "test x\n", "x\u00a0test:\n", "\ufefftest:\n",
+                   "$@\n", "@echo\n", "1 = 2\n"):
             with self.subTest(mk=mk):
                 self.refused(mk, 1, self.OTHER)
+
+    # ---- fix round 4 (owner Q-C11r4-0 (a)): fail closed, one Problem naming the first offending line
+
+    CONTROL = "control character"
+    MAKEFLAGS = "assignment to MAKEFLAGS or MFLAGS"
+    CALL = "make function call"
+    # Unicode general category Cc, minus TAB and LF (LF ends the line): U+0000-U+0008, U+000B-U+001F, U+007F-U+009F.
+    CC = [chr(c) for c in range(0x00, 0x20) if chr(c) not in "\t\n"] + [chr(c) for c in range(0x7F, 0xA0)]
+
+    def test_control_character_set_is_unicode_cc(self):  # the expected set, derived independently of detect
+        import unicodedata
+        self.assertEqual(self.CC, [chr(c) for c in range(0x110000)
+                                   if unicodedata.category(chr(c)) == "Cc" and chr(c) not in "\t\n"])
+
+    def test_refused_control_characters(self):  # F-C11r4-4: every Cc character except TAB, in every line form
+        for ch in [c for c in self.CC if c != "\r"]:  # CR: test_carriage_return_only_before_line_feed
+            for mk, n in ((ch + "test:\n", 1), ("all:\n# c" + ch + "\ntest:\n", 2), ("all:\nX = 1" + ch + "\ntest:\n", 2),
+                          ("all: a" + ch + "\ntest:\n", 1), ("test:\n\t@echo ran" + ch + "\n\tendif\n", 2), ("test:" + ch, 1),
+                          ("test:\n" + ch + "\n", 2), ("test:\n \t" + ch + "\n", 2), ("x" + ch + "test:\n", 1),
+                          ("test" + ch + ":\n", 1), ("test:\n\n\n" + ch, 4)):
+                with self.subTest(ch=hex(ord(ch)), mk=mk):
+                    self.refused(mk, n, self.CONTROL)
+
+    def test_carriage_return_only_before_line_feed(self):  # F-C11r4-4: a CR is allowed only directly before LF
+        for mk, n in (("test:\r", 1), ("test:\r\r\n", 1), ("a\rtest:\n", 1), ("test:\n\t@echo \r x\n", 2),
+                      ("# c\r\n\r", 2), ("\rtest:\n", 1), ("test:\r \n", 1), ("x = 1\r\n# a\rb\r\n", 2)):
+            with self.subTest(mk=mk):
+                self.refused(mk, n, self.CONTROL)
+        self.assertEqual(self.rules("x = 1\r\n# c\r\n\t\r\ntest:\r\n\t@echo\r\n"), [("test", "make test", "Makefile:4 test")])
+
+    def test_characters_next_to_the_control_range_are_not_control(self):  # U+0020, U+007E, U+00A0, U+00AD, U+2028, U+FEFF
+        for ch in (" ", "~", "\u00a0", "\u00ad", "\u2028", "\ufeff", "\u200b"):
+            with self.subTest(ch=hex(ord(ch))):
+                self.assertEqual(self.rules("# a" + ch + "b\ntest:\n\t@echo " + ch + "\n"),
+                                 [("test", "make test", "Makefile:2 test")])
+
+    def test_control_character_first_offending_line_wins(self):
+        self.refused("include x\n\x00\n", 1, self.DIRECTIVE)
+        self.refused("\x00\ninclude x\n", 1, self.CONTROL)
+        self.refused("test:\nlint:\n# \x00\nX := $(shell y)\n", 3, self.CONTROL)
+        self.refused("test: \x00\\\n", 1, self.CONTROL)  # the control check comes first within a line
+        self.refused("X := $(shell \x00)\n", 1, self.CONTROL)
+        self.refused("X := $(shell x) \\\n", 1, self.BACKSLASH)  # order within a line: control, backslash, call
+
+    def test_refused_slash_in_a_target(self):  # F-C11r4-1: targets are [A-Za-z0-9_.-]+, so `./test` is refused
+        for mk, n in (("./test:\n", 1), ("test:\n\t@echo ran\n./test::\n\t@echo ran2\n", 3), ("./test::\ntest:\n", 1),
+                      ("././test::\n", 1), ("out/test.o: a\n", 1), ("sub-dir/lint: x\n", 1), ("/test:\n", 1),
+                      ("test/:\n", 1), ("a b/c:\n", 1), ("test ./x:\n", 1), ("lint:\nsub/test:\n", 2), ("a/b.c-d_e: x\n", 1),
+                      ("./build:\n", 1), ("  ./test:\n", 1), ("x/:: y\n", 1), ("./test lint:\n", 1), ("a/b c d:\n", 1),
+                      ("a b/c d::\n", 1)):
+            with self.subTest(mk=mk):
+                self.refused(mk, n, self.OTHER)
+
+    def test_slash_after_the_colon_is_text(self):  # prerequisites are not targets
+        self.assertEqual(self.rules("test: src/a.c ./b /c\n\t@echo ./x\n"), [("test", "make test", "Makefile:1 test")])
+
+    def test_refused_makeflags_assignment(self):  # F-C11r4-3: any operator, any value, any position
+        for name in ("MAKEFLAGS", "MFLAGS"):
+            for op in ("=", ":=", "?=", "+="):
+                for mk, n in (("%s %s -q\ntest:\n\t@echo ran\n" % (name, op), 1), ("%s%s-t\ntest:\n" % (name, op), 1),
+                              ("test:\n\t@echo\n%s\t%s q\n" % (name, op), 3), ("  %s %s\n" % (name, op), 1),
+                              ("test:\n %s %s --question\n" % (name, op), 2)):
+                    with self.subTest(mk=mk):
+                        self.refused(mk, n, self.MAKEFLAGS)
+
+    def test_names_next_to_makeflags_are_ordinary(self):
+        self.assertEqual(self.rules("makeflags = -q\nMAKEFLAGSX = -q\nXMAKEFLAGS = -q\nMAKEFLAGS_ = -q\nMFLAGS2 += -t\n"
+                                    "Mflags = -q\nX = MAKEFLAGS\nMAKEFLAGS:\nMFLAGS: x\ntest: MAKEFLAGS\n"),
+                         [("test", "make test", "Makefile:10 test")])
+
+    def test_refused_make_function_calls(self):  # F-C11r4-2: $(f ...) or ${f ...} for the eight names, on any line
+        for fn in ("eval", "error", "shell", "file", "call", "value", "info", "warning"):
+            for o, c in (("(", ")"), ("{", "}")):
+                ref = "$" + o + fn + " x" + c
+                for mk, n in (("X := %s\ntest:\n" % ref, 1), ("X = %s\ntest:\n" % ref, 1), ("X :=\nX += %s\ntest:\n" % ref, 2),
+                              ("X ?= a %s b\n" % ref, 1), ("test: %s\n" % ref, 1), ("test:\n\t@echo %s\n" % ref, 2),
+                              ("# %s\ntest:\n" % ref, 1), ("X := $(foo %s)\n" % ref, 1), ("X := $%s\n" % ref, 1),
+                              ("X := $" + o + fn + c + "\n", 1), ("X := $" + o + fn + "\tx" + c + "\n", 1),
+                              ("X := $" + o + fn + "," + c + "\n", 1), ("test:\nlint:\n  # %s\n" % ref, 3),
+                              ("include %s\n" % ref, 1), ("X := $" + o + fn, 1)):
+                    with self.subTest(mk=mk):
+                        self.refused(mk, n, self.CALL)
+
+    def test_references_that_are_not_the_eight_calls_are_ordinary(self):
+        mk = ("CC = cc\nX := $(CC) ${CC} $(SHELL) $(evaluate x) $(infos) $(shell_x) $(shell-x y) $(filter a,b)\n"
+              "Z = $(infoX y) ${evalA} $(shell2 x) $(callB) ${error9 x} $(warningZ)\n"
+              "Y = $(Shell x) $( shell x) $(sh$(E)ell x) shell x $shell (eval x) {info x} $(errors) ${values x}\n"
+              "test: $(CC) $(foreach a,b,c)\n\t@echo $(CC) $(firstword a) $(origin x) $(warnings)\n")
+        self.assertEqual(self.rules(mk), [("test", "make test", "Makefile:5 test")])
+
+    def test_repository_state_is_not_examined(self):  # F-C11r4-5 out of scope (owner Q-C11r4-0 (a)): no repo-state checks
+        os.mkdir(os.path.join(self.tmp, "test"))
+        self.write("lint", "x")
+        self.write("Makefile", "test:\n\t@echo ran\nlint:\n")
+        self.assertEqual(detect(self.tmp), Detection((Proposal("test", "make test", "Makefile:1 test"),
+                                                      Proposal("lint", "make lint", "Makefile:3 lint")), ()))
 
     def test_refused_second_colon_in_the_rule_text(self):  # controller ruling R3
         for mk in ("test ::: x\n", "test: a:b\n", "test :: : x\n", "test: x%: y\n", "test: %: y\n", "test:: a: b\n", "a: b: c\n"):
