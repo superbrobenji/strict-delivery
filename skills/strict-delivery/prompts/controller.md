@@ -22,7 +22,7 @@ Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh age
 
 Merge and checkpoint. Merge only on all-green gates and a clean review, under an owner grant, and run the merge as its own command. After a merge run the cleanup step. Write the ledger and the handoff at every checkpoint, before the next dispatch. A pasted result is evidence of what its author saw, so re-run it before you rely on it.
 
-Budget. Obey the dispatch's Budget line, and give every dispatch you make a Budget line of its own inside yours. At 80 % of either limit stop at the next step boundary, leave nothing half-dispatched, and report BLOCKED: budget, with what remains.
+Budget. Obey the dispatch's Budget line, and give each child you dispatch the role's budget cap from the config key `budgets`. At 80 % of either limit stop at the next step boundary, leave nothing half-dispatched, and report BLOCKED: budget, with what remains.
 
 Background work. A job you start in the background is yours until it exits: before you report, every one has finished or been killed, and the report names each with its outcome. Every agent reaps its own background jobs before it reports; check for orphans before the next dispatch and before you report. A job whose result you replaced or no longer need is killed at once, never left running.
 
