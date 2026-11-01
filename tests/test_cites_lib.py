@@ -246,6 +246,17 @@ class ExtractLinkTest(unittest.TestCase):
         self.assertEqual([c.token for c in extract("d/a.md", '[t](b.md#c "a\\\\")\n')], ["b.md#c"])    # literal backslash pair
         self.assertEqual([c.token for c in extract("d/a.md", '[t](b.md#c "\\"\\"x")\n')], ["b.md#c"])   # two escapes in a row
 
+    # Known limits (owner Q-C21r-2 (c)): these pin today's behaviour, so a change is deliberate.
+    def test_known_limit_s1_escaped_backtick_pairs_with_a_later_one(self):
+        self.assertEqual(extract("d/a.md", "\\`x [t](b.md#c) `y`\n"), [])
+        self.assertEqual(len(extract("d/a.md", "\\`x [t](b.md#c)\n")), 1)             # no later backtick: the link is found
+
+    def test_known_limit_s2_escaped_gt_in_angle_destination(self):
+        self.assertEqual(extract("d/a.md", "[t](<a\\>b.md#c>)\n"), [])
+
+    def test_known_limit_s3_escaped_lt_in_angle_destination(self):
+        self.assertEqual(extract("d/a.md", "[t](<a\\<b.md#c>)\n"), [])
+
     def test_non_link_things(self):
         for text in ("[m](mailto:a@b)\n", "![i](img.png#a)\n", "[a][b]\n", "[b]: x.md#y\n", "<https://x#y>\n", '<a href="x.md#y">\n',
                      "[t](C:/x.md#a)\n", "[t](a+b:x#y)\n", "[z](https://h/p#q)\n", "bare path:3 and x.md#y\n"):
