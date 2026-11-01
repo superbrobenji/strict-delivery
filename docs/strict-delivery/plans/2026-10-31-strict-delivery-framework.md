@@ -1375,17 +1375,18 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
       - If that entry is a regular file, it is read.
       - If it is a symlink, the result is `Problem("<name>", "symlink; not read")`, as for every source (Task C1.2). Any other kind (directory, FIFO) gives `Problem("<name>", "not a regular file")`.
       - In both problem cases no later name is read, so nothing is proposed that `make` would not run.
-    - A rule line does not start with `\t` (that is a recipe line, or a "commands commence before first target" error). Its leading spaces, and any tabs after a first space, are skipped, as GNU make skips them. The rest does not start with `#` or `.`, and it matches `^([A-Za-z0-9_.-]+(?:[ \t]+[A-Za-z0-9_.-]+)*)[ \t]*::?(?![:=])`.
-      - The lookahead refuses `:=`, `::=` and `:::=` at the colon: GNU make 4.x reads these as variable assignments, and GNU Make 3.81 fails on them (rc 2).
-      - The target group admits only `[A-Za-z0-9_.-]` and blanks, so a line with `=`, `?=`, `+=` or `!=` before its first colon never matches. These are assignments too.
-      - A line is refused, though the regex matches it, when the text after the colon up to the first `;` or `#` holds an `=` (a target-specific variable: `test: X = 1`, `:=`, `+=`, `?=`, `!=`), or when its first word is a directive word followed by more names (`export`, `unexport`, `override`, `private`, `vpath`, `include`, `-include`, `sinclude`, `undefine`): GNU Make 3.81 gives "No rule to make target `test'" for each (owner Q-C11r-1). Targets inside `ifeq`/`ifdef` blocks are still proposed (owner Q-C11r-2).
-      - Checked with GNU Make 3.81, `make -n <target>` on a one-rule Makefile, recipe `\t@echo ran`:
-        - rc 0, so proposed: `test:`, `test::`, `build test:` (both targets), `  test:` (leading spaces), ` \ttest:` (a space, then a tab).
-        - Proposed as well, `test: dep` and `test : x`: with the prerequisite file present (`dep`, `x`) make gives rc 0 and runs the recipe; without it, rc 2 with "No rule to make target `dep', needed by `test'" (and the same for `x`), which names `test` as a rule. A target with no rule gives "No rule to make target `lint'" with no "needed by".
-        - rc 2, so not proposed: `test := x`, `test ?= x`, `test += x`, `test != x`, `test=x`, `test:=x` ("No rule to make target `test'"); `test ::= x` ("No rule to make target `='"); `test::=x` ("No rule to make target `=x'"); `test :::= x` ("missing target pattern"); `\ttest:` as the first line or after an assignment ("commands commence before first target"); `\ttest:` after a rule (a recipe line); `# test:` and `  # test:`; `  test := x`.
-        - Not proposed although make runs them, since detection reads literal target names only: `.PHONY: test` (rc 0, "Nothing to be done"), `$(T):` with `T = test`, `%:` and `test.o:` (implicit rules).
-    - A line ending in an odd number of backslashes is joined with the next line, as GNU make joins them (an even number is literal backslashes, so `x = 1 \\` followed by `test:` leaves `test:` a rule; owner Q-C11r-3): the backslash, the newline and the next line's leading whitespace become one space. The joined text is one logical line, numbered by its first physical line. So `x \` followed by `test:` is the rule line `x test:` at line 1 (`make test` runs that target), while a recipe line `\t@echo a \` followed by `test:` stays a recipe line (`make test` finds no rule).
-    - Lines between `define` and `endef` are skipped, as GNU Make 3.81 reads them (owner Q-C11r-4): `define` and `override define` open a body; inside it only a plain `define` nests; a tab-led line inside a body never opens or closes; a tab-led `define` outside a body opens only when no rule line has been read since the last line that is not blank, a comment, a conditional or a define (otherwise it is a recipe line); `export define` and `private define` are not recognised.
+    - The file is read line by line (physical lines; a CR before the newline is part of the line end) as a fail-closed whitelist (owner Q-C11rr-3). Every line must be one of:
+      1. blank or whitespace-only;
+      2. a comment: optional blanks, then `#`;
+      3. a simple assignment, not starting with `\t`: `NAME op value`, with NAME `[A-Za-z_][A-Za-z0-9_.-]*` and `op` one of `=`, `:=`, `?=`, `+=` (blanks around `op` optional);
+      4. a rule, not starting with `\t`: one or more literal targets (each `[A-Za-z0-9_./-]+`, so no `$`, `%` or `=`), then `:` or `::`, then text that holds no `=`, no `;` and no `\`; a `#` ends the text, and what follows it is a comment. Leading blanks of forms 3 and 4 are skipped; a first character `\t` makes the line a recipe line. A line whose first target is a directive word (`export`, `unexport`, `override`, `private`, `vpath`, `include`, `-include`, `sinclude`, `undefine`, `define`, `endef`, `ifdef`, `ifndef`, `ifeq`, `ifneq`, `else`, `endif`) and that has more targets is not a rule; the word alone (`include:`) is a plain target;
+      5. a recipe line: starts with `\t`, and only once a rule line has appeared since the last assignment (blank and comment lines between keep that context). Its text is not examined.
+    - Any other line, and any line ending in `\`, gives no proposals from that Makefile and exactly one `Problem("<name>", "unsupported line <n>: <reason>")`, where `<n>` is the first such line (1-based) and `<name>` the Makefile name as listed. The reason is fixed text and never quotes the file. Refused, with examples: `define`/`endef`; `ifeq`/`ifneq`/`ifdef`/`ifndef`/`else`/`endif`; `include`/`-include`/`sinclude`; `export`/`unexport`/`override`/`private`/`vpath`/`undefine`; a target-specific variable (`test: X = 1`, `test: X != 1`); `;` after the colon (`test: ; echo`); a backslash (`x \` then `test:`; `test: a\;b`); a tab-led line before the first rule or after an assignment; `$(T):`, `%:`; `test != x`, `test ::= x`; any text that is none of the five forms. Nothing is guessed: a Makefile that uses a construct outside the whitelist is not read at all, and init asks the owner for the commands.
+    - Checked with GNU Make 3.81, `make -n <target>` in a scratch directory, recipe `\t@echo ran`:
+      - rc 0, so proposed: `test:`, `test::`, `build test:` (both targets), `  test:` (leading spaces), ` \ttest:` (a space, then a tab).
+      - `test: dep` and `test : x` are proposed as well: without the prerequisite file make gives rc 2 with "No rule to make target `dep', needed by `test'", which names `test` as a rule. A target with no rule gives "No rule to make target `lint'" with no "needed by".
+      - `test := x` and `test: X = 1` define no target: rc 2 "No rule to make target `test'".
+      - `.PHONY: test` is accepted as a rule line but proposes nothing (its target is `.PHONY`); make runs it (rc 0, "Nothing to be done").
     - Each target named exactly `test`, `lint` or `build` gives `Proposal(name, "make " + name, "<file>:<line> " + name)`, the first definition only.
     - A file that is not UTF-8 gives a `Problem`.
 
@@ -1399,15 +1400,13 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
   - a script value non-str, empty str or whitespace only;
   - key case (`Test`), extra keys (`start`, `test:unit`), duplicate key.
 - Makefile file names: each of the three; several present; lowercase-only on a case-insensitive filesystem; the first existing name a symlink (to a regular file, dangling), a directory or a FIFO, with a regular `Makefile` after it (one `Problem` for the first name; nothing read from `Makefile`).
-- Rule lines:
-  - `test:`, `test: dep`, `test::`, `build test:`;
-  - `.PHONY: test`, `test := x`, `test ?= x`, `test += x`, `test != x`, `test ::= x`, `test :::= x`, `test::=x`, `test=x`, `test : x`;
-  - leading spaces `  test:` (a rule), a space then a tab ` \ttest:` (a rule), `  test := x` (not a rule), `  # test:` (not a rule);
-  - a recipe line `\ttest:` (after a rule; first in the file), `# test:`;
-  - `$(T):`, `%:`, `test.o:`;
-  - a rule line continued by `\` onto `test:` (a rule, numbered line 1); a recipe line continued by `\` onto `test:` (not a rule);
-  - `define`/`endef`;
-  - CRLF line ends, no final newline, a duplicate definition.
+- Makefile lines (the whitelist; owner Q-C11rr-3):
+  - blank and whitespace-only lines; comments (`# test:`, `  # test:`);
+  - simple assignments with each operator (`=`, `:=`, `?=`, `+=`), with and without blanks around it, also leading blanks (`test := x`: not a rule);
+  - rules: `test:`, `test: dep`, `test::`, `build test:`, `test : x`, leading spaces `  test:`, a space then a tab ` \ttest:`, a trailing `#` comment, `.PHONY: test` (accepted, proposes nothing), literal targets with `/`, `.`, `-`, `_` and digits;
+  - recipe lines: after a rule (also past blank and comment lines), not before the first rule, not after an assignment;
+  - refused with one `Problem`, the first such line named: `define`/`endef`; `ifeq`/`ifneq`/`ifdef`/`ifndef`/`else`/`endif`; `include`/`-include`/`sinclude`; `export`/`unexport`/`override`/`private`/`vpath`/`undefine`, alone or with a target; target-specific variables; `;` or `\` after the colon; any line ending in `\`; a tab-led line before the first rule; `$` or `%` in a target; `test != x`, `test ::= x`; unmatched text, a BOM, a form feed;
+  - CRLF line ends, no final newline, a duplicate definition, physical line numbers.
 - Order: several sources and slots at once.
 - Side effects: the tree is unchanged (a byte and mtime snapshot); no subprocess (patched `subprocess.run` and `os.system` assert not called).
 
@@ -1433,17 +1432,16 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
       write("Makefile", "VAR := test\n.PHONY: test\nbuild test: dep\n\t@echo\nlint:: x\n  check:\n# lint:\n")
       assert [(p.slot, p.command, p.source) for p in detect(tmp).proposals] == [
           ("test", "make test", "Makefile:3 test"), ("lint", "make lint", "Makefile:5 lint"), ("build", "make build", "Makefile:3 build")]
-  def test_makefile_variable_and_recipe_lines_are_not_rules():
-      # subTests (each the whole Makefile; GNU Make 3.81 `make -n test` exits 2 on every one):
-      #   "test=x\n", "test:=x\n", "test := x\n", "test ?= x\n", "test += x\n", "test != x\n",
-      #   "test ::= x\n", "test::=x\n", "test :::= x\n", "  test := x\n", "  # test:\n", "# test:\n",
-      #   "\ttest:\n", "x = 1\n\ttest:\n", "all:\n\ttest:\n", "all:\n\t@echo a \\\ntest:\n", "define D\ntest:\nendef\n"
-      assert detect(tmp).proposals == ()
+  def test_makefile_assignments_are_not_rules():
+      # subTests (each the whole Makefile): "test=x\n", "test:=x\n", "test := x\n", "test ?= x\n", "test += x\n",
+      #   "  test := x\n", "  # test:\n", "# test:\n", ".PHONY: test\n"
+      assert detect(tmp).proposals == () and detect(tmp).problems == ()
   def test_makefile_rule_after_leading_blanks():        # subTests: "  test:\n\t@echo ran\n", " \ttest:\n\t@echo ran\n" (3.81: rc 0, `ran`)
       assert [(p.slot, p.command, p.source) for p in detect(tmp).proposals] == [("test", "make test", "Makefile:1 test")]
-  def test_makefile_continued_rule_line_joins():      # GNU make: `make test` runs this target
-      write("Makefile", "x \\\ntest:\n\t@echo ran\n")
-      assert [(p.slot, p.command, p.source) for p in detect(tmp).proposals] == [("test", "make test", "Makefile:1 test")]
+  def test_makefile_unsupported_line_is_one_problem():  # subTests: "define D\ntest:\nendef\n", "ifdef X\n", "include x.mk\n",
+      # "export test:\n", "test: X = 1\n", "test: ; echo\n", "x \\\ntest:\n", "\ttest:\n", "$(T):\n", "test != x\n", "foo\n"
+      d = detect(tmp)
+      assert d.proposals == () and d.problems == (Problem("Makefile", "unsupported line 1: <reason>"),)
   def test_first_existing_makefile_name_not_regular():  # subTests: GNUmakefile a symlink (to a file; dangling), a directory, a FIFO; a regular Makefile with "test:" after it
       d = detect(tmp); assert d.proposals == () and [p.source for p in d.problems] == ["GNUmakefile"]
   def test_gnu_make_file_precedence():                # GNUmakefile and Makefile both present
