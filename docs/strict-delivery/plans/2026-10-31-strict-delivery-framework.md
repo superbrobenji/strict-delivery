@@ -863,7 +863,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       - `model-name` (`\b(haiku|sonnet|opus|fable)(?=\d|\b)`, so `opus4` and `sonnet45` match and `opusculum` does not (owner Q-B11-1): prose speaks in tiers; models come from `models.tiers`, spec §6);
       - `old-steps` (`\bS\d+ block b\d+\b`).
     - `forbidden_hits(text: str) -> list` of `(name, line_no, match)`. It scans each line, and also each paragraph with its line breaks read as spaces, so a phrase split by a line wrap (`lap` / `timer`, `serial` / `port`) is found; a paragraph hit reports the line where the match starts, and a match found both ways is listed once (owner Q-B11-5).
-    - `labels(text: str) -> list`: the label of each paragraph after the intro. A label is the text up to and including the first `. ` of a paragraph's first line, so the label keeps its full stop.
+    - `labels(text: str) -> list`: the label of each paragraph after the intro. A label is the text up to and including the first `. ` of a paragraph's first line, so the label keeps its full stop. A paragraph whose first line holds no `. ` has the label `""` (owner Q-B11r-2), which no `LABELS` row contains, so the paragraph is refused.
     - `paragraph(text: str, label: str) -> str`.
     - `LABELS: dict` from role to the ordered label list (table below).
   - Prompt-block format (consumed by `gate_dispatch`, block 2, and checked on every file present in `PROMPTS_DIR`):
