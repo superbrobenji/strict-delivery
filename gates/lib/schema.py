@@ -304,11 +304,11 @@ def _check_value(spec: dict, v: object, path: str, cfg: dict, errs: list) -> Non
             errs.append("%s: must be a non-empty glob" % path)
     elif t == "cite":
         p, sep, anchor = v.partition("#") if type(v) is str else ("", "", "")
-        if not _path_ok(p) or (sep and (anchor == "" or not anchor.isprintable())):
+        if not _path_ok(p) or (sep and (anchor == "" or "#" in anchor or not anchor.isprintable())):
             errs.append("%s: must be a normalised repo-relative path with an optional non-empty #anchor" % path)
     elif t == "sha-path":
         sha, _, p = v.partition(":") if type(v) is str else ("", "", "")
-        if not _SHA.fullmatch(sha) or not _path_ok(p):
+        if not _SHA.fullmatch(sha) or "#" in p or not _path_ok(p):
             errs.append("%s: must be <sha>:<normalised repo-relative path>" % path)
 
 

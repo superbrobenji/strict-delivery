@@ -1,7 +1,6 @@
 """Gate ``schema``: every data file carries and obeys its schema (spec Appendix A, §13)."""
 from __future__ import annotations
 
-import argparse
 import copy
 import os
 import stat
@@ -15,11 +14,6 @@ PRODUCES: tuple = ()
 
 def _root(args: list) -> str:
     ns = gate_args("schema").parse_args(args)
-    twice = argparse.ArgumentParser(add_help=False)
-    twice.add_argument("--root", action="append")
-    seen = twice.parse_known_args(args)[0].root
-    if seen is not None and len(seen) > 1:
-        raise GateError("invalid arguments: --root given more than once")
     root = ns.root if ns.root is not None else repo_root()
     try:
         gitinfo.toplevel(root)

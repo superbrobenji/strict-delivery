@@ -420,14 +420,14 @@ class Types(Dirs):
         self.run_types({"type": "cite"}, [
             ("docs/a.md", []), ("docs/a.md#sec", []), ("docs/a.md#", [m]), ("#sec", [m]), ("/abs.md", [m]),
             ("a/../b.md", [m]), ("./a.md", [m]), ("a//b.md", [m]), ("a/", [m]), ("../a.md", [m]), ("..", [m]), ("a\x01b", [m]), ("a.md#x\ny", [m]),
-            (5, [m]), ("", [m]), (".", [m]), ("docs/a.md#a#b", [])])
+            (5, [m]), ("", [m]), (".", [m]), ("docs/a.md#a#b", [m]), ("docs/a.md#sec#", [m])])
 
     def test_T13_sha_path(self):
         m = "must be <sha>:<normalised repo-relative path>"
         self.run_types({"type": "sha-path"}, [
             ("abc1234:docs/a.md", []), ("abc1234", [m]), ("abc123:docs/a.md", [m]), ("a" * 41 + ":a", [m]),
             ("ABC1234:a", [m]), ("abc1234:", [m]), ("abc1234:./a", [m]), ("abc1234:/a", [m]), ("abc1234:../a", [m]), (5, [m]),
-            ("abc1234:a:b", []), ("abc1234:a#x", [])])
+            ("abc1234:a:b", []), ("abc1234:a#x", [m]), ("abc1234:a.md#sec", [m])])
 
     def test_T14_none(self):
         s = self.sch({"n": {"type": "str", "nullable": True, "required": False},
