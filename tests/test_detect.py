@@ -88,6 +88,23 @@ class RootTests(Base):
             detect(d)
         self.assertEqual(str(cm.exception), d + ": cannot read (Permission denied)")
 
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
+    def test_root_readable_but_not_searchable(self):  # D3 (F-C11r-1): mode 0o400 lists but cannot examine any entry
+        d = os.path.join(self.tmp, "readonly")
+        os.mkdir(d)
+        self.write("Makefile", "test:\n", root=d)
+        for mode in (0o400, 0o600, 0o000, 0o200):
+            with self.subTest(mode=oct(mode)):
+                os.chmod(d, mode)
+                self.addCleanup(os.chmod, d, 0o700)
+                with self.assertRaises(GateError) as cm:
+                    detect(d)
+                self.assertEqual(str(cm.exception), d + ": cannot read (Permission denied)")
+        os.chmod(d, 0o100)  # search without read: listing fails
+        with self.assertRaises(GateError) as cm:
+            detect(d)
+        self.assertEqual(str(cm.exception), d + ": cannot read (Permission denied)")
+
     def test_root_argument_type(self):  # D4
         self.write("Makefile", "test:\n")
         for value, tname in ((self.tmp.encode(), "bytes"), (pathlib.Path(self.tmp), "PosixPath"), (None, "NoneType"),
@@ -197,6 +214,26 @@ class PackageJsonTests(Base):
                 self.write("package.json", content)
                 d = detect(self.tmp)
                 self.assertEqual(d, Detection((), (Problem("package.json", reason),)))
+
+    def test_json_constants_nan_infinity_refused(self):  # F-C11r-4 / Q-C11r-5: npm run fails on these
+        for lit in ("NaN", "Infinity", "-Infinity"):
+            for shape in ('{"scripts": {"test": "t"}, "x": %s}', '{"scripts": {"test": %s}}', '{"x": [%s]}'):
+                with self.subTest(lit=lit, shape=shape):
+                    self.write("package.json", shape % lit)
+                    self.assertEqual(detect(self.tmp), Detection((), (Problem("package.json", "not valid JSON"),)))
+
+    def test_json_huge_numbers_same_on_every_interpreter(self):  # F-C11r-4 / Q-C11r-5
+        for label, num in (("5000-digit int", "9" * 5000), ("negative", "-" + "9" * 5000), ("float", "1" * 5000 + ".5"),
+                           ("1e999", "1e999"), ("-1e999", "-1e999"), ("plain", "12")):
+            with self.subTest(label):
+                self.write("package.json", '{"scripts": {"test": "echo ran"}, "x": %s}' % num)
+                self.assertEqual(detect(self.tmp).proposals, (Proposal("test", "npm run test", "package.json scripts.test"),))
+
+    def test_number_script_value_is_not_a_script(self):  # J11 with the number hooks: 1, 1.5, 1e999 are not str
+        for num in ("1", "1.5", "1e999", "-0"):
+            with self.subTest(num):
+                self.write("package.json", '{"scripts": {"test": %s}}' % num)
+                self.assertEqual(detect(self.tmp), Detection((), ()))
 
     def test_bom_is_accepted(self):  # J6
         self.write("package.json", b'\xef\xbb\xbf{"scripts": {"build": "tsc"}}')
@@ -423,9 +460,36 @@ class MakefileNameTests(Base):
     def test_bom_makefile_first_line_is_not_a_rule(self):  # GNU Make 3.81: `\ufefftest:` -> "No rule to make target `test'"
         self.assertEqual(self.rules("\ufefftest:\n"), [])
 
-    def test_directory_and_fifo_never_opened(self):  # J3 N5: refused on lstat, before any open
+    def test_first_makefile_without_slot_targets_hides_later_ones(self):  # N2 (F-C11r-3a): make reads GNUmakefile only
+        self.write("GNUmakefile", "all:\n\t@echo a\n")
+        self.write("Makefile", "test:\n")
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+        self.write("makefile", "lint:\n")
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+
+    def test_exact_spelling_preferred_over_case_folded(self):  # N3 (F-C11r-3b): both spellings listed
+        self.write("GNUmakefile", "test:\n")
+        with mock.patch("os.listdir", return_value=["gnumakefile", "GNUmakefile"]):
+            self.assertEqual(detect(self.tmp), Detection((Proposal("test", "make test", "GNUmakefile:1 test"),), ()))
+        with mock.patch("os.listdir", return_value=["GNUmakefile", "gnumakefile"]):
+            self.assertEqual(detect(self.tmp), Detection((Proposal("test", "make test", "GNUmakefile:1 test"),), ()))
+
+    def test_directory_and_fifo_never_opened(self):  # J3 N5 (F-C11r-3c): refused on lstat, before any open
+        for name in ("package.json", "Makefile"):
+            os.mkfifo(os.path.join(self.tmp, name))
+        seen = []
+        real_open = os.open
+
+        def spy_fifo(path, *a, **k):
+            seen.append(path)
+            return real_open(path, *a, **k)
+        with mock.patch("os.open", spy_fifo):
+            res = detect(self.tmp)
+        self.assertEqual(seen, [])
+        self.assertEqual(res.problems, (Problem("package.json", "not a regular file"), Problem("Makefile", "not a regular file")))
         for name in ("package.json", "Makefile"):
             p = os.path.join(self.tmp, name)
+            os.unlink(p)
             os.mkdir(p)
         seen = []
         real_open = os.open
@@ -552,6 +616,60 @@ class MakefileRuleTests(Base):
 
     def test_define_body_lines_that_only_start_like_endef(self):
         self.assertEqual(self.rules("define D\nendefs:\ntest:\nendef\nlint:\n"), [("lint", "make lint", "Makefile:5 lint")])
+
+    def test_tab_led_define_and_endef_follow_make_381(self):  # F-C11r-2: each verdict is `make -n test` on 3.81
+        cases = [
+            ("tab endef inside a body does not close", "define D\n\tendef\ntest:\n\t@echo ran\nendef\n", []),
+            ("tab define before any rule opens", "\tdefine D\ntest:\n\t@echo ran\nendef\nlint:\n", [("lint", "Makefile:5 lint")]),
+            ("tab define after an assignment opens", "x = 1\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
+            ("tab define in a recipe is a recipe line", "all:\n\tdefine D\ntest:\n\t@echo ran\n", [("test", "Makefile:3 test")]),
+            ("tab define after blank and comment lines in a recipe", "all:\n\n# c\n\tdefine D\ntest:\n\t@echo ran\n",
+             [("test", "Makefile:5 test")]),
+            ("tab define after an include opens", "all:\ninclude /dev/null\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
+            ("tab define after a conditional stays a recipe line", "all:\nifdef X\nendif\n\tdefine D\ntest:\n\t@echo ran\n",
+             [("test", "Makefile:5 test")]),
+            ("tab define in a body does not nest", "define D\n\tdefine E\nendef\ntest:\n\t@echo ran\n", [("test", "Makefile:4 test")]),
+            ("space then tab endef closes", "define D\n \tendef\ntest:\n\t@echo ran\n", [("test", "Makefile:3 test")]),
+            ("space then tab define opens", " \tdefine D\ntest:\n\t@echo ran\nendef\nlint:\n", [("lint", "Makefile:5 lint")]),
+            ("override define does not nest in a body", "define D\noverride define E\nendef\ntest:\n\t@echo ran\n",
+             [("test", "Makefile:4 test")]),
+            ("export define is not a define", "export define D\ntest:\n", [("test", "Makefile:2 test")]),
+            ("private define is not a define", "private define D\ntest:\n", [("test", "Makefile:2 test")]),
+            ("rule then assignment then tab define", "all:\nx = 1\n\tdefine D\ntest:\nendef\n", []),
+            ("tab-led blank line outside a recipe opens nothing", "\t\ntest:\n\t@echo ran\n", [("test", "Makefile:2 test")]),
+            ("a define does not end the recipe context", "all:\ndefine D\nendef\n\tdefine E\ntest:\n\t@echo ran\nendef\n",
+             [("test", "Makefile:5 test")]),
+            ("assignment with a later colon ends the recipe context", "all:\nx = a:b\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
+            ("colon-equals ends the recipe context", "all:\nx := 1\n\tdefine D\ntest:\n\t@echo ran\nendef\n", []),
+            ("double-colon rule keeps recipe context", "all::\n\tdefine D\ntest:\n", [("test", "Makefile:3 test")]),
+        ]
+        for label, mk, expect in cases:
+            with self.subTest(label):
+                self.assertEqual(self.rules(mk), [(sl, "make " + sl, src) for sl, src in expect])
+
+    def test_target_specific_variables_and_directives_are_not_rules(self):  # Q-C11r-1 (b): make 3.81 rc 2 "No rule"
+        for mk in ("test: X = 1\n", "test: X := 1\n", "test: X += 1\n", "test: X ?= 1\n", "test: X != 1\n", "test: a=b\n",
+                   "test:: X = 1\n", "test: export X = 1\n", "test: override X = 1\n", "export test:\n", "unexport test:\n",
+                   "override test:\n", "private test:\n", "vpath test: x\n", "include test:\n", "-include test:\n",
+                   "sinclude test:\n", "undefine test:\n", "  export test:\n", "build test: X = 1\n"):
+            with self.subTest(mk=mk):
+                self.assertEqual(self.rules(mk), [])
+
+    def test_target_specific_variable_does_not_hide_the_real_rule(self):  # source cites the rule line
+        self.assertEqual(self.rules("test: X = 1\ntest:\n\t@echo ran\n"), [("test", "make test", "Makefile:2 test")])
+
+    def test_equals_after_semicolon_or_comment_is_not_an_assignment(self):  # make 3.81 rc 0 on `test: ; FOO=1 echo ran`
+        for mk in ("test: ; FOO=1 echo ran\n", "test: dep # a=b\n", "test: dep ; a=b\n"):
+            with self.subTest(mk=mk):
+                self.assertEqual(self.rules(mk), [("test", "make test", "Makefile:1 test")])
+
+    def test_directive_names_only_matter_as_first_word(self):  # a target called like a directive, and slots after one
+        self.assertEqual(self.rules("include:\ntest: include\nbuild export:\n"),
+                         [("test", "make test", "Makefile:2 test"), ("build", "make build", "Makefile:3 build")])
+
+    def test_conditionals_do_not_hide_rules(self):  # Q-C11r-2 (a): targets inside ifeq/ifdef are proposed
+        self.assertEqual(self.rules("ifeq (a,b)\ntest:\nelse\nlint:\nendif\n"),
+                         [("test", "make test", "Makefile:2 test"), ("lint", "make lint", "Makefile:4 lint")])
 
     def test_define_without_endef_skips_rest(self):  # R13: 3.81 stops with "missing `endef'"
         self.assertEqual(self.rules("define D\ntest:\nlint:\n"), [])

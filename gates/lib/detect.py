@@ -21,8 +21,16 @@ _PROPOSED = ("test", "lint", "build")
 _MAKEFILE_NAMES = ("GNUmakefile", "makefile", "Makefile")  # the order GNU make looks for them
 
 _RULE = re.compile(r"^([A-Za-z0-9_.-]+(?:[ \t]+[A-Za-z0-9_.-]+)*)[ \t]*::?(?![:=])")
-_DEFINE = re.compile(r"^(?:(?:override|export|private)[ \t]+)*define(?:[ \t]|$)")
+# GNU Make 3.81: a define opens with `define` or `override define`; inside a body only a plain `define` nests.
+_DEFINE = re.compile(r"^(?:override[ \t]+)?define(?:[ \t]|$)")
+_NESTED_DEFINE = re.compile(r"^define(?:[ \t]|$)")
 _ENDEF = re.compile(r"^endef(?:[ \t]|$)")
+# A line GNU make reads as a rule (any targets), to know whether a tab-led line is a recipe line.
+_ANY_RULE = re.compile(r"^[^#=:]*::?(?![:=])")
+_CONDITIONAL = re.compile(r"^(?:ifdef|ifndef|ifeq|ifneq|else|endif)(?:[ \t(]|$)")
+# Directive words: a rule-looking line that starts with one is not a rule for the names after it.
+_DIRECTIVES = frozenset(("export", "unexport", "override", "private", "vpath", "include", "-include", "sinclude",
+                         "undefine"))
 
 
 @dataclass(frozen=True)
@@ -101,6 +109,22 @@ def _no_duplicates(pairs: list) -> dict:
     return dict(pairs)
 
 
+class _BadConstant(ValueError):
+    pass
+
+
+def _refuse_constant(_name: str) -> None:
+    raise _BadConstant()
+
+
+class _Number:
+    """A JSON number. Never converted, so the verdict does not depend on the interpreter's integer limit."""
+
+
+def _number(_text: str) -> _Number:
+    return _Number()
+
+
 def _package_json(root: str) -> tuple:
     """(proposals, problems) from package.json."""
     try:
@@ -118,7 +142,8 @@ def _package_json(root: str) -> tuple:
     except UnicodeDecodeError:
         return bad("not valid UTF-8")
     try:
-        doc = json.loads(text, object_pairs_hook=_no_duplicates)
+        doc = json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_refuse_constant,
+                         parse_int=_number, parse_float=_number)
     except _DuplicateKey:
         return bad("duplicate key")
     except (ValueError, RecursionError):
@@ -166,7 +191,12 @@ def _logical_lines(text: str) -> list:
 
 
 def _rule_names(line: str) -> tuple:
-    """The target names of a rule line, or ()."""
+    """The target names of a rule line, or ().
+
+    Refused, since GNU make does not define the names as targets: a line whose text after the colon
+    is an assignment (a target-specific variable: ``test: X = 1``, ``:=``, ``+=``, ``?=``, ``!=``;
+    the text up to the first ``;`` or ``#`` is examined) and a line that starts with a directive word
+    (``export test:``, ``override``, ``vpath``, ``include``)."""
     if line.startswith("\t"):
         return ()
     if line.startswith(" "):
@@ -174,23 +204,41 @@ def _rule_names(line: str) -> tuple:
     if line.startswith("#") or line.startswith("."):
         return ()
     m = _RULE.match(line)
-    return tuple(m.group(1).split()) if m else ()
+    if not m:
+        return ()
+    names = m.group(1).split()
+    if len(names) > 1 and names[0] in _DIRECTIVES:
+        return ()
+    after = re.split(r"[;#]", line[m.end():], maxsplit=1)[0]
+    if "=" in after:
+        return ()
+    return tuple(names)
 
 
 def _makefile_proposals(name: str, text: str) -> tuple:
     first = {}
-    depth = 0
+    depth = 0  # nesting depth inside a define body
+    in_recipe = False  # a rule line was read and no other kind of line since: a tab-led line is a recipe line
     for lineno, line in _logical_lines(text):
-        body = line.lstrip(" \t")
-        if depth:
-            if _DEFINE.match(body):
+        body = "" if line.startswith("\t") else line.lstrip(" \t")
+        if depth:  # a tab-led line inside a body never opens or closes anything (GNU Make 3.81)
+            if _NESTED_DEFINE.match(body):
                 depth += 1
             elif _ENDEF.match(body):
                 depth -= 1
             continue
-        if not line.startswith("\t") and _DEFINE.match(body):
-            depth = 1
+        if line.startswith("\t"):
+            if not in_recipe and _DEFINE.match(line.lstrip(" \t")):
+                depth = 1
             continue
+        if not body or body.startswith("#"):
+            continue
+        if _DEFINE.match(body):
+            depth = 1  # a define does not end the recipe context (GNU Make 3.81)
+            continue
+        if _CONDITIONAL.match(body):
+            continue
+        in_recipe = bool(_ANY_RULE.match(body))
         for target in _rule_names(line):
             first.setdefault(target, lineno)
     return tuple(Proposal(slot, "make " + slot, "%s:%d %s" % (name, first[slot], slot))
@@ -234,6 +282,8 @@ def detect(root: str) -> Detection:
         raise GateError("%s: not a directory" % root)
     try:
         listing = os.listdir(root)
+        if not os.access(root, os.X_OK):  # readable but not searchable: no file inside can be examined
+            raise PermissionError(13, os.strerror(13))
     except OSError as e:
         raise GateError("%s: cannot read (%s)" % (root, e.strerror or type(e).__name__)) from None
     proposals = []
