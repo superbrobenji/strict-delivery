@@ -1,0 +1,768 @@
+"""Tests for the decision schema and rules (gates.lib.decisions) through the production call paths: rows are
+written with ``write_record`` and read back with ``yamlsub.load``; ``landed_errors`` runs on real git
+repositories. Expected error lists are written out literally, never derived from the code under test."""
+import copy
+import os
+import unittest
+
+from gates.lib import config, gitinfo, schema, yamlsub
+from gates.lib.decisions import (current, find, in_force, is_resolved, landed_errors, ref_errors, superseded_ids,
+                                 validate)
+from gates.lib.result import GateError
+from gates.lib.store import Record
+from tests.helpers import GitIsolatedTestCase, commit_all, make_repo, write_record
+
+A = "DEC-20261031-k3f9"
+B = "DEC-20261031-m4n5"
+C = "DEC-20261031-p6q7"
+D = "DEC-20261031-r8s9"
+OPT = {"label": "yes", "cost": "none"}
+OPT2 = {"label": "no", "cost": "some"}
+W = {"at": "a1b2c3d", "by": "who@example.invalid", "reason": "asked twice"}
+AT = {"at": "b2c3d4e", "by": "who@example.invalid"}
+SPEC_ERR = ("landed_in: docs/strict-delivery/specs/x.md is a spec; specs are cleaned, land the rule in a "
+            "playbook, CLAUDE.md or architecture.md")
+OPEN = {"schema": "decision/1", "id": A, "status": "open", "class": "scope", "question": "Keep X?",
+        "options": [OPT, OPT2], "asked_at": "a1b2c3d", "asked_by": "agent", "topics": ["ids"],
+        "applies_to": ["src/*"], "checked_against": [], "effect": "lasting"}
+ANSWERED = {**OPEN, "status": "answered", "answer": "Yes", "answered_at": AT, "rule": "Keep X.",
+            "landed_in": ["CLAUDE.md"]}
+WITHDRAWN = {**OPEN, "status": "withdrawn", "withdrawn": W}
+GRANT = {**OPEN, "class": "merge-grant", "plan": "p"}
+
+
+def drop(row, *keys):
+    return {k: v for k, v in row.items() if k not in keys}
+
+
+def cfg_default():
+    return copy.deepcopy(config.DEFAULTS)
+
+
+class RowTestCase(GitIsolatedTestCase):
+    def setUp(self):
+        super().setUp()
+        self.cfg = cfg_default()
+
+    def rt(self, row):
+        """The row as the gates see it: written by write_record, read back by yamlsub.load."""
+        write_record(self.work, "r.yml", row)
+        return yamlsub.load(os.path.join(self.work, "r.yml"), "r.yml")
+
+    def v(self, row):
+        return validate(self.rt(row), self.cfg)
+
+
+class SchemaFileTests(RowTestCase):
+    def test_schema_file_loads_and_declares_files(self):  # S1, S2, S4, S5
+        s = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "decision.yml"))
+        self.assertEqual((s.kind, s.version, s.format), ("decision", 1, "yaml"))
+        self.assertEqual(s.files, [{"dir": "decisions", "glob": "*.yml", "exclude": ["index.yml"]}])
+        self.assertEqual(s.fields["schema"], {"type": "str"})
+
+    def test_files_of_register_dir(self):  # S3
+        make_repo(self.work)
+        d = ".strict-delivery/state/decisions/"
+        for name in (A + ".yml", "index.yml", "in-force.md", ".x.yml"):
+            write_record(self.work, d + name, {"k": "v"})
+        s = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "decision.yml"))
+        self.assertEqual(schema.files_of(s, self.work, self.cfg), [d + ".x.yml", d + A + ".yml"])
+
+    def test_valid_open_and_answered_rows(self):
+        for name, row in (("open", OPEN), ("answered", ANSWERED), ("withdrawn", WITHDRAWN), ("grant", GRANT)):
+            with self.subTest(name):
+                self.assertEqual(self.v(row), [])
+
+    def test_unknown_key_and_schema_tag(self):  # S6, S7
+        self.assertEqual(self.v({**OPEN, "overrides": "SD-R1"}), ["overrides: unknown key"])
+        self.assertEqual(validate({**OPEN, "schema": "decision/2"}, self.cfg),
+                         ["schema: expected decision/1, got decision/2; run /strict-delivery:upgrade"])
+        self.assertEqual(validate({**OPEN, "schema": "finding/1", "class": "style", "plan": "a/b"}, self.cfg),
+                         ["schema: expected decision/1, got finding/1"])
+        self.assertEqual(validate(drop({**GRANT, "class": "style"}, "schema"), self.cfg),
+                         ["schema: expected decision/1, got (missing)"])
+
+    def test_top_level_not_a_mapping(self):  # T17
+        for v in ([], None, "x", 1):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate(v, self.cfg), ["top level: must be a mapping"])
+
+
+class FieldTypeTests(RowTestCase):
+    def check(self, key, value, expected, base=None):
+        with self.subTest("%s=%r" % (key, value)):
+            self.assertEqual(validate({**(base or OPEN), key: value}, self.cfg), expected)
+
+    def test_id(self):  # T1
+        self.check("id", A, [])
+        self.check("id", "F-20261031-k3f9", ["id: id does not match the form; expected DEC-<YYYYMMDD>-<xxxx>: "
+                                              "a valid calendar date and four characters from "
+                                              "23456789abcdefghijkmnpqrstuvwxyz"])
+        self.check("id", "DEC-20261031-K3F9", ["id: id does not match the form; expected DEC-<YYYYMMDD>-<xxxx>: "
+                                                "a valid calendar date and four characters from "
+                                                "23456789abcdefghijkmnpqrstuvwxyz"])
+        self.check("id", "DEC-20261332-k3f9", ["id: id date 20261332 is not a valid calendar date; expected "
+                                                "DEC-<YYYYMMDD>-<xxxx>: a valid calendar date and four "
+                                                "characters from 23456789abcdefghijkmnpqrstuvwxyz"])
+        self.assertEqual(len(validate({**OPEN, "id": 1}, self.cfg)), 1)
+        self.cfg["ids"]["decision"] = "ADR"
+        self.check("id", "ADR-20261031-k3f9", [])
+        self.assertEqual(len(validate(OPEN, self.cfg)), 1)  # the DEC- id is now refused
+
+    def test_status(self):  # T2
+        for bad in ("Open", "closed", 1):
+            with self.subTest(repr(bad)):
+                errs = validate({**OPEN, "status": bad}, self.cfg)
+                self.assertEqual(errs, ["status: must be one of open, answered, withdrawn"])
+        self.assertEqual(validate(drop(OPEN, "status"), self.cfg), ["status: required key is missing"])
+
+    def test_non_empty_strings(self):  # T3
+        for key in ("class", "question", "asked_by"):
+            for bad in ("", 1, None, ["x"]):
+                with self.subTest("%s=%r" % (key, bad)):
+                    errs = validate({**OPEN, key: bad}, self.cfg)
+                    self.assertTrue(errs and errs[0].startswith(key + ":"), errs)
+                    self.assertEqual([e for e in errs if "owner_only" in e], [])  # C5
+
+    def test_topics_and_applies_to(self):  # T4, T5
+        for key in ("topics", "applies_to"):
+            self.check(key, [], [])
+            self.check(key, ["x/**"], [])
+            self.check(key, [""], [key + ".0: must be a non-empty " + ("string" if key == "topics" else "glob")])
+            self.check(key, [1], [key + ".0: must be a non-empty " + ("string" if key == "topics" else "glob")])
+            self.check(key, "x", [key + ": must be a list"])
+
+    def test_checked_against(self):  # T6
+        self.check("checked_against", [], [])
+        self.check("checked_against", [B], [])
+        self.check("checked_against", [A], [])  # its own id: no rule names it
+        self.assertEqual(len(validate({**OPEN, "checked_against": ["F-20261031-k3f9"]}, self.cfg)), 1)
+        self.assertEqual(len(validate({**OPEN, "checked_against": ["x"]}, self.cfg)), 1)
+
+    def test_effect(self):  # T7
+        self.check("effect", "one-off", [])
+        self.check("effect", "one_off", ["effect: must be one of lasting, one-off"])
+        self.assertEqual(validate(drop(OPEN, "effect"), self.cfg), ["effect: required key is missing"])
+
+    def test_supersedes(self):  # T8
+        self.assertEqual(validate(OPEN, self.cfg), [])
+        self.check("supersedes", B, [])
+        self.check("supersedes", A, [])  # self: ref_errors' business
+        self.check("supersedes", None, ["supersedes: must not be null"])
+        self.assertEqual(len(validate({**OPEN, "supersedes": "F-20261031-k3f9"}, self.cfg)), 1)
+
+    def test_answer_and_rule_text(self):  # T9
+        for bad in ("", 1):
+            self.check("answer", bad, ["answer: must be a non-empty string"], ANSWERED)
+            self.check("rule", bad, ["rule: must be a non-empty string"], ANSWERED)
+        self.check("rule", "a\nb", [], ANSWERED)
+        self.check("rule", "a | b", [], ANSWERED)
+
+    def test_answered_at_sub_fields(self):  # T10
+        base = ANSWERED
+        self.check("answered_at", drop(AT, "by"), ["answered_at.by: required key is missing"], base)
+        self.check("answered_at", {**AT, "x": 1}, ["answered_at.x: unknown key"], base)
+        self.check("answered_at", {**AT, "by": ""}, ["answered_at.by: must be a non-empty string"], base)
+        self.check("answered_at", {**AT, "by": "not an email"}, [], base)
+        self.check("answered_at", ["x"], ["answered_at: must be a mapping"], base)
+
+    def test_withdrawn_sub_fields(self):  # T11
+        base = WITHDRAWN
+        self.check("withdrawn", drop(W, "reason"), ["withdrawn.reason: required key is missing"], base)
+        self.check("withdrawn", {**W, "by": ""}, ["withdrawn.by: must be a non-empty string"], base)
+        self.check("withdrawn", {**W, "x": 1}, ["withdrawn.x: unknown key"], base)
+        self.check("withdrawn", {**W, "at": "ABC1234"}, ["withdrawn.at: must be 7 to 40 lowercase hex digits"], base)
+
+    def test_options_count_and_items(self):  # T12, T13
+        for n, ok in ((0, False), (1, False), (2, True), (3, True)):
+            with self.subTest(n):
+                errs = validate({**OPEN, "options": [OPT] * n}, self.cfg)
+                self.assertEqual(errs, [] if ok else ["options: must hold at least 2 items"])
+        self.check("options", "x", ["options: must be a list"])
+        self.check("options", [OPT, {**OPT2, "label": ""}], ["options.1.label: must be a non-empty string"])
+        self.check("options", [OPT, {**OPT2, "cost": ""}], ["options.1.cost: must be a non-empty string"])
+        self.check("options", [OPT, drop(OPT2, "cost")], ["options.1.cost: required key is missing"])
+        self.check("options", [{**OPT, "x": 1}, OPT2], ["options.0.x: unknown key"])
+        self.check("options", [OPT, "a str"], ["options.1: must be a mapping"])
+
+    def test_one_option_refused_for_every_class(self):  # T14
+        for c in cfg_default()["decision_classes"]["owner_only"]:
+            with self.subTest(c):
+                base = {**OPEN, "class": c, "options": [OPT]}
+                if c == "merge-grant":
+                    base["plan"] = "p"
+                self.assertEqual(validate(base, self.cfg), ["options: must hold at least 2 items"])
+
+    def test_landed_in_items(self):  # T15
+        msg = "must be a normalised repo-relative path with an optional non-empty #anchor"
+        for cite in ("CLAUDE.md", "CLAUDE.md#x"):
+            self.check("landed_in", [cite], [], ANSWERED)
+        for cite in ("CLAUDE.md#", "/abs.md", "a/../b.md", "./a.md", 1):
+            self.check("landed_in", [cite], ["landed_in.0: " + msg], ANSWERED)
+        self.check("landed_in", [], ["landed_in: must hold at least 1 items"], ANSWERED)
+
+    def test_sha_shape_only(self):  # T16, OQ-11
+        for key_path in ("asked_at", "answered_at", "withdrawn"):
+            for sha, ok in (("a" * 7, True), ("a" * 40, True), ("a" * 6, False), ("a" * 41, False),
+                            ("A" * 7, False), ("g" * 7, False)):
+                with self.subTest("%s %r" % (key_path, sha)):
+                    if key_path == "asked_at":
+                        row = {**ANSWERED, "asked_at": sha}
+                    elif key_path == "answered_at":
+                        row = {**ANSWERED, "answered_at": {**AT, "at": sha}}
+                    else:
+                        row = {**WITHDRAWN, "withdrawn": {**W, "at": sha}}
+                    errs = validate(row, self.cfg)
+                    self.assertEqual(errs == [], ok, errs)
+                    self.assertEqual(self.v(row) == [], ok)
+
+
+class StatusMatrixTests(RowTestCase):
+    FIELDS = {"answer": "Yes", "answered_at": AT, "rule": "r", "landed_in": ["CLAUDE.md"], "withdrawn": W}
+
+    def test_open_with_each_field(self):  # M1, M2
+        self.assertEqual(self.v(OPEN), [])
+        for f, val in self.FIELDS.items():
+            with self.subTest(f):
+                self.assertEqual(validate({**OPEN, f: val}, self.cfg), [f + ": must be absent (absent_when matches)"])
+        errs = validate({**OPEN, **self.FIELDS}, self.cfg)
+        self.assertEqual(sorted(errs), sorted(f + ": must be absent (absent_when matches)" for f in self.FIELDS))
+
+    def test_answered_cells(self):  # M3, M4, M5
+        self.assertEqual(validate(drop(ANSWERED, "answer"), self.cfg),
+                         ["answer: required key is missing (required_when matches)"])
+        self.assertEqual(validate(drop(ANSWERED, "answered_at"), self.cfg),
+                         ["answered_at: required key is missing (required_when matches)"])
+        self.assertEqual(validate(drop(ANSWERED, "rule"), self.cfg), [])
+        self.assertEqual(validate({**ANSWERED, "withdrawn": W}, self.cfg),
+                         ["withdrawn: must be absent (absent_when matches)"])
+
+    def test_withdrawn_cells(self):  # M6, M7
+        for f in ("answer", "answered_at", "rule", "landed_in"):
+            with self.subTest(f):
+                self.assertEqual(validate({**WITHDRAWN, f: self.FIELDS[f]}, self.cfg),
+                                 [f + ": must be absent (absent_when matches)"])
+        self.assertEqual(validate(drop(WITHDRAWN, "withdrawn"), self.cfg),
+                         ["withdrawn: required key is missing (required_when matches)"])
+        self.assertEqual(validate({**WITHDRAWN, "answer": "x"}, self.cfg) != [], True)
+        self.assertEqual(validate({**OPEN, "withdrawn": W}, self.cfg) != [], True)
+
+    def test_invalid_or_missing_status_with_answer_fields(self):  # M8
+        self.assertEqual(validate({**ANSWERED, "status": "Answered"}, self.cfg),
+                         ["status: must be one of open, answered, withdrawn"])
+        self.assertEqual(validate(drop(ANSWERED, "status"), self.cfg), ["status: required key is missing"])
+
+
+class EffectTests(RowTestCase):
+    def test_effect_against_landed_in(self):  # E1-E5
+        self.assertEqual(validate(drop(ANSWERED, "landed_in"), self.cfg),
+                         ["landed_in: required key is missing (required_when matches)"])
+        self.assertEqual(validate({**ANSWERED, "effect": "one-off"}, self.cfg),
+                         ["landed_in: must be absent (absent_when matches)"])
+        self.assertEqual(validate(drop({**ANSWERED, "effect": "one-off"}, "landed_in"), self.cfg), [])
+        self.assertEqual(validate(OPEN, self.cfg), [])
+        self.assertEqual(validate(WITHDRAWN, self.cfg), [])
+        self.assertEqual(validate(drop(ANSWERED, "effect"), self.cfg), ["effect: required key is missing"])
+
+
+class ClassTests(RowTestCase):
+    def test_default_classes_accepted(self):  # C1
+        for c in cfg_default()["decision_classes"]["owner_only"]:
+            with self.subTest(c):
+                row = {**OPEN, "class": c}
+                if c == "merge-grant":
+                    row["plan"] = "p"
+                self.assertEqual(validate(row, self.cfg), [])
+
+    def test_config_added_class(self):  # C2
+        hw = {**OPEN, "class": "hardware"}
+        self.assertEqual(validate(hw, self.cfg), ["class: hardware is not in decision_classes.owner_only"])
+        self.cfg["decision_classes"]["owner_only"].append("hardware")
+        self.assertEqual(validate(hw, self.cfg), [])
+
+    def test_config_added_class_through_config_load(self):  # C2 through config.load
+        make_repo(self.work, {**{"schema": "config/1", "framework_version": "0", "profile": "strict"},
+                              "decision_classes": {"owner_only": ["hardware"]}})
+        self.assertEqual(validate({**OPEN, "class": "hardware"}, config.load(self.work)), [])
+
+    def test_unknown_and_case(self):  # C3, C4
+        for c in ("style", "Scope", "SCOPE", "scope "):
+            with self.subTest(repr(c)):
+                self.assertEqual(validate({**OPEN, "class": c}, self.cfg),
+                                 ["class: %s is not in decision_classes.owner_only" % c])
+
+    def test_class_not_a_string(self):  # C5
+        for bad in (1, "", None):
+            self.assertEqual(len(validate({**OPEN, "class": bad}, self.cfg)), 1)
+        self.assertEqual(validate(drop(OPEN, "class"), self.cfg), ["class: required key is missing"])
+
+
+class GrantTests(RowTestCase):
+    def g(self, **kw):
+        return validate({**GRANT, **kw}, self.cfg)
+
+    def test_grant_field_combinations(self):  # G1-G4
+        self.assertEqual(validate(drop(GRANT, "plan"), self.cfg),
+                         ["plan: required key is missing (required_when matches)"])
+        self.assertEqual(self.g(), [])
+        self.assertEqual(self.g(program="prog"), ["program: stream must be given too; program and stream come "
+                                                  "together or not at all"])
+        self.assertEqual(self.g(stream="s1"), ["stream: program must be given too; program and stream come "
+                                               "together or not at all"])
+        self.assertEqual(self.g(program="prog", stream="s1"), [])
+
+    def test_plan_shape(self):  # G5
+        for plan, ok in (("a/b", False), ("a b", False), ("a\tb", False), ("a\nb", False), ("a b", False),
+                         ("p-1.2", True)):
+            with self.subTest(repr(plan)):
+                self.assertEqual(self.g(plan=plan) == [], ok)
+        self.assertEqual(self.g(plan="a/b"), ["plan: must not contain '/' or whitespace"])
+
+    def test_program_stream_shape(self):  # G6
+        for v, ok in (("s1", True), ("a-b", True), ("0x", True), ("S1", False), ("a/b", False), ("-a", False),
+                      ("a_b", False), ("a.b", False), ("abc\n", False), ("", False)):
+            for key, other in (("program", "stream"), ("stream", "program")):
+                with self.subTest("%s %r" % (key, v)):
+                    self.assertEqual(self.g(**{key: v, other: "ok"}) == [], ok)
+        self.assertEqual(self.g(program="S1", stream="ok"), ["program: must match [a-z0-9][a-z0-9-]*"])
+
+    def test_stream_integration(self):  # G7
+        self.assertEqual(self.g(program="p", stream="integration"),
+                         ["stream: 'integration' is reserved and cannot name a stream"])
+        self.assertEqual(self.g(program="p", stream="main"), [])
+        self.assertEqual(self.g(program="integration", stream="s"), [])
+
+    def test_non_grant_with_grant_fields(self):  # G8
+        for key in ("plan", "program", "stream"):
+            with self.subTest(key):
+                self.assertEqual(validate({**OPEN, key: "p"}, self.cfg),
+                                 [key + ": must be absent unless class is merge-grant"])
+        self.assertEqual(len(validate({**OPEN, "plan": "p", "program": "p", "stream": "s"}, self.cfg)), 3)
+
+    def test_wrong_types_only_schema_error(self):  # G9
+        self.assertEqual(self.g(plan=1), ["plan: must be a non-empty string"])
+        self.assertEqual(self.g(program=["a"], stream="s"), ["program: must be a non-empty string"])
+
+    def test_grant_fields_through_file(self):  # OQ-8 via write_record/load
+        self.assertEqual(self.v({**GRANT, "program": "prog", "stream": "s1"}), [])
+        self.assertEqual(self.v({**GRANT, "plan": "a/b"}), ["plan: must not contain '/' or whitespace"])
+
+
+class LandedTests(GitIsolatedTestCase):
+    def setUp(self):
+        super().setUp()
+        self.cfg = cfg_default()
+        make_repo(self.work)
+        self.row = {**ANSWERED, "landed_in": ["CLAUDE.md"]}
+
+    def put(self, rel, text):
+        path = os.path.join(self.work, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(text if isinstance(text, bytes) else text.encode("utf-8"))
+
+    def errs(self, *cites, row=None, tracked=None, commit=True):
+        if commit:
+            commit_all(self.work, "files")
+        t = gitinfo.tracked_files(self.work) if tracked is None else tracked
+        return landed_errors({**(row or self.row), "landed_in": list(cites)}, self.work, self.cfg, t)
+
+    def test_allowed_places(self):  # L1
+        places = [".strict-delivery/playbooks/x.md", ".strict-delivery/playbooks/sub/y.md", "CLAUDE.md",
+                  "docs/strict-delivery/architecture.md"]
+        for p in places:
+            self.put(p, "see " + A + ".\n")
+        for p in places:
+            with self.subTest(p):
+                self.assertEqual(self.errs(p), [])
+
+    def test_anchor_stripped_not_checked(self):  # L2
+        self.put("CLAUDE.md", A)
+        self.assertEqual(self.errs("CLAUDE.md#no-such-anchor", "CLAUDE.md#x"), [])
+
+    def test_not_on_allow_list(self):  # L3
+        for p in ("README.md", "docs/CLAUDE.md", "claude.md", ".strict-delivery/playbooksX/a.md"):
+            self.put(p, A)
+        self.put(".strict-delivery/playbooks/d/x.md", A)
+        for p in ("README.md", "docs/CLAUDE.md", "claude.md", ".strict-delivery/playbooksX/a.md",
+                  ".strict-delivery/playbooks"):
+            with self.subTest(p):
+                self.assertEqual(self.errs(p), ["landed_in: %s is not a playbook, CLAUDE.md or architecture.md" % p])
+
+    def test_config_moved_places(self):  # L4
+        self.cfg["paths"]["playbooks"] = "rules"
+        self.cfg["paths"]["architecture"] = "ARCH.md"
+        for p in ("rules/a.md", "ARCH.md", "docs/strict-delivery/architecture.md"):
+            self.put(p, A)
+        self.assertEqual(self.errs("rules/a.md", "ARCH.md"), [])
+        self.assertEqual(self.errs("docs/strict-delivery/architecture.md"),
+                         ["landed_in: docs/strict-delivery/architecture.md is not a playbook, CLAUDE.md or "
+                          "architecture.md"])
+
+    def test_spec_refused(self):  # L5
+        self.put("docs/strict-delivery/specs/x.md", A)
+        self.assertEqual(self.errs("docs/strict-delivery/specs/x.md"), [SPEC_ERR])
+        self.assertEqual(self.errs("docs/strict-delivery/specs/x.md#s"), [SPEC_ERR])
+        self.assertEqual(self.errs("docs/strict-delivery/specs"),
+                         ["landed_in: docs/strict-delivery/specs is a spec; specs are cleaned, land the rule in "
+                          "a playbook, CLAUDE.md or architecture.md"])
+
+    def test_spec_inside_allowed_place_still_spec(self):  # L6
+        self.cfg["paths"]["specs"] = ".strict-delivery/playbooks/specs"
+        self.put(".strict-delivery/playbooks/specs/x.md", A)
+        self.assertEqual(self.errs(".strict-delivery/playbooks/specs/x.md"),
+                         ["landed_in: .strict-delivery/playbooks/specs/x.md is a spec; specs are cleaned, land "
+                          "the rule in a playbook, CLAUDE.md or architecture.md"])
+
+    def test_untracked_and_non_regular(self):  # L7
+        self.put("CLAUDE.md", A)
+        self.assertEqual(self.errs("CLAUDE.md", commit=False),
+                         ["landed_in: CLAUDE.md is not a tracked regular file"])
+        self.put(".strict-delivery/playbooks/d/x.md", A)
+        commit_all(self.work, "d")
+        self.assertEqual(self.errs(".strict-delivery/playbooks/d"),
+                         ["landed_in: .strict-delivery/playbooks/d is not a tracked regular file"])
+        # tracked in the set but absent from the working tree
+        self.assertEqual(self.errs("CLAUDE.md", tracked=frozenset({"CLAUDE.md"}) | gitinfo.tracked_files(self.work),
+                                   commit=False) , [])
+        self.assertEqual(self.errs(".strict-delivery/playbooks/gone.md", commit=False,
+                                   tracked=frozenset({".strict-delivery/playbooks/gone.md"})),
+                         ["landed_in: .strict-delivery/playbooks/gone.md cannot be read as a UTF-8 regular file "
+                          "(No such file or directory)"])
+
+    def test_tracked_symlink_not_a_regular_entry(self):  # L7
+        self.put("x.md", A)
+        os.symlink("x.md", os.path.join(self.work, "CLAUDE.md"))
+        self.assertEqual(self.errs("CLAUDE.md"), ["landed_in: CLAUDE.md is not a tracked regular file"])
+
+    def test_working_tree_symlink_and_symlinked_parent(self):  # L7
+        self.put("CLAUDE.md", A)
+        commit_all(self.work, "c")
+        tracked = gitinfo.tracked_files(self.work)
+        self.put("other.md", A)
+        link = os.path.join(self.work, "tmp-link")
+        os.symlink("other.md", link)
+        os.replace(link, os.path.join(self.work, "CLAUDE.md"))
+        self.assertEqual(self.errs("CLAUDE.md", tracked=tracked, commit=False),
+                         ["landed_in: CLAUDE.md cannot be read as a UTF-8 regular file (not a regular file)"])
+        os.makedirs(os.path.join(self.work, ".strict-delivery"), exist_ok=True)
+        self.put("real/x.md", A)
+        os.symlink("../real", os.path.join(self.work, ".strict-delivery", "playbooks"))
+        errs = self.errs(".strict-delivery/playbooks/x.md", commit=False,
+                         tracked=frozenset({".strict-delivery/playbooks/x.md"}))
+        self.assertEqual(len(errs), 1)
+        self.assertTrue(errs[0].startswith("landed_in: .strict-delivery/playbooks/x.md cannot be read"), errs)
+
+    def test_lacking_the_id(self):  # L8
+        self.put("CLAUDE.md", "nothing here\n")
+        self.assertEqual(self.errs("CLAUDE.md"), ["landed_in: CLAUDE.md does not contain the decision id " + A])
+        self.put("CLAUDE.md", "see " + B + "\n")
+        self.assertEqual(self.errs("CLAUDE.md"), ["landed_in: CLAUDE.md does not contain the decision id " + A])
+
+    def test_whole_token_match(self):  # L9
+        cases = [("see %s." % A, True), ("[x](#%s)" % A, True), (A + "a", False), ("X" + A, False),
+                 (A + "_x", False), ("-" + A, False), (A, True), ("x\n" + A, True), (A + "\nx", True),
+                 (A + "-x", False), ("%s-" % A, False), ("'%s'" % A, True)]
+        for text, ok in cases:
+            with self.subTest(text):
+                self.put("CLAUDE.md", text)
+                self.assertEqual(self.errs("CLAUDE.md") == [], ok)
+
+    def test_id_only_as_prefix_of_longer_token_fails(self):  # plan dimension
+        self.put("CLAUDE.md", A + "z")
+        self.assertEqual(len(self.errs("CLAUDE.md")), 1)
+
+    def test_file_content_kinds(self):  # L10
+        self.put("CLAUDE.md", b"\xff\xfe " + A.encode())
+        errs = self.errs("CLAUDE.md")
+        self.assertEqual(len(errs), 1)
+        self.assertTrue(errs[0].startswith("landed_in: CLAUDE.md cannot be read as a UTF-8 regular file"), errs)
+        self.put("CLAUDE.md", b"")
+        self.assertEqual(self.errs("CLAUDE.md"), ["landed_in: CLAUDE.md does not contain the decision id " + A])
+        self.put("CLAUDE.md", ("line\r\n%s\r\n" % A).encode())
+        self.assertEqual(self.errs("CLAUDE.md"), [])
+
+    def test_malformed_cites(self):  # L11
+        self.put("CLAUDE.md", A)
+        norm = "is not a normalised repo-relative path with an optional non-empty #anchor"
+        for cite in ("/abs.md", "a/../CLAUDE.md", "./CLAUDE.md", "CLAUDE.md#", "CLAUDE.md#a#b"):
+            with self.subTest(cite):
+                self.assertEqual(self.errs(cite), ["landed_in: %s %s" % (cite, norm)])
+        self.assertEqual(self.errs(1), ["landed_in: 1 is not a string"])
+        self.assertEqual(self.errs(None), ["landed_in: None is not a string"])
+
+    def test_several_and_duplicate_cites(self):  # L12
+        self.put("CLAUDE.md", A)
+        self.put("README.md", A)
+        self.assertEqual(self.errs("CLAUDE.md", "README.md"),
+                         ["landed_in: README.md is not a playbook, CLAUDE.md or architecture.md"])
+        self.assertEqual(self.errs("CLAUDE.md", "CLAUDE.md#x"), [])
+
+    def test_landed_in_absent_not_a_list_and_bad_id(self):  # L13
+        self.put("CLAUDE.md", A)
+        commit_all(self.work, "c")
+        t = gitinfo.tracked_files(self.work)
+        self.assertEqual(landed_errors(drop(self.row, "landed_in"), self.work, self.cfg, t), [])
+        self.assertEqual(landed_errors({**self.row, "landed_in": "CLAUDE.md"}, self.work, self.cfg, t),
+                         ["landed_in: must be a list of cites"])
+        for bad in (1, None, ""):
+            with self.subTest(repr(bad)):
+                self.assertEqual(landed_errors({**self.row, "id": bad}, self.work, self.cfg, t),
+                                 ["landed_in: CLAUDE.md cannot be checked: the row has no valid id to find in it"])
+        self.assertEqual(landed_errors(drop(self.row, "id"), self.work, self.cfg, t),
+                         ["landed_in: CLAUDE.md cannot be checked: the row has no valid id to find in it"])
+        self.assertEqual(landed_errors([], self.work, self.cfg, t), [])
+
+    def test_landed_in_must_contain_id_with_validate(self):  # plan test, both functions on one row
+        self.put("CLAUDE.md", "no id")
+        self.assertEqual(validate(self.row, self.cfg), [])
+        self.assertEqual(len(self.errs("CLAUDE.md")), 1)
+
+
+def rec(row, name=None):
+    return Record(row.get("id"), row, "d/%s.yml" % (name or row.get("id")))
+
+
+def dec(id_, status="answered", **more):
+    r = {"id": id_, "status": status, "class": "scope", "effect": "lasting", "question": "q", "answer": "a",
+         "topics": [], "applies_to": []}
+    r.update(more)
+    return r
+
+
+class RuleTests(unittest.TestCase):
+    def suffixes(self, records):
+        return sorted(s for s, _ in ref_errors(records))
+
+    def test_is_resolved(self):  # R1
+        self.assertFalse(is_resolved({"status": "open"}))
+        for v in ("answered", "withdrawn", "Open", None, 1):
+            with self.subTest(repr(v)):
+                self.assertTrue(is_resolved({"status": v}))
+        self.assertTrue(is_resolved({}))
+
+    def test_superseded_ids_by_answered_only(self):  # R2
+        for status, expect in (("open", set()), ("answered", {A}), ("withdrawn", set())):
+            with self.subTest(status):
+                self.assertEqual(superseded_ids([rec(dec(A)), rec(dec(B, status, supersedes=A))]), expect)
+
+    def test_chain_of_three(self):  # R3
+        recs = [rec(dec(A)), rec(dec(B, supersedes=A)), rec(dec(C, supersedes=B))]
+        self.assertEqual(superseded_ids(recs), {A, B})
+        self.assertEqual((current(recs, A), current(recs, B), current(recs, C)), (C, C, C))
+        self.assertEqual(ref_errors(recs), [])
+        recs[2] = rec(dec(C, "open", supersedes=B))
+        self.assertEqual(superseded_ids(recs), {A})
+        self.assertEqual(current(recs, A), B)
+
+    def test_missing_target(self):  # R4
+        self.assertEqual(ref_errors([rec(dec(B, supersedes=A))]),
+                         [("supersedes." + B, "supersedes: %s has no record" % A)])
+
+    def test_self(self):  # R5
+        self.assertEqual(ref_errors([rec(dec(A, supersedes=A))]),
+                         [("supersedes." + A, "supersedes: a decision cannot supersede itself")])
+        self.assertEqual(superseded_ids([rec(dec(A, supersedes=A))]), set())
+
+    def test_target_not_answered(self):  # R6
+        for target in ("open", "withdrawn"):
+            for sup in ("open", "answered"):
+                with self.subTest("%s %s" % (target, sup)):
+                    self.assertEqual(ref_errors([rec(dec(A, target)), rec(dec(B, sup, supersedes=A))]),
+                                     [("supersedes." + B, "supersedes: %s is not answered" % A)])
+        # Q-1b2-3: a withdrawn superseder is not checked for its target's status
+        self.assertEqual(ref_errors([rec(dec(A, "open")), rec(dec(B, "withdrawn", supersedes=A))]), [])
+        # ... but is checked for a missing target, itself and a cycle
+        self.assertEqual(self.suffixes([rec(dec(B, "withdrawn", supersedes=A))]), ["supersedes." + B])
+        self.assertEqual(self.suffixes([rec(dec(B, "withdrawn", supersedes=B))]), ["supersedes." + B])
+        self.assertEqual(self.suffixes([rec(dec(A, "withdrawn", supersedes=B)),
+                                        rec(dec(B, "withdrawn", supersedes=A))]),
+                         ["supersedes." + A, "supersedes." + B])
+
+    def test_cycles_terminate(self):  # R7
+        two = [rec(dec(A, supersedes=B)), rec(dec(B, supersedes=A))]
+        self.assertEqual(self.suffixes(two), ["supersedes." + A, "supersedes." + B])
+        three = [rec(dec(A, supersedes=B)), rec(dec(B, "open", supersedes=C)), rec(dec(C, supersedes=A))]
+        self.assertEqual(self.suffixes(three), ["supersedes." + A, "supersedes." + B, "supersedes." + C])
+        self.assertEqual(current(two, A), B)  # A > B > A: stops at the first repeat, last id before it
+        self.assertEqual(current(two, B), A)
+        four = [rec(dec(A, supersedes=B)), rec(dec(B, supersedes=C)), rec(dec(C, supersedes=D)),
+                rec(dec(D, supersedes=A))]
+        self.assertEqual(current(four, A), B)  # A, D, C, B, then A repeats: the last id before the repeat
+        # a tail leading into a cycle, from a row outside it: that row is not a member
+        tail = [rec(dec(D, supersedes=A))] + two
+        self.assertNotIn("supersedes." + D, self.suffixes(tail))
+
+    def test_fork(self):  # R8
+        for s1 in ("open", "answered"):
+            for s2 in ("open", "answered"):
+                with self.subTest("%s %s" % (s1, s2)):
+                    recs = [rec(dec(A)), rec(dec(B, s1, supersedes=A)), rec(dec(C, s2, supersedes=A))]
+                    self.assertEqual(self.suffixes(recs), ["fork." + A])
+
+    def test_withdrawn_superseder_ignored(self):  # R9, Q-decisions-1
+        a, bw, co = rec(dec(A)), rec(dec(B, "withdrawn", supersedes=A)), rec(dec(C, "open", supersedes=A))
+        self.assertEqual(ref_errors([a, bw, co]), [])
+        self.assertNotIn(A, superseded_ids([a, bw, co]))
+        self.assertIn("fork." + A, [s for s, _ in ref_errors([a, rec(dec(B, "open", supersedes=A)), co])])
+        self.assertEqual(ref_errors([a, bw, rec(dec(C, "withdrawn", supersedes=A))]), [])
+        ca = rec(dec(C, supersedes=A))
+        self.assertEqual(ref_errors([a, bw, ca]), [])
+        self.assertEqual(superseded_ids([a, bw, ca]), {A})
+
+    def test_checked_against(self):  # R10
+        row = dec(A, checked_against=[B, C, D])
+        self.assertEqual(ref_errors([rec(row), rec(dec(B, "withdrawn"))]),
+                         [("checked." + A, "checked_against: no record for %s, %s" % (C, D))])
+        self.assertEqual(ref_errors([rec(dec(A, checked_against=[])), rec(dec(B))]), [])
+        self.assertEqual(ref_errors([rec(dec(A, checked_against=[B])), rec(dec(B))]), [])
+
+    def test_current_unknown_and_unsuperseded(self):  # R11
+        recs = [rec(dec(A)), rec(dec(B, "open", supersedes=A))]
+        self.assertEqual(current(recs, "DEC-20261031-zzzz"), "DEC-20261031-zzzz")
+        self.assertEqual(current(recs, A), A)
+        self.assertEqual(current([rec(dec(A))], A), A)
+
+    def test_current_fork_raises(self):  # R12
+        recs = [rec(dec(A)), rec(dec(B, supersedes=A)), rec(dec(C, supersedes=A))]
+        with self.assertRaises(GateError) as cm:
+            current(recs, A)
+        self.assertIn("fork." + A, str(cm.exception))
+        self.assertEqual(self.suffixes(recs), ["fork." + A])
+
+    def test_malformed_rows_never_raise(self):  # R13
+        bad = [Record(None, {"status": "answered", "supersedes": A}, "d/x.yml"),
+               rec(dec(B, supersedes=1)), rec({"id": C}), Record(D, "not a dict", "d/y.yml"),
+               Record(5, dec(A), "d/z.yml"), rec(dec(A, checked_against="x"))]
+        ref_errors(bad)
+        superseded_ids(bad)
+        in_force(bad)
+        find(bad, [], None, None, False)
+        find(bad, ["q"], "src/a", "t", True)
+        self.assertEqual(current(bad, A), A)
+        self.assertEqual(superseded_ids(bad), set())
+
+    def test_in_force(self):  # I1-I6
+        recs = [rec(dec(A)), rec(dec(B, "open")), rec(dec(C, "withdrawn")), rec(dec(D, effect="one-off")),
+                rec(dec("DEC-20261031-e2f3", **{"class": "merge-grant"}))]
+        self.assertEqual([r.id for r in in_force(recs)], [A])
+        self.assertEqual(in_force([]), [])
+
+    def test_in_force_excludes_superseded_only_by_answered(self):  # I3
+        for status, gone in (("answered", True), ("open", False), ("withdrawn", False)):
+            with self.subTest(status):
+                got = [r.id for r in in_force([rec(dec(A)), rec(dec(B, status, supersedes=A))])]
+                self.assertEqual(got, [B] if gone else [A])
+
+    def test_in_force_keeps_input_order(self):  # I5
+        recs = [rec(dec(C)), rec(dec(A)), rec(dec(B))]
+        self.assertEqual([r.id for r in in_force(recs)], [C, A, B])
+
+    def test_in_force_excludes_superseded_grants_one_off(self):  # plan test
+        recs = [rec(dec(A)), rec(dec(B, supersedes=A)), rec(dec(C, effect="one-off")),
+                rec(dec(D, **{"class": "merge-grant"}))]
+        self.assertEqual([r.id for r in in_force(recs)], [B])
+
+
+class FindTests(unittest.TestCase):
+    def ids(self, recs, terms=(), path=None, topic=None, all_=False):
+        return [r.id for r in find(recs, list(terms), path, topic, all_)]
+
+    def test_terms_over_fields(self):  # N1
+        recs = [rec(dec(A, question="alpha")), rec(dec(B, answer="alpha")), rec(dec(C, topics=["alpha"])),
+                rec(dec(D, rule="alpha", **{"class": "scope"}))]
+        self.assertEqual(self.ids(recs, ["alpha"]), [A, B, C])
+
+    def test_every_term(self):  # N2
+        recs = [rec(dec(A, question="alpha beta")), rec(dec(B, question="alpha", answer="beta")),
+                rec(dec(C, question="alpha"))]
+        self.assertEqual(self.ids(recs, ["alpha", "beta"]), [A, B])
+
+    def test_case_unicode_literal(self):  # N3, N4
+        recs = [rec(dec(A, question="Straße é a.c")), rec(dec(B, question="abc ( ["))]
+        self.assertEqual(self.ids(recs, ["ALPHA"]), [])
+        self.assertEqual(self.ids(recs, ["STRASSE"]), [A])
+        self.assertEqual(self.ids(recs, ["É"]), [A])
+        self.assertEqual(self.ids(recs, ["a.c"]), [A])
+        self.assertEqual(self.ids(recs, ["("]), [B])
+        self.assertEqual(self.ids(recs, ["[x]"]), [])
+
+    def test_empty_terms(self):  # N5
+        recs = [rec(dec(A)), rec(dec(B))]
+        self.assertEqual(self.ids(recs, []), [A, B])
+        self.assertEqual(self.ids(recs, [""]), [A, B])
+
+    def test_path_glob(self):  # N6
+        recs = [rec(dec(A, applies_to=["src/*"])), rec(dec(B, applies_to=["src/**/*.py"])),
+                rec(dec(C, applies_to=[]))]
+        self.assertEqual(self.ids(recs, path="src/a/b.py"), [A, B])
+        self.assertEqual(self.ids(recs, path="src/a.py"), [A])
+        self.assertEqual(self.ids(recs, path="SRC/a"), [])
+        self.assertEqual(self.ids(recs, path=None), [A, B, C])
+
+    def test_find_by_path_glob_and_topic(self):  # plan test
+        recs = [rec(dec(D, applies_to=["src/*"], topics=["ids"])), rec(dec(A, applies_to=["doc/*"], topics=["x"]))]
+        self.assertEqual(self.ids(recs, path="src/a/b.py"), [D])
+        self.assertEqual(self.ids(recs, topic="ids"), [D])
+
+    def test_topic_exact_after_casefold(self):  # N7, Q-1b2-5
+        recs = [rec(dec(A, topics=["ids"]))]
+        self.assertEqual(self.ids(recs, topic="IDS"), [A])
+        self.assertEqual(self.ids(recs, topic="id"), [])
+        self.assertEqual(self.ids(recs, topic=None), [A])
+
+    def test_follows_supersedes_chain(self):  # N8, plan test
+        recs = [rec(dec(A, question="term")), rec(dec(B, supersedes=A, question="x")),
+                rec(dec(C, supersedes=B, question="y"))]
+        self.assertEqual(self.ids(recs, ["term"]), [C])
+
+    def test_no_repeats_in_first_appearance_order(self):  # N9
+        recs = [rec(dec(A, question="t")), rec(dec(B, question="t")), rec(dec(C, supersedes=A, question="t")),
+                rec(dec(D, question="t"))]
+        self.assertEqual(self.ids(recs, ["t"]), [C, B, D])  # A is replaced by C at A's place
+        recs = [rec(dec(A, question="t")), rec(dec(B, question="t", supersedes=A)), rec(dec(C, supersedes=B))]
+        self.assertEqual(self.ids(recs, ["t"]), [C])
+
+    def test_in_force_only(self):  # N10
+        recs = [rec(dec(A, "open")), rec(dec(B, "withdrawn")), rec(dec(C, effect="one-off")),
+                rec(dec(D, **{"class": "merge-grant"})), rec(dec("DEC-20261031-e2f3", question="q"))]
+        self.assertEqual(self.ids(recs, ["q"]), ["DEC-20261031-e2f3"])
+
+    def test_superseded_by_non_lasting_current_drops_out(self):  # replace then filter
+        recs = [rec(dec(A, question="t")), rec(dec(B, supersedes=A, effect="one-off"))]
+        self.assertEqual(self.ids(recs, ["t"]), [])
+
+    def test_non_lasting_superseded_hit_is_not_replaced(self):  # design call: only lasting answered hits are replaced
+        recs = [rec(dec(A, question="t", effect="one-off")), rec(dec(B, supersedes=A, question="x"))]
+        self.assertEqual(self.ids(recs, ["t"]), [])
+        recs = [rec(dec(A, question="t", **{"class": "merge-grant"})), rec(dec(B, supersedes=A, question="x"))]
+        self.assertEqual(self.ids(recs, ["t"]), [])
+
+    def test_include_all(self):  # N11, Q-1b2-7
+        recs = [rec(dec(A, "open")), rec(dec(B, "withdrawn")), rec(dec(C, effect="one-off")),
+                rec(dec(D, **{"class": "merge-grant"})), rec(dec("DEC-20261031-e2f3")),
+                rec(dec("DEC-20261031-g4h5", supersedes="DEC-20261031-e2f3"))]
+        self.assertEqual(self.ids(recs, ["q"], all_=True), [r.id for r in recs])
+
+    def test_filters_combine(self):  # N12
+        recs = [rec(dec(A, question="alpha", applies_to=["src/*"], topics=["ids"]))]
+        self.assertEqual(self.ids(recs, ["alpha"], "src/a", "ids"), [A])
+        for args in ((["beta"], "src/a", "ids"), (["alpha"], "doc/a", "ids"), (["alpha"], "src/a", "x")):
+            with self.subTest(args):
+                self.assertEqual(self.ids(recs, args[0], args[1], args[2]), [])
+
+    def test_missing_fields(self):  # N13
+        r = rec({"id": A, "status": "answered", "effect": "lasting", "class": "scope"})
+        self.assertEqual(self.ids([r], ["x"]), [])
+        self.assertEqual(self.ids([r], []), [A])
+        self.assertEqual(self.ids([r], [], "a/b"), [])
+        self.assertEqual(self.ids([r], [], None, "t"), [])
+
+    def test_fork_raises_in_find(self):  # Q-1b2-4
+        recs = [rec(dec(A, question="t")), rec(dec(B, supersedes=A)), rec(dec(C, supersedes=A))]
+        with self.assertRaises(GateError):
+            find(recs, ["t"], None, None, False)
+
+
+if __name__ == "__main__":
+    unittest.main()
