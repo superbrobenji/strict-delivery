@@ -139,6 +139,8 @@ class Store:
     def create(self, row: dict) -> str:
         """Write a new record file (exclusive create); return its repo-relative path."""
         rel, text = self._prepare(row)
+        # Check-then-write window accepted (owner Q-1a3rr-1): a symlink planted between this check and the
+        # write is not caught here; the next load refuses it.
         self._dir_exists()
         try:
             os.makedirs(self._abs(self.directory), exist_ok=True)
@@ -171,6 +173,7 @@ class Store:
     def replace(self, row: dict) -> str:
         """Rewrite an existing record file through a temp file and ``os.replace``; return its path."""
         rel, text = self._prepare(row)
+        # Same accepted check-then-write window as in create (owner Q-1a3rr-1).
         if not self._dir_exists():
             raise GateError("%s: does not exist; use create" % rel)
         path = self._abs(rel)

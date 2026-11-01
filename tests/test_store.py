@@ -950,6 +950,18 @@ class BaseErrorsContentTest(GitCase):
         git(self.root, "rm", "-q", "--", "%s/%s.yml" % (DIR, C), "%s/.x.yml" % DIR, "%s/x.yaml" % DIR)
         self.assertEqual(self.errs(), [])
 
+    def test_base_side_gitlink_entries_are_ignored(self):  # B9 (owner Q-1a3r-3), F-1a3rr-1: mode 160000
+        self.seed()
+        sha = git(self.root, "rev-parse", "HEAD")
+        path = "%s/%s.yml" % (DIR, C)
+        git(self.root, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % (sha, path))
+        git(self.root, "commit", "-q", "-m", "gitlink record at the base")
+        self.assertIn("160000 commit", git(self.root, "ls-tree", "HEAD", "--", path))
+        self.fork()
+        self.assertEqual(self.errs(), [])
+        git(self.root, "rm", "-q", "--cached", "--", path)
+        self.assertEqual(self.errs(), [])
+
     def test_unparsable_record_at_base_tip_refused(self):  # B6
         self.seed()
         self.fork()
