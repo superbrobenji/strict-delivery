@@ -1,0 +1,208 @@
+"""Read-only git queries for the gates (standard library only).
+
+Every call passes an argument list (never a shell string), forces the C locale, clears the git names that point at
+another repository (``CLEARED_ENV``: ``GIT_DIR``, ``GIT_WORK_TREE``, ``GIT_COMMON_DIR``, ``GIT_OBJECT_DIRECTORY``,
+``GIT_ALTERNATE_OBJECT_DIRECTORIES``, ``GIT_NAMESPACE``, ``GIT_CEILING_DIRECTORIES``; owner Q-1a-ver-3) from the
+caller's environment, keeps ``GIT_INDEX_FILE`` inherited, and puts ``--`` before any user path. Failure messages
+name the git command and never the directory. A ref or sha that starts with ``-`` or ``^`` is never given to git
+(owner Q-1a-ver-2): the bool queries return False, the others raise a GateError naming the rule.
+"""
+from __future__ import annotations
+
+import os
+import posixpath
+import re
+import subprocess
+from typing import List, Optional
+
+from gates.lib.result import GateError, GitNotFound
+
+_REGULAR = ("100644", "100755")
+_HEX = "0123456789abcdefABCDEF"
+LONG_HEX = re.compile(r"[0-9a-fA-F]{41,}")  # longer than a sha-1: git would match it zero-padded (F-1a2r-5)
+
+
+CLEARED_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+               "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+REFUSED_LEAD = ("-", "^")  # an option, or an exclusion marker that names no object (F-1a-ver-2)
+
+
+def _env() -> dict:
+    env = dict(os.environ)
+    for name in CLEARED_ENV:
+        env.pop(name, None)
+    # GIT_INDEX_FILE stays inherited on purpose: a pre-commit hook reads the index being committed.
+    env["LC_ALL"] = "C"
+    return env
+
+
+def _run(root: str, name: str, args: List[str], ok: Optional[tuple] = (0,),
+         literal: bool = False, opts: Optional[List[str]] = None) -> "subprocess.CompletedProcess":
+    """Run ``git [opts] -C root <args>``; with ``ok`` a tuple, any other exit status is a GateError naming
+    ``name``."""
+    argv = ["git"] + (opts or []) + (["--literal-pathspecs"] if literal else []) + ["-C", root] + args
+    try:
+        p = subprocess.run(argv, env=_env(), stdin=subprocess.DEVNULL, check=False,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        raise GitNotFound("git not found on PATH; install git") from None
+    except (OSError, ValueError):
+        raise GateError("git %s failed: unusable argument" % name) from None
+    if ok is not None and p.returncode not in ok:
+        raise GateError("git %s failed (exit %d)" % (name, p.returncode))
+    return p
+
+
+def _text(data: bytes, what: str) -> str:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise GateError("git %s gave output that is not valid UTF-8" % what) from None
+
+
+def _check_ref(ref: str) -> None:
+    for lead in REFUSED_LEAD:
+        if ref.startswith(lead):
+            raise GateError("ref must not start with '%s'" % lead)
+
+
+def _check_rev(ref: str) -> None:
+    """_check_ref, and a ref holding more than 40 hex digits in a row is refused."""
+    _check_ref(ref)
+    if LONG_HEX.search(ref):
+        raise GateError("ref must not hold more than 40 hex digits in a row")
+
+
+def _ensure_repo(root: str) -> None:
+    _run(root, "rev-parse --git-dir", ["rev-parse", "--git-dir"])
+
+
+def _require_toplevel(root: str) -> None:
+    """Every function that maps a repo-relative path goes through here (owner Q-1a-fin-1): git reads
+    ``--full-tree`` paths from the top level, so a root that is a subdirectory would silently see another tree."""
+    top = toplevel(root)  # a missing or non-repository root is a GateError here
+    try:
+        same = os.path.samefile(root, top)
+    except OSError:
+        same = False
+    if not same:
+        raise GateError("git rev-parse --show-toplevel: root must be the repository top level")
+
+
+def _check_norm(path: str, what: str, allow_empty: bool = False) -> None:
+    """A repo-relative path must be normalised (owner Q-1a-fin-2): no '.', '..' or empty segment, no leading
+    or trailing '/'. ``""`` is accepted only where ``allow_empty`` says it means the root."""
+    if allow_empty and path == "":
+        return
+    segs = path.split("/")
+    if ".." in segs:
+        raise GateError("%s must not hold a '..' segment" % what)
+    if any(s in ("", ".") for s in segs):
+        raise GateError("%s must be a normalised repo-relative path (no '.', empty segment, leading or "
+                        "trailing '/')" % what)
+
+
+def _entries(stdout: bytes, what: str) -> list:
+    """Parse ``-z`` ls-tree or ls-files --stage output into (mode, third field, path) triples.
+
+    The third field is the object id for ls-tree (``mode type sha``) and the stage for ls-files."""
+    out = []
+    for raw in stdout.split(b"\0"):
+        if not raw:
+            continue
+        head, _, path = raw.partition(b"\t")
+        mode, _, third = head.split(b" ")
+        out.append((mode.decode("ascii"), third.decode("ascii"), _text(path, what)))
+    return out
+
+
+def toplevel(root: str) -> str:
+    p = _run(root, "rev-parse --show-toplevel", ["rev-parse", "--show-toplevel"])
+    return _text(p.stdout, "rev-parse --show-toplevel").rstrip("\n")
+
+
+def head_sha(root: str) -> str:
+    p = _run(root, "rev-parse HEAD", ["rev-parse", "HEAD"])
+    return _text(p.stdout, "rev-parse").strip()
+
+
+def commit_exists(root: str, sha: str) -> bool:
+    """True iff git resolves ``sha`` to an object that peels to a commit (an annotated tag is peeled).
+
+    A ref name wins over a hex-prefix reading, as in git. A bare hex value (any letter case) is resolved
+    with no type hint and ``core.disambiguate=none``, so git refuses it exactly when no ref rule matches
+    and it is a prefix of more than one object (owner Q-1a2r-2). Any other value is git's own verdict
+    (owner Q-1a2r-7). More than 40 hex digits in a row is refused (F-1a2r-5)."""
+    _ensure_repo(root)
+    if sha.startswith(REFUSED_LEAD) or LONG_HEX.search(sha):
+        return False
+    bare_hex = all(c in _HEX for c in sha)
+    p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options", sha],
+             ok=None, opts=["-c", "core.disambiguate=none"] if bare_hex else None)
+    if p.returncode != 0:
+        return False  # git resolves no object (for a bare hex value: no ref, and not a unique prefix)
+    oid = _text(p.stdout, "rev-parse").strip()
+    p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                          oid + "^{commit}"], ok=None)
+    return p.returncode == 0
+
+
+def blob_exists(root: str, sha: str, path: str) -> bool:
+    _ensure_repo(root)
+    _require_toplevel(root)
+    _check_norm(path, "ls-tree: path", allow_empty=True)
+    if sha.startswith(REFUSED_LEAD) or LONG_HEX.search(sha):
+        return False
+    p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", sha, "--", path], ok=None, literal=True)
+    return any(mode in _REGULAR and name == path for mode, _, name in _entries(p.stdout, "ls-tree"))
+
+
+def tracked_files(root: str) -> frozenset:
+    _require_toplevel(root)
+    top = toplevel(root)
+    p = _run(top, "ls-files", ["ls-files", "-z", "--stage"])
+    return frozenset(name for mode, _, name in _entries(p.stdout, "ls-files") if mode in _REGULAR)
+
+
+def show(root: str, ref: str, path: str) -> Optional[str]:
+    _check_rev(ref)
+    _require_toplevel(root)
+    _check_norm(path, "ls-tree: path", allow_empty=True)
+    p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", ref, "--", path], literal=True)
+    raw = None
+    for mode, sha, name in _entries(p.stdout, "ls-tree"):
+        if mode in _REGULAR and name == path:
+            raw = sha
+    if raw is None:
+        return None
+    blob = _run(root, "cat-file blob", ["cat-file", "blob", raw])
+    try:
+        return blob.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        raise GateError("%s: not valid UTF-8" % path) from None
+
+
+def ls_tree(root: str, ref: str, directory: str) -> list:
+    _check_rev(ref)
+    _require_toplevel(root)
+    _check_norm(directory, "ls-tree: directory", allow_empty=True)
+    d = directory
+    args = ["ls-tree", "-z", "--full-tree", ref]
+    if d:
+        args += ["--", d + "/"]
+    p = _run(root, "ls-tree", args, literal=True)
+    return [name for mode, _, name in _entries(p.stdout, "ls-tree")
+            if mode in _REGULAR and posixpath.dirname(name) == d]
+
+
+def merge_base(root: str, a: str, b: str) -> str:
+    _check_rev(a)
+    _check_rev(b)
+    p = _run(root, "merge-base", ["merge-base", a, b])
+    return _text(p.stdout, "merge-base").strip()
+
+
+def user_email(root: str) -> Optional[str]:
+    p = _run(root, "config user.email", ["config", "user.email"], ok=(0, 1))
+    value = _text(p.stdout, "config").strip()
+    return value or None
