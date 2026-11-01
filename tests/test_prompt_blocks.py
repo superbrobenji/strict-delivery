@@ -860,12 +860,19 @@ class FixRound1Test(unittest.TestCase):
 GATE = "python3 -m gates run_all"
 STATUS_VALUES = {"DONE", "DONE_WITH_FINDINGS", "NEEDS_DECISION", "BLOCKED", "DENIED"}
 EXC_PHRASES = ("one proposed exception", "`rule-override`", "only the proposal and its evidence", "playbook",
-               "before the owner rules", "the evidence's own commands", "tier4")
+               "before the owner rules", "the evidence's own commands", "tier4", "top_tier_fallback")
+# Unrelated-findings rule (owner Q-B12r-1): the status mapping, pinned in the Verdict of the three blocks
+DONE_RULE = (("Verdict.", "the change itself holds no finding"), ("Verdict.", "Unrelated findings"),
+             ("Verdict.", "does not by itself make the status DONE_WITH_FINDINGS"),
+             ("Report contract.", "unrelated findings"))
 # Task B1.2 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
 B12_CONTENT = {
-    "task_reviewer": [("Method.", GATE), ("Method.", "every claim")],
-    "final_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("Branch scope.", "whole branch")],
-    "final_verifier": [("Adversarial scope.", GATE), ("Adversarial scope.", "tier4")],
+    "task_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("No out-of-scope bucket.", "Unrelated findings")]
+    + list(DONE_RULE),
+    "final_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("Branch scope.", "whole branch"),
+                       ("No out-of-scope bucket.", "Unrelated findings")] + list(DONE_RULE),
+    "final_verifier": [("Adversarial scope.", GATE), ("Adversarial scope.", "tier4"),
+                       ("Adversarial scope.", "top_tier_fallback")] + list(DONE_RULE),
     "exception_reviewer": [("Exception scope.", s) for s in EXC_PHRASES],
 }
 B12_ROLES = tuple(B12_CONTENT)
@@ -974,7 +981,7 @@ class B12Test(unittest.TestCase):
             with self.subTest(role=role, case="model name"):
                 bad = in_para(t, label, lambda p: p.replace("tier4", "Opus"))
                 self.assertIn(want, content_problems(role, bad))
-                self.assertEqual([h[0] for h in forbidden_hits(bad)], ["model-name"])
+                self.assertEqual({h[0] for h in forbidden_hits(bad)}, {"model-name"})
         for role in ("task_reviewer", "final_reviewer"):
             with self.subTest(role=role, case="tier4 not given"):
                 self.assertFalse(whole_token("tier4", disk(role)))
@@ -1001,6 +1008,27 @@ class B12Test(unittest.TestCase):
         self.assertIn("re-run the evidence's own commands", p)
         self.assertIn("deviation a project playbook allows", p)
         self.assertIn("draft decision", p)
+
+    def test_unrelated_findings_do_not_change_done(self):     # F-B12r-1, owner Q-B12r-1
+        for role in ("task_reviewer", "final_reviewer", "final_verifier"):
+            t = disk(role)
+            rules = list(DONE_RULE) + ([("No out-of-scope bucket.", "Unrelated findings")] if role != "final_verifier"
+                                       else [])
+            for label, s in rules:
+                want = "%s lacks %r" % (label, s)
+                for name, bad in (("missing", in_para(t, label, lambda p: p.replace(s, "zzz"))),
+                                  ("joined", in_para(t, label, lambda p: p.replace(s, s + "x"))),
+                                  ("misplaced", other_para(t, label, s, "Zero bugs."))):
+                    with self.subTest(role=role, s=s, case=name):
+                        self.assertIn(want, content_problems(role, bad))
+            v = paragraph(t, "Verdict.")
+            self.assertNotIn("holds no finding", v.replace("the change itself holds no finding", ""))
+            self.assertLess(v.index("Report status DONE when"), v.index("Unrelated findings"))
+        # reproducer of the review: the old text, DONE on "the diff holds no finding", is refused
+        old = in_para(disk("task_reviewer"), "Verdict.",
+                      lambda p: p.replace("the change itself holds no finding", "the diff holds no finding"))
+        self.assertIn("Verdict. lacks 'the change itself holds no finding'", content_problems("task_reviewer", old))
+        self.assertNotIn("Unrelated findings", paragraph(disk("exception_reviewer"), "Verdict."))   # not a member
 
     def test_scope_paragraph_missing_is_a_check_failure(self):    # C8, label gone
         t = disk("exception_reviewer")
