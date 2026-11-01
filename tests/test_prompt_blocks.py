@@ -1724,44 +1724,62 @@ SINGLE_SENTENCES = {
          "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner question."),
         ("Continuation.",
          "When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "implementer": [
         ("Owner-only decisions.",
          "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "implementer_transcription": [
         ("Owner-only decisions.",
          "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "investigator": [
         ("Owner-only decisions.",
          "If the question needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "task_reviewer": [
         ("Owner-only decisions.",
          "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "final_reviewer": [
         ("Owner-only decisions.",
          "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "final_verifier": [
         ("Owner-only decisions.",
          "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; the attempts to break the branch (attempt, command, output excerpt, held or broke); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "exception_reviewer": [
         ("Owner-only decisions.",
          "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "audit_reviewer": [
         ("Owner-only decisions.",
          "If the audit needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
         ("Coverage first.",
          "Before you review anything, write your coverage list to your progress file: every file, spec section and input-domain row the audit covers, each marked not started."),
         ("Report contract.",
@@ -1772,6 +1790,8 @@ SINGLE_SENTENCES = {
     "audit_verifier": [
         ("Owner-only decisions.",
          "If the verification needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
 }
 
@@ -1780,6 +1800,7 @@ EXACT_LABELS = frozenset(("Dispatch discipline.", "Zero bugs.", "Verdict.", "No 
 OWNER_CLASSES = ("`triage`", "`spec-direction`", "`scope`", "`merge-grant`", "`model-policy`", "`issue-close`",
                  "`finding-class`", "`rule-override`", "`program-create`", "`stream-ownership`", "`stream-merge`",
                  "`request-dispute`", "`program-close`")                    # gates/lib/config.py defaults, owner Q-U1 (a)
+PRECEDENCE = "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."
 TR = ("task_reviewer", "final_reviewer", "final_verifier")
 # Named mutants: (name, roles, label, old, new). old None appends new to the paragraph. Survivors of the B1.3 review and
 # of the B1.2 re-review 3 (owner Q-B13r-1), the two owner answers Q-B13r-2/3, and this round's findings.
@@ -1861,9 +1882,9 @@ class B13KeyTest(unittest.TestCase):
             self.assertTrue(whole_token("decision_classes.owner_only", owner[0]), role)
             for label, sentences in EXACT_PARAGRAPHS[role]:
                 self.assertTrue(sentences and all(s and s == s.strip() for s in sentences), (role, label))
-        self.assertEqual(len(SINGLE_SENTENCES["controller"]), 3)
+        self.assertEqual(len(SINGLE_SENTENCES["controller"]), 4)
         self.assertEqual({r for r in WRITTEN if any(l == "Report contract." for l, _ in SINGLE_SENTENCES[r])},
-                         set(TR) | {"audit_reviewer"})
+                         set(WRITTEN))
 
     def test_real_files_hold_the_pins(self):
         for role in WRITTEN:
@@ -1908,10 +1929,28 @@ class B13KeyTest(unittest.TestCase):
                     bad = in_para(disk(role), label, fn)
                     self.assertTrue(key_problems(role, bad) or b13_problems(role, bad))
 
+    def test_status_precedence_sentence_in_every_block(self):   # owner Q-B13rr-1 (a)
+        sentence = PRECEDENCE
+        for role in WRITTEN:
+            p = paragraph(disk(role), "Report contract.")
+            self.assertEqual(p.count(sentence), 1, role)
+            self.assertIn(("Report contract.", sentence), SINGLE_SENTENCES[role])
+            for name, new in (("dropped", ""), ("reordered", sentence.replace("DENIED, BLOCKED", "BLOCKED, DENIED")),
+                              ("done first", sentence.replace("DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE",
+                                                              "DONE, DONE_WITH_FINDINGS, NEEDS_DECISION, BLOCKED, DENIED")),
+                              ("last", sentence.replace("the first of", "the last of")),
+                              ("negated", "Never: " + sentence)):
+                with self.subTest(role=role, case=name):
+                    bad = in_para(disk(role), "Report contract.", lambda q: q.replace(sentence, new, 1))
+                    self.assertTrue(key_problems(role, bad))
+
     def test_harmless_rewordings_pass(self):                    # re-review 1: R2 and its kind
         for role, label, old, new in HARMLESS:
             with self.subTest(role=role, label=label):
-                bad = in_para(disk(role), label, lambda p: p.replace(old, new, 1))
+                t = disk(role)
+                p = paragraph(t, label)
+                self.assertTrue(old in p or new in p)                     # the rewording is applied, or already there
+                bad = t.replace(p, p.replace(old, new, 1))
                 self.assertEqual(key_problems(role, bad), [])
                 if role in B13_ROLES:
                     self.assertEqual(b13_problems(role, bad), [])
