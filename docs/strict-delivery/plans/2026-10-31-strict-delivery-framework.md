@@ -1379,7 +1379,7 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
     - The file is read line by line (physical lines; a CR directly before the newline is part of the line end) as a fail-closed whitelist (owner Q-C11rr-3). Before the forms below, each line is refused, in this order (owner Q-C11r4-0 (a)), when it holds:
       - a control character, Unicode category Cc (U+0000-U+001F, U+007F-U+009F) other than TAB, NUL included; a CR anywhere but directly before the newline (also a CR at the end of a file with no final newline) counts as one (reason `control character`; F-C11r4-4);
       - a line ending in `\` (reason `line ends in a backslash`);
-      - a call to `eval`, `error`, `shell`, `file`, `call`, `value`, `info` or `warning` in `$(...)` or `${...}` form: `$(` or `${`, the name, then any character other than a letter, digit, `_` or `-`, or the end of the line. This applies to every line, comment and recipe lines included, and `$$(shell x)` is refused as well (reason `make function call`; F-C11r4-2).
+      - a call to `eval`, `error`, `shell`, `file`, `call`, `value`, `info` or `warning` in `$(...)` or `${...}` form: `$(` or `${`, the name, then any character other than an ASCII letter, ASCII digit, `_` or `-` (so `$(eval.x)` and `$(evalé x)` are refused; controller ruling D-C11r4r-1 (a) under owner Q-C11r4-0), or the end of the line. This applies to every line, comment and recipe lines included, and `$$(shell x)` is refused as well (reason `make function call`; F-C11r4-2).
     Every line must then be one of:
       1. blank or whitespace-only;
       2. a comment: optional blanks, then `#`;
