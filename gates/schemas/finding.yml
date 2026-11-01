@@ -1,0 +1,147 @@
+kind: finding
+version: 1
+format: yaml
+files:
+  - dir: findings
+    glob: "*.yml"
+    exclude:
+      - index.yml
+fields:
+  schema:
+    type: str
+  id:
+    type: id
+    id_kind: finding
+  status:
+    type: enum
+    values:
+      - open
+      - planned
+      - in-progress
+      - fixed-unpinned
+      - pinned
+      - deferred
+      - closed
+      - merged
+  source:
+    type: str
+  severity:
+    type: enum
+    values:
+      - CRITICAL
+      - HIGH
+      - MEDIUM
+      - LOW
+      - INFO
+  class:
+    type: str
+  siblings:
+    type: list
+    items:
+      type: str
+  cites:
+    type: list
+    items:
+      type: map
+      fields:
+        file:
+          type: str
+        lines:
+          type: str
+        sha:
+          type: sha
+  repro:
+    type: str
+    nullable: true
+  owner:
+    type: map
+    fields:
+      kind:
+        type: enum
+        values:
+          - plan
+          - issue
+          - roadmap
+      plan:
+        type: str
+        required_when:
+          - kind:
+              - plan
+              - roadmap
+        absent_when:
+          - kind:
+              - issue
+      task:
+        type: str
+        required_when:
+          - kind:
+              - plan
+        absent_when:
+          - kind:
+              - issue
+              - roadmap
+      number:
+        type: int
+        min: 1
+        required_when:
+          - kind:
+              - issue
+        absent_when:
+          - kind:
+              - plan
+              - roadmap
+  pin:
+    type: map
+    nullable: true
+    fields:
+      test:
+        type: str
+      transcript:
+        type: sha-path
+  ruling:
+    type: id
+    id_kind: decision
+    nullable: true
+  evidence:
+    type: list
+    items:
+      type: str
+  history:
+    type: list
+    min: 1
+    items:
+      type: map
+      fields:
+        status:
+          type: enum
+          values:
+            - open
+            - planned
+            - in-progress
+            - fixed-unpinned
+            - pinned
+            - deferred
+            - closed
+            - merged
+        sha:
+          type: sha
+        by:
+          type: str
+  parent:
+    type: id
+    id_kind: finding
+    required: false
+  resolved_by:
+    type: str
+    required_when:
+      - status:
+          - closed
+          - merged
+    absent_when:
+      - status:
+          - open
+          - planned
+          - in-progress
+          - fixed-unpinned
+          - pinned
+          - deferred
