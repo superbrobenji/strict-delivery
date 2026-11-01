@@ -22,8 +22,10 @@ _MAKEFILE_NAMES = ("GNUmakefile", "makefile", "Makefile")  # the order GNU make 
 
 # The Makefile reader is a whitelist (owner Q-C11rr-3); see _makefile_proposals.
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*[ \t]*(?:=|:=|\?=|\+=)")
-_RULE = re.compile(r"^((?:[A-Za-z0-9_./-]+[ \t]+)*[A-Za-z0-9_./-]+)[ \t]*::?")
-# A rule line whose first word is one of these, with more targets after it, is a directive, not a rule.
+_FIRST_WORD = re.compile(r"[^:=?+!\s]*")
+_RULE = re.compile(r"^((?:[A-Za-z0-9_./-]+[ \t]+)*[A-Za-z0-9_./-]+)[ \t]*(::?)")
+# A line whose first word, or any target, is one of these is a directive line, not a rule or an assignment
+# (controller ruling R2 under owner Q-C11rr-3). The first word ends at a blank, `:`, `=`, `?`, `+` or `!`.
 _DIRECTIVES = frozenset(("export", "unexport", "override", "private", "vpath", "include", "-include", "sinclude",
                          "undefine", "define", "endef", "ifdef", "ifndef", "ifeq", "ifneq", "else", "endif"))
 
@@ -33,6 +35,8 @@ _R_ASSIGNMENT = "assignment after the colon"
 _R_SEMICOLON = "';' after the colon"
 _R_COLON_BACKSLASH = "backslash after the colon"
 _R_DIRECTIVE = "directive line"
+_R_SECOND_COLON = "second ':' after the colon"
+_R_MIXED_COLONS = "target defined with both ':' and '::'"
 _R_OTHER = "not a blank, comment, assignment, rule or recipe line"
 
 
@@ -171,6 +175,7 @@ def _makefile_proposals(name: str, text: str) -> tuple:
     targets; a recipe line after a rule. The first other line gives no proposals and one Problem.
     A target named test, lint or build gives its slot, the first definition only."""
     first = {}
+    colons = {}  # target -> ":" or "::", for the first rule line that named it
     in_recipe = False  # a rule line was read and no assignment since
     for lineno, raw in enumerate(text.split("\n"), 1):
         line = raw[:-1] if raw.endswith("\r") else raw
@@ -189,6 +194,8 @@ def _makefile_proposals(name: str, text: str) -> tuple:
         body = line.lstrip(" \t")
         if body.startswith("#"):
             continue
+        if _FIRST_WORD.match(body).group() in _DIRECTIVES:
+            return unsupported(_R_DIRECTIVE)
         if _ASSIGNMENT.match(body):
             in_recipe = False
             continue
@@ -196,7 +203,7 @@ def _makefile_proposals(name: str, text: str) -> tuple:
         if not m:
             return unsupported(_R_OTHER)
         targets = m.group(1).split()
-        if len(targets) > 1 and targets[0] in _DIRECTIVES:
+        if _DIRECTIVES.intersection(targets):
             return unsupported(_R_DIRECTIVE)
         after = body[m.end():].split("#", 1)[0]
         if "\\" in after:
@@ -205,6 +212,11 @@ def _makefile_proposals(name: str, text: str) -> tuple:
             return unsupported(_R_SEMICOLON)
         if "=" in after:
             return unsupported(_R_ASSIGNMENT)
+        if ":" in after:
+            return unsupported(_R_SECOND_COLON)
+        kind = m.group(2)
+        if any(colons.setdefault(t, kind) != kind for t in targets):
+            return unsupported(_R_MIXED_COLONS)
         in_recipe = True
         for target in targets:
             first.setdefault(target, lineno)
