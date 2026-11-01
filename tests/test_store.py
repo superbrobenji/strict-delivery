@@ -595,10 +595,13 @@ class BaseErrorsRefTest(GitCase):
 
     def test_bad_base_values_refused(self):  # B1
         self.seed()
-        for bad in ("a" * 41, "main" + "0" * 41, "-x", "--help", "", None, 7, b"main"):
+        for bad in ("a" * 41, "main" + "0" * 41, "-x", "--help", "^main", "^HEAD", "", None, 7, b"main"):
             with self.subTest(repr(bad)):
                 with self.assertRaises(GateError):
                     self.errs(base=bad)
+        with self.assertRaises(GateError) as e:  # F-1a-ver-2: refused by rule, not by git's failure
+            self.errs(base="^main")
+        self.assertEqual(str(e.exception), "ref must not start with '^'")
 
     def test_over_long_hex_refused_even_when_a_ref_exists(self):  # B1
         self.seed()

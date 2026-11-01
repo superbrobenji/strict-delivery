@@ -61,9 +61,17 @@ def write_record(root: str, rel: str, row: dict) -> str:
     return path
 
 
+# Every git name gitinfo._env clears, plus GIT_INDEX_FILE (production inherits it for the pre-commit hook;
+# fixture git must not write a parent's index, and the tests that need it set it themselves) and
+# CLAUDE_PROJECT_DIR (read by result.repo_root).
+CLEARED_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+               "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+               "GIT_INDEX_FILE", "CLAUDE_PROJECT_DIR")
+
+
 class GitIsolatedTestCase(unittest.TestCase):
     """Base class of every test that runs git: no system or global git config, a private HOME,
-    no inherited GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE, and a temp directory as self.tmp."""
+    none of the CLEARED_ENV names inherited, and a temp directory as self.tmp."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -81,5 +89,5 @@ class GitIsolatedTestCase(unittest.TestCase):
         })
         patcher.start()
         self.addCleanup(patcher.stop)
-        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CLAUDE_PROJECT_DIR"):
+        for name in CLEARED_ENV:
             os.environ.pop(name, None)

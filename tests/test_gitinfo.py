@@ -86,6 +86,61 @@ class MakeRepoTest(GitIsolatedTestCase):
                          "Fixture Author <author@example.invalid> 2026-01-01T00:00:00Z")
 
 
+class _Probe(GitIsolatedTestCase):
+    def runTest(self):
+        pass
+
+
+class FixtureEnvIsolationTest(GitIsolatedTestCase):
+    """F-1a-ver-1: a git variable set in the parent environment before setUp does not reach fixture git."""
+
+    def test_parent_git_env_does_not_reach_fixture_git(self):
+        other = os.path.join(self.tmp, "other")
+        os.mkdir(other)
+        make_repo(other)
+        with open(os.path.join(other, "other.txt"), "w") as fh:
+            fh.write("other\n")
+        other_head = commit_all(other, "other")
+        other_git = os.path.join(other, ".git")
+        empty = os.path.join(self.tmp, "empty")
+        os.mkdir(empty)
+        hostile = {
+            "GIT_DIR": other_git,
+            "GIT_WORK_TREE": other,
+            "GIT_COMMON_DIR": other_git,
+            "GIT_OBJECT_DIRECTORY": empty,
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": os.path.join(other_git, "objects"),
+            "GIT_NAMESPACE": "zz",
+            "GIT_CEILING_DIRECTORIES": self.tmp,
+            "GIT_INDEX_FILE": os.path.join(self.tmp, "missing-index"),
+        }
+        for name, value in hostile.items():
+            with self.subTest(name=name), mock.patch.dict(os.environ, {name: value}):
+                probe = _Probe()
+                probe.setUp()
+                try:
+                    root = make_repo(probe.work)
+                    head = git(root, "rev-parse", "HEAD")
+                    dot = os.path.join(root, ".git")
+                    with open(os.path.join(dot, "refs", "heads", "main")) as fh:
+                        self.assertEqual(fh.read().strip(), head)  # GIT_DIR, GIT_COMMON_DIR
+                    self.assertTrue(os.path.isfile(os.path.join(dot, "objects", head[:2], head[2:])))
+                    self.assertTrue(os.path.isfile(os.path.join(dot, "index")))  # GIT_INDEX_FILE
+                    self.assertEqual(git(root, "ls-files"), ".strict-delivery/config.yml")  # GIT_WORK_TREE
+                    self.assertEqual(git(root, "cat-file", "-t", other_head, check=False), "")
+                    clone = os.path.join(probe.tmp, "clone")
+                    git(probe.tmp, "clone", "-q", "--depth", "1", "--no-local", "--branch", "main",
+                        "file://" + root, clone)  # GIT_NAMESPACE
+                    self.assertEqual(git(clone, "rev-parse", "HEAD"), head)
+                    sub = os.path.join(root, ".strict-delivery")
+                    self.assertEqual(git(sub, "rev-parse", "HEAD"), head)
+                    self.assertFalse(name in os.environ, name)  # GIT_CEILING_DIRECTORIES: no fixture effect
+                finally:
+                    probe.doCleanups()
+                with open(os.path.join(other_git, "refs", "heads", "main")) as fh:
+                    self.assertEqual(fh.read().strip(), other_head)
+
+
 class RootKindsTest(Fixture):
     def test_repo_and_subdir_work(self):  # G1
         sub = os.path.join(self.root, "dir")
@@ -352,6 +407,31 @@ class CommitExistsTest(Fixture):
         with self.assertRaises(GateError) as e:
             gitinfo.merge_base(self.root, "HEAD", "-x")
         self.assertIn("ref", str(e.exception))
+
+    def test_caret_value_is_refused_like_dash(self):  # F-1a-ver-2, owner Q-1a-ver-2 (a)
+        values = ("^main", "^HEAD", "^" + self.head, "^" + self.head[:7], "^", "^^main", "^-x")
+        calls, patch = spy_runs()
+        with patch:
+            for v in values:
+                with self.subTest(fn="commit_exists", value=v):
+                    self.assertIs(gitinfo.commit_exists(self.root, v), False)
+                with self.subTest(fn="blob_exists", value=v):
+                    self.assertIs(gitinfo.blob_exists(self.root, v, "a.txt"), False)
+                for name, fn in (("show", lambda r: gitinfo.show(self.root, r, "a.txt")),
+                                 ("ls_tree", lambda r: gitinfo.ls_tree(self.root, r, "dir")),
+                                 ("merge_base a", lambda r: gitinfo.merge_base(self.root, r, "HEAD")),
+                                 ("merge_base b", lambda r: gitinfo.merge_base(self.root, "HEAD", r))):
+                    with self.subTest(fn=name, value=v):
+                        with self.assertRaises(GateError) as e:
+                            fn(v)
+                        self.assertEqual(str(e.exception), "ref must not start with '^'")
+        self.assertTrue(calls)
+        for argv, _ in calls:
+            self.assertFalse(any(a.startswith("^") for a in argv), argv)
+        # a '^' after the first character is still a revision suffix, resolved as git does
+        self.assertIs(gitinfo.commit_exists(self.root, "HEAD^0"), True)
+        self.assertEqual(gitinfo.merge_base(self.root, "HEAD^0", "main"), self.head)
+        self.assertEqual(gitinfo.show(self.root, "HEAD^0", "a.txt"), "alpha\n")
 
 
 ROOT, SUB, ERR = "root", "sub", "GateError"  # ls_tree verdicts: the HEAD root listing, ['x.txt'], GateError
@@ -735,6 +815,69 @@ class EnvAndFlagsTest(Fixture):
             self.assertEqual(gitinfo.head_sha(self.root), self.head)
             self.assertIn("a.txt", gitinfo.tracked_files(self.root))
             self.assertEqual(gitinfo.show(self.root, "HEAD", "a.txt"), "alpha\n")
+
+    def _other_repo(self):
+        other = os.path.join(self.tmp, "other")
+        os.mkdir(other)
+        make_repo(other)
+        git(other, "commit", "-q", "--allow-empty", "-m", "different")
+        other_head = git(other, "rev-parse", "HEAD")
+        self.assertEqual(git(self.root, "cat-file", "-t", other_head, check=False), "")
+        return other, other_head
+
+    def test_repository_env_names_cleared(self):  # G10, F-1a-ver-3, owner Q-1a-ver-3 (a)
+        other, _ = self._other_repo()
+        names = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+        env = {n: os.path.join(other, ".git") for n in names}
+        env["GIT_INDEX_FILE"] = os.path.join(self.root, ".git", "index")
+        calls, patch = spy_runs()
+        with mock.patch.dict(os.environ, env), patch:
+            gitinfo.head_sha(self.root)
+            gitinfo.commit_exists(self.root, "HEAD")
+            gitinfo.blob_exists(self.root, "HEAD", "a.txt")
+            gitinfo.tracked_files(self.root)
+            gitinfo.show(self.root, "HEAD", "a.txt")
+            gitinfo.ls_tree(self.root, "HEAD", "dir")
+            gitinfo.merge_base(self.root, "HEAD", "main")
+            gitinfo.user_email(self.root)
+        self.assertTrue(calls)
+        for argv, e in calls:
+            for n in names:
+                self.assertNotIn(n, e, argv)
+            self.assertEqual(e.get("GIT_INDEX_FILE"), env["GIT_INDEX_FILE"], argv)  # owner Q-1a2r-5
+
+    def test_each_repository_env_name_does_not_redirect(self):  # G10, F-1a-ver-3: one row per name
+        other, other_head = self._other_repo()
+        other_git = os.path.join(other, ".git")
+        empty = os.path.join(self.tmp, "empty")
+        os.mkdir(empty)
+        sub = os.path.join(self.root, "dir")
+
+        def answers():
+            return (gitinfo.commit_exists(self.root, other_head), gitinfo.commit_exists(self.root, self.head),
+                    gitinfo.head_sha(self.root), gitinfo.head_sha(sub), gitinfo.commit_exists(sub, self.head),
+                    gitinfo.merge_base(self.root, "HEAD", "main"), gitinfo.ls_tree(self.root, "HEAD", "dir"),
+                    gitinfo.show(self.root, "HEAD", "a.txt"), "a.txt" in gitinfo.tracked_files(self.root))
+        want = (False, True, self.head, self.head, True, self.head, ["dir/x.txt"], "alpha\n", True)
+        self.assertEqual(answers(), want)
+        rows = (
+            ("GIT_DIR", other_git),
+            ("GIT_WORK_TREE", other),
+            ("GIT_COMMON_DIR", other_git),
+            ("GIT_OBJECT_DIRECTORY", os.path.join(other_git, "objects")),
+            ("GIT_OBJECT_DIRECTORY", empty),
+            ("GIT_ALTERNATE_OBJECT_DIRECTORIES", os.path.join(other_git, "objects")),
+            ("GIT_NAMESPACE", "zz"),
+            ("GIT_CEILING_DIRECTORIES", self.root),
+        )
+        for name, value in rows:
+            with self.subTest(name=name, value=value), mock.patch.dict(os.environ, {name: value}):
+                try:
+                    got = answers()
+                except GateError as e:
+                    got = "GateError: %s" % e
+                self.assertEqual(got, want)
 
     def test_every_user_path_follows_double_dash(self):
         calls, patch = spy_runs()

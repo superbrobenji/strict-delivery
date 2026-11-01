@@ -1,8 +1,11 @@
 """Read-only git queries for the gates (standard library only).
 
-Every call passes an argument list (never a shell string), forces the C locale, clears ``GIT_DIR`` and
-``GIT_WORK_TREE`` from the caller's environment, and puts ``--`` before any user path. Failure messages
-name the git command and never the directory. A ref or sha that starts with ``-`` is never given to git.
+Every call passes an argument list (never a shell string), forces the C locale, clears the git names that point at
+another repository (``CLEARED_ENV``: ``GIT_DIR``, ``GIT_WORK_TREE``, ``GIT_COMMON_DIR``, ``GIT_OBJECT_DIRECTORY``,
+``GIT_ALTERNATE_OBJECT_DIRECTORIES``, ``GIT_NAMESPACE``, ``GIT_CEILING_DIRECTORIES``; owner Q-1a-ver-3) from the
+caller's environment, keeps ``GIT_INDEX_FILE`` inherited, and puts ``--`` before any user path. Failure messages
+name the git command and never the directory. A ref or sha that starts with ``-`` or ``^`` is never given to git
+(owner Q-1a-ver-2): the bool queries return False, the others raise a GateError naming the rule.
 """
 from __future__ import annotations
 
@@ -19,10 +22,15 @@ _HEX = "0123456789abcdefABCDEF"
 LONG_HEX = re.compile(r"[0-9a-fA-F]{41,}")  # longer than a sha-1: git would match it zero-padded (F-1a2r-5)
 
 
+CLEARED_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+               "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+REFUSED_LEAD = ("-", "^")  # an option, or an exclusion marker that names no object (F-1a-ver-2)
+
+
 def _env() -> dict:
     env = dict(os.environ)
-    env.pop("GIT_DIR", None)
-    env.pop("GIT_WORK_TREE", None)
+    for name in CLEARED_ENV:
+        env.pop(name, None)
     # GIT_INDEX_FILE stays inherited on purpose: a pre-commit hook reads the index being committed.
     env["LC_ALL"] = "C"
     return env
@@ -53,8 +61,9 @@ def _text(data: bytes, what: str) -> str:
 
 
 def _check_ref(ref: str) -> None:
-    if ref.startswith("-"):
-        raise GateError("ref must not start with '-'")
+    for lead in REFUSED_LEAD:
+        if ref.startswith(lead):
+            raise GateError("ref must not start with '%s'" % lead)
 
 
 def _check_rev(ref: str) -> None:
@@ -125,7 +134,7 @@ def commit_exists(root: str, sha: str) -> bool:
     and it is a prefix of more than one object (owner Q-1a2r-2). Any other value is git's own verdict
     (owner Q-1a2r-7). More than 40 hex digits in a row is refused (F-1a2r-5)."""
     _ensure_repo(root)
-    if sha.startswith("-") or LONG_HEX.search(sha):
+    if sha.startswith(REFUSED_LEAD) or LONG_HEX.search(sha):
         return False
     bare_hex = all(c in _HEX for c in sha)
     p = _run(root, "rev-parse --verify", ["rev-parse", "--verify", "--quiet", "--end-of-options", sha],
@@ -142,7 +151,7 @@ def blob_exists(root: str, sha: str, path: str) -> bool:
     _ensure_repo(root)
     _require_toplevel(root)
     _check_norm(path, "ls-tree: path", allow_empty=True)
-    if sha.startswith("-") or LONG_HEX.search(sha):
+    if sha.startswith(REFUSED_LEAD) or LONG_HEX.search(sha):
         return False
     p = _run(root, "ls-tree", ["ls-tree", "-z", "--full-tree", sha, "--", path], ok=None, literal=True)
     return any(mode in _REGULAR and name == path for mode, _, name in _entries(p.stdout, "ls-tree"))
