@@ -1168,13 +1168,15 @@ B13_CONTENT = {
     + [("Continuation.", s) for s in CTRL_FIX_LOOP + ("handoff", "BLOCKED: budget",
                                                       "Nothing continues from inherited memory")]
     + [("Input domain.", "input-domain table"), ("Oracle.", "production path"),
-       ("Oracle.", "independent expected value"), ("Finding class.", "class: <dimension>: <members>")],
+       ("Oracle.", "independent expected value"), ("Finding class.", "class: <dimension>: <members>"),
+       ("Budget.", "`budgets`")],
     "audit_reviewer": [("Owner-only decisions.", s) for s in TRIAGE]
     + [("Coverage first.", "coverage list"), ("Coverage first.", "progress file")],
     "audit_verifier": [("Owner-only decisions.", s) for s in TRIAGE]
     + [("Method.", "every reproducer"), ("Method.", "coverage list"), ("Method.", "extends")],
 }
-VERDICT_PARA = {"controller": "Report contract.", "audit_verifier": "Verdict."}       # owner Q-B12-4 pattern
+VERDICT_PARA = {"controller": "Report contract.", "audit_verifier": "Verdict.",
+                "audit_reviewer": "Report contract."}       # owner Q-B12-4 pattern, Q-B13r-2
 
 
 def b13_problems(role, text):
@@ -1522,6 +1524,533 @@ class B13Test(unittest.TestCase):
                         files[role + ".md"] = bad.encode("ascii")
                         got = dir_problems(make_dir(td, files), WRITTEN)
                         self.assertTrue(any(p.startswith(role + ".md: forbidden " + name) for p in got), got)
+
+
+# Key rule sentences (owner Q-B13r-1 (b)): role -> [(label, (every sentence of the paragraph, verbatim))].
+# The sentences are the whole paragraph, so a negated, redirected or added sentence changes the pin.
+KEY_SENTENCES = {
+    "controller": [
+        ("Dispatch discipline.", (
+            "Dispatch discipline.",
+            "Dispatch only inside the role and model map.",
+            "Give every dispatch the headings `## Role`, `## Brief`, `## Findings`, `## Claims`, `## Budget: tokens=<n> minutes=<n>`, `## Model`, `## Report`, `## Strict block` and `## Task`, in that order; the strict block is the role's prompt block, byte for byte.",
+            "A fork dispatch is refused: dispatch a fresh agent with that grammar instead.",
+            "Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top tier only to the roles in `top_tier_roles`.",
+            "Name tiers in every brief and report, never a model.",
+        )),
+        ("Rulings.", (
+            "Rulings.",
+            "You rule only inside an approved plan, and only on a conflict between plan and spec, or between two tasks, that the spec settles; every other conflict is an owner question.",
+            "Rule at most `rulings.max_per_block` times per block.",
+            "Ledger each ruling as `Ruling: what -- why -- cost if wrong -- spec cite` before the next dispatch.",
+        )),
+        ("Continuation.", (
+            "Continuation.",
+            "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner question.",
+            "One block runs per agent context, at most `block.max_tasks` tasks, with a clean worktree at every checkpoint.",
+            "When you reach a checkpoint, 80 % of your token or time budget, or a usage-limit stop, write your handoff and return.",
+            "When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page.",
+            "Nothing continues from inherited memory, and the owner never clears the session and re-prompts.",
+        )),
+        ("Merge and checkpoint.", (
+            "Merge and checkpoint.",
+            "Merge only on all-green gates and a clean review, under an owner grant, and run the merge as its own command.",
+            "After a merge run the cleanup step.",
+            "Write the ledger and the handoff at every checkpoint, before the next dispatch.",
+            "A pasted result is evidence of what its author saw, so re-run it before you rely on it.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, never deferred.",
+            "An unrelated bug gets a register row and an owner.",
+            "A deleted test is restored and fixed; dropping a test is never offered as a fix.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "A ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, merge grants, model and cost policy, closing an issue, narrowing or widening a finding's class) is the owner's.",
+            "Write the question with at least two options and their cost, halt that path, and report status NEEDS_DECISION when nothing else can proceed.",
+            "Never decide it; never assume the likely answer.",
+            "The human answers; you never run `decisions decide` or `decisions withdraw`.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line, and give each child you dispatch the role's budget cap from the config key `budgets`.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-dispatched, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: the tasks and their commits (sha and subject); gates run (command and result line); the rulings made; findings and their classes; open owner questions; denials (verbatim); budget used.",
+            "Never return while a child you dispatched still runs: questions and progress go up as messages.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "implementer": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect your own change introduces makes the work incomplete; there is no minor defect and no follow-up.",
+            "A defect you find that your change did not cause is not fixed in passing: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, a merge grant, hardware, model or cost policy, closing an issue, narrowing or widening a finding's class), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-committed, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: commits (sha and subject); gates run (command and result line); claims (claim, direct command, contradiction command, output excerpt, PASS or FAIL); findings raised; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "implementer_transcription": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect your own change introduces makes the work incomplete; there is no minor defect and no follow-up.",
+            "A defect you find that your change did not cause is not fixed in passing: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, a merge grant, hardware, model or cost policy, closing an issue, narrowing or widening a finding's class), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-committed, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: commits (sha and subject); gates run (command and result line); claims (claim, direct command, contradiction command, output excerpt, PASS or FAIL); findings raised; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "investigator": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "If the question needs a ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, a merge grant, hardware, model or cost policy, closing an issue, narrowing or widening a finding's class), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-answered, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: the answer; the evidence (file:line, or command and output); claims (claim, direct command, contradiction command, output excerpt, PASS or FAIL); findings raised; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "task_reviewer": [
+        ("Method.", (
+            "Method.",
+            "Execute every claim in the implementer's report and the brief yourself: for each one run its direct command and its contradiction command, and compare your output with the report's excerpt.",
+            "Re-run every gate yourself: run `python3 -m gates run_all` and the test command in the config key `commands.test`, on every interpreter the brief names.",
+            "A pasted result is evidence of what the implementer saw, so you rerun it before you rely on it.",
+            "Read the task's diff against the brief and the plan section line by line, and read each mutant the report names to see that a test kills it.",
+        )),
+        ("No out-of-scope bucket.", (
+            "No out-of-scope bucket.",
+            "Every defect you see is reported, whether the diff touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
+            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A missing input-domain table is a finding.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "You judge this one task.",
+            "Report status DONE when every claim and gate re-ran clean and the change itself holds no finding (here the task's diff).",
+            "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
+            "Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect the change caused is a finding and makes the task incomplete.",
+            "A defect you find that the change did not cause is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, a merge grant, hardware, model or cost policy, closing an issue, narrowing or widening a finding's class), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-reviewed, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "final_reviewer": [
+        ("Method.", (
+            "Method.",
+            "Execute every claim in the task reports and the brief yourself: for each one run its direct command and its contradiction command, and compare your output with the report's excerpt.",
+            "Re-run every gate yourself: run `python3 -m gates run_all` and the test command in the config key `commands.test` at the branch tip, on every interpreter the brief names.",
+            "A pasted result is evidence of what an earlier run saw, so you rerun it before you rely on it.",
+            "Read the diff of the branch end to end, and read each mutant the reports name to see that a test kills it.",
+        )),
+        ("No out-of-scope bucket.", (
+            "No out-of-scope bucket.",
+            "Every defect you see is reported, whether the branch touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
+            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A missing input-domain table is a finding.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "You judge whether the branch may go to the final verifier.",
+            "Report status DONE when every claim and gate re-ran clean at the tip and the change itself holds no finding (here the whole branch).",
+            "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
+            "Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`, naming the task it belongs to.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check or reach the tip.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect the change caused is a finding and makes the branch incomplete.",
+            "A defect you find that the change did not cause is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, a merge grant, hardware, model or cost policy, closing an issue, narrowing or widening a finding's class), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-reviewed, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "final_verifier": [
+        ("Verdict.", (
+            "Verdict.",
+            "You judge whether the branch survives.",
+            "Report status DONE when you could not break it and the change itself holds no finding (here the whole branch).",
+            "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
+            "Report DONE_WITH_FINDINGS when you broke the change itself, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`; the argument against the branch goes in the findings.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect the change caused is a finding and makes the branch incomplete.",
+            "A defect you find that the change did not cause is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, a merge grant, hardware, model or cost policy, closing an issue, narrowing or widening a finding's class), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-verified, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: the verdict; the attempts to break the branch (attempt, command, output excerpt, held or broke); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "exception_reviewer": [
+        ("Verdict.", (
+            "Verdict.",
+            "The owner rules, not you.",
+            "Report status DONE when the case against the exception did not survive your checks.",
+            "Report DONE_WITH_FINDINGS when it did, and put the argument against the exception in the findings, each as file:line or command and output.",
+            "Report NEEDS_DECISION when the proposal needs a ruling in the owner-only classes beyond the exception itself, and BLOCKED when you could not run the evidence's commands.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in your findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (audit triage, spec-versus-code direction, plan scope, a merge grant, hardware, model or cost policy, closing an issue, narrowing or widening a finding's class), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-reviewed, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: the verdict; the evidence commands you re-ran (command, output excerpt, held or failed); the argument against the exception; findings; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "audit_reviewer": [
+        ("Coverage first.", (
+            "Coverage first.",
+            "Before you review anything, write your coverage list to your progress file: every file, spec section and input-domain row the audit covers, each marked not started.",
+            "Mark each part as you finish it, so that a fresh agent can resume from the progress file and not from memory.",
+            "A part that is not on the coverage list was not audited, and the report says so.",
+        )),
+        ("Method.", (
+            "Method.",
+            "Read the code against the spec and the plan line by line.",
+            "Run the project's gates and the test command in the config key `commands.test` yourself, on every interpreter the brief names.",
+            "For each defect record file:line, a reproducer (the command and its output) and the class statement `class: <dimension>: <members>`; a defect without a reproducer is marked unverified.",
+            "Check the whole dimension a defect names, not only the case you saw.",
+            "Every defect you see is reported, whether the audited area touches it or not.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in the report, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "Report before plan: the owner rules on triage before any plan, so you never decide which findings are fixed, deferred or dropped, and you write no plan.",
+            "The owner-only slug for that ruling is `triage`.",
+            "If the audit needs another ruling in a class named by `decision_classes.owner_only` in the project config, write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-audited, and report BLOCKED: budget, with what remains and the coverage list as it stands.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Report status DONE when the audited area holds no finding, and DONE_WITH_FINDINGS otherwise.",
+            "Then, in order: the coverage list with each part marked audited or not; findings (file:line, reproducer, class statement); denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+    "audit_verifier": [
+        ("Method.", (
+            "Method.",
+            "Re-run every reproducer in the reviewer's report yourself, with its direct command and a contradiction command, and compare your output with the report's excerpt; a reproducer that does not reproduce is a finding against the report.",
+            "Then write your own coverage list, which extends the reviewer's coverage list with every file, spec section and input-domain row the reviewer's list leaves out, and audit those parts yourself.",
+            "A pasted result is evidence of what its author saw, so you re-run it before you rely on it.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "You judge whether the audit report stands.",
+            "Report status DONE when every reproducer re-ran as the report wrote it and your extension found nothing the report misses.",
+            "Report DONE_WITH_FINDINGS when a reproducer did not reproduce or your extension found a defect the report misses, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in your findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Owner-only decisions.", (
+            "Owner-only decisions.",
+            "Report before plan: the owner rules on triage before any plan, so you never decide which findings are fixed, deferred or dropped, and you write no plan.",
+            "The owner-only slug for that ruling is `triage`.",
+            "If the verification needs another ruling in a class named by `decision_classes.owner_only` in the project config, write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION.",
+            "Never decide it; never assume the likely answer.",
+            "For hardware, never write to a device and never open its port.",
+        )),
+        ("Budget.", (
+            "Budget.",
+            "Obey the dispatch's Budget line.",
+            "At 80 % of either limit stop at the next step boundary, leave nothing half-verified, and report BLOCKED: budget, with what remains.",
+        )),
+        ("Report contract.", (
+            "Report contract.",
+            "Write the full report to the path the dispatch's Report line names.",
+            "Its first line is `status: ` and one value from `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`, for example `status: DONE`.",
+            "Then, in order: the verdict; the reproducers you re-ran (reproducer, direct command, contradiction command, output excerpt, reproduced or not); your coverage list; findings; denials (verbatim); budget used.",
+            "Your final reply is at most 10 lines with the same fields.",
+        )),
+    ],
+}
+
+
+KEY_LABELS = frozenset(("Dispatch discipline.", "Rulings.", "Continuation.", "Merge and checkpoint.", "Coverage first.",
+                        "Method.", "No out-of-scope bucket.", "Verdict.", "Zero bugs.", "No subagents.",
+                        "Owner-only decisions.", "Budget.", "Report contract."))
+# Named mutants (owner Q-B13r-1 (b)): (name, roles, label, old, new). old None appends new to the paragraph.
+# The first four are the survivors of the B1.3 review; the rest are the 14 survivors of the B1.2 re-review 3, plus the
+# two owner answers Q-B13r-2 and Q-B13r-3.
+KEY_MUTANTS = (
+    ("X3 fork refusal negated", ("controller",), "Dispatch discipline.", "A fork dispatch is refused",
+     "No fork dispatch is refused"),
+    ("B8-first coverage list to a notes file", ("audit_reviewer",), "Coverage first.", "to your progress file",
+     "to your notes file"),
+    ("N-Verdict negated", ("task_reviewer", "final_reviewer", "final_verifier"), "Verdict.",
+     "Report DONE_WITH_FINDINGS when", "Never report DONE_WITH_FINDINGS when"),
+    ("N-Zero bugs redirect", ("task_reviewer", "final_reviewer", "final_verifier"), "Zero bugs.", None,
+     " List a defect the change caused there too."),
+    ("R-Report contract omits unrelated findings", ("task_reviewer", "final_reviewer", "final_verifier"),
+     "Report contract.", "Then, in order:", "Then, in order (omit unrelated findings):"),
+    ("R-Zero bugs leaves complete", ("task_reviewer",), "Zero bugs.", "makes the task incomplete",
+     "leaves the task complete"),
+    ("R-Zero bugs leaves complete (branch)", ("final_reviewer", "final_verifier"), "Zero bugs.",
+     "makes the branch incomplete", "leaves the branch complete"),
+    ("R-OOS dropped", ("task_reviewer", "final_reviewer"), "No out-of-scope bucket.",
+     "Every defect you see is reported", "Every defect you see is dropped"),
+    ("R-Verdict does make", ("task_reviewer", "final_reviewer", "final_verifier"), "Verdict.",
+     "does not by itself make", "does make"),
+    ("Q-B13r-2 audit_reviewer DONE mapping", ("audit_reviewer",), "Report contract.",
+     "holds no finding, and DONE_WITH_FINDINGS otherwise", "holds no finding, and DONE otherwise"),
+    ("Q-B13r-3 controller budget cap", ("controller",), "Budget.", "the role's budget cap from the config key `budgets`",
+     "a Budget line of its own inside yours"),
+)
+
+
+def key_problems(role, text):
+    """Problems of the pinned paragraphs of one block: each must be exactly its pinned sentences, each once."""
+    out = []
+    for label, sentences in KEY_SENTENCES[role]:
+        try:
+            p = paragraph(text, label)
+        except ValueError:
+            out.append("%s is missing" % label)
+            continue
+        if p != " ".join(sentences):
+            out.append("%s differs from its pinned sentences" % label)
+        for s in sentences:
+            if p.count(s) != 1:
+                out.append("%s: %d occurrences of %r" % (label, p.count(s), s[:40]))
+    return out
+
+
+class B13KeyTest(unittest.TestCase):
+    def test_table_covers_every_block_and_key_paragraph(self):
+        self.assertEqual(sorted(KEY_SENTENCES), sorted(WRITTEN))
+        for role in WRITTEN:
+            labs = [label for label, _ in KEY_SENTENCES[role]]
+            self.assertEqual(len(labs), len(set(labs)), role)
+            self.assertEqual(set(labs), set(LABELS[role]) & KEY_LABELS, role)
+            for label, sentences in KEY_SENTENCES[role]:
+                self.assertTrue(sentences and all(s and s == s.strip() for s in sentences), (role, label))
+            for label in ("Zero bugs.", "Report contract.", "Budget.", "Owner-only decisions."):
+                self.assertIn(label, labs, role)
+
+    def test_real_files_hold_each_pinned_sentence_once(self):
+        for role in WRITTEN:
+            with self.subTest(role=role):
+                self.assertEqual(key_problems(role, disk(role)), [])
+
+    def test_every_pin_is_killed_by_four_generic_mutations(self):
+        for role in WRITTEN:
+            t = disk(role)
+            for label, sentences in KEY_SENTENCES[role]:
+                cases = [("deleted", lambda p: p.replace(sentences[0], "", 1)),
+                         ("sentence added", lambda p: p + " Also do the opposite."),
+                         ("sentence duplicated", lambda p: p.replace(sentences[-1], sentences[-1] + " " + sentences[-1], 1)),
+                         ("negated", lambda p: p.replace(sentences[0], "Never: " + sentences[0], 1))]
+                if len(sentences) > 1:
+                    cases.append(("two swapped", lambda p: b13_swap(p, sentences[0], sentences[1])))
+                for name, fn in cases:
+                    with self.subTest(role=role, label=label, case=name):
+                        self.assertTrue(key_problems(role, in_para(t, label, fn)))
+
+    def test_missing_paragraph_is_a_failed_check(self):
+        for role in WRITTEN:
+            t = disk(role)
+            for label, _ in KEY_SENTENCES[role]:
+                with self.subTest(role=role, label=label):
+                    bad = t.replace(paragraph(t, label), "Renamed. x")
+                    self.assertIn("%s is missing" % label, key_problems(role, bad))
+
+    def test_named_survivors_are_killed(self):
+        for name, roles, label, old, new in KEY_MUTANTS:
+            for role in roles:
+                with self.subTest(mutant=name, role=role):
+                    fn = (lambda p: p + new) if old is None else (lambda p: p.replace(old, new, 1))
+                    if old is not None:
+                        self.assertIn(old, paragraph(disk(role), label))
+                    self.assertTrue(key_problems(role, in_para(disk(role), label, fn)))
+
+    def test_budget_and_audit_status_rules(self):               # Q-B13r-2, Q-B13r-3
+        self.assertTrue(whole_token("`budgets`", paragraph(disk("controller"), "Budget.")))
+        self.assertNotIn("inside yours", disk("controller"))
+        r = paragraph(disk("audit_reviewer"), "Report contract.")
+        self.assertTrue(whole_token("Report status DONE when the audited area holds no finding, and DONE_WITH_FINDINGS "
+                                    "otherwise.", r))
+        self.assertEqual(b13_problems("audit_reviewer", disk("audit_reviewer")), [])
+        bad = in_para(disk("audit_reviewer"), "Report contract.", lambda p: p + " APPROVED")
+        self.assertTrue([x for x in b13_problems("audit_reviewer", bad) if "not only STATUS_LINE" in x])
 
 
 if __name__ == "__main__":
