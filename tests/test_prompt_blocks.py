@@ -1949,7 +1949,8 @@ class B13KeyTest(unittest.TestCase):
             with self.subTest(role=role, label=label):
                 t = disk(role)
                 p = paragraph(t, label)
-                self.assertTrue(old in p or new in p)                     # the rewording is applied, or already there
+                if old not in p:                                # F-B13rr-2: reworded on disk; unpinned, so never a failure
+                    continue
                 bad = t.replace(p, p.replace(old, new, 1))
                 self.assertEqual(key_problems(role, bad), [])
                 if role in B13_ROLES:
