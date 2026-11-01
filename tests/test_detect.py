@@ -780,6 +780,25 @@ class MakefileRuleTests(Base):
             with self.subTest(mk=mk):
                 self.refused(mk, n, self.OTHER)
 
+    # Characters outside [A-Za-z0-9_.-] other than the blanks, `/` (above), `=`, `:` and `#` (below), and the control
+    # characters (test_refused_control_characters); non-ASCII letters and digits included.
+    BAD_TARGET_CHARS = ("+", "$", "%", "*", "?", "~", "@", "!", ",", "(", ")", "[", "]", "{", "}", "<", ">", "|", "&",
+                        "^", "`", "'", '"', ";", "\\", "\u00e9", "\u00df", "\u03a9", "\u0663", "\uff21", "\u00a0")
+
+    def test_refused_target_characters(self):  # F-C11r4r-2: every target character class outside [A-Za-z0-9_.-]
+        for ch in self.BAD_TARGET_CHARS:
+            for mk in ("a%sb test:\n" % ch, "test a%sb:\n" % ch, "a%sb:\n" % ch, "%stest:\n" % ch, "test%s:\n" % ch,
+                       "test%s::\n" % ch, "  a b%sc lint:\n" % ch, "lint:\ntest%s:\n" % ch):
+                with self.subTest(ch=ch, mk=mk):
+                    self.refused(mk, mk.count("\n"), self.OTHER)
+        for mk in ("a#b test:\n", "test a#b:\n", "a#b:\n", "test#:\n", "test a=b:\n", "=test:\n", "x a=b:\n"):
+            with self.subTest(mk=mk):
+                self.refused(mk, 1, self.OTHER)
+        for mk in ("a:b test:\n", "a:b:\n", "test a:b:\n"):  # `:` inside a name: the text after the first colon holds a second
+            with self.subTest(mk=mk):
+                self.refused(mk, 1, self.SECOND_COLON)
+        self.assertEqual(self.rules("#test:\na=b test:\n"), [])  # a comment and an assignment, not targets
+
     def test_slash_after_the_colon_is_text(self):  # prerequisites are not targets
         self.assertEqual(self.rules("test: src/a.c ./b /c\n\t@echo ./x\n"), [("test", "make test", "Makefile:1 test")])
 
@@ -806,7 +825,13 @@ class MakefileRuleTests(Base):
                               ("# %s\ntest:\n" % ref, 1), ("X := $(foo %s)\n" % ref, 1), ("X := $%s\n" % ref, 1),
                               ("X := $" + o + fn + c + "\n", 1), ("X := $" + o + fn + "\tx" + c + "\n", 1),
                               ("X := $" + o + fn + "," + c + "\n", 1), ("test:\nlint:\n  # %s\n" % ref, 3),
-                              ("include %s\n" % ref, 1), ("X := $" + o + fn, 1)):
+                              ("include %s\n" % ref, 1), ("X := $" + o + fn, 1),
+                              # the name ends at any character but an ASCII letter, ASCII digit, `_` or `-`
+                              # (controller ruling D-C11r4r-1 (a) under owner Q-C11r4-0)
+                              ("X = $" + o + fn + ".x" + c + "\ntest:\n", 1), ("X = $" + o + fn + "é x" + c + "\n", 1),
+                              ("X = $" + o + fn + "٣ x" + c + "\n", 1), ("X = $" + o + fn + "ß" + c + "\n", 1),
+                              ("X = $" + o + fn + "Ａ x" + c + "\n", 1), ("X = $" + o + fn + "/x" + c + "\n", 1),
+                              ("X = $" + o + fn + ":x" + c + "\n", 1), ("X = $" + o + fn + "$(Y)" + c + "\n", 1)):
                     with self.subTest(mk=mk):
                         self.refused(mk, n, self.CALL)
 
