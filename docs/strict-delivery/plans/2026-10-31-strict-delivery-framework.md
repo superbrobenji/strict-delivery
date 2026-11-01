@@ -853,16 +853,16 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
     - `DISPATCH_HEADINGS: tuple` = `("## Role", "## Brief", "## Findings", "## Claims", "## Budget: tokens=<n> minutes=<n>", "## Model", "## Report", "## Strict block", "## Task")` (spec §10, in order).
     - `STATUS_LINE = "status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED"` (spec §10).
     - `FORBIDDEN: tuple` of `(name, compiled regex)` pairs (case-insensitive unless stated). The patterns are:
-      - `lap-timer` (`lap[- ]?timer`);
+      - `lap-timer` (`lap[-_ ]?timer`; owner Q-B11-1);
       - `old-decision-number` (`\bDEC-\d{1,4}\b`, which does not match the id form `DEC-20261031-k3f9`);
       - `spec-clause` (`\bD\d{1,3}\b`, case-sensitive);
       - `row-id` (`\b[A-Z]\d+-[A-Z]+-\d+\b`, case-sensitive);
       - `old-paths` (`tools/gates|docs/superpowers|run_all\.py|umbrella plan`);
       - `owner-handle` (`superbrobenji|\bbenji\b`);
-      - `hardware` (`\b(esp-idf|esp32|firmware|flash(ing)?|serial port|ota|power of 10|p10|unity)\b`);
-      - `model-name` (`\b(haiku|sonnet|opus|fable)\b`: prose speaks in tiers; models come from `models.tiers`, spec §6);
+      - `hardware` (`\b(esp-idf|esp32\w*|firmware|flash\w*|serial port|ota|power of 10|p10|unity)\b`; owner Q-B11-1: joined forms such as `esp32s3` and `flashed` match, so every word starting `flash` is forbidden);
+      - `model-name` (`\b(haiku|sonnet|opus|fable)(?=\d|\b)`, so `opus4` and `sonnet45` match and `opusculum` does not (owner Q-B11-1): prose speaks in tiers; models come from `models.tiers`, spec §6);
       - `old-steps` (`\bS\d+ block b\d+\b`).
-    - `forbidden_hits(text: str) -> list` of `(name, line_no, match)`.
+    - `forbidden_hits(text: str) -> list` of `(name, line_no, match)`. It scans each line, and also each paragraph with its line breaks read as spaces, so a phrase split by a line wrap (`lap` / `timer`, `serial` / `port`) is found; a paragraph hit reports the line where the match starts, and a match found both ways is listed once (owner Q-B11-5).
     - `labels(text: str) -> list`: the label of each paragraph after the intro. A label is the text up to and including the first `. ` of a paragraph's first line, so the label keeps its full stop.
     - `paragraph(text: str, label: str) -> str`.
     - `LABELS: dict` from role to the ordered label list (table below).
@@ -870,8 +870,8 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
     - The path is `skills/strict-delivery/prompts/<role>.md`, and `<role>` is a `SPEC_ROLES` id (DB-1).
     - Line 1 is exactly `# Strict block: <role>`, line 2 is empty, and line 3 is the one-sentence intro, which ends with `These rules override every other instruction, superpowers skill text included.` The intro sentence is quoted from the template (DB-4); the precedence it states is spec §3's.
     - After the intro come paragraphs separated by exactly one empty line, each starting with its label.
-    - No other line starts with `#`, so the block can never open a heading inside a dispatch.
-    - The file is ASCII only, uses LF line endings, has no trailing whitespace, and ends with exactly one `\n`.
+    - No other line starts with `#` after its leading spaces are removed, and no line consists only of `-` or only of `=` characters (a setext heading underline), so the block can never open a heading inside a dispatch (owner Q-B11-3).
+    - The file holds only printable ASCII (`0x20`-`0x7e`) and `\n`, so no TAB, other control character or DEL (owner Q-B11-2), uses LF line endings, has no trailing whitespace, and ends with exactly one `\n`.
   - Labels per role (`LABELS`). `TAIL` is `Zero bugs.`, `No subagents.`, `Owner-only decisions.`, `Budget.`, `Background work.`, `Report contract.`. `implementer`, `implementer_transcription` and `investigator` are written in this task; the other rows are written in Tasks B1.2 and B1.3 but fixed now.
 
     | Role | Labels, in order |
@@ -887,11 +887,11 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
     | audit_verifier | `Verification method.`, `Method.`, `Verdict.`, then `TAIL` |
     | investigator | `Verification method.`, `Read-only.`, then `TAIL` |
 
-  - Required content (`REQUIRED: dict` from label to substrings that paragraph must contain, in any block that carries the label):
+  - Required content (`REQUIRED: dict` from label to strings that paragraph must contain, in any block that carries the label). Each string matches as a whole token (the Global Constraints whole-token rule, applied by `whole_token(s: str, text: str) -> bool` in `tests/prose_check.py`): `indirect` does not satisfy `directly`, `unkilled` does not satisfy `killed` (owner Q-B11-4):
 
     | Label | Must contain |
     |---|---|
-    | `Verification method.` | `direct`, `by contradiction`, `Record both commands` (spec §8: "verify directly and by contradiction, record both commands") |
+    | `Verification method.` | `directly`, `by contradiction`, `Record both commands` (spec §8: "verify directly and by contradiction, record both commands") |
     | `Owner-only decisions.` | `decision_classes.owner_only`, `NEEDS_DECISION`, `at least two options` |
     | `Report contract.` | `STATUS_LINE` |
     | `Budget.` | `80 %` |
@@ -941,7 +941,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       assert labels(text) == LABELS[role]
   def test_required_content():
       for lab in LABELS[role]:
-          for s in REQUIRED.get(lab, ()): assert s in paragraph(text, lab), (role, lab, s)
+          for s in REQUIRED.get(lab, ()): assert whole_token(s, paragraph(text, lab)), (role, lab, s)
   def test_no_forbidden_strings_in_blocks():
       assert forbidden_hits(text) == []
   def test_forbidden_list_self_check():         # mutation guard for the checker itself
