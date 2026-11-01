@@ -996,14 +996,18 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
   WRITTEN = (..., "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer")
   def test_reviewer_blocks_differ_in_scope():
       assert paragraph(read("task_reviewer"), "Verdict.") != paragraph(read("final_reviewer"), "Verdict.")
-      assert "whole branch" in paragraph(read("final_reviewer"), "Branch scope.")
-  def test_reviewers_rerun_gates():
-      for r in ("task_reviewer", "final_reviewer", "final_verifier"): assert "python3 -m gates run_all" in read(r)
-  def test_exception_reviewer_scope():          # DB-5
+      assert whole_token("whole branch", paragraph(read("final_reviewer"), "Branch scope."))      # owner Q-B12-1
+  def test_reviewers_rerun_gates():             # owner Q-B12-1: whole token, in the named paragraph
+      for r in ("task_reviewer", "final_reviewer"):
+          for s in ("python3 -m gates run_all", "every claim"): assert whole_token(s, paragraph(read(r), "Method."))
+      assert whole_token("python3 -m gates run_all", paragraph(read("final_verifier"), "Adversarial scope."))
+  def test_exception_reviewer_scope():          # DB-5, owner Q-B12-1 and Q-B12-2
       p = paragraph(read("exception_reviewer"), "Exception scope.")
-      for s in ("one proposed exception", "`rule-override`", "only the proposal and its evidence"): assert s in p
-  def test_top_tier_blocks_name_tier4():        # DB-2
-      for r in ("final_verifier", "exception_reviewer"): assert "tier4" in read(r)
+      for s in ("one proposed exception", "`rule-override`", "only the proposal and its evidence", "playbook",
+                "before the owner rules"): assert whole_token(s, p)
+  def test_top_tier_blocks_name_tier4():        # DB-2, owner Q-B12-1
+      for r, lab in (("final_verifier", "Adversarial scope."), ("exception_reviewer", "Exception scope.")):
+          assert whole_token("tier4", paragraph(read(r), lab))
   ```
 - [ ] **Step 2: Run; expect FAIL** (files missing).
 - [ ] **Step 3: Write the four blocks.**
