@@ -116,6 +116,12 @@ class RootKindsTest(Fixture):
             self.skipTest("the test filesystem is case-sensitive")
         self.assertEqual(gitinfo.ls_tree(swapped, "HEAD", "dir"), ["dir/x.txt"])
 
+    def test_samefile_oserror_refuses_root(self):  # F-1a-rr2-1
+        with mock.patch("gates.lib.gitinfo.os.path.samefile", side_effect=OSError("boom")):
+            with self.assertRaises(GateError) as e:
+                gitinfo.show(self.root, "HEAD", "dir/x.txt")
+        self.assertIn("top level", str(e.exception))
+
     def test_missing_root_is_gate_error_not_oserror(self):  # Q-1a-rr-1
         missing = os.path.join(self.tmp, "no-such-dir")
         for fn in (lambda: gitinfo.show(missing, "HEAD", "a"), lambda: gitinfo.ls_tree(missing, "HEAD", "a"),
