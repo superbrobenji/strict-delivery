@@ -814,10 +814,45 @@ class BoundaryTest(unittest.TestCase):
         self.assertEqual(missing, ["required: Dispatch discipline. lacks '`## Role`'"])
         self.assertEqual(run(" ".join(ticked[:2] + ticked[3:]) + " fork"),
                          ["required: Dispatch discipline. lacks '`## Findings`'"])
-        bare_first =run("## Brief first. " + " ".join(ticked) + " fork")
+        bare_first = run("## Brief first. " + " ".join(ticked) + " fork")
         self.assertEqual(bare_first, [])
         swapped = run(" ".join([ticked[1], ticked[0]] + ticked[2:]) + " fork")
         self.assertEqual(swapped, ["required: Dispatch discipline. names the dispatch headings out of order"])
+
+
+class FixRound1Test(unittest.TestCase):
+    def body(self, role, label):
+        with open(os.path.join(pc.prompts_dir(), role + ".md"), "rb") as f:
+            return paragraph(f.read().decode("ascii"), label)
+
+    def test_short_content_with_trailing_newlines_pins_kinds(self):        # F3, P4, P5
+        probs = block_problems(b"\n\n\n", "implementer")
+        self.assertEqual({p.split(":")[0] for p in probs}, {"final-newline", "truncated", "first-line", "labels"})
+        self.assertTrue(any(p.startswith("truncated: 0 lines") for p in probs), probs)
+        probs = block_problems(b"# Strict block: implementer\n\n\n\n", "implementer")
+        self.assertEqual({p.split(":")[0] for p in probs}, {"final-newline", "truncated", "labels"})
+        self.assertTrue(any(p.startswith("truncated: 1 lines") for p in probs), probs)
+        self.assertEqual(kinds(b"\n"), {"truncated", "first-line", "labels"})
+        self.assertEqual(kinds(b""), {"final-newline", "truncated", "first-line", "labels"})
+
+    def test_report_contract_says_pick_one_value(self):                    # F1
+        for role in WRITTEN:
+            body = self.body(role, "Report contract.")
+            self.assertIn("one value from `" + STATUS + "`", body, role)
+            self.assertIn("for example `status: DONE`", body, role)
+            self.assertNotIn("exactly `status", body, role)
+
+    def test_investigator_report_file_is_the_one_write(self):              # F2
+        body = self.body("investigator", "Read-only.")
+        self.assertIn("except that you write the report file the dispatch's Report line names", body)
+        self.assertIn("the one write you make", body)
+        self.assertIn("no tracked file", body)
+
+    def test_no_subagents_bans_agent_tasks_only(self):                     # Q-B11r-1
+        for role in WRITTEN:
+            self.assertIn("Do not dispatch agents, workflows or other agent tasks", self.body(role, "No subagents."))
+            self.assertNotIn("background", self.body(role, "No subagents."))
+            self.assertIn("A job you start in the background is yours", self.body(role, "Background work."))
 
 
 if __name__ == "__main__":
