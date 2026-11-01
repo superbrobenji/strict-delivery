@@ -318,7 +318,7 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
       assert out.startswith("FAIL schema.input:") and "/strict-delivery:init" in out
   def test_config_yaml_error_is_input_fail():  # config.yml holding "a: [b"
       assert out.startswith("FAIL schema.input:")
-  def test_empty_decisions_map_passes():      # decisions: {} and decision_classes: {}
+  def test_empty_decisions_map_passes():      # decisions: {} and decision_classes: {} reach validate as caller values (the YAML subset cannot parse {}); absent maps go through the gate
       assert "PASS schema.config" in out
   def test_json_output_shape():
       assert json.loads(out)                  # parses; it carries the same lines as the text form
