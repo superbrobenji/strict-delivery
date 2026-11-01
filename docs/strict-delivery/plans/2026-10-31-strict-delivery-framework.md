@@ -29,7 +29,7 @@
 - Generated files (spec §5): "Ignored, never committed: generated files (state indexes, `in-force.md`, `INDEX.md`)".
 - Gate contract (spec §13): "`check(args) -> Result`; prints `PASS id` or `FAIL id: reason` lines; `--json`; exits 0 only when at least one line exists and every line passes; a missing input fails (`<gate>.input`), an empty run fails (`<gate>.empty`); `--root` points at another tree."
 - Registers ship empty. No lap-timer decisions, findings, claims, decision numbers or state as fixtures; the repository is public, so tests build synthetic fixtures in temp directories.
-- Every commit carries `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Every commit carries the harness's `Co-Authored-By:` line for the model that wrote it (controller ruling 2026-11-01: honest authorship; commits made before this line read `Claude Opus 5.5` or `Claude Sonnet 5.5` and are not rewritten).
 - Test command, every task, both interpreters (strict profile): `/usr/bin/python3 -m unittest discover -s tests -t . -v` (3.9.6) and `python3.13 -m unittest discover -s tests -t . -v` (Homebrew `/opt/homebrew/bin/python3.13`). Both pass before every commit, and the tree is clean after it.
 
 ## Process for this plan
