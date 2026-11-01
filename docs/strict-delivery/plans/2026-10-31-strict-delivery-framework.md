@@ -387,9 +387,9 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
       assert [r.id for r in find(records, ["term"], None, None, False)] == [C]
   def test_supersedes_cycle_and_fork_fail():
       assert any(x.startswith("supersedes.") for x in cycle_suffixes) and "fork." + A in fork_suffixes
-  def test_withdrawn_superseder_ignored():    # Q-decisions-1: B supersedes A, B withdrawn, C supersedes A
-      assert ref_errors([A, B_withdrawn, C_open]) == [] and A["id"] not in superseded_ids([A, B_withdrawn, C_open])
-      assert ("fork." + A["id"]) in [s for s, _ in ref_errors([A, B_open, C_open])]
+  def test_withdrawn_superseder_ignored():    # Q-decisions-1: B supersedes A, B withdrawn, C supersedes A; records are store.Record (Q-1b2-1)
+      assert ref_errors([A, B_withdrawn, C_open]) == [] and A.id not in superseded_ids([A, B_withdrawn, C_open])
+      assert ("fork." + A.id) in [s for s, _ in ref_errors([A, B_open, C_open])]
   def test_find_by_path_glob_and_topic():     # applies_to ["src/*"] matches "src/a/b.py" (fnmatchcase)
       assert ids_for(path="src/a/b.py") == [D] and ids_for(topic="ids") == [D]
   ```
