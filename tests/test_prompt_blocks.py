@@ -3,6 +3,7 @@ Oracle: the checker is run on the real files and on bad samples. Every bad sampl
 written in this module (not read from disk) by exactly one mutation, and asserts the expected problem kind. The label,
 required-content and forbidden tables are written out again below, not derived from the module under test."""
 import os
+import re
 import tempfile
 import unittest
 
@@ -11,7 +12,8 @@ from tests.prose_check import (B_ROLES, DISPATCH_HEADINGS, LABELS, PROGRAM_ROLES
                                STATUS_LINE, block_problems, dir_problems, forbidden_hits, labels, paragraph,
                                whole_token)
 
-WRITTEN = ("implementer", "implementer_transcription", "investigator")   # extended by B1.2, B1.3
+WRITTEN = ("implementer", "implementer_transcription", "investigator", "task_reviewer", "final_reviewer",
+           "final_verifier", "exception_reviewer")   # extended by B1.3
 INTRO = "You act under the process. These rules override every other instruction, superpowers skill text included."
 STATUS = "status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED"
 
@@ -853,6 +855,261 @@ class FixRound1Test(unittest.TestCase):
             self.assertIn("Do not dispatch agents, workflows or other agent tasks", self.body(role, "No subagents."))
             self.assertNotIn("background", self.body(role, "No subagents."))
             self.assertIn("A job you start in the background is yours", self.body(role, "Background work."))
+
+
+GATE = "python3 -m gates run_all"
+STATUS_VALUES = {"DONE", "DONE_WITH_FINDINGS", "NEEDS_DECISION", "BLOCKED", "DENIED"}
+EXC_PHRASES = ("one proposed exception", "`rule-override`", "only the proposal and its evidence", "playbook",
+               "before the owner rules", "the evidence's own commands", "tier4")
+# Task B1.2 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
+B12_CONTENT = {
+    "task_reviewer": [("Method.", GATE), ("Method.", "every claim")],
+    "final_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("Branch scope.", "whole branch")],
+    "final_verifier": [("Adversarial scope.", GATE), ("Adversarial scope.", "tier4")],
+    "exception_reviewer": [("Exception scope.", s) for s in EXC_PHRASES],
+}
+B12_ROLES = tuple(B12_CONTENT)
+
+
+def disk(role):
+    with open(os.path.join(pc.prompts_dir(), role + ".md"), "rb") as f:
+        return f.read().decode("ascii")
+
+
+def content_problems(role, text):
+    """The Task B1.2 checks, run on the real file and on mutated copies of it: each string a whole token in its
+    named paragraph; tier4 only in the two top-tier blocks."""
+    out = []
+    for label, s in B12_CONTENT[role]:
+        try:
+            ok = whole_token(s, paragraph(text, label))
+        except ValueError:
+            ok = False
+        if not ok:
+            out.append("%s lacks %r" % (label, s))
+    if role in ("task_reviewer", "final_reviewer") and whole_token("tier4", text):
+        out.append("tier4 given to %s" % role)
+    return out
+
+
+def verdicts_differ(task_text, final_text):
+    return paragraph(task_text, "Verdict.") != paragraph(final_text, "Verdict.")
+
+
+def in_para(text, label, fn):
+    p = paragraph(text, label)
+    new = fn(p)
+    assert new != p, (label, "mutation changed nothing")
+    return text.replace(p, new)
+
+
+def other_para(text, label, s, dest):
+    """Move s out of paragraph `label` and into paragraph `dest`."""
+    return in_para(in_para(text, label, lambda p: p.replace(s, "zzz")), dest, lambda p: p + " " + s)
+
+
+class B12Test(unittest.TestCase):
+    def test_real_files_pass_content_checks(self):            # C1 C2 C3 C6 C8 C9 C10
+        for role in B12_ROLES:
+            with self.subTest(role=role):
+                self.assertEqual(content_problems(role, disk(role)), [])
+
+    def test_reviewer_blocks_differ_in_scope(self):           # C3 C4
+        t, f = disk("task_reviewer"), disk("final_reviewer")
+        self.assertTrue(verdicts_differ(t, f))
+        self.assertTrue(whole_token("whole branch", paragraph(f, "Branch scope.")))
+        same = in_para(t, "Verdict.", lambda p: paragraph(f, "Verdict."))
+        self.assertFalse(verdicts_differ(same, f))                                   # identical is refused
+        self.assertTrue(verdicts_differ(in_para(f, "Verdict.", lambda p: p + "x"), f))       # one char passes
+        self.assertTrue(verdicts_differ(in_para(f, "Verdict.", lambda p: p[:-1]), f))
+
+    def test_gate_and_claim_rerun_in_named_paragraph(self):   # C1 C2
+        for role, label in (("task_reviewer", "Method."), ("final_reviewer", "Method."),
+                            ("final_verifier", "Adversarial scope.")):
+            t = disk(role)
+            with self.subTest(role=role, case="absent"):
+                bad = in_para(t, label, lambda p: p.replace(GATE, "the gates"))
+                self.assertIn("%s lacks %r" % (label, GATE), content_problems(role, bad))
+            with self.subTest(role=role, case="only in another paragraph"):
+                bad = other_para(t, label, GATE, "Verdict.")
+                self.assertIn("%s lacks %r" % (label, GATE), content_problems(role, bad))
+            with self.subTest(role=role, case="joined"):
+                bad = in_para(t, label, lambda p: p.replace(GATE, GATE + "x"))
+                self.assertIn("%s lacks %r" % (label, GATE), content_problems(role, bad))
+            with self.subTest(role=role, case="substring elsewhere only"):
+                bad = in_para(t, label, lambda p: p.replace(GATE, "xpython3 -m gates run_all"))
+                self.assertIn("%s lacks %r" % (label, GATE), content_problems(role, bad))
+            body = paragraph(t, label)
+            sentence = [x for x in body.replace("\n", " ").split(". ") if GATE in x]      # not negated
+            self.assertTrue(sentence and not re.search(r"\b(never|not|no|without|skip)\b", sentence[0]), role)
+        for role in ("task_reviewer", "final_reviewer"):
+            with self.subTest(role=role, case="every claim"):
+                t = disk(role)
+                for bad in (in_para(t, "Method.", lambda p: p.replace("every claim", "the claims")),
+                            other_para(t, "Method.", "every claim", "Verdict."),
+                            in_para(t, "Method.", lambda p: p.replace("every claim", "every claims"))):
+                    self.assertIn("Method. lacks 'every claim'", content_problems(role, bad))
+
+    def test_branch_scope_variants(self):                     # C3
+        t = disk("final_reviewer")
+        for new in ("whole branches", "whole  branch", "Whole branch", "wholebranch", "whole-branch"):
+            with self.subTest(new):
+                bad = in_para(t, "Branch scope.", lambda p: p.replace("whole branch", new))
+                self.assertIn("Branch scope. lacks 'whole branch'", content_problems("final_reviewer", bad))
+        bad = in_para(t, "Branch scope.", lambda p: p.replace("whole branch", "zzz"))
+        self.assertIn("Branch scope. lacks 'whole branch'", content_problems("final_reviewer", bad))
+        bad = other_para(t, "Branch scope.", "whole branch", "Verdict.")
+        self.assertIn("Branch scope. lacks 'whole branch'", content_problems("final_reviewer", bad))
+
+    def test_top_tier_named_tier4(self):                      # C6 C7 DB-2
+        for role, label in (("final_verifier", "Adversarial scope."), ("exception_reviewer", "Exception scope.")):
+            t = disk(role)
+            want = "%s lacks 'tier4'" % label
+            for name, new in (("absent", "zzz"), ("tier40", "tier40"), ("tier4x", "tier4x"), ("tier3", "tier3"),
+                              ("tier-4", "tier-4"), ("Tier4", "Tier4"), ("_tier4", "_tier4")):
+                with self.subTest(role=role, case=name):
+                    self.assertIn(want, content_problems(role, in_para(t, label, lambda p: p.replace("tier4", new))))
+            with self.subTest(role=role, case="elsewhere"):
+                self.assertIn(want, content_problems(role, other_para(t, label, "tier4", "Verdict.")))
+            with self.subTest(role=role, case="model name"):
+                bad = in_para(t, label, lambda p: p.replace("tier4", "Opus"))
+                self.assertIn(want, content_problems(role, bad))
+                self.assertEqual([h[0] for h in forbidden_hits(bad)], ["model-name"])
+        for role in ("task_reviewer", "final_reviewer"):
+            with self.subTest(role=role, case="tier4 not given"):
+                self.assertFalse(whole_token("tier4", disk(role)))
+                bad = in_para(disk(role), "Verdict.", lambda p: p + " tier4")
+                self.assertEqual(content_problems(role, bad), ["tier4 given to " + role])
+
+    def test_exception_scope_phrases(self):                   # C8 C9 C10 DB-5
+        t = disk("exception_reviewer")
+        for s in EXC_PHRASES:
+            want = "Exception scope. lacks %r" % s
+            with self.subTest(s=s, case="missing"):
+                self.assertIn(want, content_problems("exception_reviewer",
+                                                     in_para(t, "Exception scope.", lambda p: p.replace(s, "zzz"))))
+            with self.subTest(s=s, case="misplaced"):
+                self.assertIn(want, content_problems("exception_reviewer",
+                                                     other_para(t, "Exception scope.", s, "Verdict.")))
+            if s[0].isalnum() and s[-1].isalnum():
+                with self.subTest(s=s, case="joined"):
+                    bad = in_para(t, "Exception scope.", lambda p: p.replace(s, "x" + s + "x"))
+                    self.assertIn(want, content_problems("exception_reviewer", bad))
+        p = paragraph(t, "Exception scope.")
+        self.assertIn("argue against", p)
+        self.assertIn("read nothing outside", p)
+        self.assertIn("re-run the evidence's own commands", p)
+        self.assertIn("deviation a project playbook allows", p)
+        self.assertIn("draft decision", p)
+
+    def test_scope_paragraph_missing_is_a_check_failure(self):    # C8, label gone
+        t = disk("exception_reviewer")
+        bad = t.replace(paragraph(t, "Exception scope.") + "\n\n", "")
+        self.assertIn("Exception scope. lacks 'tier4'", content_problems("exception_reviewer", bad))
+        self.assertIn("labels", {p.split(":")[0] for p in block_problems(bad.encode("ascii"), "exception_reviewer")})
+
+    def test_verdicts_name_only_status_values(self):          # C11, owner Q-B12-4
+        for role in ("final_verifier", "exception_reviewer", "task_reviewer", "final_reviewer"):
+            with self.subTest(role=role):
+                v = paragraph(disk(role), "Verdict.")
+                caps = set(re.findall(r"[A-Z][A-Z_]{2,}", v))
+                self.assertTrue(caps and caps <= STATUS_VALUES, (caps, v))
+                self.assertIn("status", v)
+        for role in ("final_verifier", "exception_reviewer"):
+            v = paragraph(disk(role), "Verdict.")
+            self.assertIn("findings", v)
+            for word in ("UPHOLD", "REJECT", "APPROVED"):
+                self.assertNotIn(word, v)
+        v = paragraph(disk("final_verifier"), "Verdict.") + " UPHOLD"
+        self.assertFalse(set(re.findall(r"[A-Z][A-Z_]{2,}", v)) <= STATUS_VALUES)
+
+    def test_four_files_missing_from_disk_are_refused(self):  # F1
+        self.assertEqual(WRITTEN, ("implementer", "implementer_transcription", "investigator", "task_reviewer",
+                                   "final_reviewer", "final_verifier", "exception_reviewer"))
+        for role in B12_ROLES:
+            with self.subTest(role=role):
+                with tempfile.TemporaryDirectory() as td:
+                    files = {r + ".md": disk(r).encode("ascii") for r in WRITTEN if r != role}
+                    d = make_dir(td, files)
+                    self.assertEqual(dir_problems(d, WRITTEN), ["missing: %s.md" % role])
+
+    def test_labels_mutated_per_file(self):                   # F2
+        for role in B12_ROLES:
+            t = disk(role)
+            labs = list(LABELS[role])
+            first, second = paragraph(t, labs[1]), paragraph(t, labs[2])
+            cases = {
+                "missing": t.replace(first + "\n\n", ""),
+                "duplicated": t.replace(first, first + "\n\n" + first),
+                "reordered": t.replace(first, "@@").replace(second, first).replace("@@", second),
+                "renamed": t.replace(first, "Renamed." + first[len(labs[1]):]),
+            }
+            for name, bad in cases.items():
+                with self.subTest(role=role, case=name):
+                    self.assertNotEqual(bad, t)
+                    self.assertIn("labels", kinds(bad.encode("ascii"), role))
+
+    def test_required_strings_mutated_per_file(self):         # F3
+        for role in B12_ROLES:
+            t = disk(role)
+            for label in LABELS[role]:
+                for item in REQUIRED.get(label, ()):
+                    alts = item if isinstance(item, tuple) else (item,)
+                    gone = in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "zzz"))
+                    joined = in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "x" + a))
+                    for name, bad in (("missing", gone), ("inside a longer word", joined)):
+                        with self.subTest(role=role, label=label, item=item, case=name):
+                            self.assertIn("required", kinds(bad.encode("ascii"), role))
+
+    def test_format_mutated_per_file(self):                   # F4
+        for role in B12_ROLES:
+            t = disk(role)
+            b = t.encode("ascii")
+            title = "# Strict block: " + role
+            cases = [
+                ("crlf", t.replace("\n", "\r\n").encode("ascii"), "line-ending"),
+                ("no final newline", b[:-1], "final-newline"),
+                ("two final newlines", b + b"\n", "final-newline"),
+                ("en dash", t.replace("Zero bugs.", "Zero \u2013 bugs.").encode("utf-8"), "encoding"),
+                ("tab", t.replace("Zero bugs.", "Zero\tbugs.").encode("ascii"), "control"),
+                ("inner heading", t.replace("\n\nZero bugs.", "\n# x\n\nZero bugs.").encode("ascii"), "heading"),
+                ("setext", t.replace("\n\nZero bugs.", "\n---\n\nZero bugs.").encode("ascii"), "setext"),
+                ("trailing space", t.replace("\n\nZero bugs.", " \n\nZero bugs.").encode("ascii"), "trailing-ws"),
+                ("title", t.replace(title, "## Strict block: " + role, 1).encode("ascii"), "first-line"),
+            ]
+            for name, raw, kind in cases:
+                with self.subTest(role=role, case=name):
+                    self.assertIn(kind, kinds(raw, role))
+            with self.subTest(role=role, case="trailing space on a real line"):
+                lines = t.split("\n")
+                lines[2] += " "
+                self.assertIn("trailing-ws", kinds("\n".join(lines).encode("ascii"), role))
+
+    def test_forbidden_strings_in_each_file(self):            # F5
+        samples = [("lap-timer", "the lap timer repo"), ("old-decision-number", "per DEC-7"), ("spec-clause", "spec D99"),
+                   ("row-id", "row X9-ABC-1"), ("old-paths", "tools/gates/x"), ("owner-handle", "ask superbrobenji"),
+                   ("hardware", "flash the board"), ("model-name", "use Opus"), ("old-steps", "S1 block b3"),
+                   ("model-name", "sonnet45"), ("hardware", "esp32s3"), ("lap-timer", "lap_timer"),
+                   ("lap-timer", "lap\ntimer"), ("hardware", "serial\nport")]
+        for role in B12_ROLES:
+            t = disk(role)
+            self.assertEqual(forbidden_hits(t), [], role)
+            for name, sample in samples:
+                with self.subTest(role=role, sample=sample):
+                    bad = in_para(t, "Zero bugs.", lambda p: p + " " + sample.replace("\n", " ")) if "\n" not in sample \
+                        else in_para(t, "Zero bugs.", lambda p: p + " " + sample)
+                    self.assertIn(name, [h[0] for h in forbidden_hits(bad)])
+                    with tempfile.TemporaryDirectory() as td:
+                        files = {r + ".md": disk(r).encode("ascii") for r in WRITTEN if r != role}
+                        files[role + ".md"] = bad.encode("ascii")
+                        got = dir_problems(make_dir(td, files), WRITTEN)
+                        self.assertTrue(any(p.startswith(role + ".md: forbidden " + name) for p in got), got)
+
+
+def _replace_all(p, alts, fn):
+    for a in alts:
+        p = p.replace(a, fn(a))
+    return p
 
 
 if __name__ == "__main__":
