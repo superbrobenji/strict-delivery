@@ -174,3 +174,5 @@ Owner answers 2026-11-01: Q-1a-ver-2 (a) commit_exists/_check_ref refuse a leadi
 Block 1a fix round 4 DONE 6027e4a (396 tests both, verified by controller). Verifier re-check dispatched.
 Block 1a verifier re-check DONE: APPROVED at 6027e4a (396 OK both; polluted env x9 and all together OK; F-1a-ver-1..3 transcripts reproduce). Block 1a ready for owner merge grant.
 CHECKPOINT 1a block-end head=6027e4a tests=396/396 gates=n/a next=merge-grant
+Owner merge grant 2026-11-01 (option a): block/b1a merged into main as 4c2f40f (--no-ff); suite 396 OK on both interpreters at the merge; main pushed; block/b1a deleted locally.
+CHECKPOINT 1a merged head=4c2f40f tests=396/396 gates=n/a next=1b.1 (stream A); stream C may start from main; stream B after its B1.1 dispatch
