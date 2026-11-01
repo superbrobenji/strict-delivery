@@ -229,6 +229,22 @@ class RunGateTest(unittest.TestCase):
         out = run("x", lambda a: (_ for _ in ()).throw(SystemExit("a\nb")), [])[1]  # F-1a-fin-3: escaped once
         self.assertEqual(out, "FAIL x.input: exit requested ('a\\nb')\n")
 
+    def test_exception_text_is_escaped_once(self):  # F-1a-rr-1
+        def raiser(exc):
+            def check(args):
+                raise exc
+            return check
+        cases = [(KeyError("a\nb"), "KeyError: a\\nb"),
+                 (FileNotFoundError(2, "No such file", "a\nb"), "FileNotFoundError: [Errno 2] No such file: a\\nb"),
+                 (SystemExit(["a\nb"]), "exit requested ([a\\nb])"),
+                 (SystemExit(("a\nb", "c")), "exit requested ([a\\nb, c])"),
+                 (ValueError("a\nb"), "ValueError: a\\nb"),
+                 (SystemExit("a\nb"), "exit requested ('a\\nb')")]
+        for exc, want in cases:
+            with self.subTest(exc=repr(exc)):
+                out = run("x", raiser(exc), [])[1]
+                self.assertEqual(out, "FAIL x.input: %s\n" % want)
+
     def test_keyboard_interrupt_propagates(self):
         def raising(args):
             raise KeyboardInterrupt()

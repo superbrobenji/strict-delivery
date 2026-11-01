@@ -160,6 +160,10 @@ class TestRefuse(unittest.TestCase):
 
     def test_duplicate_key_nested(self):
         self._refuse("- k: 1\n  k: 2\n", 2, "duplicate key 'k'")
+        # F-1a-rr-1: the reason holds the key raw; Result.render escapes it once
+        with self.assertRaises(YamlError) as e:
+            parse('"a\\nb": 1\n"a\\nb": 2\n')
+        self.assertEqual(e.exception.reason, "duplicate key 'a\nb'")
 
     def test_tab_indent(self):
         self._refuse("a:\n\t- 1\n", 2, "tab")

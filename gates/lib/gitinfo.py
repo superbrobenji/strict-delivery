@@ -71,7 +71,12 @@ def _ensure_repo(root: str) -> None:
 def _require_toplevel(root: str) -> None:
     """Every function that maps a repo-relative path goes through here (owner Q-1a-fin-1): git reads
     ``--full-tree`` paths from the top level, so a root that is a subdirectory would silently see another tree."""
-    if os.path.realpath(root) != os.path.realpath(toplevel(root)):
+    top = toplevel(root)  # a missing or non-repository root is a GateError here
+    try:
+        same = os.path.samefile(root, top)
+    except OSError:
+        same = False
+    if not same:
         raise GateError("git rev-parse --show-toplevel: root must be the repository top level")
 
 

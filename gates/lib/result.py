@@ -104,6 +104,28 @@ def gate_args(prog: str) -> argparse.ArgumentParser:
     return p
 
 
+def _raw(x: object) -> str:
+    """``x`` as text without Python's repr escaping, so that ``Result.render`` escapes it exactly once."""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, (list, tuple)):
+        return "[" + ", ".join(_raw(i) for i in x) + "]"
+    return str(x)
+
+
+def _exc_text(e: BaseException) -> str:
+    """``str(e)`` with the repr that KeyError and OSError-with-filename apply to their text undone."""
+    if isinstance(e, KeyError) and len(e.args) == 1:
+        return _raw(e.args[0])
+    if isinstance(e, OSError) and e.filename is not None:
+        head = "[Errno %s] " % e.errno if e.errno is not None else ""
+        out = head + (e.strerror or type(e).__name__) + ": " + _raw(e.filename)
+        if e.filename2 is not None:
+            out += " -> " + _raw(e.filename2)
+        return out
+    return str(e)
+
+
 def run_check(name: str, check, args: list) -> Result:
     """Run ``check(args)``; anything but a non-empty Result becomes a FAIL line."""
     try:
@@ -111,9 +133,9 @@ def run_check(name: str, check, args: list) -> Result:
     except GateError as e:
         return _input_fail(name, str(e))
     except SystemExit as e:
-        return _input_fail(name, "exit requested (%s)" % ("'%s'" % e.code if isinstance(e.code, str) else e.code,))
+        return _input_fail(name, "exit requested (%s)" % ("'%s'" % e.code if isinstance(e.code, str) else _raw(e.code),))
     except Exception as e:
-        return _input_fail(name, "%s: %s" % (type(e).__name__, e))
+        return _input_fail(name, "%s: %s" % (type(e).__name__, _exc_text(e)))
     if not isinstance(result, Result):
         return _input_fail(name, "the check returned %s, not a Result" % type(result).__name__)
     if not result.lines:

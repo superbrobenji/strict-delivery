@@ -108,6 +108,21 @@ class RootKindsTest(Fixture):
                 self.assertNotIn(self.root, str(e.exception))
                 fn(self.root)  # the top level itself is accepted
 
+    def test_toplevel_spellings_by_samefile(self):  # Q-1a-rr-1
+        self.assertEqual(gitinfo.show(self.root + "/", "HEAD", "dir/x.txt"), "x\n")
+        self.assertEqual(gitinfo.show(self.root + "/dir/..", "HEAD", "dir/x.txt"), "x\n")
+        swapped = self.root.swapcase()
+        if not os.path.exists(swapped) or not os.path.samefile(swapped, self.root):
+            self.skipTest("the test filesystem is case-sensitive")
+        self.assertEqual(gitinfo.ls_tree(swapped, "HEAD", "dir"), ["dir/x.txt"])
+
+    def test_missing_root_is_gate_error_not_oserror(self):  # Q-1a-rr-1
+        missing = os.path.join(self.tmp, "no-such-dir")
+        for fn in (lambda: gitinfo.show(missing, "HEAD", "a"), lambda: gitinfo.ls_tree(missing, "HEAD", "a"),
+                   lambda: gitinfo.blob_exists(missing, "HEAD", "a"), lambda: gitinfo.tracked_files(missing)):
+            with self.assertRaises(GateError):
+                fn()
+
     def test_symlinked_alias_of_toplevel_is_accepted(self):  # Q-1a-fin-1
         alias = os.path.join(self.tmp, "alias")
         os.symlink(self.root, alias)

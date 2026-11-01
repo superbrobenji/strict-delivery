@@ -49,7 +49,7 @@ def _check_start(text: str, lineno: int) -> None:
     if c in _PLAIN_BAD_START:
         raise YamlError(lineno, _PLAIN_BAD_START[c])
     if c in _PLAIN_GENERIC_BAD or (c == "?" and (len(text) == 1 or text[1] in _WS)):
-        raise YamlError(lineno, f"plain scalar may not start with {c!r}")
+        raise YamlError(lineno, f"plain scalar may not start with '{c}'")
     if text.startswith("-\t"):
         raise YamlError(lineno, "tab used as a separator after '-'")
     if text == "-" or text.startswith("- "):
@@ -145,7 +145,7 @@ def _plain(text: str, lineno: int, flow: bool = False) -> object:
         raise YamlError(lineno, "empty scalar")
     _check_start(text, lineno)
     if flow and text[0] in "#|":  # c-indicators: refused first in a flow item too (owner ruling D4)
-        raise YamlError(lineno, f"plain scalar may not start with {text[0]!r}")
+        raise YamlError(lineno, f"plain scalar may not start with '{text[0]}'")
     if re.search(r":\t", text):
         raise YamlError(lineno, "tab used as a separator after ':'")
     if re.search(r":([ \t]|\Z)", text):
@@ -340,7 +340,7 @@ class _Parser:
                 raise YamlError(lineno, "expected 'key: value'")
             key, rest = kv
             if key in result:
-                raise YamlError(lineno, f"duplicate key {key!r}")
+                raise YamlError(lineno, f"duplicate key '{key}'")
             self.pos = idx + 1
             lead = rest[:len(rest) - len(rest.lstrip(_WS))]
             if rest == "":  # nothing follows ':' (content is rstripped): the stripped tail is after ':'
