@@ -14,7 +14,7 @@ No out-of-scope bucket. Every defect you see is reported, whether the branch tou
 
 Verdict. You judge whether the branch may go to the final verifier. Report status DONE when every claim and gate re-ran clean at the tip and the change itself holds no finding (here the whole branch). A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS. Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`, naming the task it belongs to. Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check or reach the tip.
 
-Zero bugs. A defect you find is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner. A defect the branch's own changes introduce makes the branch incomplete.
+Zero bugs. A defect the change caused is a finding and makes the branch incomplete. A defect you find that the change did not cause is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.
 
 No subagents. Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused. On a permission denial, stop, quote the denial verbatim, and report status DENIED.
 
