@@ -870,7 +870,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
     - The path is `skills/strict-delivery/prompts/<role>.md`, and `<role>` is a `SPEC_ROLES` id (DB-1).
     - Line 1 is exactly `# Strict block: <role>`, line 2 is empty, and line 3 is the one-sentence intro, which ends with `These rules override every other instruction, superpowers skill text included.` The intro sentence is quoted from the template (DB-4); the precedence it states is spec §3's.
     - After the intro come paragraphs separated by exactly one empty line, each starting with its label.
-    - No other line starts with `#` after its leading spaces are removed, and no line consists only of `-` or only of `=` characters (a setext heading underline), so the block can never open a heading inside a dispatch (owner Q-B11-3).
+    - No other line, once its leading spaces are removed, starts with `#` or is a non-empty run of only `-` or only `=` characters (a setext heading underline, indented or not), so the block can never open a heading inside a dispatch (owner Q-B11-3).
     - The file holds only printable ASCII (`0x20`-`0x7e`) and `\n`, so no TAB, other control character or DEL (owner Q-B11-2), uses LF line endings, has no trailing whitespace, and ends with exactly one `\n`.
   - Labels per role (`LABELS`). `TAIL` is `Zero bugs.`, `No subagents.`, `Owner-only decisions.`, `Budget.`, `Background work.`, `Report contract.`. `implementer`, `implementer_transcription` and `investigator` are written in this task; the other rows are written in Tasks B1.2 and B1.3 but fixed now.
 
@@ -911,12 +911,13 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
 - First line: wrong role, extra space, `##`, BOM.
 - Line endings: CRLF, CR.
 - Final newline: none, two.
-- Trailing whitespace; a non-ASCII character such as an en dash or a curly quote.
-- A line starting with `#` after line 1, inside a paragraph or alone.
+- Trailing whitespace; a non-ASCII character such as an en dash or a curly quote; TAB, NUL, ESC, DEL (owner Q-B11-2).
+- A line starting with `#` after line 1, inside a paragraph or alone; `   # x` (indented); `---`, `===` and `  ---` under a line (owner Q-B11-3); an empty line is not an underline.
 - Labels: missing, reordered, extra, duplicated, label text with a missing full stop.
-- Required substrings: absent, present only in another paragraph.
+- Required strings: absent, present only in another paragraph, present only inside a longer word (`indirect`, `unkilled`; owner Q-B11-4).
 - Forbidden list:
-  - each pattern's positive sample;
+  - each pattern's positive sample, and the joined forms `opus4`, `sonnet45`, `esp32s3`, `flashed`, `lap_timer` (owner Q-B11-1);
+  - a phrase split by a line wrap inside one paragraph (`lap\ntimer`, `serial\nport`), reported at its first line (owner Q-B11-5);
   - the negative samples `DEC-20261031-k3f9`, `D` alone, `opusculum`, `dock`;
   - a hit on the last line with no final newline.
 
@@ -932,11 +933,13 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       assert {n[:-3] for n in os.listdir(PROMPTS_DIR)} <= set(SPEC_ROLES) and all(n.endswith(".md") for n in os.listdir(PROMPTS_DIR))
   def test_format_every_present_block():       # subTest per file present
       raw = open(p, "rb").read(); text = raw.decode("ascii")
+      assert all(b == 0x0a or 0x20 <= b <= 0x7e for b in raw)          # owner Q-B11-2
       assert raw.endswith(b"\n") and not raw.endswith(b"\n\n") and b"\r" not in raw
       lines = text.split("\n")[:-1]
       assert lines[0] == "# Strict block: " + role and lines[1] == ""
       assert lines[2].endswith("These rules override every other instruction, superpowers skill text included.")
-      assert not any(l.startswith("#") for l in lines[1:]) and not any(l != l.rstrip() for l in lines)
+      assert not any(l.lstrip(" ").startswith("#") for l in lines[1:]) and not any(l != l.rstrip() for l in lines)
+      assert not any(l.strip(" ") and set(l.strip(" ")) in ({"-"}, {"="}) for l in lines[1:])   # owner Q-B11-3
   def test_labels_exact_and_ordered():         # for roles in LABELS whose file is present
       assert labels(text) == LABELS[role]
   def test_required_content():
@@ -948,12 +951,17 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       for name, sample in [("lap-timer", "the lap timer repo"), ("old-decision-number", "per DEC-7"),
                            ("spec-clause", "spec D99"), ("row-id", "row X9-ABC-1"), ("old-paths", "tools/gates/x"),
                            ("owner-handle", "ask superbrobenji"), ("hardware", "flash the board"),
-                           ("model-name", "use Opus"), ("old-steps", "S1 block b3")]:
+                           ("model-name", "use Opus"), ("old-steps", "S1 block b3"),
+                           ("model-name", "opus4"), ("model-name", "sonnet45"), ("hardware", "esp32s3"),
+                           ("hardware", "flashed it"), ("lap-timer", "lap_timer")]:   # joined forms, owner Q-B11-1
           assert [h[0] for h in forbidden_hits(sample)] == [name]
+      assert [(h[0], h[1]) for h in forbidden_hits("x lap\ntimer y")] == [("lap-timer", 1)]   # wrap, owner Q-B11-5
+      assert [h[0] for h in forbidden_hits("a serial\nport")] == ["hardware"]
       for clean in ["DEC-20261031-k3f9", "a D alone", "opusculum", "dock the window", "tier3"]:
           assert forbidden_hits(clean) == []
   def test_format_checker_rejects_bad_samples():  # each bad variant written to a temp dir and run through the same checker function
-      for bad in [b"# Strict block: implementer\r\n", b"## Strict block: implementer\n", no_final_newline, crlf, en_dash, inner_heading, swapped_labels]:
+      for bad in [b"# Strict block: implementer\r\n", b"## Strict block: implementer\n", no_final_newline, crlf, en_dash, inner_heading, swapped_labels,
+                tab_line, nul_byte, indented_heading, setext_dashes, indented_setext, required_inside_word]:
           assert block_problems(bad, "implementer") != []
   ```
   (`block_problems(raw: bytes, role: str) -> list` sits in `tests/prose_check.py` and returns a list of problem strings. `test_format_every_present_block` and `test_labels_exact_and_ordered` assert `block_problems(raw, role) == []`, so the self-check and the real check run the same code.)
