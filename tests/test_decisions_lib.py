@@ -564,6 +564,18 @@ class RuleTests(unittest.TestCase):
                          [("supersedes." + A, "supersedes: a decision cannot supersede itself")])
         self.assertEqual(superseded_ids([rec(dec(A, supersedes=A))]), set())
 
+    def test_self_superseding_row_counts_nowhere(self):  # owner Q-1b2r-2 (a)
+        selfie = rec(dec(A, supersedes=A))
+        self.assertEqual(superseded_ids([selfie]), set())
+        self.assertEqual([r.id for r in in_force([selfie])], [A])
+        self.assertEqual(current([selfie], A), A)
+        self.assertEqual([r.id for r in find([selfie], [], None, None, False)], [A])
+        self.assertEqual(self.suffixes([selfie]), ["supersedes." + A])
+        # with a second answered superseder there is no fork: the self reference is not a superseder
+        both = [selfie, rec(dec(B, supersedes=A))]
+        self.assertEqual(self.suffixes(both), ["supersedes." + A])
+        self.assertEqual(current(both, A), B)
+
     def test_target_not_answered(self):  # R6
         for target in ("open", "withdrawn"):
             for sup in ("open", "answered"):
@@ -732,11 +744,30 @@ class FindTests(unittest.TestCase):
         recs = [rec(dec(A, question="t")), rec(dec(B, supersedes=A, effect="one-off"))]
         self.assertEqual(self.ids(recs, ["t"]), [])
 
-    def test_non_lasting_superseded_hit_is_not_replaced(self):  # design call: only lasting answered hits are replaced
-        recs = [rec(dec(A, question="t", effect="one-off")), rec(dec(B, supersedes=A, question="x"))]
+    def test_every_kind_of_superseded_match_is_replaced(self):  # owner Q-1b2r-1 (b)
+        kinds = {"one-off": dict(effect="one-off"), "grant": {"class": "merge-grant"},
+                 "open": dict(status="open"), "withdrawn": dict(status="withdrawn")}
+        for name, kw in kinds.items():
+            with self.subTest(name):
+                a = dec(A, question="t", **kw)
+                # an open or withdrawn A is superseded by an answered B: the cross-status case
+                recs = [rec(a), rec(dec(B, supersedes=A, question="x"))]
+                self.assertEqual(self.ids(recs, ["t"]), [B])
+                self.assertEqual(self.ids(recs, ["t"], all_=True), [A])
+                # unsuperseded, the same match stays out (not in force)
+                self.assertEqual(self.ids([rec(a)], ["t"]), [])
+                # replaced by a ruling that is itself not in force: nothing
+                recs = [rec(a), rec(dec(B, supersedes=A, question="x", effect="one-off"))]
+                self.assertEqual(self.ids(recs, ["t"]), [])
+        # a withdrawn superseder does not replace its target
+        recs = [rec(dec(A, question="t", effect="one-off")), rec(dec(B, "withdrawn", supersedes=A))]
         self.assertEqual(self.ids(recs, ["t"]), [])
-        recs = [rec(dec(A, question="t", **{"class": "merge-grant"})), rec(dec(B, supersedes=A, question="x"))]
-        self.assertEqual(self.ids(recs, ["t"]), [])
+        # two matches replaced by one ruling: once
+        recs = [rec(dec(A, question="t", effect="one-off")), rec(dec(C, question="t", status="open")),
+                rec(dec(B, supersedes=A)), rec(dec(D, supersedes=C))]
+        self.assertEqual(self.ids(recs, ["t"]), [B, D])
+        recs = [rec(dec(A, question="t", effect="one-off")), rec(dec(B, supersedes=A, question="t"))]
+        self.assertEqual(self.ids(recs, ["t"]), [B])
 
     def test_include_all(self):  # N11, Q-1b2-7
         recs = [rec(dec(A, "open")), rec(dec(B, "withdrawn")), rec(dec(C, effect="one-off")),

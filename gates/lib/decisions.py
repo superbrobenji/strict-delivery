@@ -299,8 +299,9 @@ def _matches(row: dict, terms: list, path: Optional[str], topic: Optional[str]) 
 
 def find(records: list, terms: list, path: Optional[str], topic: Optional[str], include_all: bool) -> list:
     """Records matching every term (case-insensitive over question, answer and topics), the ``path`` glob and the
-    ``topic``. With ``include_all`` every match is returned as itself. Otherwise a superseded match is replaced by
-    its ``current`` and only decisions in force are returned, once each, in order of first appearance."""
+    ``topic``. With ``include_all`` every match is returned as itself. Otherwise every match, whatever its status,
+    effect or class, is replaced by its ``current`` (owner Q-1b2r-1), and only decisions in force are returned, once
+    each, in order of first appearance."""
     if include_all:
         return [r for r in records if _matches(_row(r), terms, path, topic)]
     by_id = _by_id(records)
@@ -308,8 +309,6 @@ def find(records: list, terms: list, path: Optional[str], topic: Optional[str], 
     out: list = []
     for r in records:
         row = _row(r)
-        if row.get("status") != "answered" or row.get("effect") != "lasting" or row.get("class") == CLASS_GRANT:
-            continue
         if not _matches(row, terms, path, topic):
             continue
         i = _rid(r)
