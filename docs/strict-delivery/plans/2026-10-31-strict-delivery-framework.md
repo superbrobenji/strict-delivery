@@ -1478,7 +1478,9 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
 - Q-C12-4: Task C1.1's Makefile name match compares ASCII case only (fixes K1, a KELVIN SIGN name): an entry with a non-ASCII character never matches a probe; when `lstat` finds the probe but no listing entry matches exactly or by ASCII case, the result is `Problem("<probe>", "name not ASCII")` and no later name is read.
 - Q-C12-5: `[tool.ruff.format]` (a sub-table whose first key is `format`) gives no lint proposal; `[tool.ruff]` or any other `[tool.ruff.<sub>]` still does.
 - Controller row S1: `SOURCES` is the tuple of the seven labels (`"Makefile"` stands for row 2); `detect` reads through one private label -> reader table whose keys a test checks against `SOURCES`.
-- Controller ruling (reason text not fixed by the owner): a UTF-8 byte order mark at the start of `pyproject.toml` gives `Problem("pyproject.toml", "unsupported line 1: byte order mark")` and no proposals.
+- Q-C12r-1 (2026-11-02, (a)): a trailing comment on a matched `pyproject.toml` header line that holds a Unicode Cc character other than TAB (a lone CR included) gives `Problem("pyproject.toml", "unsupported line <n>: control character")` and no proposals, as for C1.1's control-character rule. Control characters on other lines are not examined.
+- Q-C12r-2 (2026-11-02, (a)): Q-C12-3 extends to row 1: `package.json` counts only under its exact spelling in `os.listdir(root)`; `Package.json` gives nothing.
+- A UTF-8 byte order mark at the start of `pyproject.toml` (domain P2: one `Problem`, no proposals) is reported in the existing format `Problem("pyproject.toml", "unsupported line 1: byte order mark")`; the owner fixed no reason text, so the reason follows `unsupported line <n>: <reason>`.
 
 **Interfaces:**
 - Consumes: Task C1.1.
