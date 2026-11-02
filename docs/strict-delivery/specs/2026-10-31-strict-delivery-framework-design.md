@@ -106,11 +106,11 @@ Install once per machine:
    confirms, edits or leaves out each command.
 2. Ask for profile and model map (default from the profile). Ask the two extras' questions:
    local git hooks (pre-commit, pre-push), default **yes**; the GitHub Actions workflow,
-   default **no**, since not every project can use it or may run it.
+   default **no**, since not every project can use it or may run it. Ask `merge.mode`: `host` (the owner merges pull requests on the host) or `controller` (the owner approves in chat and the controller runs `gh pr merge`) (owner answer Q-M1). Offer to configure host branch protection on the base branch (pull request required, merge-commit method only) (owner directive 2026-11-01).
 3. Write `.strict-delivery/config.yml`, empty state directories, the CLAUDE.md managed block
    (between `<!-- strict-delivery:begin schema=claude-block/1 version=<framework version> -->`
    and `<!-- strict-delivery:end -->`; the rest of CLAUDE.md is untouched), and the extras
-   answered yes: the git hook shims, the CI workflow.
+   answered yes: the git hook shims, the CI workflow. It also writes the subagent depth and concurrency limits the owner chooses into the project's `.claude/settings.json` `env` block, as `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` and `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (section 10; measured limits in the programs and streams design, section 4.2).
    - Init and upgrade never overwrite. They refuse to write any path that already exists
      and is not framework-managed. Framework-managed means a managed block between the
      framework's begin and end markers in CLAUDE.md or `.gitignore` (inserting the block into an
@@ -130,7 +130,7 @@ Install once per machine:
 extras are installed and which are not, git hooks (when installed) not foreign or bypassed,
 config valid, CLAUDE.md block matches the plugin version, CI pin (when installed) matches the
 plugin version, every register parses, the indexes regenerate without error, no generated file
-is tracked, and the `.gitignore` managed block matches the plugin version. A project with
+is tracked, and the `.gitignore` managed block matches the plugin version, and whether the base branch is protected on the host (pull request required, merge-commit method only) when the host can be read. A project with
 neither extra installed is gated only inside Claude sessions, and `doctor` says so.
 
 `/strict-delivery:upgrade` moves the version pin, re-renders managed blocks and templates,
@@ -147,16 +147,16 @@ no-ops in a repository without `.strict-delivery/config.yml`):
   (standard and strict, and every profile while a program is live).
 - PreToolUse Bash: hook-bypass block (`--no-verify`, `-n`, `core.hooksPath`,
   `GIT_CONFIG_*`, HOME moves), gated commit/push, and refusal of `decisions decide` and
-  `decisions withdraw` from any agent (section 7.1) (all profiles).
+  `decisions withdraw` from any agent (section 7.1), and, since the base branch is protected (section 8), refusal of an agent's push to the base branch in any refspec form, an agent's merge through `gh api` (the REST pull-request merge endpoint, GraphQL `mergePullRequest`), an agent's `git merge` or `git commit` while the base branch is checked out, and an agent's `gh pr merge` unless `merge.mode` is `controller` and the command carries `--merge` and `--match-head-commit <sha>` (all profiles).
 - PreToolUse Edit/Write: surfaces in-force decisions whose `applies_to` matches the path,
-  once per session per decision (section 7.4); records nothing, blocks nothing.
+  once per session per decision (section 7.4); refuses any agent Edit or Write of a path under `paths.decisions`, since only the `decisions` tool writes decision records (owner answer Q-16 (a)); records nothing else and blocks nothing else.
 - PostToolUse Read: read receipts for the context contract (section 9).
 
 Enforcement: the framework enforces through what the plugin installs, the Claude Code hooks
 (they run the gates before a commit or push an agent makes, and check dispatches, edits and
 reads) and the skill's rules. The two extras extend the same gates to commits made outside
 Claude: the git pre-commit and pre-push hooks, and the CI workflow, which checks out
-`superbrobenji/strict-delivery` at the pinned tag and runs `python3 -m gates run_all`.
+`superbrobenji/strict-delivery` at the pinned tag and runs `python3 -m gates run_all`; on pull requests it also runs, on a checkout of the PR's head sha, `check streams --branch <head>` and, for a `cleanup/<plan>` head, `check cleanup`.
 
 Versioning: semver tags. The plugin version, the CLAUDE.md block version, the CI pin (when the
 CI workflow is installed) and `framework_version` in config must agree; `doctor` and `run_all`
@@ -221,8 +221,7 @@ Lean tree. Three kinds of path:
 
 `config.yml` keys. Only `schema`, `framework_version` and `profile` are required in the file;
 every other key may be omitted. The keys with a fixed default are `paths`, `ids`,
-`models.tiers`, `decision_classes.owner_only`, `drift.estimate_factor_pct`, `base_branch` and
-`decisions.scan`, as listed below; a profile presets some others, such as the block size cap
+`models.tiers`, `decision_classes.owner_only`, `drift.estimate_factor_pct`, `base_branch`, `decisions.scan` and `merge.mode`, as listed below; a profile presets some others, such as the block size cap
 (section 12). A key whose reader has not landed yet is optional in `config/1` and becomes
 required, if at all, in a later schema version with a migration (owner answer 2026-10-31).
 
@@ -248,6 +247,7 @@ required, if at all, in a later schema version with a migration (owner answer 20
 - `decisions.scan` (optional, default `docs/**`, `CLAUDE.md`, `.strict-delivery/playbooks/**`):
   the tracked files `gate_decisions` scans for references to unanswered decision ids; files under
   the state directory are never scanned (section 7.1; owner answer 2026-10-31).
+- `merge.mode` (optional, default `host`; in `config/2`, owner answers Q-M1 and Q-Pplan-14 (a)): who presses merge on an approved pull request: `host` (the owner, on the host) or `controller` (the controller, after the owner's approval in chat, section 8).
 - `overrides`: profile keys changed for this repository; each entry names the owner decision
   that authorised it.
 
@@ -274,8 +274,7 @@ from that human: the PreToolUse Bash hook refuses `decisions decide` and `decisi
 from any agent, and the human runs them (`!` prefix) or the program session records the
 owner's exact words. In a plain plan the same holds for the controller's session. Each answer
 records the git identity (`git config user.email`) as `answered_at.by`. A hand edit of a record
-cannot be told apart from a tool write; it is valid when the schema holds, and pull-request review
-is where a human checks who answered. Nothing may reference an unanswered decision id
+cannot be told apart from a tool write; it is valid when the schema holds, and pull-request review is where a human checks who answered. Agents cannot hand-edit records: the PreToolUse Edit/Write hook refuses any agent Edit or Write under `paths.decisions` (section 4; owner answer Q-16 (a)). Nothing may reference an unanswered decision id
 (`gate_decisions`, over the tracked files matching `decisions.scan`, section 6; the state
 directory, where handoffs, status pages and records list open ids by design, is not scanned).
 
@@ -306,7 +305,7 @@ in `supersedes`. At most one open or answered decision may name a given id in `s
 a withdrawn one is ignored, and `ask` refuses a second (owner answer 2026-10-31). The decision schema (appendix A) holds the exact shape. Grants use class
 `merge-grant` and name the plan; a grant inside a program also names the program and the
 stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant; `program` and
-`stream` together or not at all; none of the three on any other class; owner answer 2026-10-31).
+`stream` together or not at all; none of the three on any other class; owner answer 2026-10-31). A pull-request merge approval is not a decision record (owner answer Q-15 (a), 2026-11-02): in `controller` mode the owner approves in chat naming the PR and its head sha, in `host` mode the owner's merge on the host is the approval, and the plan's ledger records each merge as a `MERGED` line (who merged, when, PR, head sha, merge commit, the approval). `merge-grant` records and their fields stay valid for records already written.
 
 ### 7.2 Storage and ids
 
@@ -325,7 +324,7 @@ stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant
   pull request's ids are checked against the base branch too (config `base_branch`, section 6;
   deletions and immutability are checked against the merge base with it); a resolved record is
   immutable (a change is a new decision with `supersedes`), except that a finding's status moves
-  from `closed` to `merged`, set only by the cleanup step (owner answer 2026-10-31), and that a
+  from `closed` to `merged`, set only by the cleanup step (owner answer 2026-10-31; in v0.1 the cleanup step is a pull request made by hand and sets no `merged`, owner answer Q-Pplan-9 (a)), and that a
   change which is exactly a registered schema migration of the base row is not an immutability
   change: the gates migrate the base row with the registered migrations before comparing, so a
   schema version change and `upgrade` can migrate resolved records (owner answer 2026-10-31); a
@@ -336,16 +335,14 @@ stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant
   deleted by a branch. The only deletions allowed are the cleanup step's (resolved findings and
   per-effort files, section 5). Until `gate_cleanup` lands (programs block), `gate_register`
   lets a branch delete a resolved finding only when an answered `merge-grant` names its
-  `resolved_by` plan; the merge-commit check arrives with `gate_cleanup` (owner answer
-  2026-10-31).
+  `resolved_by` plan; the merge-commit check arrives with `gate_cleanup` (owner answer 2026-10-31). From the programs block, merge approvals are not decision records (owner answer Q-15 (a)), and the deletion proof is the plan's final `MERGED` ledger line checked against git, as below.
 - "Resolved" covers answered, withdrawn and superseded decisions; resolved decisions are
   permanent, and resolved rulings stay binding.
 - Findings: an open finding (status open, planned, in-progress, fixed-unpinned, pinned or
   deferred) is global and permanent until resolved, even after the effort that raised it
   closes; ownership then passes to an issue or roadmap item. A resolved finding (status closed
   or merged) stays in `state/findings/`, names the plan that resolved it
-  (`resolved_by: <plan>`) and is cleaned with that effort: the cleanup may delete it only
-  when that plan's merge grant is answered and its merge commit exists on the target branch.
+  (`resolved_by: <plan>`) and is cleaned with that effort: the cleanup may delete it only when the plan's ledger records its final pull-request merge (`MERGED ... final=yes`) and that merge commit is on the target branch's first-parent history with the recorded head as its second parent; the cleanup is its own pull request (owner answers Q-15 (a), Q-Pplan-9 (a)).
 - Claims are grouped per cited document (`claims/<doc-slug>.yml`), because they go stale
   whenever the cited code moves and are read together with that document; they are cleaned
   with that document.
@@ -417,14 +414,8 @@ Initial rule set, rewritten from lap-timer rulings without their history:
   dispatches a fresh agent of the same role with a continue prompt built from the handoff,
   ledger and status page. Nothing continues from inherited memory, and the owner never
   `/clear`s and re-prompts.
-- Merge only on all-green under an owner grant; the merge runs as its own command. The owner
-  grants merges into a program's integration branch and into main. Two exceptions: a
-  stream controller merges a group branch into its stream branch without a grant, after a
-  clean review and green gates; and during a sync the program controller merges main into the
-  integration branch without a grant when main is ahead of it. If that merge conflicts, the
-  controller stops and asks the owner.
-- After a merge, and at a program's close, the cleanup step removes the per-effort files from
-  the tree (section 5); evidence cites them as `<sha>:<path>`.
+- The base branch is protected: nothing is pushed or merged to it directly. Every change reaches it by a pull request on all-green, merged by merge commit on the owner's approval: in `controller` mode the owner approves in chat naming the PR and its head sha and the controller runs `gh pr merge --merge --match-head-commit <sha>`; in `host` mode the owner merges on the host. The plan's ledger records each merge as a `MERGED` line; merge approvals are not decision records (owner directive 2026-11-01; owner answer Q-15 (a)). Work branches are pushed at every checkpoint. Two merges need no approval: a stream controller merges a group branch into its stream branch after a clean review and green gates; and during a sync the program controller merges main into the integration branch and into each stream branch behind it, never rebasing (owner answer Q-Pplan-5 (a)). If such a merge conflicts, the controller stops and asks the owner.
+- After a merge, and at a program's close, the cleanup step removes the per-effort files from the tree in a pull request of its own (section 5); evidence cites them as `<sha>:<path>`.
 - Every agent reaps its background jobs before reporting; the controller checks for orphans.
 - Scripts that write files start with `set -eu` and assert they run inside their scratch path.
 - Owner rules go into decisions, rolled into playbooks, CLAUDE.md or `architecture.md`; agent
@@ -456,9 +447,7 @@ overrides. Project rules live in `.strict-delivery/playbooks/`.
   tracked file has unstaged changes, and section 13 states the conditions (owner answers
   2026-10-31).
 - `gate_drift`: status-page and handoff facts (branch heads, merged PRs, open blocks) match git and,
-  when available, GitHub; pending decisions on a status page match open decision records; a
-  stream branch behind `<program>/integration`, or an integration branch behind main, fails
-  until a sync (a sync merges main into the integration branch, section 8); a block past
+  when available, GitHub; pending decisions on a status page match open decision records; a stream branch behind the base branch, or an integration branch behind it, fails until a sync (a sync merges main into both, section 8); a block past
   `drift.estimate_factor_pct` percent of its estimate is reported to the owner.
 - `gate_index`: `docs/strict-delivery/INDEX.md` and the state indexes regenerate without error,
   and none of them is tracked (a tracked generated file fails).
@@ -486,11 +475,9 @@ Dispatch prompt grammar, checked by the PreToolUse Agent hook (`gate_dispatch`):
 `## Role`, `## Brief`, `## Findings`, `## Claims`, `## Budget: tokens=<n> minutes=<n>`,
 `## Model`, `## Report`, `## Strict block` (the role's prompt block, byte for byte),
 `## Task`. A fork dispatch is refused. The tool's model must equal `## Model` and meet the
-role's minimum tier; the top tier is allowed only for `top_tier_roles`.
+role's minimum tier; the top tier is allowed only for `top_tier_roles`. `gate_dispatch` refuses any dispatch whose dispatcher is a worker role (owner answer Q-H4).
 
-Lifecycle: in a plain plan, the controller dispatches every role. In a program, only the
-program session dispatches a program_controller, only a program_controller dispatches a
-stream_controller, and stream controllers and their sub-controllers dispatch the workers. Fix
+Lifecycle: in a plain plan, the controller dispatches every role. In a program, only the program session dispatches a program_controller; the program session (which acts as program controller by default) or a program_controller dispatches a stream_controller; stream controllers and their sub-controllers dispatch the workers, and a sub-controller may dispatch a sub-controller when the stream controller judges it better, within the depth limit (owner answers Q-H3, Q-H5 (a)). Fix
 loop rounds 1-3 resume the implementer,
 rounds 4-5 a fresh agent one tier up, then an owner question; every report starts with
 `status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED`. A controller never returns
@@ -505,13 +492,11 @@ brief:
 
 - Small work is a plain plan run by one controller. A large effort is a program, split by a
   program plan into streams; each stream owns a disjoint set of files and runs its own blocks in
-  its own worktrees under one stream_controller. A program_controller runs the program for the
-  owner's lean program session.
+  its own worktrees under one stream_controller. By default the owner's lean program session itself acts as program controller; a separate program_controller runs only when the configured depth allows (owner answer Q-H5 (a)).
 - A stream never edits another stream's file: it raises a cross-stream request, which the
   program controller records and the owning stream implements.
 - Each program keeps its status page, ownership map (`streams.yml`), requests and sync log in
-  its program folder on its integration branch; only the program controller commits there,
-  apart from the merges the owner grants.
+  its program folder on its integration branch; only the program controller commits there, apart from the sync's merges; it never merges into the base branch (owner answer Q-M4 (a)).
 - Branches: `<program>/integration`, stream branch `<program>/<stream>/main`, group branch
   `<program>/<stream>/<group>`. No branch is named `<program>` or `<program>/<stream>`, because
   git refuses a ref that is also another ref's directory; the stream id `integration` and the
@@ -521,8 +506,7 @@ brief:
   `<worktrees>/<program>/<stream>/main` for a stream and `<worktrees>/<program>/<stream>/<group>`
   for a group. Dashes are allowed in ids.
 - A stream controller merges each group branch into its stream branch after a clean review and
-  green gates, with no owner grant; the owner grants merges into the integration branch and into
-  main (section 8).
+  green gates, with no owner approval; a finished stream opens its own pull request to the base branch, merged on the owner's approval (section 8; owner answer Q-M4 (a)).
 - Questions travel up as messages and are asked as one batch; answers travel down as decision
   records. Agents continue themselves from handoffs (section 8).
 - `gate_streams` checks ownership, shared-file rules, status rows and request records; it and
@@ -563,8 +547,7 @@ The PreToolUse hook refuses a Bash command that runs `git commit` inside a compo
 so a commit runs as its own command, and its check runs before that command, so the index the
 commit records changes only through the commit itself (owner answers 2026-11-01). The bypass block refuses an agent's `--no-verify`; a
 human's `--no-verify`, or a repository without the git hooks, commits outside Claude with no
-gate run. CI checks out the pushed commit, so there the working tree is the commit
-(owner answers 2026-10-31).
+gate run. CI checks out the pushed commit, so there the working tree is the commit (owner answers 2026-10-31). The git pre-push hook refuses a push to the base branch, and the PreToolUse Bash hook refuses an agent's push or merge to it (section 4; owner directive 2026-11-01).
 
 ## 13a. Evidence contract for target projects
 
@@ -646,8 +629,7 @@ freezes the config and state schemas.
    registers with the id format of section 7.2 and the no-delete rule, `gate_register`,
    `gate_decisions`, decisions/findings tools (`ask`,
    `decide`, `find`, indexes, `in-force.md`).
-2. `gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption, and
-   the decision schema `decision/2` (the optional `overrides`, section 7.1) with its migration.
+2. `gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption, and the decision schema `decision/2` (the optional `overrides`, section 7.1) with its migration; `config/2` with its migration carries `merge.mode` (owner answer Q-Pplan-14 (a)).
 
 Programs block, placed after block 2 so this repository can run its remaining blocks as a
 program: the program_controller and stream_controller prompt blocks, automatic continuation,
@@ -708,6 +690,7 @@ version plus a tested migration that `upgrade` runs (section 15). Where the line
   in `.gitignore`. The end markers stay plain.
 - Mutation transcripts: the first line is `<!-- schema: mutation-transcript/1 -->`.
 - Read receipts: a YAML file with a top-level `schema:` key.
+- File lists: a schema's `files` glob may hold `/`-separated segments (`*/handoff.md`), each segment but the last matching real directories; a front-matter kind's schema (format `front-matter`) checks the front matter only (programs block Task P1.1).
 
 `gate_schema` validates every framework file against the schema of its kind, on commit, in the
 Claude hooks, and in CI when CI is installed. A kind's schema file becomes required when the
@@ -719,8 +702,7 @@ One stated exception: `gate_schema` always checks the config kind, though no gat
 produces it before `init` (owner answer 2026-10-31). Every schema refuses a key it does not
 declare. A generated file (in-force, decision-index, finding-index, overview) that is absent on
 disk is skipped, since it is regenerated before use (owner answers 2026-10-31). The decision
-schema carries the optional `rule`, the `withdrawn{at, by, reason}` map and the grant fields
-`plan`, `program` and `stream` (section 7.1). From `decision/2` it also carries the optional
+schema carries the optional `rule`, the `withdrawn{at, by, reason}` map and the grant fields `plan`, `program` and `stream` (section 7.1; kept for records already written, since pull-request merge approvals are ledger `MERGED` lines, not records, owner answer Q-15 (a)). From `decision/2` it also carries the optional
 `overrides` (section 7.1), with a tested migration from `decision/1` that lands before block 3's
 SessionStart reads the field (owner answer 2026-10-31). The first overview version, `overview/1`, holds
 only the sections block 1 can fill (architecture, open findings, in-force decisions); the
@@ -740,7 +722,7 @@ decision-index, finding-index and overview kinds, because block 1's tools produc
 | streams | `gates/schemas/streams.yml` | a program's ownership map (section 11) |
 | context | `gates/schemas/context.yml` | required reads per session kind and role (section 9) |
 | handoff | `gates/schemas/handoff.yml` | a plan's handoff front matter (section 9) |
-| ledger | `gates/schemas/ledger.yml` | a plan ledger's line formats (`CHECKPOINT`, `Ruling:`, ...) |
+| ledger | `gates/schemas/ledger.yml` | a plan ledger's line formats (`CHECKPOINT`, `Ruling:`, `Request:`, `UPDATE`, `MERGED`); a line led by one of these words must match its form, any other line is prose (owner answer Q-Pplan-1 (a)) |
 | status | `gates/schemas/status.yml` | a program's status page table (section 11) |
 | sync-log | `gates/schemas/sync-log.yml` | a program's sync log (section 11) |
 | overview | `gates/schemas/overview.yml` | the sections of `INDEX.md` (section 5) |
