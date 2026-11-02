@@ -133,6 +133,7 @@ checkpoint" is removed; one block per agent context stays.
    cross-stream interface) and its program plan. The plan defines each stream: id, purpose,
    stream plan, owned paths, shared files and their rules, estimate, dependencies, merge order,
    and a `## Deferred` table. Approving it is an owner decision of class `program-create`.
+   Everything in the program's spec and plan is planned in full before any code; no block that is only an outline may start implementation. The last planning step is the stream breakdown plan, `.strict-delivery/state/plans/<plan>/breakdown.yml` (kind `breakdown/1`, main spec section 8 and appendix A): streams with owned paths, tasks per stream, dependency edges from task to task, unblock conditions, and parallel groups within the concurrency limit, with the concurrency and depth limits it assumes. `program create` refuses a plan with an outline-only block or without a valid breakdown, and streams start as their unblock conditions hold (owner answer Q-PL-1 (a), 2026-11-02).
 2. The program controller (the program session itself by default, section 4; a separate program_controller only when the configured depth allows) creates the integration branch `<program>/integration` from main, with its own worktree, and the program folder on it (section 7), then dispatches one stream controller per ready stream. Each stream branch starts from main (owner answer Q-M4 (a)).
 3. Streams run. Owner questions flow up and are asked as one batch; answers flow down as decision
    records. Cross-stream needs flow as requests (section 6). Progress, estimate use and blockers
@@ -181,7 +182,7 @@ program controller writes it as a record; B implements it in its own file.
 | `docs/strict-delivery/specs/<spec>.md` | an effort's spec; marks where decisions were made by citing their ids | the spec's effort is done |
 | `docs/strict-delivery/plans/<plan>.md` | a plan (stream plan, plain plan, or program plan) | the plan is done |
 | `.strict-delivery/state/programs/<program>/` | `status.md`, `streams.yml` (the local ownership map), `requests/`, `sync-log.md`; lives on the integration branch, committed only by the program controller, never merged into the base branch | the program closes |
-| `.strict-delivery/state/plans/<plan>/` | ledger, handoff, mutation transcripts | the plan merges |
+| `.strict-delivery/state/plans/<plan>/` | ledger, handoff, stream breakdown (`breakdown.yml`), mutation transcripts | the plan merges |
 | `docs/strict-delivery/reviews/<plan>/` | review reports | the plan merges |
 | `.strict-delivery/state/claims/<doc-slug>.yml` | claims about one document | with that document |
 | resolved findings in `.strict-delivery/state/findings/` | closed and merged findings | with the effort that resolved them |

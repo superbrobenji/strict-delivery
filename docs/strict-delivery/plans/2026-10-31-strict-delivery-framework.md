@@ -1729,6 +1729,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 
 **Cross-block notes.**
 - **Block 3:** the PreToolUse Agent hook supplies `dispatcher` and `program_live` (block 2). It takes `program_live` from `programs.live_programs` (Task P2.1; controller ruling on live programs), and runs `gate_dispatch` whenever `dispatch.required(root, cfg)` (Task P4.3) is true, so a live program is gated on the light profile too (spec §12).
+- **Stream B (Q-PL-1 (a), owner 2026-11-02):** a cross-stream request to B, raised by A when Task P2.2 starts (stream rules, "Requests"): Task B2.2's `playbook/sessions.md` writes the planning steps for agents: plan every block of the spec and plan in full before any code (no outline-only block starts implementation), then write the stream breakdown plan last (`<paths.plan_state>/<plan>/breakdown.yml`, `breakdown/1`: streams and owned paths, tasks per stream, dependency edges, unblock conditions, parallel groups within the concurrency limit, the assumed concurrency and depth), and run streams as they unblock. If B2 has merged by then, the request goes to whoever owns `playbook/sessions.md` (DS-3).
 - **Block 3 (stream B or A):** `playbook/streams.md` and `playbook/sessions.md` describe the Q-H5 default tree, the session as program controller and the PR flow. While B is live this is a cross-stream request to B, raised in Task P4.3 (stream rules, "Requests").
 - **Block 3 (PR flow, Q-15):** the PreToolUse Bash hook refuses an agent's `git push` whose destination is the base branch, and an agent's `git merge` or `git commit` while the base branch is checked out; it refuses an agent's `gh pr merge` unless `merge.agent_may_merge(cfg)` (Task P3.1) and the command carries `--merge` and `--match-head-commit <40 hex>`. It also refuses every other agent route to a merge or a base-branch update (review 5 F-Pp5-3): `gh api` calls to the REST merge endpoint (`repos/<owner>/<repo>/pulls/<n>/merge`, any method or path spelling) and GraphQL `mergePullRequest` (a `gh api graphql` body holding it), and `git push` to the base branch in any refspec form (`<remote> <base>`, `HEAD:<base>`, `refs/heads/<base>`, `:<base>`, `--all`, `--mirror`). The owner's chat approval itself cannot be checked by a hook; the ledger's `MERGED` line records it.
 - **Block 3 (Q-16):** the PreToolUse Edit/Write hook refuses any agent Edit or Write of a path under `paths.decisions` (spec §4 currently: it "records nothing, blocks nothing"); only `python3 -m gates decisions` writes there, and its `decide` and `withdraw` stay refused to agents by the Bash hook.
@@ -2038,16 +2039,19 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 ### Task P2.2: the `program` tool
 
 **Files:**
-- Create: `gates/tools/program_cli.py`
+- Create: `gates/tools/program_cli.py`; `gates/lib/breakdown.py` and `gates/schemas/breakdown.yml` (the plan checks of owner answer Q-PL-1 (a): no task owned `gate_plan` or plan checks, so they land here, in the task where a program starts)
 - Modify: `gates/__main__.py` (`COMMANDS["program"]`), `gates/producers.py` (add `gates.tools.program_cli`)
-- Test: `tests/test_program_cli.py`
+- Test: `tests/test_program_cli.py`, `tests/test_breakdown.py`
 
-**Owner answers applied:** controller rulings (producer; integration-branch writer; `program-create` decision); Q-Pplan-4, Q-Pplan-11.
+**Owner answers applied:** controller rulings (producer; integration-branch writer; `program-create` decision); Q-Pplan-4, Q-Pplan-11; Q-PL-1 (a) (plan in full before code; the stream breakdown is the last planning step; main spec §8 and Appendix A, programs design §5 step 1).
 
 **Interfaces:**
 - Consumes: `programs.*` (Task P2.1), `ids.mint/utc_today`, `decisions.is_resolved`, `store.Store("decision")`, `gitinfo.current_branch/head_sha/local_branches/show`, `yamlsub.emit`, `config.load`, and the ids of every register (decisions, findings, claims, every program's requests).
-- Produces: `PRODUCES = ("streams", "status", "sync-log", "request")`; `main(argv: list) -> int` for `python3 -m gates program <sub>`. Every subcommand refuses (exit 1, nothing written) unless `current_branch` is `<program>/integration`, validates every file it writes before writing it, and writes with `yamlsub.emit` or the canonical table form.
-  - `create <program> --streams FILE --decision DEC [--root R]`: refuses an invalid name, a name whose folder exists in the working tree, at `HEAD`, or at the tip of `base_branch` (programs design §7.3: "a name already on main or on the branch is refused"), an id that is not an answered `program-create` decision, and a streams file that fails `streams/1` or `streams_errors`. It writes `streams.yml`, `status.md` (one row per stream: `block` and `next task` `none`, `estimate` from `streams.yml`, `used` `0`, `status` `ready`, `blockers` and `pending decisions` `none`, `delivers` the stream's `purpose`) and `sync-log.md` (its first line).
+- Produces: `PRODUCES = ("streams", "status", "sync-log", "request", "breakdown")`; `main(argv: list) -> int` for `python3 -m gates program <sub>`. Every subcommand refuses (exit 1, nothing written) unless `current_branch` is `<program>/integration`, validates every file it writes before writing it, and writes with `yamlsub.emit` or the canonical table form.
+  - `gates/schemas/breakdown.yml` (`breakdown/1`, YAML, `files: "<paths.plan_state>/*/breakdown.yml"`): `plan` (`str`, the plan slug, equal to the folder name); `max_concurrent`, `max_depth` (`int`, `min: 1`: the limits the breakdown assumes); `streams` (`list`, `min: 1`) of `map {id: str [a-z0-9][a-z0-9-]*, paths: list of str (min 1; a trailing `/` owns every path under it), tasks: list of str (min 1, task ids), unblock: str ("at program start" or the condition, naming tasks or streams)}`; `edges` (`list`, may be empty) of `map {from: str, to: str}` (`to` waits for `from`); `groups` (`list`, `min: 1`) of `map {id: str, tasks: list of str (min 1)}`. Unknown keys refused.
+  - `breakdown.breakdown_errors(row: dict) -> list` of `(suffix, reason)`: stream ids unique; a task id in more than one stream; owned paths that overlap between streams (equal, or one a `/`-prefix of the other); an edge naming an unknown task, an edge from a task to itself, a cycle (the reason names one cycle); a group naming an unknown task, a task in two groups, a group holding two tasks joined by a path of edges, a group larger than `max_concurrent`.
+  - `breakdown.plan_errors(plan_text: str, row: dict) -> list` of `(suffix, reason)` ("outline-only"): a bullet under a heading that starts `## Later blocks` whose text does not contain `Planned in full in section`; a task of the breakdown with no `### Task <id>:` or `#### Task <id>:` heading in the plan; a task heading of the plan in no stream of the breakdown.
+  - `create <program> --streams FILE --decision DEC --plan SLUG [--root R]`: first refuses (exit 1, nothing written) when `<paths.plans>/<SLUG>.md` or `<paths.plan_state>/<SLUG>/breakdown.yml` is missing, when the breakdown fails `breakdown/1`, `breakdown_errors` or `plan_errors`, each reason printed (owner answer Q-PL-1 (a): a program does not start on an outline-only plan or without a valid breakdown); then refuses an invalid name, a name whose folder exists in the working tree, at `HEAD`, or at the tip of `base_branch` (programs design §7.3: "a name already on main or on the branch is refused"), an id that is not an answered `program-create` decision, and a streams file that fails `streams/1` or `streams_errors`. It writes `streams.yml`, `status.md` (one row per stream: `block` and `next task` `none`, `estimate` from `streams.yml`, `used` `0`, `status` `ready`, `blockers` and `pending decisions` `none`, `delivers` the stream's `purpose`) and `sync-log.md` (its first line).
     - Where it runs (owner answer Q-Pplan-11 (a)): the session first creates the branch and its worktree with one git command of its own, `git worktree add -b <program>/integration <worktrees>/<program>/integration <base_branch>`, and runs `create` (and every later `program`, `questions` and `decisions` write of the program) with `--root` that worktree. `create` then also refuses when the top level of `--root` is not `<worktrees>/<program>/integration`, with `<worktrees>` from the streams file resolved against the main worktree (the parent of `git rev-parse --path-format=absolute --git-common-dir`). The main checkout is never switched.
   - After every successful write the tool prints `push <program>/integration`; the program controller pushes the integration branch as its own command (owner directive; CI reads program files from it).
   - `status <program> <stream> [--block B] [--next-task T] [--used N] [--status S] [--blockers IDS] [--pending IDS] [--delivers TEXT]`: rewrites that one row; every other row is byte-identical.
@@ -2059,6 +2063,8 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 - Branch: `<program>/integration`; another program's integration; a stream branch; `main`; detached.
 - `--root` (Q-Pplan-11 (a)): the integration worktree at `<worktrees>/<program>/integration`; the main checkout with `<program>/integration` checked out (refused); a worktree on the right branch at another path (refused); `<worktrees>` given as `../w` from the main worktree.
 - `create`: each refusal above; streams file missing, a YAML error, a directory; `--decision` open, withdrawn, another class, unknown; folder present only on `main`.
+- `--plan` and the breakdown (Q-PL-1 (a)): plan file missing; breakdown missing, a YAML error, a directory, a wrong `plan`; a `## Later blocks` bullet without `Planned in full in section` (outline-only block) and one with it; a breakdown task with no heading; a plan task heading in no stream; `### Task` and `#### Task` headings; a heading id with a suffix before the colon.
+- `breakdown_errors`: duplicate stream ids; a task in two streams; overlapping paths (`a/` and `a/b.py`, equal paths, `a` and `ab`, which do not overlap); an edge to an unknown task, a self edge, a two-task and a three-task cycle; an empty `edges`; a group with an unknown task, a task in two groups, two dependent tasks (directly and through a third), a group of `max_concurrent` tasks (passes) and of `max_concurrent + 1` (fails); `max_concurrent` and `max_depth` `0`, `True`, `"2"`.
 - `status`: unknown stream; each field value against `status_errors`; text holding `|`, a newline, non-ASCII.
 - `request new`: each flag missing, repeated, empty; `--to` not owning a file; `--from` equal to `--to`; a mint collision forced by a seeded generator; the requests folder missing.
 - `request set`: every transition pair; `done` without `--commit`; a commit not on the owner's branch; `--decision` absent when leaving `disputed`.
@@ -2069,6 +2075,19 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
   ```python
   def test_create_writes_three_files_that_validate():
       assert code == 0 and gate_schema.check(["--root", root]).ok() and status_rows(read(STATUS))[0]["status"] == "ready"
+  def test_create_refuses_outline_only_plan():   # Q-PL-1 (a)
+      assert code == 1 and "Planned in full" in err and not exists(FOLDER)
+  def test_create_refuses_missing_or_invalid_breakdown():   # Q-PL-1 (a); subTest per case
+      assert code == 1 and "breakdown" in err and not exists(FOLDER)
+  # test_breakdown.py
+  def test_cycle_found_and_named():
+      assert any(s == "edges" and "t1 -> t2 -> t1" in r for s, r in breakdown_errors(row_with_cycle))
+  def test_group_over_concurrency_or_with_dependent_tasks_fails():   # subTest per case
+      assert breakdown_errors(bad_group_row) != []
+  def test_overlapping_paths_fail_and_prefix_without_slash_passes():
+      assert breakdown_errors(row_paths("a/", "a/b.py")) and not breakdown_errors(row_paths("a", "ab"))
+  def test_plan_errors_this_repository_plan_passes_its_headings():   # every Later blocks bullet points to a detailed section
+      assert [e for e in plan_errors(read(PLAN), row_of_every_task(read(PLAN))) if e[0].startswith("outline")] == []
   def test_create_needs_answered_program_create():
       assert code == 1 and "program-create" in err and not exists(FOLDER)
   def test_create_refuses_name_on_main():
@@ -2087,9 +2106,9 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
       assert read(SYNC).splitlines()[-1].startswith("SYNC integration=")
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Implement** `program_cli.py`.
+- [ ] **Step 3: Implement** `program_cli.py`, `breakdown.py` and `schemas/breakdown.yml`.
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS** (this repository has no program folder, so the four kinds have no files).
-- [ ] **Step 5: Commit** `feat(tools): program create, status, request and sync-log`, then checkpoint.
+- [ ] **Step 5: Commit** `feat(tools): program create, status, request and sync-log; breakdown/1 and the plan checks at program start`, then checkpoint.
 
 ### Task P2.3: `gate_streams`; `run_all` runs it while a program is live
 
@@ -2515,7 +2534,7 @@ Starts only after the two prompt files are on `main` and A has updated from `mai
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Implement** the two dispatch additions.
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
-- [ ] **Step 5: Enable.** In a `mktemp -d` clone: create a fixture program with `program create` (a fixture `program-create` decision in the clone only), render a `stream_controller` dispatch from the real prompt file, run `python3 -m gates check dispatch --input <file>` with `dispatcher {id: session, depth: 0, live_children: 0, live_total: 0}`; expect every line PASS; ledger it. Raise the block-3 request for `playbook/streams.md` and `playbook/sessions.md` (cross-block notes) when B is live.
+- [ ] **Step 5: Enable.** In a `mktemp -d` clone: create a fixture program with `program create` (a fixture `program-create` decision, plan and `breakdown.yml` in the clone only), render a `stream_controller` dispatch from the real prompt file, run `python3 -m gates check dispatch --input <file>` with `dispatcher {id: session, depth: 0, live_children: 0, live_total: 0}`; expect every line PASS; ledger it. Raise the block-3 request for `playbook/streams.md` and `playbook/sessions.md` (cross-block notes) when B is live.
 - [ ] **Step 6: Commit** `feat(gates): gate_dispatch for live programs; program and stream controller prompt blocks; pin subagent limits`, then checkpoint with `gates=PASS`. **Block P4 end:** as block 1d; this ends the programs block. The next step, running blocks 3-6 as a program, starts with the owner's `program-create` decision.
 
 ---
@@ -5958,7 +5977,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
 
     The table covers spec §10: "Each role names its prompt block, minimum tier, budget cap, whether it needs a brief, and which finding states it may take". The budget cap is config `budgets` (no default in the spec), so the table names the key, not a number.
   - `decisions.md`: spec §7 in operating terms, covering `ask` / `decide` / `find` / `withdraw`, the human-only answer rule, search before asking, and `landed_in` (spec §7.2: "a decision's `landed_in` is never a spec").
-  - `sessions.md`: session kinds, start order, blocks, checkpoints, handoffs and continuation (spec §9, design §4.4, §10).
+  - `sessions.md`: session kinds, start order, blocks, checkpoints, handoffs and continuation (spec §9, design §4.4, §10), and the planning steps for agents: plan in full before code, the stream breakdown plan (`breakdown/1`) as the last planning step, streams run as they unblock (spec §8 as edited for owner answer Q-PL-1 (a); cross-block request from A, Programs block cross-block notes "Stream B (Q-PL-1 (a))"; if this task is already done when the request arrives, B adds the section in a follow-up commit).
   - `streams.md`: design §4-§6 and §10-§12 in operating terms.
   - `review.md`: task and final review, the verifier, the fix loop and the process-defect stop (spec §8, §10).
 
@@ -6958,3 +6977,7 @@ Answers on earlier blocks, given with the same batch:
 - **Q-Pplan-14 (a)** with **Q-B6plan-3 (a)**: Task 2c.2's `config/2` carries `merge` (`mode` `host` | `controller`, default `host`) and the optional `escape_cost`.
 
 Spec edits applied with this section (each as its draft states it, for the chosen options only): SE-B3-1..SE-B3-7; SE-B4-1..SE-B4-7 and the Q-B4plan-2 (a) edit of spec §4's `doctor` protection line (the Q-B4plan-1 (b) edit does not apply); S5-1..S5-8 (S5-4 and S5-8 as answered); SE6-1..SE6-7 (SE6-5 under Q-B6plan-2 (d), SE6-7 under Q-B6plan-5 (a)); and the Q-B1v-2 (a) wording in the programs design. The main spec's §7.2 deletion proof by the plan's final `MERGED` line starts with the programs block, where `MERGED` lines begin (docs review F-docs-15).
+
+Owner directive given later the same day:
+
+- **Q-PL-1 (a) (2026-11-02)** everything in a spec and its plan is planned in full before code; no outline-only block may start implementation. The last planning step is a parallelism and stream breakdown plan (`<paths.plan_state>/<plan>/breakdown.yml`, kind `breakdown/1`: streams with owned paths, tasks per stream, dependency edges task -> task, unblock conditions, parallel groups within the concurrency limit, the assumed concurrency and depth), and streams run as they unblock. Written into main spec section 8, section 5 and Appendix A, programs design section 5 step 1 and section 7.2, Task P2.2 (`program create` refuses a plan with an outline-only block or no valid breakdown; `breakdown.py`, `schemas/breakdown.yml`), and a cross-block request to stream B for `playbook/sessions.md` (Task B2.2).

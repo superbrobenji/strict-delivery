@@ -174,7 +174,7 @@ fail when they do not.
                                       until the cleanup removes it
   state/findings/index.yml            generated, git-ignored
   state/claims/<doc-slug>.yml         claims about one document
-  state/plans/<plan>/ledger.md handoff.md mutations/
+    state/plans/<plan>/ledger.md handoff.md breakdown.yml mutations/
                                       live plans only; cleaned when the plan merges
   state/programs/<program>/status.md streams.yml requests/ sync-log.md
                                       live programs only, on the program's integration
@@ -392,7 +392,7 @@ Initial rule set, rewritten from lap-timer rulings without their history:
 - No claim is trusted: verify directly and by contradiction, record both commands.
 - Owner-only classes are questions in the log; the path halts until answered.
 - Report before plan: after an audit, the owner rules on triage before any plan; no plan is
-  committed the owner has not seen.
+  committed the owner has not seen. Plan in full before code (owner answer Q-PL-1 (a), 2026-11-02): every block of a spec and its plan is planned in full (tasks, files, interfaces, input-domain dimensions, tests) before any code is written; no block whose plan is only an outline may start implementation. The last planning step is the stream breakdown plan, `<paths.plan_state>/<plan>/breakdown.yml` (kind `breakdown/1`, appendix A): the streams with their owned paths, the tasks of each stream, the dependency edges from task to task, each stream's unblock condition, the parallel groups (each within the concurrency limit), and the concurrency and depth limits it assumes. Streams run as they unblock. When a program starts, `program create` refuses a plan with an outline-only block or without a valid breakdown (programs and streams design, section 5).
 - Zero bugs: a change's own bug makes it incomplete; review minors are fixed in the fix round,
   never deferred; an unrelated bug gets a register row and an owner.
 - A deleted test is restored and fixed; dropping a test is never offered as a fix.
@@ -716,6 +716,7 @@ decision-index, finding-index and overview kinds, because block 1's tools produc
 | mutation-transcript | `gates/schemas/mutation-transcript.yml` | one mutation transcript (section 13a) |
 | review-report | `gates/schemas/review-report.yml` | one review report or review package (section 13a) |
 | receipt | `gates/schemas/receipt.yml` | one session's read receipts (section 9) |
+| breakdown | `gates/schemas/breakdown.yml` | a plan's stream breakdown, `<paths.plan_state>/<plan>/breakdown.yml` (section 8): `plan`, `max_concurrent` and `max_depth` (the limits assumed), `streams` (each `id`, owned `paths`, `tasks`, `unblock`), `edges` (`from` task, `to` task: `to` waits for `from`), `groups` (parallel groups: `id`, `tasks`); owner answer Q-PL-1 (a) |
 | claude-block | `gates/schemas/claude-block.yml` | the CLAUDE.md managed block (section 4) |
 | gitignore-block | `gates/schemas/gitignore-block.yml` | the `.gitignore` managed block (section 5) |
 | profile | `gates/schemas/profile.yml` | a profile preset in the plugin (section 12) |
