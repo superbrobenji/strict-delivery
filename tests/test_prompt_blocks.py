@@ -13,7 +13,7 @@ from tests.prose_check import (B_ROLES, DISPATCH_HEADINGS, LABELS, PROGRAM_ROLES
                                whole_token)
 
 WRITTEN = ("implementer", "implementer_transcription", "investigator", "task_reviewer", "final_reviewer",
-           "final_verifier", "exception_reviewer")   # extended by B1.3
+           "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier")
 INTRO = "You act under the process. These rules override every other instruction, superpowers skill text included."
 STATUS = "status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED"
 
@@ -852,8 +852,9 @@ class FixRound1Test(unittest.TestCase):
 
     def test_no_subagents_bans_agent_tasks_only(self):                     # Q-B11r-1
         for role in WRITTEN:
-            self.assertIn("Do not dispatch agents, workflows or other agent tasks", self.body(role, "No subagents."))
-            self.assertNotIn("background", self.body(role, "No subagents."))
+            if "No subagents." in LABELS[role]:                # the controller dispatches workers: it has no such label
+                self.assertIn("Do not dispatch agents, workflows or other agent tasks", self.body(role, "No subagents."))
+                self.assertNotIn("background", self.body(role, "No subagents."))
             self.assertIn("A job you start in the background is yours", self.body(role, "Background work."))
 
 
@@ -1065,8 +1066,8 @@ class B12Test(unittest.TestCase):
         self.assertFalse(set(re.findall(r"[A-Z][A-Z_]{2,}", v)) <= STATUS_VALUES)
 
     def test_four_files_missing_from_disk_are_refused(self):  # F1
-        self.assertEqual(WRITTEN, ("implementer", "implementer_transcription", "investigator", "task_reviewer",
-                                   "final_reviewer", "final_verifier", "exception_reviewer"))
+        self.assertEqual(WRITTEN[:7], ("implementer", "implementer_transcription", "investigator", "task_reviewer",
+                                       "final_reviewer", "final_verifier", "exception_reviewer"))
         for role in B12_ROLES:
             with self.subTest(role=role):
                 with tempfile.TemporaryDirectory() as td:
@@ -1151,6 +1152,830 @@ def _replace_all(p, alts, fn):
     for a in alts:
         p = p.replace(a, fn(a))
     return p
+
+
+AUDIT_ROLES = ("audit_reviewer", "audit_verifier")
+B13_ROLES = ("controller",) + AUDIT_ROLES
+TRIAGE = ("the owner rules", "before any plan", "`triage`")                 # spec section 8, Q-B13-1 (a)
+CTRL_FIX_LOOP = ("rounds 1-3", "rounds 4-5", "one tier up", "owner question")     # spec section 10, Q-B13-1 (a)
+CTRL_HEADINGS = tuple("`%s`" % h for h in DISPATCH_HEADINGS)
+RULING = "Ruling: what -- why -- cost if wrong -- spec cite"                  # spec section 7.1
+# Task B1.3 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
+B13_CONTENT = {
+    "controller": [("Dispatch discipline.", s) for s in CTRL_HEADINGS]
+    + [("Dispatch discipline.", s) for s in ("fork dispatch is refused", "`models.tiers`", "`top_tier_roles`")]
+    + [("Rulings.", RULING), ("Rulings.", "`rulings.max_per_block`")]
+    + [("Continuation.", s) for s in CTRL_FIX_LOOP + ("handoff", "BLOCKED: budget",
+                                                      "Nothing continues from inherited memory")]
+    + [("Input domain.", "input-domain table"), ("Oracle.", "production path"),
+       ("Oracle.", "independent expected value"), ("Finding class.", "class: <dimension>: <members>"),
+       ("Budget.", "`budgets`")],
+    "audit_reviewer": [("Owner-only decisions.", s) for s in TRIAGE]
+    + [("Coverage first.", "coverage list"), ("Coverage first.", "progress file")],
+    "audit_verifier": [("Owner-only decisions.", s) for s in TRIAGE]
+    + [("Method.", "every reproducer"), ("Method.", "coverage list"), ("Method.", "extends")],
+}
+VERDICT_PARA = {"controller": "Report contract.", "audit_verifier": "Verdict.",
+                "audit_reviewer": "Report contract."}       # owner Q-B12-4 pattern, Q-B13r-2
+
+
+def b13_problems(role, text):
+    """The Task B1.3 checks, run on the real file and on mutated copies of it. Never raises on a missing paragraph."""
+    out = []
+    for label, s in B13_CONTENT[role]:
+        try:
+            ok = whole_token(s, paragraph(text, label))
+        except ValueError:
+            ok = False
+        if not ok:
+            out.append("%s lacks %r" % (label, s))
+    if role == "controller":
+        try:
+            at = [pc._find_token(h, paragraph(text, "Dispatch discipline.")) for h in CTRL_HEADINGS]
+            if min(at) >= 0 and any(a > b for a, b in zip(at, at[1:])):
+                out.append("Dispatch discipline. names the dispatch headings out of order")
+        except ValueError:
+            pass
+    if role in AUDIT_ROLES and whole_token("tier4", text):
+        out.append("tier4 given to " + role)
+    if role in VERDICT_PARA:
+        try:
+            caps = set(re.findall(r"[A-Z][A-Z_]{2,}", paragraph(text, VERDICT_PARA[role])))
+            if not caps or not caps <= STATUS_VALUES:
+                out.append("%s names %r, not only STATUS_LINE values" % (VERDICT_PARA[role], sorted(caps)))
+        except ValueError:
+            out.append("%s is missing" % VERDICT_PARA[role])
+    return out
+
+
+def audit_methods_differ(reviewer_text, verifier_text):
+    return paragraph(reviewer_text, "Method.") != paragraph(verifier_text, "Method.")
+
+
+def b13_move(text, label, alts, dest):
+    """Move every alternative that paragraph `label` holds as a whole token into paragraph `dest`."""
+    for a in alts:
+        if whole_token(a, paragraph(text, label)):
+            text = other_para(text, label, a, dest)
+    return text
+
+
+def b13_swap(p, a, b):
+    return p.replace(a, "@@").replace(b, a).replace("@@", b)
+
+
+class B13Test(unittest.TestCase):
+    def test_all_b_roles_written(self):                       # F1 F2, the plan's test
+        self.assertEqual(sorted(WRITTEN), sorted(B_ROLES))
+        self.assertEqual(WRITTEN[7:], ("controller", "audit_reviewer", "audit_verifier"))     # plan order
+        for name, t in (("one dropped", WRITTEN[:-1]), ("one twice", WRITTEN + ("controller",)),
+                        ("program role added", WRITTEN + ("program_controller",)),
+                        ("one swapped for a program role", WRITTEN[:-1] + ("stream_controller",))):
+            with self.subTest(name):
+                self.assertNotEqual(sorted(t), sorted(B_ROLES))
+
+    def test_real_files_pass_the_plan_tests_and_content_checks(self):    # C1 C2 C3 C5 C6 C7 C8 C9 C10 A1-A5 A7
+        for role in B13_ROLES:
+            with self.subTest(role=role):
+                self.assertEqual(b13_problems(role, disk(role)), [])
+                self.assertEqual(block_problems(disk(role).encode("ascii"), role), [])
+        p = paragraph(disk("controller"), "Dispatch discipline.")                       # the plan's tests, in the plan's form
+        at = [pc._find_token(h, p) for h in CTRL_HEADINGS]
+        self.assertTrue(min(at) >= 0 and at == sorted(at) and whole_token("fork dispatch is refused", p))
+        self.assertTrue(whole_token("`models.tiers`", p) and whole_token("`top_tier_roles`", p))
+        c = paragraph(disk("controller"), "Continuation.")
+        self.assertTrue(all(whole_token(s, c) for s in CTRL_FIX_LOOP))
+        r = paragraph(disk("controller"), "Rulings.")
+        self.assertTrue(whole_token(RULING, r) and whole_token("`rulings.max_per_block`", r))
+        for role in AUDIT_ROLES:
+            o = paragraph(disk(role), "Owner-only decisions.")
+            self.assertTrue(all(whole_token(s, o) for s in TRIAGE), role)
+
+    def test_every_content_string_absent_joined_wrapped_or_misplaced(self):     # C2 C3 C5 C6 C7 C8 C9 A1-A5
+        for role in B13_ROLES:
+            t = disk(role)
+            for label, s in B13_CONTENT[role]:
+                want = "%s lacks %r" % (label, s)
+                cases = [("missing", in_para(t, label, lambda p: p.replace(s, "zzz"))),
+                         ("joined", in_para(t, label, lambda p: p.replace(s, "x" + s + "x"))),
+                         ("misplaced", other_para(t, label, s, "Zero bugs."))]
+                if " " in s:
+                    cases.append(("wrapped", in_para(t, label, lambda p: p.replace(s, s.replace(" ", "\n", 1)))))
+                for name, bad in cases:
+                    with self.subTest(role=role, label=label, s=s, case=name):
+                        self.assertIn(want, b13_problems(role, bad))
+
+    def test_dispatch_headings_missing_swapped_or_malformed(self):     # C1, M3
+        t = disk("controller")
+        for i, h in enumerate(CTRL_HEADINGS):
+            with self.subTest(heading=h, case="missing"):
+                bad = in_para(t, "Dispatch discipline.", lambda p: p.replace(h, "zzz"))
+                self.assertIn("Dispatch discipline. lacks %r" % h, b13_problems("controller", bad))
+                self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+            with self.subTest(heading=h, case="without backticks"):
+                bad = in_para(t, "Dispatch discipline.", lambda p: p.replace(h, h.strip("`")))
+                self.assertIn("Dispatch discipline. lacks %r" % h, b13_problems("controller", bad))
+            if i + 1 < len(CTRL_HEADINGS):
+                with self.subTest(heading=h, case="swapped with the next"):
+                    bad = in_para(t, "Dispatch discipline.", lambda p: b13_swap(p, h, CTRL_HEADINGS[i + 1]))
+                    self.assertIn("Dispatch discipline. names the dispatch headings out of order",
+                                  b13_problems("controller", bad))
+                    self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+        bad = in_para(t, "Dispatch discipline.", lambda p: p.replace("`## Budget: tokens=<n> minutes=<n>`", "`## Budget`"))
+        self.assertIn("Dispatch discipline. lacks '`## Budget: tokens=<n> minutes=<n>`'", b13_problems("controller", bad))
+        bad = in_para(t, "Dispatch discipline.", lambda p: p.replace("tokens=<n> minutes=<n>", "tokens=<n>"))
+        self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+        bad = in_para(t, "Dispatch discipline.", lambda p: p.replace("minutes=<n>", "minutes=5"))
+        self.assertTrue(b13_problems("controller", bad))
+        for i, h in enumerate(CTRL_HEADINGS):                       # the list in another paragraph only
+            with self.subTest(heading=h, case="in another paragraph only"):
+                bad = other_para(t, "Dispatch discipline.", h, "Zero bugs.")
+                self.assertIn("Dispatch discipline. lacks %r" % h, b13_problems("controller", bad))
+        for label in ("Dispatch discipline.",):                     # M3: a missing paragraph is a failed check, not an error
+            bad = t.replace(paragraph(t, label) + "\n\n", "")
+            self.assertIn("Dispatch discipline. lacks '`## Role`'", b13_problems("controller", bad))
+            self.assertIn("labels", kinds(bad.encode("ascii"), "controller"))
+
+    def test_fork_refusal_phrase(self):                          # C2
+        t = disk("controller")
+        p = paragraph(t, "Dispatch discipline.")
+        self.assertTrue(whole_token("fork dispatch is refused", p))
+        for name, new in (("only fork", "a fork inherits"), ("forks", "forks dispatch is refused"),
+                          ("fork dispatch is refused-ish", "fork dispatch is refusedx"),
+                          ("no refusal", "fork dispatch is allowed")):
+            with self.subTest(name):
+                bad = in_para(t, "Dispatch discipline.", lambda q: q.replace("fork dispatch is refused", new))
+                self.assertIn("Dispatch discipline. lacks 'fork dispatch is refused'", b13_problems("controller", bad))
+        self.assertIn("required", kinds(in_para(t, "Dispatch discipline.",
+                                                lambda q: q.replace("fork dispatch is refused", "zzz").replace("fork", "zzz"))
+                                        .encode("ascii"), "controller"))
+
+    def test_tiers_not_models_in_controller_and_tier4_rule(self):    # C3 C4 F6 A6
+        t = disk("controller")
+        self.assertEqual(forbidden_hits(t), [])
+        for model in ("Opus", "sonnet", "Haiku", "fable45"):
+            with self.subTest(model=model):
+                bad = in_para(t, "Dispatch discipline.", lambda p: p + " Use " + model + ".")
+                self.assertEqual({h[0] for h in forbidden_hits(bad)}, {"model-name"})
+        # C4: tier4 is neither required nor refused in the controller
+        self.assertEqual(b13_problems("controller", in_para(t, "Dispatch discipline.", lambda p: p + " tier4")), [])
+        self.assertEqual(b13_problems("controller", t), [])
+        for role in AUDIT_ROLES:                                  # A6: refused in the audit blocks, wherever it is
+            for label in ("Method.", "Zero bugs.", "Owner-only decisions."):
+                with self.subTest(role=role, label=label):
+                    self.assertFalse(whole_token("tier4", disk(role)))
+                    bad = in_para(disk(role), label, lambda p: p + " tier4")
+                    self.assertEqual(b13_problems(role, bad), ["tier4 given to " + role])
+            bad = in_para(disk(role), "Method.", lambda p: p + " tier4x")
+            self.assertEqual(b13_problems(role, bad), [])           # a longer word is not the tier
+
+    def test_fix_loop_rounds_other_than_1_3_and_4_5(self):      # C6 C7
+        t = disk("controller")
+        for s, new in (("rounds 1-3", "rounds 1-2"), ("rounds 1-3", "rounds 1-30"), ("rounds 1-3", "round 1-3"),
+                       ("rounds 1-3", "rounds 2-3"), ("rounds 4-5", "rounds 4-6"), ("rounds 4-5", "rounds 4-50"),
+                       ("rounds 4-5", "round 4-5"), ("rounds 4-5", "rounds 5-5"), ("one tier up", "one tier down"),
+                       ("one tier up", "one tier upx"), ("owner question", "owner questions")):
+            with self.subTest(s=s, new=new):
+                bad = in_para(t, "Continuation.", lambda p: p.replace(s, new))
+                self.assertIn("Continuation. lacks %r" % s, b13_problems("controller", bad))
+        for s in CTRL_FIX_LOOP:                                   # only in another paragraph, even whole-file present
+            bad = other_para(t, "Continuation.", s, "Merge and checkpoint.")
+            self.assertTrue(whole_token(s, bad))
+            self.assertIn("Continuation. lacks %r" % s, b13_problems("controller", bad))
+
+    def test_ruling_format_variants(self):                       # C5
+        t = disk("controller")
+        for name, new in (("one dash", "Ruling: what - why - cost if wrong - spec cite"),
+                          ("en dash", "Ruling: what – why – cost if wrong – spec cite"),
+                          ("reordered", "Ruling: why -- what -- cost if wrong -- spec cite"),
+                          ("no colon", "Ruling what -- why -- cost if wrong -- spec cite")):
+            with self.subTest(name):
+                bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, new))
+                self.assertIn("Rulings. lacks %r" % RULING, b13_problems("controller", bad))
+        bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, RULING.replace("what -- why", "what\n-- why")))
+        self.assertIn("Rulings. lacks %r" % RULING, b13_problems("controller", bad))
+        bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, RULING.replace("what -- why", "what\n--\nwhy")))
+        self.assertIn("setext", kinds(bad.encode("ascii"), "controller"))             # F5
+        bad = in_para(t, "Rulings.", lambda p: p.replace(RULING, "Ruling: what – why – cost if wrong – spec cite"))
+        self.assertIn("encoding", kinds(bad.encode("utf-8"), "controller"))
+        bad = in_para(t, "Rulings.", lambda p: p.replace("`rulings.max_per_block`", "rulings.max_per_block"))
+        self.assertIn("Rulings. lacks '`rulings.max_per_block`'", b13_problems("controller", bad))
+
+    def test_triage_variants(self):                              # A1 A2
+        for role in AUDIT_ROLES:
+            t = disk(role)
+            for s, new in (("`triage`", "triage"), ("before any plan", "before any plans"),
+                           ("before any plan", "before a plan"), ("the owner rules", "the reviewer rules"),
+                           ("the owner rules", "the owner ruled")):
+                with self.subTest(role=role, s=s, new=new):
+                    bad = in_para(t, "Owner-only decisions.", lambda p: p.replace(s, new))
+                    self.assertIn("Owner-only decisions. lacks %r" % s, b13_problems(role, bad))
+            for s in TRIAGE:                                      # present elsewhere in the file only
+                bad = other_para(t, "Owner-only decisions.", s, "Zero bugs.")
+                self.assertTrue(whole_token(s, bad))
+                self.assertIn("Owner-only decisions. lacks %r" % s, b13_problems(role, bad))
+            o = paragraph(t, "Owner-only decisions.")
+            self.assertTrue(all(whole_token(s, o) for s in ("decision_classes.owner_only", "NEEDS_DECISION",
+                                                              "at least two options")))
+
+    def test_coverage_and_method_variants(self):                 # A3 A4 A5
+        t = disk("audit_reviewer")
+        bad = other_para(t, "Coverage first.", "coverage list", "Method.")
+        self.assertIn("Coverage first. lacks 'coverage list'", b13_problems("audit_reviewer", bad))
+        bad = other_para(t, "Coverage first.", "progress file", "Method.")
+        self.assertIn("Coverage first. lacks 'progress file'", b13_problems("audit_reviewer", bad))
+        v = disk("audit_verifier")
+        for new in ("reproducers", "every reproducers", "the reproducer", "each reproducer"):
+            with self.subTest(new=new):
+                bad = in_para(v, "Method.", lambda p: p.replace("every reproducer", new))
+                self.assertIn("Method. lacks 'every reproducer'", b13_problems("audit_verifier", bad))
+        bad = other_para(v, "Method.", "every reproducer", "Verdict.")
+        self.assertIn("Method. lacks 'every reproducer'", b13_problems("audit_verifier", bad))
+        self.assertIn("coverage list", paragraph(v, "Method."))
+        bad = in_para(v, "Method.", lambda p: p.replace("extends", "replaces"))
+        self.assertIn("Method. lacks 'extends'", b13_problems("audit_verifier", bad))
+
+    def test_verdict_values_only_status_line(self):              # C10 A7
+        for role, label in VERDICT_PARA.items():
+            t = disk(role)
+            v = paragraph(t, label)
+            self.assertIn("status", v)
+            for word in ("APPROVED", "UPHOLD", "PASS", "REJECT", "DONE_WITH_FINDING"):
+                with self.subTest(role=role, word=word):
+                    bad = in_para(t, label, lambda p: p + " Report " + word + ".")
+                    self.assertTrue([x for x in b13_problems(role, bad) if "not only STATUS_LINE" in x])
+            bad = t.replace(v, "")                                # the paragraph's label is gone
+            self.assertNotEqual(bad, t)
+            self.assertTrue([x for x in b13_problems(role, bad) if "is missing" in x or "lacks" in x])
+
+    def test_audit_blocks_differ(self):                          # A8
+        r, v = disk("audit_reviewer"), disk("audit_verifier")
+        self.assertTrue(audit_methods_differ(r, v))
+        same = in_para(r, "Method.", lambda p: paragraph(v, "Method."))
+        self.assertFalse(audit_methods_differ(same, v))
+        self.assertTrue(audit_methods_differ(in_para(v, "Method.", lambda p: p + "x"), v))
+        self.assertTrue(audit_methods_differ(in_para(v, "Method.", lambda p: p[:-1]), v))
+        self.assertNotEqual(r, v)
+
+    def test_controller_required_paragraph_content(self):        # C8 C9 F4
+        t = disk("controller")
+        for label in ("Input domain.", "Oracle.", "Finding class.", "Continuation.", "Owner-only decisions.",
+                      "Report contract.", "Verification method.", "Budget.", "Background work."):
+            for item in REQUIRED[label]:
+                alts = item if isinstance(item, tuple) else (item,)
+                for name, bad in (("missing", in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "zzz"))),
+                                  ("joined", in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "x" + a))),
+                                  ("misplaced", b13_move(t, label, alts, "Zero bugs."))):
+                    with self.subTest(label=label, item=item, case=name):
+                        self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+
+    def test_no_reuse_of_b12_helpers(self):                      # X2 X3: the B1.2 helpers are defined once
+        import ast
+        with open(os.path.join(pc.REPO_ROOT, "tests", "test_prompt_blocks.py"), "rb") as f:
+            tree = ast.parse(f.read())
+        names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
+        for name in ("disk", "in_para", "other_para", "content_problems", "verdicts_differ"):
+            self.assertEqual(names.count(name), 1, name)
+        assigned = [t.id for n in tree.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)]
+        for name in ("GATE", "STATUS_VALUES", "WRITTEN", "B12_ROLES", "B12_CONTENT"):
+            self.assertEqual(assigned.count(name), 1, name)
+        self.assertEqual(content_problems("task_reviewer", disk("task_reviewer")), [])     # B1.2 function unchanged in use
+
+    def test_three_files_missing_from_disk_are_refused(self):   # F1
+        for role in B13_ROLES:
+            with self.subTest(role=role):
+                with tempfile.TemporaryDirectory() as td:
+                    files = {r + ".md": disk(r).encode("ascii") for r in WRITTEN if r != role}
+                    self.assertEqual(dir_problems(make_dir(td, files), WRITTEN), ["missing: %s.md" % role])
+
+    def test_labels_mutated_per_file(self):                      # F3
+        for role in B13_ROLES:
+            t = disk(role)
+            labs = list(LABELS[role])
+            self.assertEqual(labels(t), labs)
+            first, second = paragraph(t, labs[1]), paragraph(t, labs[2])
+            cases = {
+                "missing": t.replace(first + "\n\n", ""),
+                "duplicated": t.replace(first, first + "\n\n" + first),
+                "reordered": t.replace(first, "@@").replace(second, first).replace("@@", second),
+                "renamed": t.replace(first, "Renamed." + first[len(labs[1]):]),
+                "no full stop": t.replace(first, first.replace(labs[1], labs[1][:-1], 1)),
+            }
+            for name, bad in cases.items():
+                with self.subTest(role=role, case=name):
+                    self.assertNotEqual(bad, t)
+                    self.assertIn("labels", kinds(bad.encode("ascii"), role))
+
+    def test_required_strings_mutated_per_file(self):           # F4
+        for role in AUDIT_ROLES:
+            t = disk(role)
+            for label in LABELS[role]:
+                for item in REQUIRED.get(label, ()):
+                    alts = item if isinstance(item, tuple) else (item,)
+                    for name, bad in (("missing", in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "zzz"))),
+                                      ("inside a longer word",
+                                       in_para(t, label, lambda p: _replace_all(p, alts, lambda a: "x" + a))),
+                                      ("only in another paragraph",
+                                       b13_move(t, label, alts, "Zero bugs." if label != "Zero bugs." else "Budget."))):
+                        with self.subTest(role=role, label=label, item=item, case=name):
+                            self.assertIn("required", kinds(bad.encode("ascii"), role))
+        t = disk("controller")                                     # the controller's wrap case
+        bad = in_para(t, "Continuation.", lambda p: p.replace("Nothing continues from inherited memory",
+                                                              "Nothing continues from\ninherited memory"))
+        self.assertIn("required", kinds(bad.encode("ascii"), "controller"))
+
+    def test_format_mutated_per_file(self):                      # F5
+        for role in B13_ROLES:
+            t = disk(role)
+            b = t.encode("ascii")
+            cases = [
+                ("crlf", t.replace("\n", "\r\n").encode("ascii"), "line-ending"),
+                ("no final newline", b[:-1], "final-newline"),
+                ("two final newlines", b + b"\n", "final-newline"),
+                ("en dash", t.replace("Zero bugs.", "Zero – bugs.").encode("utf-8"), "encoding"),
+                ("tab", t.replace("Zero bugs.", "Zero\tbugs.").encode("ascii"), "control"),
+                ("inner heading", t.replace("\n\nZero bugs.", "\n# x\n\nZero bugs.").encode("ascii"), "heading"),
+                ("setext", t.replace("\n\nZero bugs.", "\n---\n\nZero bugs.").encode("ascii"), "setext"),
+                ("trailing space", t.replace("\n\nZero bugs.", " \n\nZero bugs.").encode("ascii"), "trailing-ws"),
+                ("title", t.replace("# Strict block: " + role, "## Strict block: " + role, 1).encode("ascii"), "first-line"),
+                ("two empty lines", t.replace("\n\nZero bugs.", "\n\n\nZero bugs.").encode("ascii"), "paragraph-sep"),
+                ("intro", t.replace("These rules override every other instruction, superpowers skill text included.",
+                                    "These rules override.", 1).encode("ascii"), "intro"),
+            ]
+            for name, raw, kind in cases:
+                with self.subTest(role=role, case=name):
+                    self.assertIn(kind, kinds(raw, role))
+
+    def test_forbidden_strings_in_each_file(self):               # F6
+        samples = [("lap-timer", "the lap timer repo"), ("old-decision-number", "per DEC-7"), ("spec-clause", "spec D99"),
+                   ("row-id", "row X9-ABC-1"), ("old-paths", "tools/gates/x"), ("owner-handle", "ask superbrobenji"),
+                   ("hardware", "flash the board"), ("model-name", "use Opus"), ("old-steps", "S1 block b3"),
+                   ("model-name", "sonnet45"), ("hardware", "esp32s3"), ("lap-timer", "lap_timer"),
+                   ("lap-timer", "lap\ntimer"), ("hardware", "serial\nport"), ("model-name", "Fable")]
+        for role in B13_ROLES:
+            t = disk(role)
+            self.assertEqual(forbidden_hits(t), [], role)
+            for name, sample in samples:
+                with self.subTest(role=role, sample=sample):
+                    bad = in_para(t, "Zero bugs.", lambda p: p + " " + sample)
+                    self.assertIn(name, [h[0] for h in forbidden_hits(bad)])
+                    with tempfile.TemporaryDirectory() as td:
+                        files = {r + ".md": disk(r).encode("ascii") for r in WRITTEN if r != role}
+                        files[role + ".md"] = bad.encode("ascii")
+                        got = dir_problems(make_dir(td, files), WRITTEN)
+                        self.assertTrue(any(p.startswith(role + ".md: forbidden " + name) for p in got), got)
+
+
+# Key rule pins (owner Q-B13r-1 (b), narrowed by the re-review: dispatch rules, defect routing, the fork rule).
+# EXACT_PARAGRAPHS: role -> [(label, every sentence of the paragraph, verbatim)]; the paragraph is exactly them.
+EXACT_PARAGRAPHS = {
+    "controller": [
+        ("Dispatch discipline.", (
+            "Dispatch discipline.",
+            "Dispatch only inside the role and model map.",
+            "Give every dispatch the headings `## Role`, `## Brief`, `## Findings`, `## Claims`, `## Budget: tokens=<n> minutes=<n>`, `## Model`, `## Report`, `## Strict block` and `## Task`, in that order; the strict block is the role's prompt block, byte for byte.",
+            "A fork dispatch is refused: dispatch a fresh agent with that grammar instead.",
+            "Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top tier only to the roles in `top_tier_roles`.",
+            "Name tiers in every brief and report, never a model.",
+        )),
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, never deferred.",
+            "An unrelated bug gets a register row and an owner.",
+            "A deleted test is restored and fixed; dropping a test is never offered as a fix.",
+        )),
+    ],
+    "implementer": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect your own change introduces makes the work incomplete; there is no minor defect and no follow-up.",
+            "A defect you find that your change did not cause is not fixed in passing: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+    ],
+    "implementer_transcription": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect your own change introduces makes the work incomplete; there is no minor defect and no follow-up.",
+            "A defect you find that your change did not cause is not fixed in passing: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+    ],
+    "investigator": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+    ],
+    "task_reviewer": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect the change caused is a finding and makes the task incomplete.",
+            "A defect you find that the change did not cause is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "You judge this one task.",
+            "Report status DONE when every claim and gate re-ran clean and the change itself holds no finding (here the task's diff).",
+            "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
+            "Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+        )),
+        ("No out-of-scope bucket.", (
+            "No out-of-scope bucket.",
+            "Every defect you see is reported, whether the diff touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
+            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A missing input-domain table is a finding.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+    ],
+    "final_reviewer": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect the change caused is a finding and makes the branch incomplete.",
+            "A defect you find that the change did not cause is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "You judge whether the branch may go to the final verifier.",
+            "Report status DONE when every claim and gate re-ran clean at the tip and the change itself holds no finding (here the whole branch).",
+            "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
+            "Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`, naming the task it belongs to.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check or reach the tip.",
+        )),
+        ("No out-of-scope bucket.", (
+            "No out-of-scope bucket.",
+            "Every defect you see is reported, whether the branch touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
+            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A missing input-domain table is a finding.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+    ],
+    "final_verifier": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect the change caused is a finding and makes the branch incomplete.",
+            "A defect you find that the change did not cause is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "You judge whether the branch survives.",
+            "Report status DONE when you could not break it and the change itself holds no finding (here the whole branch).",
+            "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
+            "Report DONE_WITH_FINDINGS when you broke the change itself, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`; the argument against the branch goes in the findings.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+    ],
+    "exception_reviewer": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in your findings, so the controller registers it with an owner.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "The owner rules, not you.",
+            "Report status DONE when the case against the exception did not survive your checks.",
+            "Report DONE_WITH_FINDINGS when it did, and put the argument against the exception in the findings, each as file:line or command and output.",
+            "Report NEEDS_DECISION when the proposal needs a ruling in the owner-only classes beyond the exception itself, and BLOCKED when you could not run the evidence's commands.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+    ],
+    "audit_reviewer": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in the report (in findings, or under Unrelated findings when it lies outside the audited area), so the controller registers it with an owner.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Method.", (
+            "Method.",
+            "Read the code against the spec and the plan line by line.",
+            "Run the project's gates and the test command in the config key `commands.test` yourself, on every interpreter the brief names.",
+            "For each defect record file:line, a reproducer (the command and its output) and the class statement `class: <dimension>: <members>`; a defect without a reproducer is marked unverified.",
+            "Check the whole dimension a defect names, not only the case you saw.",
+            "Every defect you see is reported, whether the audited area touches it or not: one in the audited area goes in findings, and one outside it goes under Unrelated findings.",
+        )),
+    ],
+    "audit_verifier": [
+        ("Zero bugs.", (
+            "Zero bugs.",
+            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in your findings, so the controller registers it with an owner.",
+        )),
+        ("Verdict.", (
+            "Verdict.",
+            "You judge whether the audit report stands.",
+            "Report status DONE when every reproducer re-ran as the report wrote it and your extension found nothing the report misses.",
+            "Report DONE_WITH_FINDINGS when a reproducer did not reproduce or your extension found a defect the report misses, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+            "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+        )),
+        ("No subagents.", (
+            "No subagents.",
+            "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+            "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+        )),
+        ("Method.", (
+            "Method.",
+            "Re-run every reproducer in the reviewer's report yourself, with its direct command and a contradiction command, and compare your output with the report's excerpt; a reproducer that does not reproduce is a finding against the report.",
+            "Then write your own coverage list, which extends the reviewer's coverage list with every file, spec section and input-domain row the reviewer's list leaves out, and audit those parts yourself.",
+            "A pasted result is evidence of what its author saw, so you re-run it before you rely on it.",
+        )),
+    ],
+}
+
+# SINGLE_SENTENCES: role -> [(label, one full sentence)]; the sentence occurs once in its paragraph.
+SINGLE_SENTENCES = {
+    "controller": [
+        ("Owner-only decisions.",
+         "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
+        ("Continuation.",
+         "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner question."),
+        ("Continuation.",
+         "When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "implementer": [
+        ("Owner-only decisions.",
+         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "implementer_transcription": [
+        ("Owner-only decisions.",
+         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "investigator": [
+        ("Owner-only decisions.",
+         "If the question needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "task_reviewer": [
+        ("Owner-only decisions.",
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "final_reviewer": [
+        ("Owner-only decisions.",
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "final_verifier": [
+        ("Owner-only decisions.",
+         "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "Then, in order: the verdict; the attempts to break the branch (attempt, command, output excerpt, held or broke); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "exception_reviewer": [
+        ("Owner-only decisions.",
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+    "audit_reviewer": [
+        ("Owner-only decisions.",
+         "If the audit needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+        ("Coverage first.",
+         "Before you review anything, write your coverage list to your progress file: every file, spec section and input-domain row the audit covers, each marked not started."),
+        ("Report contract.",
+         "Report status DONE when the audited area holds no finding, and DONE_WITH_FINDINGS when it holds at least one; a defect found outside the audited area goes under Unrelated findings and does not change the status."),
+        ("Report contract.",
+         "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, BLOCKED when you could not run a check or finish the coverage list, and DENIED on a permission denial."),
+    ],
+    "audit_verifier": [
+        ("Owner-only decisions.",
+         "If the verification needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+        ("Report contract.",
+         "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
+    ],
+}
+
+
+EXACT_LABELS = frozenset(("Dispatch discipline.", "Zero bugs.", "Verdict.", "No out-of-scope bucket.", "No subagents."))
+OWNER_CLASSES = ("`triage`", "`spec-direction`", "`scope`", "`merge-grant`", "`model-policy`", "`issue-close`",
+                 "`finding-class`", "`rule-override`", "`program-create`", "`stream-ownership`", "`stream-merge`",
+                 "`request-dispute`", "`program-close`")                    # gates/lib/config.py defaults, owner Q-U1 (a)
+PRECEDENCE = "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."
+TR = ("task_reviewer", "final_reviewer", "final_verifier")
+# Named mutants: (name, roles, label, old, new). old None appends new to the paragraph. Survivors of the B1.3 review and
+# of the B1.2 re-review 3 (owner Q-B13r-1), the two owner answers Q-B13r-2/3, and this round's findings.
+KEY_MUTANTS = (
+    ("X3 fork refusal negated", ("controller",), "Dispatch discipline.", "A fork dispatch is refused",
+     "No fork dispatch is refused"),
+    ("B8-first coverage list to a notes file", ("audit_reviewer",), "Coverage first.", "to your progress file",
+     "to your notes file"),
+    ("N-Verdict negated", TR, "Verdict.", "Report DONE_WITH_FINDINGS when", "Never report DONE_WITH_FINDINGS when"),
+    ("N-Zero bugs redirect", TR, "Zero bugs.", None, " List a defect the change caused there too."),
+    ("R-Report contract omits unrelated findings", TR, "Report contract.", "Then, in order:",
+     "Then, in order (omit unrelated findings):"),
+    ("R-Zero bugs leaves complete", ("task_reviewer",), "Zero bugs.", "makes the task incomplete",
+     "leaves the task complete"),
+    ("R-Zero bugs leaves complete (branch)", ("final_reviewer", "final_verifier"), "Zero bugs.",
+     "makes the branch incomplete", "leaves the branch complete"),
+    ("R-OOS dropped", ("task_reviewer", "final_reviewer"), "No out-of-scope bucket.",
+     "Every defect you see is reported", "Every defect you see is dropped"),
+    ("R-Verdict does make", TR, "Verdict.", "does not by itself make", "does make"),
+    ("F-B13rr-1 audit mapping back to otherwise", ("audit_reviewer",), "Report contract.",
+     "and DONE_WITH_FINDINGS when it holds at least one", "and DONE_WITH_FINDINGS otherwise"),
+    ("F-B13rr-1 outside defects change the status", ("audit_reviewer",), "Report contract.",
+     "and does not change the status", "and makes the status DONE_WITH_FINDINGS"),
+    ("F-B13rr-1 blocked rule gone", ("audit_reviewer",), "Report contract.", "BLOCKED when you could not run a check",
+     "BLOCKED never"),
+    ("F-B13rr-1 method sends outside defects to findings", ("audit_reviewer",), "Method.",
+     "and one outside it goes under Unrelated findings", "and one outside it goes in findings"),
+    ("Q-U1 rule-override missing", ("controller",) + tuple(r for r in WRITTEN if r != "controller"),
+     "Owner-only decisions.", "`rule-override`, ", ""),
+    ("Q-U1 program-close missing", WRITTEN, "Owner-only decisions.", " and `program-close`", ""),
+    ("Q-U1 hardware as a default class", ("investigator",), "Owner-only decisions.", "`triage`, ", "`triage`, hardware, "),
+)
+# Rewordings that keep every rule: none of them may fail a pin or a token check.
+HARMLESS = (
+    ("controller", "Budget.", "leave nothing half-dispatched", "leave no dispatch half-made"),
+    ("controller", "Rulings.", "before the next dispatch", "ahead of the next dispatch"),
+    ("controller", "Merge and checkpoint.", "run the merge as its own command", "make the merge its own command"),
+    ("audit_reviewer", "Coverage first.", "so that a fresh agent can resume", "so a fresh agent can resume"),
+    ("audit_reviewer", "Report contract.", "the coverage list with each part marked audited or not",
+     "the coverage list, each part marked audited or not"),
+    ("implementer", "Budget.", "leave nothing half-committed", "leave no commit half-made"),
+    ("task_reviewer", "Budget.", "leave nothing half-reviewed", "leave no review half-done"),
+)
+
+
+def key_problems(role, text):
+    """Problems of the pinned text of one block: exact paragraphs equal their sentences, single sentences occur once."""
+    out = []
+    for label, sentences in EXACT_PARAGRAPHS[role]:
+        try:
+            p = paragraph(text, label)
+        except ValueError:
+            out.append("%s is missing" % label)
+            continue
+        if p != " ".join(sentences):
+            out.append("%s differs from its pinned sentences" % label)
+    for label, sentence in SINGLE_SENTENCES[role]:
+        try:
+            p = paragraph(text, label)
+        except ValueError:
+            out.append("%s is missing" % label)
+            continue
+        if p.count(sentence) != 1 or not (p.startswith(label + " " + sentence) or ". " + sentence in p):
+            out.append("%s: %d occurrences of %r" % (label, p.count(sentence), sentence[:40]))
+    return out
+
+
+class B13KeyTest(unittest.TestCase):
+    def test_tables_cover_the_named_paragraphs(self):
+        self.assertEqual(sorted(EXACT_PARAGRAPHS), sorted(WRITTEN))
+        self.assertEqual(sorted(SINGLE_SENTENCES), sorted(WRITTEN))
+        for role in WRITTEN:
+            want = set(LABELS[role]) & (EXACT_LABELS | ({"Method."} if role in AUDIT_ROLES else set()))
+            self.assertEqual({label for label, _ in EXACT_PARAGRAPHS[role]}, want, role)
+            self.assertIn(("Zero bugs."), {label for label, _ in EXACT_PARAGRAPHS[role]})
+            owner = [s for label, s in SINGLE_SENTENCES[role] if label == "Owner-only decisions."]
+            self.assertEqual(len(owner), 1, role)
+            self.assertTrue(all(whole_token(c, owner[0]) for c in OWNER_CLASSES), role)       # Q-U1 (a)
+            self.assertTrue(whole_token("decision_classes.owner_only", owner[0]), role)
+            for label, sentences in EXACT_PARAGRAPHS[role]:
+                self.assertTrue(sentences and all(s and s == s.strip() for s in sentences), (role, label))
+        self.assertEqual(len(SINGLE_SENTENCES["controller"]), 4)
+        self.assertEqual({r for r in WRITTEN if any(l == "Report contract." for l, _ in SINGLE_SENTENCES[r])},
+                         set(WRITTEN))
+
+    def test_real_files_hold_the_pins(self):
+        for role in WRITTEN:
+            with self.subTest(role=role):
+                self.assertEqual(key_problems(role, disk(role)), [])
+
+    def test_every_pin_is_killed_by_generic_mutations(self):
+        for role in WRITTEN:
+            t = disk(role)
+            for label, sentences in EXACT_PARAGRAPHS[role]:
+                cases = [("deleted", lambda p: p.replace(sentences[1], "", 1)),
+                         ("sentence added", lambda p: p + " Also do the opposite."),
+                         ("sentence duplicated", lambda p: p.replace(sentences[-1], sentences[-1] + " " + sentences[-1], 1)),
+                         ("negated", lambda p: p.replace(sentences[1], "Never: " + sentences[1], 1))]
+                if len(sentences) > 2:
+                    cases.append(("two swapped", lambda p: b13_swap(p, sentences[1], sentences[2])))
+                for name, fn in cases:
+                    with self.subTest(role=role, label=label, case=name):
+                        self.assertTrue(key_problems(role, in_para(t, label, fn)))
+            for label, sentence in SINGLE_SENTENCES[role]:
+                cases = [("deleted", lambda p: p.replace(sentence, "", 1)),
+                         ("negated", lambda p: p.replace(sentence, "Never: " + sentence, 1)),
+                         ("duplicated", lambda p: p.replace(sentence, sentence + " " + sentence, 1)),
+                         ("last word changed", lambda p: p.replace(sentence, sentence[:-2] + "x.", 1))]
+                for name, fn in cases:
+                    with self.subTest(role=role, label=label, sentence=sentence[:30], case=name):
+                        self.assertTrue(key_problems(role, in_para(t, label, fn)))
+
+    def test_missing_paragraph_is_a_failed_check(self):
+        for role in WRITTEN:
+            t = disk(role)
+            for label in {l for l, _ in EXACT_PARAGRAPHS[role]} | {l for l, _ in SINGLE_SENTENCES[role]}:
+                with self.subTest(role=role, label=label):
+                    bad = t.replace(paragraph(t, label), "Renamed. x")
+                    self.assertIn("%s is missing" % label, key_problems(role, bad))
+
+    def test_named_survivors_are_killed(self):
+        for name, roles, label, old, new in KEY_MUTANTS:
+            for role in roles:
+                with self.subTest(mutant=name, role=role):
+                    fn = (lambda p: p + new) if old is None else (lambda p: p.replace(old, new, 1))
+                    bad = in_para(disk(role), label, fn)
+                    self.assertTrue(key_problems(role, bad) or b13_problems(role, bad))
+
+    def test_status_precedence_sentence_in_every_block(self):   # owner Q-B13rr-1 (a)
+        sentence = PRECEDENCE
+        for role in WRITTEN:
+            p = paragraph(disk(role), "Report contract.")
+            self.assertEqual(p.count(sentence), 1, role)
+            self.assertIn(("Report contract.", sentence), SINGLE_SENTENCES[role])
+            for name, new in (("dropped", ""), ("reordered", sentence.replace("DENIED, BLOCKED", "BLOCKED, DENIED")),
+                              ("done first", sentence.replace("DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE",
+                                                              "DONE, DONE_WITH_FINDINGS, NEEDS_DECISION, BLOCKED, DENIED")),
+                              ("last", sentence.replace("the first of", "the last of")),
+                              ("negated", "Never: " + sentence)):
+                with self.subTest(role=role, case=name):
+                    bad = in_para(disk(role), "Report contract.", lambda q: q.replace(sentence, new, 1))
+                    self.assertTrue(key_problems(role, bad))
+
+    def test_harmless_rewordings_pass(self):                    # re-review 1: R2 and its kind
+        for role, label, old, new in HARMLESS:
+            with self.subTest(role=role, label=label):
+                t = disk(role)
+                p = paragraph(t, label)
+                if old not in p:                                # F-B13rr-2: reworded on disk; unpinned, so never a failure
+                    continue
+                bad = t.replace(p, p.replace(old, new, 1))
+                self.assertEqual(key_problems(role, bad), [])
+                if role in B13_ROLES:
+                    self.assertEqual(b13_problems(role, bad), [])
+                self.assertEqual(block_problems(bad.encode("ascii"), role), [])
+
+    def test_budget_audit_status_and_class_list(self):          # Q-B13r-2, Q-B13r-3, F-B13rr-1, Q-U1
+        self.assertTrue(whole_token("`budgets`", paragraph(disk("controller"), "Budget.")))
+        self.assertNotIn("inside yours", disk("controller"))
+        r = paragraph(disk("audit_reviewer"), "Report contract.")
+        self.assertTrue(whole_token("Report status DONE when the audited area holds no finding, and DONE_WITH_FINDINGS "
+                                    "when it holds at least one", r))
+        self.assertNotIn("otherwise", r)
+        for word in ("Unrelated findings", "NEEDS_DECISION", "BLOCKED", "DENIED"):
+            self.assertTrue(whole_token(word, r), word)
+        self.assertEqual(b13_problems("audit_reviewer", disk("audit_reviewer")), [])
+        bad = in_para(disk("audit_reviewer"), "Report contract.", lambda p: p + " APPROVED")
+        self.assertTrue([x for x in b13_problems("audit_reviewer", bad) if "not only STATUS_LINE" in x])
+        for role in WRITTEN:                                    # the whole default set, in every block, as tokens
+            o = paragraph(disk(role), "Owner-only decisions.")
+            for c in OWNER_CLASSES:
+                self.assertTrue(whole_token(c, o), (role, c))
+                sent = [s for l, s in SINGLE_SENTENCES[role] if l == "Owner-only decisions."][0]
+                bad = in_para(disk(role), "Owner-only decisions.", lambda p: p.replace(sent, sent.replace(c, "`zzz`", 1), 1))
+                self.assertTrue(key_problems(role, bad), (role, c))
 
 
 if __name__ == "__main__":
