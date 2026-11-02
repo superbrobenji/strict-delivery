@@ -53,8 +53,8 @@ Anti-goals (failure even if it works):
   human's effort: they exist so that agents do not collide. Another human's effort has its own
   owner and its own ownership map, and may own the same file for its own agents. There is no
   global owner setting. Answers and withdrawals come only from the human: the PreToolUse hook
-  refuses `decisions decide` and `decisions withdraw` from any agent, and the human runs them
-  (`!` prefix) or the program session records the owner's exact words. Each answer records the
+  refuses `decisions decide` and `decisions withdraw` from any subagent, and the human runs them
+  (`!` prefix) or the main session (the program session) records the owner's exact words. Each answer records the
   git identity (`git config user.email`) as `answered_at.by`.
 - **Interface:** anything one stream needs from another (API, shared module, data format). Agreed
   in the program's spec before streams start; the owner rules on any later conflict.
@@ -69,7 +69,7 @@ Anti-goals (failure even if it works):
 | 2+ | controller (sub-controller; may dispatch a sub-controller, owner answer Q-H3), implementer, task/final reviewer, final verifier, exception reviewer, audit roles, investigator | as main spec §10 | unchanged | unchanged |
 
 - Models: program_controller and stream_controller at the reviewer tier (tier3); the top tier stays
-  only for final verifier and exception reviewer (main spec §10).
+  only for the roles in `top_tier_roles`, by default the final verifier and the exception reviewer (main spec §10).
 - Dispatch: only the program session dispatches a program_controller; the program session or a program_controller dispatches a stream_controller; stream controllers and sub-controllers dispatch sub-controllers and workers; `gate_dispatch` refuses any dispatch from a worker role and any dispatch that leaves too few levels below it for the depth limit (owner answers Q-H1..Q-H5, 2026-11-01). Each new role has a prompt block in `skills/strict-delivery/prompts/`.
 - Depth-aware tree (owner answer Q-H5 (a)): by default the program session itself acts as program controller (status page, ids, requests, syncs, one question batch); stream_controller runs at level 1, sub-controllers at level 2, workers at level 3. A separate program_controller agent, and nested sub-controllers, are used only when the configured depth allows them.
 - Both new roles are core to the framework, not an add-on.
@@ -250,7 +250,7 @@ States are derived from git, plan ledgers and status pages; nothing in the index
 - `program-controller` (only when a separate program_controller runs), `stream-<id>-block`: agents; each reads its handoff and its context list.
   A stream's blocks run one after another in the stream worktree
   (`<worktrees>/<program>/<stream>/main`), on the stream branch `<program>/<stream>/main`.
-- `sync`: run by the program controller after every merge into the base branch, and at the start of each working day: run `gate_drift`; merge main into each stream branch that is behind it, as its own command, never a rebase (owner answer Q-Pplan-5 (a)); when main is ahead of `<program>/integration`, merge main into the integration branch, with no owner approval (if a merge conflicts, stop and ask the owner); merge the stream heads into the integration branch for combined testing and run the gates and the suite there (owner answer Q-M4 (a)); collect every pending owner question for one batch; update status rows and the sync log; push the integration branch.
+- `sync`: run by the program controller after every merge into the base branch, and at the start of each working day: fetch and fast-forward the local base branch from the remote; run `gate_drift`; merge main into each stream branch that is behind it, as its own command, never a rebase (owner answer Q-Pplan-5 (a)); when main is ahead of `<program>/integration`, merge main into the integration branch, with no owner approval (if a merge conflicts, stop and ask the owner); merge the stream heads into the integration branch for combined testing and run the gates and the suite there (owner answer Q-M4 (a)); collect every pending owner question for one batch; update status rows; run `gate_drift` again and expect it to pass before the sync log line; update the sync log; push the integration branch.
 
 ## 11. Status page
 
@@ -277,8 +277,8 @@ branches never carry a copy, so rows never conflict at a merge.
 - `gate_checkpoint`: clean means the block's own worktree; other streams' worktrees are allowed;
   continuation handoff present.
 - `gate_drift`: status-row branches and heads match git; pending decisions match open records;
-  a stream branch behind the base branch, or an integration branch behind it, fails until a sync; a block past
-  `drift.estimate_factor_pct` percent (default 150) of its estimate is reported to the owner.
+  a stream branch behind the base branch, or an integration branch behind it, fails until a sync; a stream whose status row's `used` is past
+  `drift.estimate_factor_pct` percent (default 150) of its `estimate` is reported to the owner by `drift report` at each sync; it is not a failing line.
 - `gate_index`: INDEX.md and indexes regenerate without error and none is tracked.
 - `gate_cleanup` (post-merge and at program close): the merged plan's or closed program's
   per-effort files are gone from the tree, and every lasting decision they produced has a
