@@ -612,7 +612,6 @@ class TestArgv(CitesCase):
         out, code = self.run_gate("--root", empty)
         self.assertNotIn("config.yml", out)
 
-    @unittest.skip("row A6: needs gate_args' _Once from block 1b; the controller removes this skip at the update from main")
     def test_root_twice_refused(self):  # A6
         out, code = self.run_gate("--root", self.root, "--root", self.root)
         self.assertEqual(out, "FAIL cites.input: invalid arguments: --root given more than once\n")
@@ -646,8 +645,6 @@ class TestFixRound1(CitesCase):
 
 
 class TestThisRepository(unittest.TestCase):
-    @unittest.skip("row E1: this checkout has no .strict-delivery/config.yml until block/sc2 updates from main (block 1b); "
-                   "the controller removes this skip at the update")
     def test_this_repository_passes(self):  # E1
         top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         out = io.StringIO()
