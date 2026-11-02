@@ -426,7 +426,7 @@ class EvidenceEntryTests(EvidenceBase):
         self.assertBad(pre)
         self.assertEqual(self.ev(self.closed_with(self.c)), [])  # the full sha still resolves
 
-    def test_sha_path(self):  # E3, E5
+    def test_evidence_sha_path_survives_cleanup(self):  # E3, E5
         self.assertEqual(self.ev(self.closed_with(self.c + ":" + R)), [])  # survives the cleanup
         self.assertEqual(self.ev(self.closed_with(self.c[:7] + ":src/x.py")), [])
         self.assertEqual(self.ev(self.closed_with(self.c + ":docs/a:b.md")), [])  # split at the first ':'

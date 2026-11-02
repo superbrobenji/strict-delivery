@@ -12,7 +12,7 @@ import re
 import stat
 from typing import List, Optional
 
-from gates.lib import schema
+from gates.lib import gitinfo, schema
 from gates.lib.result import GateError
 
 CLASS_GRANT = "merge-grant"
@@ -105,7 +105,9 @@ def _cite_problem(cite: object) -> str:
 
 
 def landed_errors(row: object, root: str, cfg: dict, tracked: frozenset) -> list:
-    """One error per bad ``landed_in`` cite; ``[]`` when the row has none (presence is ``validate``'s)."""
+    """One error per bad ``landed_in`` cite; ``[]`` when the row has none (presence is ``validate``'s).
+    ``root`` must be the git top level (owner Q-1a-fin-1): ``tracked`` holds repo paths and the cites are read under it."""
+    gitinfo._require_toplevel(root)
     if type(row) is not dict or "landed_in" not in row:
         return []
     cites = row["landed_in"]

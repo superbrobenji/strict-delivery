@@ -513,6 +513,25 @@ class LandedTests(GitIsolatedTestCase):
                          ["landed_in: CLAUDE.md cannot be checked: the row has no valid id to find in it"])
         self.assertEqual(landed_errors([], self.work, self.cfg, t), [])
 
+    def test_root_must_be_toplevel(self):  # L14, owner Q-1a-fin-1 (a)
+        self.put("CLAUDE.md", "no id")
+        self.put("sub/CLAUDE.md", A)
+        commit_all(self.work, "c")
+        t = gitinfo.tracked_files(self.work)
+        row = {**self.row, "landed_in": ["CLAUDE.md"]}
+        msg = "git rev-parse --show-toplevel: root must be the repository top level"
+        with self.assertRaises(GateError) as cm:
+            landed_errors(row, os.path.join(self.work, "sub"), self.cfg, t)
+        self.assertEqual(str(cm.exception), msg)
+        with self.assertRaises(GateError):  # refused before the row is looked at
+            landed_errors(drop(row, "landed_in"), os.path.join(self.work, "sub"), self.cfg, t)
+        self.assertEqual(landed_errors(row, self.work, self.cfg, t),
+                         ["landed_in: CLAUDE.md does not contain the decision id " + A])
+        link = os.path.join(self.tmp, "toplink")
+        os.symlink(self.work, link)
+        self.assertEqual(landed_errors(row, link, self.cfg, t),
+                         ["landed_in: CLAUDE.md does not contain the decision id " + A])
+
     def test_landed_in_must_contain_id_with_validate(self):  # plan test, both functions on one row
         self.put("CLAUDE.md", "no id")
         self.assertEqual(validate(self.row, self.cfg), [])
