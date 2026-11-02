@@ -133,7 +133,7 @@ checkpoint" is removed; one block per agent context stays.
    cross-stream interface) and its program plan. The plan defines each stream: id, purpose,
    stream plan, owned paths, shared files and their rules, estimate, dependencies, merge order,
    and a `## Deferred` table. Approving it is an owner decision of class `program-create`.
-   Everything in the program's spec and plan is planned in full before any code; no block that is only an outline may start implementation. The last planning step is the stream breakdown plan, `.strict-delivery/state/plans/<plan>/breakdown.yml` (kind `breakdown/1`, main spec section 8 and appendix A): streams with owned paths, tasks per stream, dependency edges from task to task, unblock conditions, and parallel groups within the concurrency limit, with the concurrency and depth limits it assumes. `program create` refuses a plan with an outline-only block or without a valid breakdown (a breakdown is valid only within the effective concurrency and depth limits and with the same streams and owned paths as `streams.yml`), and streams start as their unblock conditions hold (owner answer Q-PL-1 (a), 2026-11-02).
+   Everything in the program's spec and plan is planned in full before any code; no block that is only an outline may start implementation. The last planning step is the stream breakdown plan, `.strict-delivery/state/plans/<plan>/breakdown.yml` (kind `breakdown/1`, main spec section 8 and appendix A): streams with owned paths, tasks per stream, dependency edges from task to task, unblock conditions, and parallel groups within the concurrency limit, with the concurrency and depth limits it assumes, the tasks already done, and stream periods and path windows for ownership that moves during the program (owner answers Q-BD-7 (a), Q-BDr2-1 (a)). `program create` refuses a plan with an outline-only block or without a valid breakdown (a breakdown is valid only within the effective concurrency and depth limits and with the same streams and owned paths as `streams.yml`), and streams start as their unblock conditions hold (owner answer Q-PL-1 (a), 2026-11-02).
 2. The program controller (the program session itself by default, section 4; a separate program_controller only when the configured depth allows) creates the integration branch `<program>/integration` from main, with its own worktree, and the program folder on it (section 7), then dispatches one stream controller per ready stream. Each stream branch starts from main (owner answer Q-M4 (a)).
 3. Streams run. Owner questions flow up and are asked as one batch; answers flow down as decision
    records. Cross-stream needs flow as requests (section 6). Progress, estimate use and blockers
@@ -181,7 +181,7 @@ program controller writes it as a record; B implements it in its own file.
 |---|---|---|
 | `docs/strict-delivery/specs/<spec>.md` | an effort's spec; marks where decisions were made by citing their ids | the spec's effort is done |
 | `docs/strict-delivery/plans/<plan>.md` | a plan (stream plan, plain plan, or program plan) | the plan is done |
-| `.strict-delivery/state/programs/<program>/` | `status.md`, `streams.yml` (the local ownership map), `requests/`, `sync-log.md`; lives on the integration branch, committed only by the program controller, never merged into the base branch | the program closes |
+| `.strict-delivery/state/programs/<program>/` | `status.md`, `streams.yml` (the local ownership map; an `owns` item may be a path window `{path, from, until}`, and at most one `residual` stream owns every path no other stream owns in the same window, owner answers Q-BDr2-1 (a), Q-BD-4 (a)), `requests/`, `sync-log.md`; lives on the integration branch, committed only by the program controller, never merged into the base branch | the program closes |
 | `.strict-delivery/state/plans/<plan>/` | ledger, handoff, stream breakdown (`breakdown.yml`), mutation transcripts | the plan merges |
 | `docs/strict-delivery/reviews/<plan>/` | review reports | the plan merges |
 | `.strict-delivery/state/claims/<doc-slug>.yml` | claims about one document | with that document |
@@ -263,8 +263,7 @@ branches never carry a copy, so rows never conflict at a merge.
 ## 12. Gates
 
 - `gate_streams` (on every commit in a program; in CI per commit `base..HEAD`): `streams.yml`
-  schema; owned paths disjoint within the program; every changed path owned by the committing
-  stream or a shared file used under its rule; status rows one per stream and edited only as
+  schema; owned paths disjoint within the program; every changed path owned by the committing stream, judged by the owner in the window at the commit (a window event `merged:<stream>/<sub-block>` holds once that sub-block's `MERGED` line passes the merge checks; `merged:<stream>` once the stream's last sub-block has), or a shared file used under its rule; status rows one per stream and edited only as
   section 11 allows; request records as section 6. The committing stream is read from the branch
   (`<program>/<stream>/...`); commits on `<program>/integration` are program commits. The base for `base..HEAD` is the base branch, or the stream branch named as `stacked_on` in `streams.yml`; a merge of the integration branch into a stream branch fails (owner answer Q-M4 (a)). A changed path that no stream owns and that is not a shared file fails; the
   program controller assigns it (class `stream-ownership`). Shared files have one of two rules:

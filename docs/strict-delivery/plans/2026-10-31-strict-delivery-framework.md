@@ -35,7 +35,7 @@
 ## Process for this plan
 
 - Bootstrap (spec §16): no gates existed when block 1a started; judgment rules apply by hand and the block-1a report says so. "Each gate is enabled on this repository as soon as it lands": `check schema` from Task 1b.1, `check decisions` from Task 1c.1, `check register` from Task 1c.2. From each enabling task on, the commit gate is the test command on both interpreters plus every enabled `python3 -m gates check <gate>` exiting 0, with a clean tree (`git status --porcelain --untracked-files=all` empty). `run_all` replaces this list in block 2.
-- Blocks. Spec §17 block 1 is split under the strict cap of 3 tasks per block into sub-blocks **1a** (Tasks 1a.1-1a.3), **1b** (1b.1-1b.3), **1c0** (Task 1c0.1; owner answer F-docs-11 (c), 2026-11-02), **1c** (1c.1-1c.3) and **1d** (1d.1-1d.2), each on its own branch (`block/b1a`, `block/b1b`, `block/b1c` for 1c0, `block/b1c1` for 1c, `block/b1d`) and each with its own pull request from block 1c0 on. Under the strict profile each block ends with a final review (opus) and a top-tier final verifier. Blocks 1a and 1b then took an owner merge grant given in chat and ledgered verbatim, the merge as its own command, and the checkpoint. From block 1c on, `main` is protected (owner directive 2026-11-01) and every block, of every stream, ends in the pull-request flow: push the block branch; open a pull request to `main`; the owner approves it in chat naming the PR and its head sha; the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; the merge is read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`); the post-merge gates run on `main` updated from the remote; the merge is ledgered verbatim (from programs Task P1.2 as the `MERGED` line), written as the next branch's first commit; then the checkpoint and continuation. Merge approvals are not decision records (owner answer Q-15 (a), 2026-11-01).
+- Blocks. Spec §17 block 1 is split under the strict cap of 3 tasks per block into sub-blocks **1a** (Tasks 1a.1-1a.3), **1b** (1b.1-1b.3), **1c0** (Task 1c0.1; owner answer F-docs-11 (c), 2026-11-02), **1c** (1c.1-1c.3) and **1d** (1d.1-1d.2), each on its own branch (`block/b1a`, `block/b1b`, `block/b1c` for 1c0, `block/b1c1` for 1c, started from `block/b1c` at `f39e418` (owner answer (a), 2026-11-02), `block/b1d`) and each with its own pull request from block 1c0 on. Under the strict profile each block ends with a final review (opus) and a top-tier final verifier. Blocks 1a and 1b then took an owner merge grant given in chat and ledgered verbatim, the merge as its own command, and the checkpoint. From block 1c on, `main` is protected (owner directive 2026-11-01) and every block, of every stream, ends in the pull-request flow: push the block branch; open a pull request to `main`; the owner approves it in chat naming the PR and its head sha; the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; the merge is read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`); the post-merge gates run on `main` updated from the remote; the merge is ledgered verbatim (from programs Task P1.2 as the `MERGED` line), written as the next branch's first commit; then the checkpoint and continuation. Merge approvals are not decision records (owner answer Q-15 (a), 2026-11-01).
 - Continuation (spec §8, design §4.4) replaces stopping for `/clear`: at a checkpoint, at 80 % of its token or time budget, or at a usage-limit stop, the controller writes its handoff and returns `status: DONE` with `next:` (or `BLOCKED: budget`); its dispatcher at once dispatches a fresh controller with a continue prompt built from the handoff and ledger. One block per agent context stays. Nothing continues from inherited memory.
 - Checkpoint after every task: append one line to `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/ledger.md`:
   `CHECKPOINT <block> <task> head=<short sha> tests=<passed>/<total> gates=<PASS|n/a> next=<task id>`
@@ -554,7 +554,7 @@ Owner answer F-docs-11 (c) (2026-11-02): this task is a sub-block of its own, wi
 
 ## Block 1c: gates and indexes (branch `block/b1c1`)
 
-Block 1c starts from `main` after block 1c0's pull request has merged.
+Block 1c started from `block/b1c` at `f39e418` (owner answer (a), 2026-11-02; stream breakdown). Task 1c.1 runs at once; Task 1c.2 starts after block 1c0's pull request has merged; block 1c's pull request merges after block 1c0's.
 
 ### Task 1c.1: `gate_decisions`; enable `check decisions`
 
@@ -617,7 +617,7 @@ Block 1c starts from `main` after block 1c0's pull request has merged.
 ### Task 1c.2: `gate_register`; enable `check register`
 
 **Files:**
-- Create: `gates/gate_register.py`; Modify: `gates/__main__.py` (register `check register`)
+- Create: `gates/gate_register.py`; Modify: `gates/__main__.py` (register `check register`), `gates/lib/store.py` (private merge-base row helpers, Q-1c2-1 (a))
 - Test: `tests/test_gate_register.py`
 
 **Owner answers applied:** OQ-4, OQ-5, OQ-6, OQ-18.
@@ -666,7 +666,7 @@ Block 1c starts from `main` after block 1c0's pull request has merged.
 
 **Files:**
 - Create: `gates/tools/__init__.py`, `gates/tools/index.py`, `gates/schemas/decision-index.yml`, `gates/schemas/finding-index.yml`, `gates/schemas/in-force.yml`, `gates/schemas/overview.yml`; Modify: `gates/__main__.py` (register `index`), `gates/producers.py` (add `gates.tools.index`), `.gitignore`
-- Test: `tests/test_index.py`
+- Test: `tests/test_index.py`, `tests/test_schema_lib.py` (K6)
 
 **Owner answers applied:** OQ-12, OQ-13, OQ-17.
 
@@ -835,9 +835,9 @@ Spec §17 block 2: "`gate_claims`, `gate_dispatch`, `run_all`, git hook shims an
 - **2b** (Tasks 2b.1-2b.3): `run_all`, the git hooks, and self-adoption.
 - **2c** (Tasks 2c.1-2c.3): the claims tool (2c.1), `config/2` with `limits`, `merge` and `escape_cost` (2c.2), and `gate_dispatch` (2c.3).
 
-Each sub-block has its own branch (`block/b2a`, `block/b2b`, `block/b2c`) and starts from the tip of `main`. Each ends as block 1d does: final review, verifier, the pull request, the owner's chat approval and `gh pr merge --merge --match-head-commit` (Process for this plan, "Blocks"; owner Q-15 (a)), checkpoint, continuation.
+Sub-block 2a runs as stream D on `block/sd1` (owner answer Q-BDr-1 (a), 2026-11-02): it starts after block 1c0's pull request has merged and `block/sd1` has updated from `main`. 2b (`block/b2b`) starts after both stream D's pull request (PR-D) and block B2's have merged; 2c (`block/b2c`: 2c.1, 2c.2, 2c.3) starts after 2b's pull request has merged. Each branch starts from the tip of `main`. Each ends as block 1d does: final review, verifier, the pull request, the owner's chat approval and `gh pr merge --merge --match-head-commit` (Process for this plan, "Blocks"; owner Q-15 (a)), checkpoint, continuation.
 
-Only Task 2c.3 waits for block B1 to merge into `main` and for A to update from `main` (stream rules, "Cross-stream order": "The block-2 task that lands `gate_dispatch`"). Tasks 2c.1 and 2c.2 depend only on 2a and 2b (2c.1's hook test needs 2b.2's hook), and run first.
+Order (stream breakdown, section "Stream breakdown (2026-11-02)"): 2a (stream D) after PR-1c0; 2b after PR-D and PR-B2; 2c after PR-2b. Task 2c.3 also needs block B1 on `main` (stream rules, "Cross-stream order"), which holds by then.
 
 The commit gate is the block-1 gate list until Task 2b.3. From Task 2b.3's commit on, it is `python3 -m gates run_all` plus the test command on both interpreters, with a clean tree (Process for this plan: "`run_all` replaces this list in block 2").
 
@@ -882,19 +882,18 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 ### Task 2a.1: `decision/2`, `FIXED_RULES`, the migration registry, migrate-before-compare
 
 **Files:**
-- Create: `gates/lib/migrations.py`, `tests/test_playbook_drift.py` (stream A's file; see "Drift tests" below)
+- Create: `gates/lib/migrations.py`, `tests/test_playbook_drift.py` (stream D's file while D is live, then A's (DS-3); see "Drift tests" below)
 - Modify:
   - `gates/schemas/decision.yml`: version 2, `overrides`.
   - `gates/lib/decisions.py`: `FIXED_RULES`; `KNOWN_RULES` under Q-B2plan-8 (a); the current tag; the `overrides` rules.
-  - `gates/lib/store.py`: `base_errors` migrates rows before comparing.
-  - `gates/tools/decisions_cli.py`: `ask --overrides`, Q-B2plan-7.
+  - `gates/lib/store.py`: `base_errors` migrates rows before comparing. Order rule O2 (stream breakdown): `store.py` and `tests/test_store.py` change only after `block/sd1` has merged `main` containing block 1c's pull request (Task 1c.2's store helpers); until then the task works in its other files.
 - Records: every record under this repository's `paths.decisions` has its tag migrated in the same commit. The session controller writes them (F-B2p-10; Step 5).
-- Test: `tests/test_migrations.py`, `tests/test_decisions_lib.py`, `tests/test_store.py`, `tests/test_decisions_cli.py`, `tests/test_playbook_drift.py`. `tests/test_playbook.py` gains the `FIXED_RULES` test only when the stream rules' "Cross-stream order" gives it to A.
+- Test: `tests/test_migrations.py`, `tests/test_decisions_lib.py`, `tests/test_store.py`, `tests/test_playbook_drift.py`. `tests/test_playbook.py` gains the `FIXED_RULES` test only when the stream rules' "Cross-stream order" gives it to A.
 
-**Owner answers applied:** DB-6, DB-9, F-1, F-2, F-r3-3 (cross-stream order), DS-3, OQ-16; Q-B2plan-7, Q-B2plan-8.
+**Owner answers applied:** DB-6, DB-9, F-1, F-2, F-r3-3 (cross-stream order), DS-3, OQ-16; Q-B2plan-8; Q-BDr-1 (a) (runs in stream D). `ask --overrides` (Q-B2plan-7) is in Task 2c.1 (Q-2a1-1 (a); controller ruling Q-BD-1).
 
 **Drift tests (F-B2p-5; the stream-A-file route).**
-- **Where.** `tests/test_playbook_drift.py` is a new file owned by A. It reads `playbook/rules.md` and, from Task 2c.3, `playbook/roles.md`, and never edits them. Reading another stream's file is allowed; only editing is refused (design §6).
+- **Where.** `tests/test_playbook_drift.py` is a new file owned by stream D while D is live, then by A (DS-3). It reads `playbook/rules.md` and, from Task 2c.3, `playbook/roles.md`, and never edits them. Reading another stream's file is allowed; only editing is refused (design §6).
 - **Each test** asserts strict equality: `KNOWN_RULES` equals every rule id in `rules.md`, and `MIN_TIERS` equals the `minimum tier` column of `roles.md`. There is no `expectedFailure` marker (F-B2p2-1): measured, it hides a mismatch and fails on a match.
 - **When it runs.**
   - The test runs only when its B file exists on the branch being tested.
@@ -903,15 +902,15 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
   - A file that is present but unreadable, or has no table, fails. It never skips.
 - **On stream B's branch**, after B updates from `main` past the task that adds the test (DS-2), the file is present and the test compares for real.
   - B's tables follow the same owner answers as A's constants (DB-6, DB-2), which B's own tests assert. So the test passes there unless there is real drift.
-  - On real drift, the side that differs from the owner answer is fixed. If B's table is wrong, B fixes its own file. If A's constant is wrong, B raises a cross-stream request to A, which fixes its constant; while A's fix is pending, B stops BLOCKED (stream rules, "Requests"). A never edits B's file, and B never edits this test.
+  - On real drift, the side that differs from the owner answer is fixed. If B's table is wrong, B fixes its own file. If A's constant is wrong, B raises a cross-stream request to the constant's owner at the time (D while live, then A), which fixes it; while A's fix is pending, B stops BLOCKED (stream rules, "Requests"). A never edits B's file, and B never edits this test.
 - **Stream C** runs the test once B2 is on `main` and C has updated. The same rule applies, with C raising the request.
-- **Who updates it.** A owns and updates the test, before and after B2 merges. When B2 merges, `playbook/` passes to A (DS-3), and the test is unchanged.
+- **Who updates it.** Its owner at the time (D while live, then A) updates the test, before and after B2 merges. When B2 merges, `playbook/` passes to A (DS-3), and the test is unchanged.
 - **Ledger.** While B2 is unmerged, A's checkpoint lines carry `open: drift test <name> skipped (B2 not merged)`, so the skip is never silent.
 - **Meanwhile** each constant is also asserted against its literal owner value (DB-6, DB-2, spec §10; F-B2p-4). B's own tests assert the same literals against B's tables (Task B2.1 rows, Task B2.2 `TIERS`). The gap before B2 merges is therefore covered through the shared owner answers.
 - **Not moved.** The `FIXED_RULES` test keeps its existing "Cross-stream order" entry and file (`tests/test_playbook.py`), as the plan already states.
 
 **Interfaces:**
-- Consumes: `schema.load_schema/validate/SCHEMAS_DIR`, `decisions.validate/CLASS_GRANT`, `store.Store/base_errors/store_errors`, `gitinfo.merge_base/show/ls_tree`, `ids.id_problem`, `decisions_cli.main` (Task 1d.1), `helpers.make_repo/commit_all/write_record/GitIsolatedTestCase`.
+- Consumes: `schema.load_schema/validate/SCHEMAS_DIR`, `decisions.validate/CLASS_GRANT`, `store.Store/base_errors/store_errors`, `gitinfo.merge_base/show/ls_tree`, `ids.id_problem`, `helpers.make_repo/commit_all/write_record/GitIsolatedTestCase`.
 - Produces:
   - `gates/schemas/decision.yml`:
     - `version: 2`.
@@ -937,9 +936,6 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - Each row at the merge base and each row at the tip of `base` is passed through `migrations.migrate(store.kind, row)` before comparing.
     - `deleted.<id>` still calls `may_delete` with the unmigrated base row.
     - A record equal to its migrated base row passes. Any other change to a resolved record fails `immutable.<id>` (spec §7.2, F-1).
-  - `decisions_cli`:
-    - `ask` gains `[--overrides SD-R<n>]` (Q-B2plan-7 (a)), written into the open record and validated before writing.
-    - `decide` takes no `--overrides`.
   - `tests/test_playbook.py::test_fixed_rules_match_decisions_constant`, only when A writes it per "Cross-stream order".
 
 **Input-domain dimensions:**
@@ -955,7 +951,6 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
   - an open record changed;
   - a base row with a malformed tag, changed;
   - a `decision/1` tip row with the same content as a `decision/2` branch row.
-- `ask --overrides`: missing, repeated, empty, with `--class rule-override`, with any other class, naming a fixed rule.
 - Record migration of this repository: no records; open, answered and withdrawn records.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -992,11 +987,6 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       assert "immutable." + ID in [s for s, _ in base_errors(root, store, "HEAD", is_resolved, never)]
   def test_migrated_tip_row_is_no_collision():
       assert not any(s.startswith("collision.") for s, _ in errs)
-  # test_decisions_cli.py
-  def test_ask_writes_overrides():
-      assert rec(new)["overrides"] == "SD-R2" and rec(new)["class"] == "rule-override"
-  def test_ask_fixed_override_writes_nothing():
-      assert code == 1 and "fixed rule" in err and listdir(decisions_dir) == before
   # test_playbook_drift.py
   def test_known_rules_match_rules_md():       # skipTest only when playbook/rules.md is absent (Drift tests); strict on presence
       assert set(KNOWN_RULES) == rule_ids(read("playbook/rules.md"))
@@ -1006,9 +996,9 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       with self.assertRaises(unittest.SkipTest): compare(KNOWN_RULES, missing_path)
   ```
 - [ ] **Step 2: Run the test command; expect FAIL** (`ModuleNotFoundError: gates.lib.migrations`).
-- [ ] **Step 3: Implement** `migrations.py`, the schema version, the `decisions.py` and `store.py` changes, and `ask --overrides`.
+- [ ] **Step 3: Implement** `migrations.py`, the schema version, the `decisions.py` and `store.py` changes.
 - [ ] **Step 4: Write `test_fixed_rules_match_decisions_constant`** only if `playbook/rules.md` and `tests/test_playbook.py` are on `main` and are A's (B2 merged, DS-3). Otherwise ledger that stream B writes it ("Cross-stream order").
-- [ ] **Step 5: Migrate the records (session controller).** The implementer stops before the commit with status DONE and the code uncommitted. The session controller, the only writer of decision records (stream rules, "Shared files"), migrates every record under `paths.decisions` with `migrations.migrate` and `Store.replace`, never by hand. It then runs the test command on both interpreters and every enabled gate (`check schema`, `check decisions`, `check register`), expects PASS, and makes the commit.
+- [ ] **Step 5: Migrate the records (session controller)**, on `block/sd1` after it has merged `main` containing block 1c's pull request (`check register`, Task 1c.2). The implementer stops before the commit with status DONE and the code uncommitted. The session controller, the only writer of decision records (stream rules, "Shared files"), migrates every record under `paths.decisions` with `migrations.migrate` and `Store.replace`, never by hand. It then runs the test command on both interpreters and every enabled gate (`check schema`, `check decisions`, `check register`), expects PASS, and makes the commit.
 - [ ] **Step 6: Commit** `feat(lib): decision/2 with overrides, FIXED_RULES, schema migration registry` (code and migrated records together, so `check schema` and `check decisions` stay green), then checkpoint.
 
 ### Task 2a.2: claim schema and claim rules
@@ -1121,7 +1111,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 
 **Files:**
 - Create: `gates/gate_claims.py`
-- Modify: `gates/__main__.py` (`GATES["claims"]`)
+- Modify: `gates/__main__.py` (`GATES["claims"]`; order rule O3: committed after `block/sd1` has merged `main` containing block 1d's pull request)
 - Test: `tests/test_gate_claims.py`
 
 **Owner answers applied:** OQ-4, OQ-14; controller ruling on claim execution; Q-B2plan-4, Q-B2plan-5, Q-B2plan-6.
@@ -1179,7 +1169,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 
 **Files:**
 - Create: `gates/run_all.py`
-- Modify: `gates/__main__.py` (`COMMANDS["run_all"]`)
+- Modify: `gates/__main__.py` (`COMMANDS["run_all"]`), `tests/test_playbook.py` (`test_fixed_rules_match_decisions_constant`, when B2 merged first; stream rules, "Cross-stream order")
 - Test: `tests/test_run_all.py`
 
 **Owner answers applied:** OQ-1; controller ruling on `PROFILE_GATES`; stream rules "Cross-stream order" (`cites`, D4); Q-B2plan-19 (the `dispatch` part), Q-B2plan-24 (version source).
@@ -1392,13 +1382,13 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
 
 **Files:**
 - Create: `gates/tools/claims_cli.py`
-- Modify: `gates/__main__.py` (`COMMANDS["claims"]`), `gates/producers.py` (add `gates.tools.claims_cli`)
-- Test: `tests/test_claims_cli.py`
+- Modify: `gates/__main__.py` (`COMMANDS["claims"]`), `gates/producers.py` (add `gates.tools.claims_cli`), `gates/tools/decisions_cli.py` (`ask --overrides`, Q-B2plan-7; moved from Task 2a.1 by Q-2a1-1 (a) and controller ruling Q-BD-1)
+- Test: `tests/test_claims_cli.py`, `tests/test_decisions_cli.py`
 
-**Owner answers applied:** controller ruling on claim shape; Q-B2plan-2, Q-B2plan-4, Q-B2plan-6.
+**Owner answers applied:** controller ruling on claim shape; Q-B2plan-2, Q-B2plan-4, Q-B2plan-6, Q-B2plan-7 (a).
 
 **Interfaces:**
-- Consumes: `claims.*`, `ids.mint/utc_today`, `gitinfo.head_sha`, `gitinfo.blob_id` (Q-B2plan-4 (a)), `yamlsub.emit`, `config.load`, and the ids of every register.
+- Consumes: `claims.*`, `ids.mint/utc_today`, `gitinfo.head_sha`, `gitinfo.blob_id` (Q-B2plan-4 (a)), `yamlsub.emit`, `config.load`, `decisions_cli.main` (Task 1d.1), `decision/2` and `decisions.validate` (Task 2a.1), and the ids of every register.
 - Produces: `PRODUCES = ("claim",)`; `main(argv: list) -> int`:
   - `add --document D --text T --cite C (at least once) --direct CMD --contradiction CMD --by WHO [--root R]`:
     - mints `C-<YYYYMMDD>-<xxxx>` with `random.SystemRandom()`;
@@ -1409,6 +1399,7 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
   - `verify ID --by WHO`, run after the caller has re-run both commands:
     - refuses when a cited path has unstaged changes, so the recorded reference holds the verified text;
     - otherwise re-records freshness as `add` does.
+  - `decisions_cli`: `ask` gains `[--overrides SD-R<n>]` (Q-B2plan-7 (a)), written into the open record and validated before writing; `decide` takes no `--overrides`.
 
 **Input-domain dimensions:**
 - Each flag missing, repeated, empty.
@@ -1417,6 +1408,7 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
 - `verify` on an unknown id, a malformed id, a cited file with unstaged changes.
 - A mint collision across the three registers.
 - The claims directory missing.
+- `ask --overrides`: missing, repeated, empty, with `--class rule-override`, with any other class, naming a fixed rule.
 
 - [ ] **Step 1: Write the failing tests:**
   ```python
@@ -1430,9 +1422,14 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
       assert code == 1 and rec(cid) == before
   def test_gate_schema_checks_claims_now():
       assert "PASS schema.claim" in out
+  # test_decisions_cli.py
+  def test_ask_writes_overrides():
+      assert rec(new)["overrides"] == "SD-R2" and rec(new)["class"] == "rule-override"
+  def test_ask_fixed_override_writes_nothing():
+      assert code == 1 and "fixed rule" in err and listdir(decisions_dir) == before
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Implement `claims_cli.py`.**
+- [ ] **Step 3: Implement `claims_cli.py` and `ask --overrides`.**
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
 - [ ] **Step 5: Commit** `feat(tools): claims add and verify`, then checkpoint.
 
@@ -1446,7 +1443,7 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
   - `.strict-delivery/config.yml`: tag `config/2`, migrated in the same commit.
   - `tests/helpers.py` (A's shared file): `minimal_config()` returns `schema: config/2`. Otherwise every `make_repo` test fails once `config.load` refuses `config/1`. Measured by the reviewer: no `config/1` literal exists on `block/sb1`, `block/sc1` or `block/sc2` outside A's files.
   - `tests/test_decisions_lib.py`: its `config/1` literal becomes `config/2`.
-  - Any other `config/1` literal in A's tests: the implementer greps for them and lists them in the report.
+  - A builds test configs only with `tests/helpers.minimal_config()`; this task rewrites any `config/1` literal left in A's tests at its last update from `main` (owner answer Q-2c2-2 (a)). That covers stream D's test files, which are A's after PR-D (DS-3); order rule O5's brief rule (config only through `minimal_config()` or `make_repo`) applies to D's tests too. Task 2c.2 runs in A's sub-block 2c after 2b's pull request, so Step 4's `run_all` holds as written.
 - Test: `tests/test_config.py`, `tests/test_migrations.py`, `tests/test_gate_schema.py`
 - **Spec and plan edits, made before dispatch by the session controller with the owner's approval.** These are Q-H2's consequence; the plan and specs belong to the session controller and the owner.
   - Spec §6 gains the `limits` key: `max_children`, `max_depth`, `max_concurrent`, with their units; every limit is absent by default (no default value). It also gains `merge` (`mode: host | controller`, default `host`; owner Q-M1, Q-Pplan-14 (a)) and `escape_cost` (unset by default; spec edit SE6-2, owner Q-B6plan-3 (a); applied 2026-11-02).
@@ -1689,7 +1686,7 @@ Spec §17: "Programs block, placed after block 2 so this repository can run its 
 - **P3** (Tasks P3.1-P3.3): the pull-request merge policy (`merge.mode`, merges checked against the ledger's `MERGED` lines, no push to the base branch), cleanup rules with the merge-commit half of the deletion proof, `gate_cleanup`.
 - **P4** (Tasks P4.1-P4.3): the upward-question path, automatic continuation, `gate_dispatch` for live programs with the two prompt blocks.
 
-Each sub-block has its own branch (`block/p1` ... `block/p4`) from the tip of `main`, starts after block 2 has merged into `main`, and is pushed at every checkpoint. It ends in the pull-request flow (owner directive and Q-15 below): final review, verifier, a pull request to `main` (`gh pr create`), the owner's approval in chat naming the PR and its head sha, `gh pr merge <n> --merge --match-head-commit <that sha>` (GitHub refuses the merge if the head moved), the merge read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`), the post-merge gate run on an updated `main`, and a `MERGED` ledger line (Task P1.2) as the first commit of the next branch (the next sub-block's branch, or the cleanup branch after the plan's last PR, with `final=yes`). The commit gate is `python3 -m gates run_all` plus the test command on both interpreters, with a clean tree (block 2, Task 2b.3). From Task P1.3 the checkpoint step also runs `python3 -m gates check checkpoint --plan 2026-10-31-strict-delivery-framework`, and expects PASS after the checkpoint commit.
+Each sub-block has its own branch (`block/p1` ... `block/p4`) from the tip of `main`, starts after block 2 has merged into `main`, and is pushed at every checkpoint. P3 and P4 both start after P2's pull request has merged (controller ruling Q-BD-2); P4 is expected to merge first, and P3 updates from `main` before its merge. It ends in the pull-request flow (owner directive and Q-15 below): final review, verifier, a pull request to `main` (`gh pr create`), the owner's approval in chat naming the PR and its head sha, `gh pr merge <n> --merge --match-head-commit <that sha>` (GitHub refuses the merge if the head moved), the merge read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`), the post-merge gate run on an updated `main`, and a `MERGED` ledger line (Task P1.2) as the first commit of the next branch (the next sub-block's branch, or the cleanup branch after the plan's last PR, with `final=yes`). The commit gate is `python3 -m gates run_all` plus the test command on both interpreters, with a clean tree (block 2, Task 2b.3). From Task P1.3 the checkpoint step also runs `python3 -m gates check checkpoint --plan 2026-10-31-strict-delivery-framework`, and expects PASS after the checkpoint commit.
 
 Owner answers (2026-11-02): every question of the programs batch was answered (a) (section "Programs block (2026-11-02)" in the owner answers below). The tasks state those answers.
 
@@ -1699,6 +1696,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 - **Q-H3:** a sub-controller (`controller`) may dispatch a sub-controller when the stream agent judges it better.
 - **Q-H4:** `gate_dispatch` refuses any dispatch from a worker role.
 - **Q-H5 (a):** depth-aware tree. By default the session itself acts as program controller (status page, ids, requests, syncs, one question batch); `stream_controller` runs at level 1, sub-controllers at level 2, workers at level 3. A separate `program_controller` agent and nested sub-controllers are used only when the configured depth allows them (block 2's `dispatch.depth_ok` and `LEVELS_BELOW` decide; nothing in this block writes a tree shape into a gate).
+- **Concurrency for planning (stream breakdown, 2026-11-02):** the session runs at depth 5 and concurrency 30; program breakdowns assume `max_concurrent: 25` until the boundary is measured (Block 2 measured facts: 25 ran at once under 30).
 - **Measured Claude Code facts (2026-11-01):** with `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` unset the Agent tool exists at levels 1-2 (level 3 is a leaf); set to 5 it exists at levels 1-5; with `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` unset a launch past 20 is refused, not queued; set to 30, 25 ran at once. Block 2 pins these as `dispatch.limits_of` constants (Q-B2plan-22 (a)). A controller stays alive while its children run; questions go up by `SendMessage`; answers come down as decision records. Block 4's `init` writes both variables into the project `.claude/settings.json`; this repository already carries depth 5 and concurrency 30 there (commit 1e5bdc1), and Task P4.3 pins them with a test.
 - **Block 2 answers consumed:** all (a), and Q-B2plan-21 as answered (plan Task 2c.3 and "### Block 2 (2026-11-01)"): "a `top_tier_roles` role is checked against the tier named by `models.top_tier_fallback`, which defaults to `tier3`; a project raises the top tier by setting `tier4`". So `tier4` is unset by default. Every model choice in this block (Task P4.2's `## Model`) resolves the tier the way `gate_dispatch` checks it, fallback included; this block names no model.
 - **Owner directive, pull-request flow (binding, 2026-11-01):**
@@ -1729,8 +1727,8 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 
 **Cross-block notes.**
 - **Block 3:** the PreToolUse Agent hook supplies `dispatcher` and `program_live` (block 2). It takes `program_live` from `programs.live_programs` (Task P2.1; controller ruling on live programs), and runs `gate_dispatch` whenever `dispatch.required(root, cfg)` (Task P4.3) is true, so a live program is gated on the light profile too (spec §12).
-- **Stream B (Q-PL-1 (a), owner 2026-11-02):** a cross-stream request to B, raised by A when Task P2.2 starts (stream rules, "Requests"): Task B2.2's `playbook/sessions.md` writes the planning steps for agents: plan every block of the spec and plan in full before any code (no outline-only block starts implementation), then write the stream breakdown plan last (`<paths.plan_state>/<plan>/breakdown.yml`, `breakdown/1`: streams and owned paths, tasks per stream, dependency edges, unblock conditions, parallel groups within the concurrency limit, the assumed concurrency and depth), and run streams as they unblock. The same request covers Task B2.1's `playbook/rules.md` row `SD-R4` (review F-QPL-5): its rule text also states plan in full before code and the stream breakdown as the last planning step, and its `enforced by` reads `program create` (Task P2.2) for a program, judgment otherwise. If B2 has merged by then, the request goes to whoever owns `playbook/sessions.md` and `playbook/rules.md` (DS-3).
-- **Block 3 (stream B or A):** `playbook/streams.md` and `playbook/sessions.md` describe the Q-H5 default tree, the session as program controller and the PR flow. While B is live this is a cross-stream request to B, raised in Task P4.3 (stream rules, "Requests").
+- **Stream B (Q-PL-1 (a), owner 2026-11-02):** carried by Task B2.2 (stream breakdown, edit E-10; no request): Task B2.2's `playbook/sessions.md` writes the planning steps for agents: plan every block of the spec and plan in full before any code (no outline-only block starts implementation), then write the stream breakdown plan last (`<paths.plan_state>/<plan>/breakdown.yml`, `breakdown/1`: streams and owned paths, tasks per stream, dependency edges, unblock conditions, parallel groups within the concurrency limit, the assumed concurrency and depth), and run streams as they unblock. Task B2.1 likewise writes `playbook/rules.md`'s row `SD-R4` (review F-QPL-5): its rule text also states plan in full before code and the stream breakdown as the last planning step, and its `enforced by` reads `program create` (Task P2.2) for a program, judgment otherwise.
+- **Task B2.2:** `playbook/streams.md` and `playbook/sessions.md` describe the Q-H5 default tree, the session as program controller and the PR flow (owner answer Q-BD-5 (a): the former Task 3d.2 folds into B2.2; no request).
 - **Block 3 (PR flow, Q-15):** the PreToolUse Bash hook refuses an agent's `git push` whose destination is the base branch, and an agent's `git merge` or `git commit` while the base branch is checked out; it refuses an agent's `gh pr merge` unless `merge.agent_may_merge(cfg)` (Task P3.1) and the command carries `--merge` and `--match-head-commit <40 hex>`. It also refuses every other agent route to a merge or a base-branch update (review 5 F-Pp5-3): `gh api` calls to the REST merge endpoint (`repos/<owner>/<repo>/pulls/<n>/merge`, any method or path spelling) and GraphQL `mergePullRequest` (a `gh api graphql` body holding it), and `git push` to the base branch in any refspec form (`<remote> <base>`, `HEAD:<base>`, `refs/heads/<base>`, `:<base>`, `--all`, `--mirror`). The owner's chat approval itself cannot be checked by a hook; the ledger's `MERGED` line records it.
 - **Block 3 (Q-16):** the PreToolUse Edit/Write hook refuses any agent Edit or Write of a path under `paths.decisions` (spec §4 currently: it "records nothing, blocks nothing"); only `python3 -m gates decisions` writes there, and its `decide` and `withdraw` stay refused to agents by the Bash hook.
 - **Block 4:** `init` writes `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` and `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` into the project `.claude/settings.json` `env` block (owner answer; spec edit SE-6). It asks `merge.mode` (Q-M1), and offers to configure host branch protection on the base branch (pull request required, merge-commit method only) through `gh api`, with `doctor` reporting what is and is not set (owner directive; this repository already has protection on).
@@ -1830,7 +1828,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
     - `Ruling`: `Ruling: <what> -- <why> -- <cost if wrong> -- <spec cite>`, exactly three ` -- ` separators, each part non-empty (spec §7.1);
     - `Request`: `Request: <id> from=<stream> to=<stream> files=<paths> need=<text> status=<open|done|disputed>`, optionally `sha=<hex>` (stream rules);
     - `UPDATE`: `UPDATE <block> from=<branch>@<hex> head=<hex> tests=<n>/<n> gates=<PASS|n/a>` (stream rules).
-    - `MERGED` (owner Q-15 (a)): `MERGED pr=<n> head=<40 hex> merge=<40 hex> merged_by=<token> at=<YYYY-MM-DDTHH:MM:SSZ> final=<yes|no> approval=<approval>`, where `<approval>` is `host` (host mode: the owner's merge on the host is the approval) or, in controller mode, `chat pr=<n> head=<40 hex> words=<the owner's chat words verbatim, to the end of the line, non-empty>` (the PR number and head sha the owner named, then the words). One line per merged PR of this plan, read back from the host after the merge (`merged_by` is the host account that merged, `mergedBy`; `at` is `mergedAt`), written as the first commit of the next branch; `final=yes` on the plan's last PR only. `approval` is last because `words` runs to the end of the line.
+    - `MERGED` (owner Q-15 (a)): `MERGED pr=<n> head=<40 hex> merge=<40 hex> merged_by=<token> at=<YYYY-MM-DDTHH:MM:SSZ> final=<yes|no> stream=<stream id> block=<sub-block id> approval=<approval>`, where `stream` and `block` name the stream and sub-block whose PR the line records (plain-plan streams use their stream rules id, `a`, `b`, `c`, `d`, and the block id, `1c`, `sb2`, `2b`, `P3`; program streams their `streams.yml` id and sub-block, `residual R2`, `init4 4e`; stream breakdown edit E-21) and where `<approval>` is `host` (host mode: the owner's merge on the host is the approval) or, in controller mode, `chat pr=<n> head=<40 hex> words=<the owner's chat words verbatim, to the end of the line, non-empty>` (the PR number and head sha the owner named, then the words). One line per merged PR of this plan, read back from the host after the merge (`merged_by` is the host account that merged, `mergedBy`; `at` is `mergedAt`), written as the first commit of the next branch; `final=yes` on the plan's last PR only. `approval` is last because `words` runs to the end of the line.
     - The schema patterns accept any `<PREFIX>-<YYYYMMDD>-<xxxx>` id; the configured prefix is checked by `ledger_errors`.
   - `checkpoints.py`:
     - `plan_slug(plan_path: str) -> str`: the basename without its final `.md`; a path not ending `.md` raises `ValueError`.
@@ -1838,7 +1836,8 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
     - `parse_handoff(text: str) -> dict` (the front matter; `ValueError` with the `validate_front_matter` errors).
     - `handoff_errors(row: dict, cfg: dict) -> list`: `resume` equals `resume_line(row)`; `plan` lies under `paths.plans` and ends `.md`; `ledger` equals `<paths.plan_state>/<plan_slug(plan)>/ledger.md`; `role` is in `dispatch.ROLES`; `program` and `stream` both present or both absent, each matching `[a-z0-9][a-z0-9-]*`; `qid` values unique and matching `[a-z0-9][a-z0-9-]*`; each question's `class` is in `decision_classes.owner_only` (a handoff question is an owner question, spec §7.1).
     - `checkpoint_lines(text: str) -> list` of dicts (`block`, `task`, `head`, `passed`, `total`, `gates`, `next`), in file order.
-    - `merged_lines(text: str) -> list` of dicts (`pr`, `head`, `merge`, `merged_by`, `at`, `final`, `approval` (`host` or `chat`), and for `chat` `approval_pr`, `approval_head`, `words`), in file order; `ledger_errors` adds `line <n>: pr <n> recorded twice` and `line <n>: final=yes after a final line`.
+    - Lines written before `stream` and `block` existed (PRs #1-#3) are not rewritten: the reader treats both fields as absent (`stream` and `block` unknown, never matching a window event).
+    - `merged_lines(text: str) -> list` of dicts (`pr`, `head`, `merge`, `merged_by`, `at`, `final`, `stream`, `block` (each `None` when absent), `approval` (`host` or `chat`), and for `chat` `approval_pr`, `approval_head`, `words`), in file order; `ledger_errors` adds `line <n>: pr <n> recorded twice`, `line <n>: final=yes after a final line`, and, given the plan text, `line <n>: unknown stream <s>` and `line <n>: block <b> has no block heading` (Task P2.2's block-heading rule).
     - `ledger_errors(text: str, cfg: dict) -> list`: the schema errors, plus `line <n>: tests passed > total`, plus `line <n>: <id>` for a `Request:` id failing `id_problem(id, cfg["ids"]["request"])`.
   - No module declares `handoff` or `ledger` yet, so `gate_schema` does not check these files (Appendix A).
 
@@ -1849,7 +1848,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 - `role` each `ROLES` id and an unknown one; `program` without `stream`.
 - `questions`: empty; one option; repeated `qid`; `qid` with `/`; `class` outside `owner_only`; `effect` other.
 - Ledger lines: each keyword with a conforming line, a trailing word, a missing field, `gates=FAIL`, `tests=5/4`, uppercase hex, a 6-hex sha; `Ruling:` with two and with four separators, an empty part; `Ruling (x):` (refused under Q-Pplan-1 (a)); `Request:` with another prefix; a keyword mid-line; the first line missing.
-- `MERGED` lines: conforming host and chat forms; short sha; `final=maybe`; `approval=other`; `chat` with empty `words`; `chat` without `pr=` or `head=`; words holding `=`, quotes, non-ASCII; `by=` instead of `merged_by=`; `at` without `Z`; one PR twice; two `final=yes` lines.
+- `MERGED` lines: conforming host and chat forms; short sha; `final=maybe`; `approval=other`; `chat` with empty `words`; `chat` without `pr=` or `head=`; words holding `=`, quotes, non-ASCII; `by=` instead of `merged_by=`; `at` without `Z`; one PR twice; two `final=yes` lines; `stream=`/`block=` present and absent; an unknown stream; a block with no heading; two lines for one block.
 - `plan_slug`: nested path, `x.md.md`, no suffix.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -1977,7 +1976,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
     - `stream_problem(id)`: `NAME_RE`, and not `integration`. `group_problem(id)`: `NAME_RE`, and not `main`.
     - `parse_branch(name: str) -> Optional[tuple]`: `<p>/integration` gives `("integration", p, None, None)`; under Q-Pplan-12 (a), `<p>/records` gives `("records", p, None, None)` and the stream id `records` is refused too; `<p>/<s>/main` gives `("stream", p, s, None)`; `<p>/<s>/<g>` gives `("group", p, s, g)`; a name whose first component passes `program_problem` but whose shape or ids are wrong raises `ValueError` naming the rule; any other name gives `None` (not a program branch).
     - `branch_of(p, s=None, g=None) -> str` and `worktree_of(worktrees, p, s, g=None) -> str` (`<worktrees>/<p>/<s>/main` or `<worktrees>/<p>/<s>/<g>`; spec §11).
-  - `gates/schemas/streams.yml` (`streams/1`, `files: [{dir: programs, glob: "*/streams.yml"}]`): `schema`, `program` (`str`), `plan` (`str`, the program plan), `specs` (`list` of `str`), `worktrees` (`str`), `streams` (`list`, `min: 1`; items `map {id: str, purpose: str, plan: str, owns: list min 1 of str, estimate: int min 0, depends_on: list of str, merge_order: int min 1, stacked_on: str required false}`), `shared` (`list`; items `map {path: str, rule: enum [append-rows, own-row]}`). Programs design §5 lists what the plan defines per stream; §12 gives the two shared rules.
+  - `gates/schemas/streams.yml` (`streams/1`, `files: [{dir: programs, glob: "*/streams.yml"}]`): `schema`, `program` (`str`), `plan` (`str`, the program plan), `specs` (`list` of `str`), `worktrees` (`str`), `streams` (`list`, `min: 1`; items `map {id: str, purpose: str, plan: str, owns: list of (str or map {path: str, from: str required false, until: str required false}) (min 1 unless `residual`), residual: bool required false (at most one stream; it has no `owns`), estimate: int min 0, depends_on: list of str, merge_order: int min 1, stacked_on: str required false}`; stream breakdown edit E-13: path windows (Q-BDr2-1 (a)) and the residual stream (Q-BD-4 (a)), with the events of `breakdown/1`), `shared` (`list`; items `map {path: str, rule: enum [append-rows, own-row]}`). Programs design §5 lists what the plan defines per stream; §12 gives the two shared rules.
   - `gates/schemas/request.yml` (`request/1`, `files: [{dir: programs, glob: "*/requests/*.yml"}]`): programs design §6's fields: `id` (`id`, `id_kind: request`), `from_stream`, `to_stream` (`str`), `files` (`list` min 1 of `str`), `interface` (`cite`), `need` (`str`), `status` (`enum [open, accepted, done, disputed, withdrawn]`), `raised_at` (`map {sha: sha, by: str}`), `resolution` (`map {commits: list min 1 of sha, at: sha, by: str}`; `required_when: [{status: [done]}]`), `decision` (`id`, `id_kind: decision`, `required: false`).
   - `gates/schemas/status.yml` (`status/1`, markdown, `first_line: "<!-- schema: status/1 -->"`, `table` = the eleven headers of spec §11, exactly `stream | block | branch | worktree | next task | estimate | used | status | blockers | pending decisions | delivers`).
   - `gates/schemas/sync-log.yml` (`sync-log/1`, markdown, `first_line: "<!-- schema: sync-log/1 -->"`, `lines`: `SYNC integration=<hex> main=<hex> merged-main=<yes|no> updated=<stream ids|none> combined=<stream ids|none> tests=<PASS|FAIL> questions=<ids|none>`). Under Q-M4 (a) a sync merges main into the integration branch, updates each stream branch behind main (Q-Pplan-5), merges the stream heads named in `combined` into integration and runs `run_all` and the suite there (combined testing), and collects the question batch. The sync's command sequence is the builder's (programs design §17); the line records its outcome. Why here although the outline's P2 names only the streams, request and status schemas: `sync-log.md` is one of the four files of the program folder (programs design §7.2), `program create` writes it with the others, and the sync duty of P4.3's prompt blocks needs a checked place to record each sync (programs design §10: "update status rows and the sync log"); without a schema and a producer, `gate_schema` would leave it unchecked (Appendix A).
@@ -2048,16 +2047,16 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 **Interfaces:**
 - Consumes: `programs.*` (Task P2.1), `dispatch.limits_of` (Task 2c.3), `ids.mint/utc_today`, `decisions.is_resolved`, `store.Store("decision")`, `gitinfo.current_branch/head_sha/local_branches/show`, `yamlsub.emit`, `config.load`, and the ids of every register (decisions, findings, claims, every program's requests).
 - Produces: `PRODUCES = ("streams", "status", "sync-log", "request", "breakdown")`; `main(argv: list) -> int` for `python3 -m gates program <sub>`. Every subcommand refuses (exit 1, nothing written) unless `current_branch` is `<program>/integration`, validates every file it writes before writing it, and writes with `yamlsub.emit` or the canonical table form.
-  - `gates/schemas/breakdown.yml` (`breakdown/1`, YAML, `files: "<paths.plan_state>/*/breakdown.yml"`): `plan` (`str`, the plan slug, equal to the folder name); `max_concurrent`, `max_depth` (`int`, `min: 1`: the limits the breakdown assumes); `streams` (`list`, `min: 1`) of `map {id: str [a-z0-9][a-z0-9-]*, paths: list of str (min 1; a trailing `/` owns every path under it), tasks: list of str (min 1, task ids), unblock: str ("at program start" or the condition, naming tasks or streams)}`; `edges` (`list`, may be empty) of `map {from: str, to: str}` (`to` waits for `from`); `groups` (`list`, `min: 1`) of `map {id: str, tasks: list of str (min 1)}`. Unknown keys refused.
-  - `breakdown.breakdown_errors(row: dict) -> list` of `(suffix, reason)`: stream ids unique; a task id in more than one stream; owned paths that overlap between streams (equal, or one a `/`-prefix of the other); an edge naming an unknown task, an edge from a task to itself, a cycle (the reason names one cycle); a group naming an unknown task, a task in two groups, a group holding two tasks joined by a path of edges, a group larger than `max_concurrent`.
+  - `gates/schemas/breakdown.yml` (`breakdown/1`, YAML, `files: "<paths.plan_state>/*/breakdown.yml"`): `plan` (`str`, the plan slug, equal to the folder name); `max_concurrent`, `max_depth` (`int`, `min: 1`: the limits the breakdown assumes); `done` (`list` of task ids, may be empty: tasks finished before the record; controller ruling under Q-BD-7 (a), ledgered and named in the PR description for the owner); `streams` (`list`, `min: 1`) of `map {id: str [a-z0-9][a-z0-9-]*, residual: bool (optional; at most one stream; it owns every path no other stream owns in the same window and has no `paths`), paths: list of (str or map {path: str, from: str (optional), until: str (optional)}) (min 1 unless `residual`; a trailing `/` owns every path under it; a map is a path window, Q-BDr2-1 (a)), period: map {from: str, until: str} (optional; absent means the whole program; Q-BD-7 (a)), tasks: list of str (min 1, task ids), unblock: str ("at program start" or the condition, naming tasks or streams)}`. Window and period events: `program-start`, `merged:<stream id>/<sub-block id>` (that sub-block's PR, by its `MERGED` line's `stream` and `block` fields), `merged:<stream id>` (the stream's last sub-block merge: its last `merged:<stream id>/<sub-block id>` event; not `final=yes`, which marks the plan's last PR) and `program-close`; `edges` (`list`, may be empty) of `map {from: str, to: str}` (`to` waits for `from`); `groups` (`list`, `min: 1`) of `map {id: str, tasks: list of str (min 1)}`. Unknown keys refused.
+  - `breakdown.breakdown_errors(row: dict) -> list` of `(suffix, reason)`: stream ids unique; a task id in more than one stream; a `done` id with no task heading in the plan (checked with `plan_errors`; no ledger `CHECKPOINT` check, F-BDr3-1); a task in `done` and in a stream, or named by an edge; more than one `residual` stream, a `residual` stream with `paths`, a non-residual stream without; an event naming no stream, or a sub-block the stream does not have (it has no block heading in the plan); owned paths of two non-residual streams that overlap (equal, or one a `/`-prefix of the other) while their windows intersect (windows are chained when one's `until` equals the other's `from`; any other pair on the same path is an overlap); an edge naming an unknown task, an edge from a task to itself, a cycle (the reason names one cycle); a group naming an unknown task, a task in two groups, a group holding two tasks joined by a path of edges, a group larger than `max_concurrent`.
   - `breakdown.plan_errors(plan_text: str, row: dict) -> list` of `(suffix, reason)` ("outline-only"; fail closed, review F-QPL-1). Line-based, fences not special:
     - A task heading is a line `### Task <id>:` or `#### Task <id>:`, the colon right after the id (the same rule as Task 6K.1's `plan_tasks`). A heading with anything between the id and the colon (`### Task 3d.2 (only if ...):`) is not a task heading. A conditional task writes its condition after the colon, and the breakdown lists it like any other task, with the condition in its stream's `unblock`.
     - A block heading is `## Block <id>` or `### Block <id>` followed by `:` or ` (`, or `## Stream <name>, sub-block <id>` followed by ` (` or the end of the line; `<id>` is `[0-9A-Za-z]+`. `### Block <id>` counts only inside a `## Stream` section (owner-answer and divergence headings elsewhere are not blocks).
     - `outline.structure`: the plan has no block heading at all (a plan without the expected structure fails).
     - `outline.block.<id>`: a block heading whose section (up to the next heading of the same or a higher level) holds no task heading `Task <id>.<n>:`, unless it is an umbrella: a later block heading exists whose id starts with `<id>` and is longer (`## Block 2 (sub-blocks ...)` then `## Block 2a`), and every such sub-block passes. Another `## ` heading holding `(sub-blocks <id>, <id>, ...)` (`## Programs block (sub-blocks P1, P2, P3, P4)`) is an umbrella over exactly the listed ids, each of which must be a passing block heading. Checked on this plan at the commit that states the rule: 37 block headings, all passing, and all six `## Later blocks` pointers resolving; a prose-only `## Block 7:` and a bare bullet both fail.
     - `outline.later.<n>`: a bullet under a heading that starts `## Later blocks` whose text does not read `Planned in full in section "<X>"`, or whose `<X>` is not the text of a block heading of the plan, or names one that fails `outline.block`.
-    - `outline.task.<id>`: a task of the breakdown with no task heading in the plan; `outline.unplanned.<id>`: a task heading of the plan in no stream of the breakdown.
-  - `create <program> --streams FILE --decision DEC --plan SLUG [--root R]`: first refuses (exit 1, nothing written) when `<paths.plans>/<SLUG>.md` or `<paths.plan_state>/<SLUG>/breakdown.yml` is missing, when the breakdown fails `breakdown/1`, `breakdown_errors` or `plan_errors`, each reason printed (owner answer Q-PL-1 (a): a program does not start on an outline-only plan or without a valid breakdown); when the breakdown's `max_concurrent` or `max_depth` exceeds the effective limit, `dispatch.limits_of(cfg, os.environ)` (Task 2c.3: the lower of config `limits` (Task 2c.2) and the measured Claude Code limits, failing closed when the environment does not say; when config leaves a limit unset, the Claude Code value alone counts) (review F-QPL-2); and unless the breakdown agrees with the streams file: the same set of stream ids, each stream's `paths` equal as a set to its `owns`, the breakdown's `plan` equal to `--plan`, and `--plan` equal to the streams file's `plan` (review F-QPL-3; one ownership map, the one `gate_streams` enforces); then refuses an invalid name, a name whose folder exists in the working tree, at `HEAD`, or at the tip of `base_branch` (programs design §7.3: "a name already on main or on the branch is refused"), an id that is not an answered `program-create` decision, and a streams file that fails `streams/1` or `streams_errors`. It writes `streams.yml`, `status.md` (one row per stream: `block` and `next task` `none`, `estimate` from `streams.yml`, `used` `0`, `status` `ready`, `blockers` and `pending decisions` `none`, `delivers` the stream's `purpose`) and `sync-log.md` (its first line).
+    - `outline.task.<id>`: a task of the breakdown with no task heading in the plan; `outline.unplanned.<id>`: a task heading of the plan in no stream of the breakdown and not in `done` (a heading in `done` counts as covered).
+  - `create <program> --streams FILE --decision DEC --plan SLUG [--root R]`: first refuses (exit 1, nothing written) when `<paths.plans>/<SLUG>.md` or `<paths.plan_state>/<SLUG>/breakdown.yml` is missing, when the breakdown fails `breakdown/1`, `breakdown_errors` or `plan_errors`, each reason printed (owner answer Q-PL-1 (a): a program does not start on an outline-only plan or without a valid breakdown); when the breakdown's `max_concurrent` or `max_depth` exceeds the effective limit, `dispatch.limits_of(cfg, os.environ)` (Task 2c.3: the lower of config `limits` (Task 2c.2) and the measured Claude Code limits, failing closed when the environment does not say; when config leaves a limit unset, the Claude Code value alone counts) (review F-QPL-2); and unless the breakdown agrees with the streams file: the same set of stream ids, each stream's `paths` (with their windows) equal as a set to its `owns`, `residual` equal (`done` is not compared), the breakdown's `plan` equal to `--plan`, and `--plan` equal to the streams file's `plan` (review F-QPL-3; one ownership map, the one `gate_streams` enforces); then refuses an invalid name, a name whose folder exists in the working tree, at `HEAD`, or at the tip of `base_branch` (programs design §7.3: "a name already on main or on the branch is refused"), an id that is not an answered `program-create` decision, and a streams file that fails `streams/1` or `streams_errors`. It writes `streams.yml`, `status.md` (one row per stream: `block` and `next task` `none`, `estimate` from `streams.yml`, `used` `0`, `status` `ready`, `blockers` and `pending decisions` `none`, `delivers` the stream's `purpose`) and `sync-log.md` (its first line).
     - Where it runs (owner answer Q-Pplan-11 (a)): the session first creates the branch and its worktree with one git command of its own, `git worktree add -b <program>/integration <worktrees>/<program>/integration <base_branch>`, and runs `create` (and every later `program`, `questions` and `decisions` write of the program) with `--root` that worktree. `create` then also refuses when the top level of `--root` is not `<worktrees>/<program>/integration`, with `<worktrees>` from the streams file resolved against the main worktree (the parent of `git rev-parse --path-format=absolute --git-common-dir`). The main checkout is never switched.
   - After every successful write the tool prints `push <program>/integration`; the program controller pushes the integration branch as its own command (owner directive; CI reads program files from it).
   - `status <program> <stream> [--block B] [--next-task T] [--used N] [--status S] [--blockers IDS] [--pending IDS] [--delivers TEXT]`: rewrites that one row; every other row is byte-identical.
@@ -2149,7 +2148,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
     - `streams.map.<program>`: `streams_errors`;
     - `streams.status.<program>`: `status_errors`;
     - `streams.request.<suffix>`: `request_errors`, and `request_base_errors` against the program at the merge base of the integration branch with `HEAD`;
-    - `streams.owned.<path>` on a stream or group branch: a changed path owned by another stream, or by nobody and not shared, fails; the reason names the owner, or says "no stream owns it; the program controller assigns it (class `stream-ownership`)" (programs design §12). A change under the program folder or a global record directory fails (controller ruling). A merge commit whose second parent is reachable from the tip of `base_branch` (an update from main, per Q-Pplan-5) is not judged: it brings main's own changes.
+    - `streams.owned.<path>` on a stream or group branch: a changed path owned by another stream, or by nobody and not shared, fails; ownership is judged by the owner in the window at the commit (path windows, Q-BDr2-1 (a)), and a path no other stream owns in that window is the `residual` stream's when the program has one (Q-BD-4 (a)). A window event `merged:<s>/<b>` holds when the program's ledgers hold a `MERGED` line with `stream=<s> block=<b>` that passes Task P3.1's `merged_errors`; `merged:<s>` holds when that is true for the stream's last sub-block; the merge-commit rule (R5c-5) is the fallback check that the line's merge commit is on the base branch's first-parent history; the reason names the owner, or says "no stream owns it; the program controller assigns it (class `stream-ownership`)" (programs design §12). A change under the program folder or a global record directory fails (controller ruling). A merge commit whose second parent is reachable from the tip of `base_branch` (an update from main, per Q-Pplan-5) is not judged: it brings main's own changes.
     - `streams.owned.<path>` on `<program>/integration`: a non-merge commit, and the tree being committed when `merge_head` is `None`, may change only the program folder and the global record directories (programs design §5: "Only the program controller commits on the integration branch, apart from these merges"; Q-M4 (a): integration holds only program records). A merge whose second parent is reachable from the tip of `base_branch` is exempt (controller ruling). Any other merge (combined testing), and the tree being committed while a merge is in progress, may change only paths the merged stream owns, identified as the stream whose branch the second parent is reachable from; none found fails.
     - `streams.owned.<path>` on `<program>/records` (Q-Pplan-12 (a)), judged against the merge base with `base_branch`: only the global record directories may change.
     - `streams.integration.<sha>`: on a stream, group or records branch, a judged merge commit whose second parent is reachable from `<program>/integration` and not from the tip of `base_branch` fails: integration content (other streams' code from combined testing) never flows into a branch that opens a PR to `main` (Q-M4 (a): integration is never a merge stop on the way to `main`).
@@ -2281,8 +2280,8 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 
 **Files:**
 - Create: `gates/lib/cleanup.py`
-- Modify: `gates/lib/findings.py` (`may_delete` gains the merge check; signature unchanged); `gates/lib/gitinfo.py` (additive: `last_text`)
-- Test: `tests/test_cleanup_lib.py`, `tests/test_findings_lib.py`, `tests/test_gate_register.py`
+- Modify: `gates/lib/findings.py` (`may_delete` gains the merge check; signature unchanged); `gates/lib/gitinfo.py` (additive: `last_text`; and Block 5's Rq-5-4 functions `is_ignored`, `first_parent`, `deleted_paths`, `upstream_of`, landed by A here before the program, controller ruling Q-BD-3)
+- Test: `tests/test_cleanup_lib.py`, `tests/test_findings_lib.py`, `tests/test_gate_register.py`, `tests/test_gitinfo.py` (the Rq-5-4 functions, with the rows Block 5 lists)
 
 **Owner answers applied:** OQ-5, OQ-6; controller rulings (shared specs; merge method); Q-M4 (a); Q-15 (a); Q-Pplan-9.
 
@@ -2550,7 +2549,7 @@ Starts only after the two prompt files are on `main` and A has updated from `mai
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Implement** the two dispatch additions.
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
-- [ ] **Step 5: Enable.** In a `mktemp -d` clone: create a fixture program with `program create` (a fixture `program-create` decision, plan and `breakdown.yml` in the clone only), render a `stream_controller` dispatch from the real prompt file, run `python3 -m gates check dispatch --input <file>` with `dispatcher {id: session, depth: 0, live_children: 0, live_total: 0}`; expect every line PASS; ledger it. Raise the block-3 request for `playbook/streams.md` and `playbook/sessions.md` (cross-block notes) when B is live.
+- [ ] **Step 5: Enable.** In a `mktemp -d` clone: create a fixture program with `program create` (a fixture `program-create` decision, plan and `breakdown.yml` in the clone only), render a `stream_controller` dispatch from the real prompt file, run `python3 -m gates check dispatch --input <file>` with `dispatcher {id: session, depth: 0, live_children: 0, live_total: 0}`; expect every line PASS; ledger it.
 - [ ] **Step 6: Commit** `feat(gates): gate_dispatch for live programs; program and stream controller prompt blocks; pin subagent limits`, then checkpoint with `gates=PASS`. **Block P4 end:** as block 1d; this ends the programs block. The next step, running blocks 3-6 as a program, starts with the owner's `program-create` decision.
 
 ---
@@ -2572,11 +2571,11 @@ Blocks 3-6 run as one program after the programs block (owner's `program-create`
 | Stream | Sub-block, tasks | Starts | Parallel groups |
 |---|---|---|---|
 | `runtime` | 3a: 3a.1 session store; 3a.2 hook entry, `hooks.json`, SessionStart, UserPromptSubmit, PostToolUse Read | at program start | serial (3a.2 consumes 3a.1) |
-| `package` | 3d: 3d.1 manifests and `run_all.version`; 3d.2 (conditional) playbook streams and sessions prose | at program start | 3d.1 and 3d.2 in parallel (disjoint files) |
+| `package` | 3d: 3d.1 manifests and `run_all.version` | at program start | one task |
 | `bash` | 3b: 3b.1 shell scanner; 3b.2 bypass block, decide/withdraw, gated commit; 3b.3 push, base branch, `gh` | 3b.1 at program start; 3b.2 after streams `runtime` and `package` have merged into `main` and `bash` has updated from `main` | 3b.1 runs beside `runtime`; 3b.2 then 3b.3 serial (same files) |
 | `tools` | 3c: 3c.1 Edit/Write; 3c.2 Agent and SubagentStop | after streams `runtime` and `package` have merged into `main` and `tools` has updated from `main` | 3c.1 and 3c.2 in parallel (disjoint files) |
 
-`runtime`, `package` and `bash` (3b.1) run in parallel from the start; `bash` (3b.2-3b.3) and `tools` run in parallel after `runtime` and `package` merge. If either is not on `main` when `bash` finishes 3b.1, `bash` ledgers the wait and stops `BLOCKED: waiting for runtime and package` (stream rules, "Cross-stream order").
+`runtime`, `package` and `bash` (3b.1) run in parallel from program start; `bash` (3b.2-3b.3) and `tools` run in parallel after `runtime` and `package` merge. If either is not on `main` when `bash` finishes 3b.1, `bash` ledgers the wait and stops `BLOCKED: waiting for runtime and package` (stream rules, "Cross-stream order").
 
 **File ownership (`streams.yml`; exact paths; a trailing `/` means every path under it).** Paths not listed stay with the program's residual owner.
 
@@ -2585,9 +2584,9 @@ Blocks 3-6 run as one program after the programs block (owner's `program-create`
 | `runtime` | `gates/hook.py`; `gates/hooks/__init__.py`, `gates/hooks/session_start.py`, `gates/hooks/prompt_submit.py`, `gates/hooks/post_read.py`; `gates/lib/hookio.py`, `gates/lib/session.py`, `gates/lib/transcript.py`, `gates/lib/worktrees.py`; `hooks/hooks.json`; `tests/hookrun.py`, `tests/test_session_store.py`, `tests/test_transcript.py`, `tests/test_worktrees.py`, `tests/test_hookio.py`, `tests/test_hook_entry.py`, `tests/test_hook_session_start.py`; its plan workspace |
 | `bash` | `gates/lib/shellscan.py`, `gates/lib/bashpolicy.py`, `gates/hooks/pre_bash.py`; `gates/lib/gitinfo.py` (additive only); `gates/tools/githooks.py` (additive refactor only); `tests/test_shellscan.py`, `tests/test_bashpolicy.py`, `tests/test_hook_bash.py`; its plan workspace |
 | `tools` | `gates/hooks/pre_edit.py`, `gates/hooks/pre_agent.py`, `gates/hooks/subagent_stop.py`; `tests/test_hook_edit.py`, `tests/test_hook_agent.py`; its plan workspace |
-| `package` | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`; `gates/lib/plugin.py`; `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py`, `tests/test_run_all.py` (controller ruling, binding for the program of blocks 3-6); `tests/test_plugin_manifest.py`; under Task 3d.2 only, `playbook/streams.md`, `playbook/sessions.md`, `tests/test_playbook.py`; its plan workspace |
+| `package` | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`; `gates/lib/plugin.py`; `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py`, `tests/test_run_all.py` (controller ruling, binding for the program of blocks 3-6); `tests/test_plugin_manifest.py`; its plan workspace |
 
-**Shared registration files (controller ruling, binding for the program of blocks 3-6).** `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py` and `tests/test_run_all.py` are owned by stream `package`. Controller ruling for all blocks (F-B3p-19): registry requests land with `package` while it is live, else with A (DS-3). Every other stream, here and in blocks 4-6, adds its line to these files only by such a request (programs design §6; `R-` request records minted by the program controller). Standing receiver step: before `package`'s final review, `package` lands every registry request open at that time, in a commit per request, and the controller marks each `status=done` with its sha; when `package`'s PR merges, its registry paths pass to A (DS-3), and every later request (blocks 4-6) lands with A. `.claude-plugin/plugin.json` and `marketplace.json` pass the same way, and move on to block 6's release stream only through that block's `stream-ownership` decision. In block 3 there is one request, known now and so planned into Task 3d.1: `COMMANDS["hook"]`, a lazy wrapper that imports `gates.hook` and calls its `main(argv)`; while `gates/hook.py` is absent the wrapper exits 2 with `FAIL hook.missing: gates.hook is not installed` (fail closed). `runtime`'s own tests call `gates.hook.main` in a subprocess (`python3 -c "import sys, gates.hook; sys.exit(gates.hook.main(sys.argv[1:]))" <Event>`); `tests/hookrun.py` uses `python3 -m gates hook` when `COMMANDS` has `hook`, and that form otherwise. Streams `bash` (from 3b.2) and `tools` start only after both `runtime` and `package` have merged into `main`, so their tests run the production entry `python3 -m gates hook`. `gates/lib/plugin.py` (the plugin-version reader and the two repository readers `repository_url` and `repository_slug`) is `package`'s; block 4 consumes it.
+**Shared registration files (controller ruling, binding for the program of blocks 3-6).** `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py` and `tests/test_run_all.py` are owned by stream `package`. Controller ruling for all blocks (F-B3p-19): registry requests land with `package` while it is live, else with stream `residual` (Q-BD-4 (a)). Every other stream, here and in blocks 4-6, adds its line to these files only by such a request (programs design §6; `R-` request records minted by the program controller). Standing receiver step: before `package`'s final review, `package` lands every registry request open at that time, in a commit per request, and the controller marks each `status=done` with its sha; when `package`'s PR merges, its registry paths pass to stream `residual` (Q-BD-4 (a)), and every later request (blocks 4-6) lands with `residual` (from `merged:residual/R2`, `init4` by its `stream-ownership` decision, Q-BD-8 (a)). `.claude-plugin/plugin.json` and `marketplace.json` pass the same way, and move on to block 6's release stream only through that block's `stream-ownership` decision. In block 3 there is one request, known now and so planned into Task 3d.1: `COMMANDS["hook"]`, a lazy wrapper that imports `gates.hook` and calls its `main(argv)`; while `gates/hook.py` is absent the wrapper exits 2 with `FAIL hook.missing: gates.hook is not installed` (fail closed). `runtime`'s own tests call `gates.hook.main` in a subprocess (`python3 -c "import sys, gates.hook; sys.exit(gates.hook.main(sys.argv[1:]))" <Event>`); `tests/hookrun.py` uses `python3 -m gates hook` when `COMMANDS` has `hook`, and that form otherwise. Streams `bash` (from 3b.2) and `tools` start only after both `runtime` and `package` have merged into `main`, so their tests run the production entry `python3 -m gates hook`. `gates/lib/plugin.py` (the plugin-version reader and the two repository readers `repository_url` and `repository_slug`) is `package`'s; block 4 consumes it.
 
 `gates/hook.py` (owned by `runtime`) names every handler module from Task 3a.2 on, including the modules `bash` and `tools` create later. A missing handler module fails closed (Task 3a.2), and no Claude Code session in this repository runs these hooks until the controller ruling on enabling (below) is met, so nothing is bricked in between. `tests/hookrun.py` is `runtime`'s test helper; `bash` and `tools` import it and never edit it (a change is a request to `runtime`).
 
@@ -2634,7 +2633,7 @@ The tests pin the shapes as fixtures built from these field names (synthetic val
 **Plan choices (design §17 names, owner-approved call I7), stated because they carry a spec edit:** the hook session state lives at `${CLAUDE_PLUGIN_DATA}/sessions/<session_id>.yml` with a lock file beside it, outside every repository, as a strict-YAML-subset file whose first key is `schema: hook-session/1`, checked by its reader (`session.state_errors`) because no tree holds it (spec edit SE-B3-3). When `CLAUDE_PLUGIN_DATA` is unset, the Agent hook cannot count (fail closed under the ruling above) and the Edit/Write hook surfaces on every matching edit instead of once.
 
 **Cross-block notes.**
-- **Block 4:** `doctor` reports whether the plugin's hooks are active for the repository and runs `run_all.version`; the CLAUDE.md block version joins `run_all.version` when block 4 lands it, and how spec §4's CI pin is met is block 4's to state (blocks 4 and 6 agree the CI template holds no version) (spec §4: "The plugin version, the CLAUDE.md block version, the CI pin (when the CI workflow is installed) and `framework_version` in config must agree; `doctor` and `run_all` fail when they do not."). Block 4 reads the plugin version and `repository_slug` through `gates/lib/plugin.py` (Task 3d.1); its registry requests land with `package` while it is live, else with A (DS-3). `init` writes the subagent limits into `.claude/settings.json` (owner answer).
+- **Block 4:** `doctor` reports whether the plugin's hooks are active for the repository and runs `run_all.version`; the CLAUDE.md block version joins `run_all.version` when block 4 lands it, and how spec §4's CI pin is met is block 4's to state (blocks 4 and 6 agree the CI template holds no version) (spec §4: "The plugin version, the CLAUDE.md block version, the CI pin (when the CI workflow is installed) and `framework_version` in config must agree; `doctor` and `run_all` fail when they do not."). Block 4 reads the plugin version and `repository_slug` through `gates/lib/plugin.py` (Task 3d.1); its registry requests land with `package` while it is live, else with stream `residual` (Q-BD-4 (a)). `init` writes the subagent limits into `.claude/settings.json` (owner answer).
 - **Block 5:** `gates/hooks/post_read.py` writes receipts; SessionStart prints `context.yml`'s list instead of the default load; `gate_context` joins the Agent hook and the gated commit (spec §9: "`gate_context` fails a dispatch or commit when a required read is missing").
 - **Block 6:** the release script bumps the version in `plugin.json` and the `marketplace.json` entry (spec §15 also lists the CLAUDE.md block; blocks 4 and 6 agree the CI template holds no version, so block 3 names no CI pin); Claude Code resolves version constraints against tags named `<plugin-name>--v<version>` (plugin dependencies reference), which sits beside the spec's semver tags; block 6 decides whether to push both.
 
@@ -3246,7 +3245,7 @@ Starts after streams `runtime` and `package` have merged into `main` and `tools`
 
 ## Stream `package`, sub-block 3d (branch `<program>/package/main`)
 
-Tasks 3d.1 and 3d.2 run in parallel as two groups; their file sets are disjoint.
+Task 3d.1 is the stream's one task (owner answer Q-BD-5 (a) folded the former Task 3d.2 into Task B2.2).
 
 ### Task 3d.1: `plugin.json`, `marketplace.json`, `run_all.version`, `COMMANDS["hook"]`
 
@@ -3312,28 +3311,7 @@ Tasks 3d.1 and 3d.2 run in parallel as two groups; their file sets are disjoint.
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Write both manifests and `gates/lib/plugin.py`; add the line to `run_all`.**
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.** If the `claude` CLI is available to the controller, `claude plugin validate .` is run once and its verdict ledgered (not a test: the suite stays standard-library and offline).
-- [ ] **Step 5: Commit** `feat(plugin): plugin.json and marketplace.json; run_all checks the plugin version`, then checkpoint.
-
-### Task 3d.2: `playbook/streams.md` and `playbook/sessions.md` (only if Task P4.3's request to stream B was not done before B's last merge)
-
-**Files:**
-- Modify: `playbook/streams.md`, `playbook/sessions.md`, `tests/test_playbook.py`
-- Test: `tests/test_playbook.py`, `tests/prose_check.py` (format, unchanged)
-
-**Owner answers applied:** programs cross-block note ("Block 3 (stream B or A): `playbook/streams.md` and `playbook/sessions.md` describe the Q-H5 default tree, the session as program controller and the PR flow"); DS-3 (B's paths pass to A after B's last merge); Q-H5 (a); Q-15 (a); Q-M4 (a); owner directive (protected `main`).
-
-**Interfaces:**
-- Consumes: B's playbook format (Task B2.2) and `tests/prose_check.py`'s forbidden list.
-- Produces: in `playbook/sessions.md`, the session acting as program controller by default, the levels (stream 1, sub-controller 2, workers 3; deeper only within the configured depth), workers never dispatch; in `playbook/streams.md`, the PR flow (a PR to `main` per finished stream, the owner's approval naming PR and head sha, `gh pr merge --merge --match-head-commit`, the `MERGED` line) and that the Bash hook refuses pushes and merges to the base branch. One test per added fact (phrases asserted).
-
-**Input-domain dimensions:**
-- The two files' existing sections kept byte-for-byte outside the edited sections; the forbidden list (no model names, owner handles, paths outside the repository); the facts each asserted once.
-
-- [ ] **Step 1: Write the failing tests** (`test_sessions_names_default_tree`, `test_streams_names_pr_flow`, each asserting the phrases).
-- [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Edit the two files.**
-- [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
-- [ ] **Step 5: Commit** `docs(playbook): default agent tree and the pull-request flow`, then checkpoint. **Stream `package` end:** the standing receiver step (land every open registry request, one commit each, the controller marks each done with its sha), then as stream `runtime`; after the merge, registry requests land with A (DS-3).
+- [ ] **Step 5: Commit** `feat(plugin): plugin.json and marketplace.json; run_all checks the plugin version`, then checkpoint. **Stream `package` end:** the standing receiver step (land every open registry request, one commit each, the controller marks each done with its sha), then as stream `runtime`; after the merge, registry requests land with stream `residual`.
 
 ### Block 3 end (session controller, after all four streams have merged)
 
@@ -3360,7 +3338,7 @@ Blocks 3-6 run as one program after the programs block. Block 4 is three streams
 - **Before block 4c starts (session controller, ledgered): measurement M-B4-1.** Install this checkout as a plugin in a scratch Claude Code session. Run a throwaway command file whose body runs `printf '%s\n' "${CLAUDE_PLUGIN_ROOT}"`. Record whether the variable expands in a command file body, and to which directory. This mirrors block 3's M9 for `hooks.json`.
   - The (4c) interactivity ruling and Task 4e.2's command files are written to the measured form (`cd "${CLAUDE_PLUGIN_ROOT}" && python3 -m gates <cmd> --root "$OLDPWD" ...`).
   - If it does not expand, the fallback goes to the owner as one question at that point: the command files first run a helper, `python3 -c` importing `gates.lib.plugin` from the installed plugin cache path that Claude Code reports. It is not assumed.
-- Block 4a (`cfg4`) and block 4c (`init4`) run in parallel from the start. They share no file and consume nothing from each other. Task 4a.2 starts only when block 3's `package` Task 3d.1 (`gates/lib/plugin.py`) is on `main` and `cfg4` has merged `main`. Until then `cfg4` runs Task 4a.1, and if 4a.1 is done it waits, ledgered.
+- Block 4a (`cfg4`) and block 4c (`init4`) run in parallel from program start. They share no file and consume nothing from each other. Task 4a.2 starts only when block 3's `package` Task 3d.1 (`gates/lib/plugin.py`) is on `main` and `cfg4` has merged `main`. Until then `cfg4` runs Task 4a.1, and if 4a.1 is done it waits, ledgered.
 - Block 4b (`rules4`) starts when `cfg4`'s pull request has merged into `main`. It consumes `config.load`'s typed `overrides`, `roles`, `budgets` and `dispatch` (Tasks 4a.2, 4a.3).
 - Block 4d starts when `cfg4` has merged and `init4` has merged `main` into its stream branch. It consumes `profiles.load`, `plugin.version` and `plugin.repository_slug` (block 3, with request Rq-4-1 done), and the `init-answers` schema.
 - Blocks 4b and 4d/4e run in parallel.
@@ -3392,14 +3370,13 @@ The owner answered this block's questions Q-B4plan-1..7 on 2026-11-02 (section "
 
 **Requests to other streams (program rule: one owner per file; controller ruling, binding for the blocks 3-6 program).** `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py` and `tests/test_run_all.py` belong to block 3's stream `package`. Block 4 adds its lines by request:
 - **Rq-4-1 → `package` (before Task 4a.2; blocks 4a.2 and 4d):** (i) `plugin.version` fully matches `(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)` (X.Y.Z, no leading zeros, the same pattern as block 6's 6R.2), and raises `GateError` otherwise; (ii) add `plugin.repository_slug(framework_dir) -> str`. It returns `<owner>/<name>` from the manifest's `repository`, which must fully match `https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(\.git)?`, and raises `GateError` otherwise. Tests are in `package`'s `tests/test_plugin_manifest.py`.
-- **When and to whom Rq-4-2, Rq-4-3 and Rq-4-5 land (F-B4p2-1).** Each is raised in the task named, and lands only after `init4`'s pull request has merged into `main` and the receiver has merged `main`. Until then the modules they name (`gates/tools/init.py`, `doctor.py`, `upgrade.py`, `gates/lib/managed.py`, `templates.py`) are not on `main`. A `PRODUCER_MODULES` entry for a missing module turns `check schema` red (`schema.produced_kinds`: "a module that cannot be used is a GateError"), and so does a version line that reads them. Each lands as one commit right after that merge.
+- **When and to whom Rq-4-2, Rq-4-3 and Rq-4-5 land (F-B4p2-1).** Each is raised in the task named and lands in `init4`'s own pull request, as request commits at the end of Task 4e.3, in the order below: a `stream-ownership` decision gives `init4` `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py`, `tests/test_run_all.py`, `CLAUDE.md` and `.gitignore` from `merged:residual/R2` (owner answer Q-BD-8 (a); review F-BD-15). The modules they name are then in the same pull request, so `check schema` and `run_all` stay green (`schema.produced_kinds`: "a module that cannot be used is a GateError").
   - Receiver: block 3's `package` stream if it is still live. Otherwise the residual owner, A, the session controller's stream (DS-3 pattern: a finished stream's paths pass to A).
   - Order: Rq-4-2, then Rq-4-5 (this repository's blocks), then Rq-4-3, which fails on a repository without the CLAUDE.md block.
   - Until Rq-4-2 lands, `init4` runs its tools as `python3 -m gates.tools.<name>` (each module has a `__main__` guard calling `main(sys.argv[1:])`), and its tests call `<module>.main`.
 - **Rq-4-2 (raised in Tasks 4d.1, 4d.3, 4e.1):** `COMMANDS["init"]`, `["doctor"]`, `["upgrade"]` in `gates/__main__.py`, each a lazy wrapper that imports `gates.tools.<name>` inside the call (`lambda argv: importlib.import_module("gates.tools.init").main(argv)`, as `_check` already does for `GATES`), so a broken or absent module never breaks other `python3 -m gates` commands, hooks included; and `gates.tools.init` in `producers.PRODUCER_MODULES`.
 - **Rq-4-3 (raised in Task 4e.1):** extend the `run_all.version` line. The CLAUDE.md block version, and when `.github/workflows/strict-delivery.yml` is framework-managed its pin, must equal `plugin.version`. A missing block fails `run_all.version: CLAUDE.md managed block missing; run /strict-delivery:init`. Tests go in `tests/test_run_all.py`. Block 4 supplies the readers (`managed.find_block`, `templates.ci_pin`).
-- **Rq-4-4 → owner of `playbook/decisions.md` (Task 4a.3):** the `profile-override` row (cross-block notes).
-- **Rq-4-5 (raised in Task 4e.2) → `.gitignore`'s owner (A, the shared-file owner, unless `streams.yml` names another stream): this repository's adoption.**
+- **Rq-4-5 (raised in Task 4e.2) → `init4`, which owns `.gitignore` and `CLAUDE.md` from `merged:residual/R2` (Q-BD-8 (a)): this repository's adoption.**
   - The receiver runs `python3 -m gates upgrade apply --root <its checkout> --hooks yes --ci no` (Q-B4plan-7 (a)). That inserts the CLAUDE.md block and the `.gitignore` block.
   - It then removes, by hand, the plain `.gitignore` lines that duplicate a block entry (ruling (4e)), runs `doctor --root <checkout>` (all PASS, lines ledgered), and commits `CLAUDE.md` and `.gitignore` in one commit.
   - `CLAUDE.md` therefore belongs to that receiver, not to `init4`.
@@ -3440,7 +3417,7 @@ No block-4 stream owns `gates/__main__.py`, `gates/producers.py`, `gates/run_all
 **Cross-block notes.**
 - **Block 3 (`package`):** Rq-4-1..3 above. `plugin.json` carries `version` and `repository`. `commands/` loads from its default location (block-3 3d.1: "No component keys"), so Task 4e.2 needs no manifest change.
 - **Block 6:** the release site list (block-6 draft: "the CI workflow template, `superbrobenji/strict-delivery@v<v>`") is reconciled at the splice. Block 4's template renders the repository and pin at `init` and holds no literal, so it falls under block 6's "A template that renders the version at `init` ... is left off the list".
-- **Block 3 or stream B (prose):** by Q-B4plan-4 (a), the default `decision_classes.owner_only` gains `profile-override`. B's `test_owner_only_matches_config_defaults` (Task B2.3) compares `config.DEFAULTS` with `playbook/decisions.md`. So Task 4a.3 raises Rq-4-4 to whoever owns `playbook/decisions.md` (B while live, else A; DS-3) to add the class row in the same merge window. Until that row lands, 4a.3 stops BLOCKED before its commit (stream rules, "Requests").
+- **Block 3 or stream B (prose):** by Q-B4plan-4 (a), the default `decision_classes.owner_only` gains `profile-override`. B's `test_owner_only_matches_config_defaults` (Task B2.3) compares `config.DEFAULTS` with `playbook/decisions.md`. So Task 4a.3 adds the class row itself: a `stream-ownership` decision asked before 4a.3 gives `cfg4` `playbook/decisions.md`, `skills/strict-delivery/SKILL.md` and `tests/test_skill.py` (owner answer Q-BD-8 (a)); no request.
 - **Block 5:** `gate_index` ("a tracked generated file fails") overlaps `doctor.generated-tracked`. Both read the same paths (`index.render`'s keys); neither re-plans the other.
 - **Block 6:** the profile end-to-end tests ("the same fixture repository under each profile runs exactly the gates the profile table names", spec §14) reuse `tests/repo_fixtures.py` (Task 4e.3) by reading it, and add the hook-dependent seeded violations if 4e.3 did not (ruling above). The release script bumps nothing in block 4's files: the CI template and the CLAUDE.md block template hold no version literal, and both render the plugin version at `init`/`upgrade`. So both fall under block 6's "A template that renders the version at `init` ... is left off the list" (as the block-3 note above says for the CI template). After a release, target repositories move their pins with `upgrade`.
 - **Not in block 4:** readers for `block.max_tasks` and `rulings.max_per_block` (block 6's `gate_checkpoint` in full counts tasks and ledger `Ruling` lines). Block 4 lands their shapes and the preset only.
@@ -3613,10 +3590,9 @@ Starts when block 3's Task 3d.1 (`gates/lib/plugin.py`) is on `main` and `cfg4` 
 ### Task 4a.3: typed readers for `roles`, `budgets`, `block`, `rulings`, `dispatch`; the `profile-override` class
 
 **Files:**
-- Modify: `gates/lib/config.py` (`_validate` checks the five keys; `DEFAULTS["decision_classes"]["owner_only"]` gains `profile-override`, Q-B4plan-4 (a))
-- Test: `tests/test_config.py`
+- Modify: `gates/lib/config.py` (`_validate` checks the five keys; `DEFAULTS["decision_classes"]["owner_only"]` gains `profile-override`, Q-B4plan-4 (a)); `playbook/decisions.md` (the `profile-override` row) and `skills/strict-delivery/SKILL.md` (the class list), by a `stream-ownership` decision asked before this task (owner answer Q-BD-8 (a))
+- Test: `tests/test_config.py`, `tests/test_skill.py`
 - Spec edits: SE-B4-2 (§7.1 default list, Q-B4plan-4 (a)); SE-B4-3 (§10, Q-B4plan-6 (a)).
-- Request: to the owner of `playbook/decisions.md` for the `profile-override` row (cross-block notes). The commit waits for it.
 
 **Owner answers applied:** Q-B2plan-16 (a) (framework roles `plan_writer` and `plan_reviewer` are in `dispatch.ROLES`); Q-B4plan-4 (a), Q-B4plan-6 (a); ruling on `any-map` typing.
 
@@ -3874,7 +3850,7 @@ Starts when block 3's Task 3d.1 (`gates/lib/plugin.py`) is on `main` and `cfg4` 
 
 **Files:**
 - Create: `gates/tools/init.py`
-- Requests: Rq-4-2 (`COMMANDS["init"]`, `producers` entry `gates.tools.init`), landed after `init4`'s PR merges (receiver per "When and to whom").
+- Requests: Rq-4-2 (`COMMANDS["init"]`, `producers` entry `gates.tools.init`), landed in `init4`'s pull request at the end of 4e.3 ("When and to whom").
 - Test: `tests/test_init.py`
 
 **Owner answers applied:** spec §4 steps 1-3 and 5; extras defaults; subagent limits; Q-M1; DC-2; rulings (4c, 4d); Q-B4plan-1 (a), Q-B4plan-7 (a).
@@ -4039,7 +4015,7 @@ Starts when block 3's Task 3d.1 (`gates/lib/plugin.py`) is on `main` and `cfg4` 
 **Files:**
 - Create: `gates/tools/doctor.py`
 - Modify: `gates/tools/init.py` (`apply` ends with `doctor`, spec §4 step 4)
-- Requests: Rq-4-2 (`COMMANDS["doctor"]`), landed after `init4`'s PR merges.
+- Requests: Rq-4-2 (`COMMANDS["doctor"]`), landed in `init4`'s pull request at the end of 4e.3.
 - Test: `tests/test_doctor.py`
 
 **Owner answers applied:** spec §4 doctor list; programs design §12a ("doctor says so"); owner directive (protection reported); Q-B4plan-2 (a), Q-B4plan-7 (a); SE-B4-6; ruling (4d) on a read-only doctor.
@@ -4114,11 +4090,11 @@ Starts when block 3's Task 3d.1 (`gates/lib/plugin.py`) is on `main` and `cfg4` 
 
 ### Task 4e.1: `upgrade plan | apply`; version sources in `run_all`
 
-The `run_all.version` extension is request Rq-4-3, raised at this task's start and landed only after `init4`'s PR merges and Rq-4-5 is on `main` (order above). `upgrade` does not wait for it.
+The `run_all.version` extension is request Rq-4-3, raised at this task's start and landed in `init4`'s pull request after Rq-4-5 (order above). `upgrade` does not wait for it.
 
 **Files:**
 - Create: `gates/tools/upgrade.py`
-- Requests: Rq-4-2 (`COMMANDS["upgrade"]`), Rq-4-3 (`run_all.version` reads the block version and the managed CI pin; tests in `tests/test_run_all.py`), both landed after `init4`'s PR merges (receiver per "When and to whom").
+- Requests: Rq-4-2 (`COMMANDS["upgrade"]`), Rq-4-3 (`run_all.version` reads the block version and the managed CI pin; tests in `tests/test_run_all.py`), both landed in `init4`'s pull request at the end of 4e.3 ("When and to whom").
 - Test: `tests/test_upgrade.py`
 
 **Owner answers applied:** spec §4 (upgrade), §15 ("every migration is tested from an old fixture"); F-1; Q-B2plan-24 (a); rulings (4e); SE-B4-4; Q-B4plan-1 (a) (settings untouched by upgrade); Q-B4plan-7 (a).
@@ -4192,7 +4168,7 @@ Starts when block 3's `.claude-plugin/plugin.json` is on `main` and merged into 
 
 **Files:**
 - Create: `commands/init.md`, `commands/doctor.md`, `commands/upgrade.md`
-- Not touched on `init4`'s branch: `CLAUDE.md` and `.gitignore`. This repository's adoption is Rq-4-5, landed by `.gitignore`'s owner after `init4`'s PR merges (F-B4p2-2). This task rehearses the adoption in a disposable clone and writes the request.
+- `CLAUDE.md` and `.gitignore` are `init4`'s from `merged:residual/R2` (Q-BD-8 (a)); this repository's adoption is Rq-4-5, landed by `init4` as a request commit at the end of 4e.3, in `init4`'s pull request. This task rehearses the adoption in a disposable clone and writes the request.
 - Test: `tests/test_commands.py` (the rehearsal runs on a temp clone, never on this checkout's tracked files; `tests/test_self_adoption.py` is not block 4's).
 
 **Owner answers applied:** spec §16 as edited by SE-B4-7 (this repository adopts itself at strict; its own workflow stands in for the CI extra); rulings (4c) on interactivity and (4e) on `.gitignore`; Q-B4plan-7 (a).
@@ -4246,7 +4222,7 @@ Starts when block 3's `.claude-plugin/plugin.json` is on `main` and merged into 
 - [ ] **Step 2: Run; expect FAIL.**
 - [ ] **Step 3: Write the command files; run the rehearsal; write the Rq-4-5 request text into the report (command, duplicate lines, expected doctor lines).**
 - [ ] **Step 4: Run both interpreters and `run_all`; expect PASS.**
-- [ ] **Step 5: Commit** `feat(plugin): init, doctor and upgrade commands`, then checkpoint. The session controller records Rq-4-5 (and Rq-4-2, Rq-4-3) to be landed after `init4`'s PR merges, in the order stated above.
+- [ ] **Step 5: Commit** `feat(plugin): init, doctor and upgrade commands`, then checkpoint. The session controller records Rq-4-5 (and Rq-4-2, Rq-4-3) to be landed in `init4`'s pull request at the end of 4e.3, in the order stated above.
 
 ### Task 4e.3: fixture repositories and init end to end
 
@@ -4353,11 +4329,11 @@ The owner answered this block's questions Q-B5plan-2..5 on 2026-11-02 (section "
 - Programs block: `checkpoints.parse_handoff/handoff_errors/plan_slug` (P1.2); `gitinfo.current_branch/is_ancestor` (P1.3); `programs.live_programs/load_program/Program/status_rows/status_errors/branch_of/worktrees_dir/NAME_RE`, `gitinfo.local_branches` (P2.1); `gitinfo.parents/rev_list` (P2.3); `cleanup.final_merge` (P3.2; for done plans in 5b.1).
 - Stream C: `gates/gate_cites.py` (`PRODUCES = ()`, `check(args)`, `main(argv=None)`), checked on block/sc2 at 2df51c0. Block 5 plans none of it again.
 
-**Cross-stream requests (the program controller mints each `R-` id).** Registry files (controller ruling, binding for the blocks 3-6 program): `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py` and `tests/test_run_all.py` belong to block 3's `package` stream. Every other stream adds its lines by cross-stream request, received by `package` while it is live and by A once `package` has merged (DS-3; controller ruling for all blocks). A request lands its registry line only in the same PR as the module it names, or after that module has reached `main`, so `check schema` and `run_all` never go red on `main` or on a stream that updates from it (review F-B5p-1: `schema.produced_kinds` raises for a producer module that cannot be imported, and `run_all` fails `run_all.missing.<gate>`). Block 5's modules reach `main` only with its stream PRs, so Rq-5-1..3 are raised at each sub-block's start and land after the stream PR that carries their modules has merged. Each "Registration" step below runs then, on `main` updated from the remote, and the tests that read a registry skip with the named reason `<Rq id> not on this branch` until then. While a skip stands, every checkpoint line carries `open: <Rq id> (registration after merge)`, so no skip is silent.
+**Cross-stream requests (the program controller mints each `R-` id).** Registry files (controller ruling, binding for the blocks 3-6 program): `gates/__main__.py`, `gates/producers.py`, `gates/run_all.py` and `tests/test_run_all.py` belong to block 3's `package` stream. Every other stream adds its lines by cross-stream request, received by `package` while it is live and by stream `residual` once `package` has merged (Q-BD-4 (a); controller ruling for all blocks). A request lands its registry line only in the same PR as the module it names, or after that module has reached `main`, so `check schema` and `run_all` never go red on `main` or on a stream that updates from it (review F-B5p-1: `schema.produced_kinds` raises for a producer module that cannot be imported, and `run_all` fails `run_all.missing.<gate>`). Block 5's modules reach `main` only with its stream PRs, so Rq-5-1..3 are raised at each sub-block's start and land after the stream PR that carries their modules has merged. Each "Registration" step below runs then, on `main` updated from the remote, and the tests that read a registry skip with the named reason `<Rq id> not on this branch` until then. While a skip stands, every checkpoint line carries `open: <Rq id> (registration after merge)`, so no skip is silent.
 - **Rq-5-1 `gates/__main__.py` (`package`):** `GATES["context"] = "gates.gate_context"`, `GATES["index"] = "gates.gate_index"`, `GATES["drift"] = "gates.gate_drift"`; `COMMANDS["context"]` (`gates.tools.context_cli.main`), `COMMANDS["receipt"]` (`gates.tools.receipt_cli.main`), `COMMANDS["drift"]` (`gates.tools.drift_cli.main`). Lands after stream `context`'s PR (the `context`/`receipt` rows) and after stream `docs`'s PR (the `index`/`drift` rows). Read by the Registration steps of 5a.1, 5a.2, 5a.3, 5b.2 and 5c.2.
 - **Rq-5-2 `gates/producers.py` (`package`):** add `gates.gate_context` (R5a-5). Lands after stream `context`'s PR. Read by 5a.3's Registration step.
 - **Rq-5-3 `gates/run_all.py` and `tests/test_run_all.py` (`package`):** `index` appended to the `standard` and `strict` tuples of `PROFILE_GATES`, not to `light` (R5b-3). Lands after stream `docs`'s PR. Read by 5b.2's Registration step.
-- **Rq-5-4 `gates/lib/gitinfo.py` (additive, to that file's owner under the program plan; additive functions name no module, so they may land first; every call with `-C root`, `GIT_INDEX_FILE` inherited, as every gitinfo call):**
+- **Rq-5-4 `gates/lib/gitinfo.py` (landed by A in Task P3.2, before the program; controller ruling Q-BD-3; every call with `-C root`, `GIT_INDEX_FILE` inherited, as every gitinfo call):**
   - `is_ignored(root: str, path: str) -> bool`: `git check-ignore -q --no-index -- <path>`; exit 0 is `True`, exit 1 is `False`, anything else raises `GateError`. Needed by 5b.2.
   - `first_parent(root: str, ref: str) -> list`: `git rev-list --first-parent <ref>`, newest first. Needed by 5c.1.
   - `deleted_paths(root: str, ref: str, directory: str) -> list`: the repo-relative paths under `directory` that some commit reachable from `ref` deleted and that are absent at `ref` (`git log --diff-filter=D --name-only --format= --no-renames <ref> -- <directory>`, deduplicated, sorted). Needed by 5b.1.
@@ -4848,7 +4824,7 @@ Blocks 3-6 run as one program after the programs block. The program plan names t
 | checkpoint | `gates/gate_checkpoint.py`, `gates/lib/checkpoints.py`, `tests/test_gate_checkpoint.py`, `tests/test_checkpoints_lib.py` |
 | release | `tests/test_profiles_e2e.py`, `scripts/release.py`, `tests/test_release.py`, `CHANGELOG.md`. From the `stream-ownership` decision of Task 6R.2 onward, also the version sites: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `CLAUDE.md`, `.gitignore`, `.strict-delivery/config.yml` |
 
-**Requests to stream `package` (programs design §6; `R-` records minted by the program controller).** Each registry line lands only with or after its module. Stream `evidence` raises each request when its module's PR has merged into `main`. The receiver lands all four in one PR: `package` while it is live, else A (DS-3; controller ruling for all blocks). Until then, the tests in 6E that need a registry line are skipped with the reason `Rq-6-<n> not on this branch` (the Block 5 pattern). They run for real in `package`'s PR and in Task 6R.1.
+**Requests to stream `package` (programs design §6; `R-` records minted by the program controller).** Each registry line lands only with or after its module. Stream `evidence` raises each request when its module's PR has merged into `main`. The receiver lands all four in one PR: `package` while it is live, else stream `residual` (Task R2.3; Q-BD-4 (a); controller ruling for all blocks). Until then, the tests in 6E that need a registry line are skipped with the reason `Rq-6-<n> not on this branch` (the Block 5 pattern). They run for real in `package`'s PR and in Task 6R.1.
 - **Rq-6-1 `gates/__main__.py`:** `GATES["evidence"] = "gates.gate_evidence"`; `COMMANDS["loopstats"]`, a wrapper calling `gates.loopstats.main(argv)`.
 - **Rq-6-2 `gates/producers.py`:** add `gates.gate_evidence`, which declares `("mutation-transcript", "review-report")`. From then on, `gate_schema` checks every transcript and review report.
 - **Rq-6-3 `gates/run_all.py` and `tests/test_run_all.py`:**
@@ -4879,7 +4855,7 @@ The owner answered this block's questions Q-B6plan-1..6 on 2026-11-02 (section "
   - Task P3.1: the line `checkpoint.merges` ("every `MERGED` line of the plan's ledger passes `merged_errors(root, cfg, plan, line)`");
   - Task P2.1: `programs.live_programs`.
 - Blocks 3-5, from their drafts (block-3-draft.md, block-4-draft.md, block-5-draft.md), reconciled when the sections are spliced in. A different name is a plan edit, never a silent change:
-  - block 3, stream `package`: `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`; `gates/lib/plugin.py` (`plugin.version`); the `run_all.version` line; the four registry files. Also `hook` (`python3 -m gates hook <event>`) for 6R.1's hook cases, and `playbook/review.md` with the Rules N and T text (Q-ES; the request below).
+  - block 3, stream `package`: `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`; `gates/lib/plugin.py` (`plugin.version`); the `run_all.version` line; the four registry files. Also `hook` (`python3 -m gates hook <event>`) for 6R.1's hook cases, and `playbook/review.md` with the Rules N and T text (Q-ES; Task B2.2).
   - block 4:
     - `config.load` applies the profile presets, which set only `block.max_tasks` (light none, standard 5, strict 3). `rulings.max_per_block` has no preset, so it is absent and no cap applies ((4a) ruling).
     - `init` with an answers file, and `doctor`.
@@ -4932,10 +4908,7 @@ The owner answered this block's questions Q-B6plan-1..6 on 2026-11-02 (section "
   - Cost if wrong: the tag is re-pointed before the push.
 
 **Cross-block notes.**
-- **Stream B / block 3 (Q-ES "rule text in stream B review playbook"):** Task B2.2's `review.md` carries no Rules N and T text yet. When 6E.3 starts, the owner of `playbook/review.md` (stream B, or A after DS-3) gets a cross-stream request for:
-  - one paragraph in the fix-loop section, stating Rules N and T and the decision table of Task 6E.3, naming `python3 -m gates loopstats` and the `Loopstats:` ledger line;
-  - its key-phrase row in `tests/test_playbook.py`.
-  - This block does not edit that file.
+- **Stream B (Q-ES "rule text in stream B review playbook"):** Task B2.2's `review.md` carries Rules N and T (Q-B22-3 (a)); no request.
 - **Block 3, stream `package`:** Rq-6-1..Rq-6-4 above. The block-3 note on tag names (`<plugin-name>--v<version>`) is settled by Q-B6plan-6 (a): `v0.1.0` only.
 - **Block 4:** `init` offers `escape_cost` only as a commented example (unset by default, Q-ES2). `doctor` needs nothing new. Block 4's note "block 6's `gate_checkpoint` in full counts tasks and ledger `Ruling` lines" matches Task 6K.1: rulings are counted from the ledger's `Ruling` lines by position (`ledger_rulings`), and the handoff's `rulings` must equal that count.
 - **Block 5:** context enforcement and drift sit outside `run_all` (R5a-1, R5c-1). Task 6R.1 tests context through the hook and `context.enforced`, and leaves drift out of the gate set.
@@ -5217,7 +5190,6 @@ The owner answered this block's questions Q-B6plan-1..6 on 2026-11-02 (section "
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
 - [ ] **Step 5: Commit** `feat(gates): loopstats: advisory Rules N and T and the escape-cost verdict`, then checkpoint.
   - The stream controller merges the group branch into `<program>/evidence/main` after a clean review and green gates (spec §8).
-  - It raises the `playbook/review.md` request (cross-block notes).
   - **Block 6E end:** final review, verifier, PR to `main` (`final=yes`), then Rq-6-1..Rq-6-4 to `package`.
 
 ---
@@ -5545,6 +5517,134 @@ Starts only when every other stream of the program has merged into `main` (inclu
 
 ---
 
+## Stream `residual` (program; branch `<program>/residual/main`)
+
+Owner answer Q-BD-4 (a) (2026-11-02): stream A's residual ownership becomes a program stream. In the blocks 3-6 program, `residual` owns every path no other stream owns in the same window (`breakdown/1` `residual: true`, `streams/1` `residual: true` with no `owns`; spec Appendix A, programs design §7.2), and from `package`'s merge it receives the registry requests (`gates/__main__.py`, `gates/producers.py`, `gates/run_all.py`, `tests/test_run_all.py`) until a `stream-ownership` decision moves a path on (Q-BD-8 (a): `init4` from `merged:residual/R2`). It starts at program start, follows the pull-request flow of every stream (one PR per sub-block, `MERGED` line with `stream=residual block=<R1|R2|R3>`), and lands each request only with or after the module it names (registry ruling). Schedule: the stream breakdown, section 6 (`.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md`).
+
+**Owner answers applied across the stream:** Q-BD-4 (a), Q-BD-8 (a), Q-BDr2-1 (a); Q-Pplan-6 (a) (prompt-block prose); R5a-3, R5a-5, R5b-3; Q-B6plan-1 (a); the registry ruling (controller, F-B3p-19); protected `main`; Q-15 (a).
+
+### Block R1: the program controller's sync text
+
+#### Task R1.1: Rq-5-5, `program_controller.md` sync steps
+
+**Files:**
+- Modify: `skills/strict-delivery/prompts/program_controller.md` (B's paths are `residual`'s after B's last merge, DS-3), `tests/test_prompt_blocks.py` (its key-phrase row)
+- Test: `tests/test_prompt_blocks.py`
+
+**Interfaces:**
+- Consumes: Rq-5-5's text (Block 5 cross-stream requests), Task B1.1's prompt-block format and `tests/prose_check.py`.
+- Produces: the sync paragraph exactly as Rq-5-5 states it: fetch, then `merge --ff-only <remote>/<base_branch>`, each its own command; `python3 -m gates check drift --program <p>` before and after the merges (`--host` where the remote is GitHub); `drift report` lines into the sync's owner batch.
+
+**Input-domain dimensions:**
+- The prompt file's other sections byte-for-byte unchanged; each Rq-5-5 fact asserted once; the forbidden list (no model names, owner handles, absolute paths).
+
+- [ ] **Step 1: Write the failing test** `test_program_controller_names_sync_steps` (phrases `merge --ff-only`, `check drift`, `drift report`).
+- [ ] **Step 2: Run the test command; expect FAIL.**
+- [ ] **Step 3: Edit the prompt file.**
+- [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
+- [ ] **Step 5: Commit** `docs(prompts): program controller sync steps (Rq-5-5)`, then checkpoint. **Block R1 end:** final review, verifier, PR to `main` (`MERGED ... stream=residual block=R1`); stream `docs`'s 5c end waits for it.
+
+### Block R2: registry requests
+
+#### Task R2.1: Rq-5-1 (`context`, `receipt` rows) and Rq-5-2
+
+**Files:**
+- Modify: `gates/__main__.py` (`GATES["context"]`, `COMMANDS["context"]`, `COMMANDS["receipt"]`), `gates/producers.py` (`gates.gate_context`)
+- Test: `tests/test_gate_schema.py` (dispatcher rows), the Registration tests of Tasks 5a.1-5a.3 (`test_gate_context_registered`, `test_gate_context_declared_producer`), which run for real once this lands
+
+**Interfaces:**
+- Consumes: `gates.gate_context`, `gates.tools.context_cli`, `gates.tools.receipt_cli` (Tasks 5a.1-5a.3), on `main` after `merged:context`.
+- Produces: the three registry lines; the `PRODUCER_MODULES` entry. Every entry is a lazy import (`_check` and the `COMMANDS` wrappers import inside the call).
+
+**Input-domain dimensions:**
+- Landing order: before `merged:context` (refused by the controller; `check schema` would go red), after; each line present once; `check context` and `context`/`receipt` commands reachable; `check schema` not importing `gate_context` until called.
+
+- [ ] **Step 1: Write the failing tests** (`test_context_commands_registered`: `GATES["context"] == "gates.gate_context"` and both `COMMANDS` keys present; `test_context_producer_listed`).
+- [ ] **Step 2: Run the test command; expect FAIL.**
+- [ ] **Step 3: Add the lines**, one commit per request (Rq-5-1 part, Rq-5-2).
+- [ ] **Step 4: Run the test command on both interpreters, `python3 -m gates run_all` and `python3 -m gates check schema`; expect PASS.**
+- [ ] **Step 5: Commit** each request (`feat(registry): Rq-5-1 context and receipt`, `feat(registry): Rq-5-2 gate_context producer`); the controller marks each request done with its sha; checkpoint.
+
+#### Task R2.2: Rq-5-1 (`index`, `drift` rows) and Rq-5-3
+
+**Files:**
+- Modify: `gates/__main__.py` (`GATES["index"]`, `GATES["drift"]`, `COMMANDS["drift"]`), `gates/run_all.py` (`index` in the `standard` and `strict` tuples, R5b-3), `tests/test_run_all.py`
+- Test: `tests/test_run_all.py`, `tests/test_gate_schema.py`
+
+**Interfaces:**
+- Consumes: `gates.gate_index`, `gates.gate_drift`, `gates.tools.drift_cli` (Tasks 5b.2, 5c.2), on `main` after `merged:docs`.
+- Produces: the three registry lines; `PROFILE_GATES` with `index` for `standard` and `strict`, not `light`.
+
+**Input-domain dimensions:**
+- `PROFILE_GATES` per profile as full literal tuples (Task 2b.1's style); `drift` in no `run_all` list (R5c-1); landing before and after `merged:docs`.
+
+- [ ] **Step 1: Write the failing tests** (`test_index_in_standard_and_strict_only`, `test_drift_registered_not_in_run_all`).
+- [ ] **Step 2: Run the test command; expect FAIL.**
+- [ ] **Step 3: Add the lines**, one commit per request.
+- [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
+- [ ] **Step 5: Commit** each request (`feat(registry): Rq-5-1 index and drift`, `feat(run_all): Rq-5-3 index`); the controller marks each done; checkpoint.
+
+#### Task R2.3: Rq-6-1..Rq-6-4
+
+**Files:**
+- Modify: `gates/__main__.py` (`GATES["evidence"]`, `COMMANDS["loopstats"]`), `gates/producers.py` (`gates.gate_evidence`), `gates/run_all.py` (`evidence` in `standard`, `strict` and `BASE_GATES`; `--base` forwarded), `tests/test_run_all.py`
+- Test: `tests/test_run_all.py`, `tests/test_gate_schema.py`
+
+**Interfaces:**
+- Consumes: `gates.gate_evidence`, `gates.loopstats` (Tasks 6E.1-6E.3), on `main` after `merged:evidence`.
+- Produces: Rq-6-1..Rq-6-4 exactly as Block 6 states them.
+
+**Input-domain dimensions:**
+- `PROFILE_GATES` and `BASE_GATES` literal tuples; `run_all --base x` forwarding to `evidence` and to no gate without a base; `gate_schema` checking transcripts and review reports from this commit (an existing nonconforming report fails, so the controller checks the tree first).
+
+- [ ] **Step 1: Write the failing tests** (`test_evidence_in_standard_strict_and_base`, `test_base_forwarded_to_evidence`, `test_loopstats_registered`).
+- [ ] **Step 2: Run the test command; expect FAIL.**
+- [ ] **Step 3: Add the lines**, one commit per request.
+- [ ] **Step 4: Run the test command on both interpreters, `python3 -m gates run_all` and `check schema`; expect PASS.**
+- [ ] **Step 5: Commit** each request; the controller marks each done; checkpoint. **Block R2 end:** final review, verifier, PR to `main` (`MERGED ... stream=residual block=R2`). From `merged:residual/R2`, `init4` owns the registry files, `CLAUDE.md` and `.gitignore` by its `stream-ownership` decision (Q-BD-8 (a)).
+
+### Block R3: context in the hooks
+
+#### Task R3.1: PostToolUse Read writes receipts; SessionStart prints the required reads
+
+**Files:**
+- Modify: `gates/hooks/post_read.py`, `gates/hooks/session_start.py` (block 3 `runtime`'s files, `residual`'s after `merged:runtime`)
+- Test: `tests/test_hook_entry.py` (the post-read cases), `tests/test_hook_session_start.py`
+
+**Interfaces:**
+- Consumes: `receipts.record(root, cfg, session, file_path)` (Task 5a.2), `context.required(...)` (Task 5a.1), `hookio` (Task 3a.2).
+- Produces: PostToolUse Read calls `receipts.record` with the hook input's session id and `tool_input.file_path`; a raising call is reported and never blocks the Read. SessionStart prints `context.required(...)` for the session's kind. The promise is stated by block 3's session-key measurement: per agent when a subagent's input carries its own session key, else "someone in this session read it" (Block 5 cross-block notes).
+
+**Input-domain dimensions:**
+- Read of a tracked file, an untracked file, a path outside the repository, a partial read; `record` raising (`OSError`, a bad receipt file); no `context.yml`; each session kind; no `CLAUDE_PLUGIN_DATA`.
+
+- [ ] **Step 1: Write the failing tests** (`test_read_appends_receipt`, `test_record_error_never_blocks`, `test_session_start_prints_required_reads`), through `python3 -m gates hook` on a temporary repository.
+- [ ] **Step 2: Run the test command; expect FAIL.**
+- [ ] **Step 3: Implement** the two handler changes.
+- [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
+- [ ] **Step 5: Commit** `feat(hooks): read receipts and the context load list`, then checkpoint.
+
+#### Task R3.2: `gate_context` in PreToolUse Agent and in the gated commit
+
+**Files:**
+- Modify: `gates/hooks/pre_agent.py`, `gates/hooks/pre_bash.py` (block 3 `tools` and `bash` files, `residual`'s after their merges)
+- Test: `tests/test_hook_agent.py`, `tests/test_hook_bash.py` (the context cases)
+
+**Interfaces:**
+- Consumes: `gate_context.check` (Task 5a.3), `context.enforced(cfg)` (R5a-3), the Agent and Bash branches (Tasks 3c.2, 3b.2-3b.3).
+- Produces: both branches run `gate_context.check(["--root", R, "--session", S, "--kind", K, "--role", ROLE, ...])`; a FAIL refuses the call only when `context.enforced(cfg)` (strict), and is printed as a warning otherwise (spec §9, S5-1).
+
+**Input-domain dimensions:**
+- Profile light, standard, strict; receipts complete, missing a read, stale; `gate_context` raising (refused, fail closed, on strict; warned otherwise); a role that neither dispatches nor commits (not gated, Q-B5plan-4 (a)).
+
+- [ ] **Step 1: Write the failing tests** (`test_strict_missing_read_refuses_dispatch`, `test_standard_missing_read_warns`, `test_strict_missing_read_refuses_commit`).
+- [ ] **Step 2: Run the test command; expect FAIL.**
+- [ ] **Step 3: Implement** the two branch changes.
+- [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
+- [ ] **Step 5: Commit** `feat(hooks): gate_context in dispatches and commits`, then checkpoint. **Block R3 end:** final review, verifier, PR to `main` (`MERGED ... stream=residual block=R3`); Task 6R.1 waits for it.
+
+---
+
 ## Streams before the programs block
 
 Owner decision 2026-10-31: two streams run beside stream A (block 1 in order, then block 2) before the programs tooling exists. The session controller coordinates them by hand. Design §1 states the aim these rules serve here: "Every file and every piece of work has exactly one owner within an effort." Design §6 states the core rule: "When stream A needs a change in a file stream B owns, A never edits it." Until `gate_streams` lands (programs block, P2), a person or agent enforces both, using the checks below. Nothing is left to memory.
@@ -5553,12 +5653,14 @@ Owner decision 2026-10-31: two streams run beside stream A (block 1 in order, th
   - **A**: blocks 1a-1d, block 2, then the programs block. A runs in the main checkout.
   - **B**: the prose of block 3 (section "Stream B" below). B starts once its section is approved.
   - **C**: init's stack command detection (block 4) and `gate_cites` (block 5) (section "Stream C" below). C starts after block 1a merges into `main`.
+  - **D**: sub-block 2a (Tasks 2a.1-2a.3) on `block/sd1` (owner answer Q-BDr-1 (a), 2026-11-02). D starts after block 1c0's pull request has merged and `block/sd1` has updated from `main`; Task 2c.2 stays A's.
 - **File ownership.** The three path lists are disjoint. A is the residual owner: every path a block-1 or block-2 task creates or modifies belongs to A, and so does every path the table does not list.
 
   | Stream | Owns (exact paths; a trailing `/` means every path under that directory) |
   |---|---|
   | B | `skills/strict-delivery/SKILL.md`; `skills/strict-delivery/prompts/controller.md`, `implementer.md`, `implementer_transcription.md`, `task_reviewer.md`, `final_reviewer.md`, `final_verifier.md`, `exception_reviewer.md`, `audit_reviewer.md`, `audit_verifier.md`, `investigator.md`, and, on A's request in programs Task P4.3, `program_controller.md` and `stream_controller.md` (owner Q-Pplan-6 (a)) (these files only, each directly in the prompts directory; the directory itself is not B's); `playbook/rules.md`, `playbook/roles.md`, `playbook/decisions.md`, `playbook/sessions.md`, `playbook/streams.md`, `playbook/review.md`; `tests/prose_check.py`, `tests/test_prompt_blocks.py`, `tests/test_playbook.py`, `tests/test_skill.py`; `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/` |
   | C | `gates/lib/detect.py`, `gates/lib/cites.py`, `gates/lib/slug_table.py`, `gates/lib/case_table.py`, `gates/gate_cites.py`; `tests/test_detect.py`, `tests/test_cites_lib.py`, `tests/test_gate_cites.py`; `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-c/` |
+  | D | `gates/lib/migrations.py`, `gates/schemas/decision.yml`, `gates/lib/decisions.py`, `tests/test_playbook_drift.py`, `tests/test_migrations.py`, `tests/test_decisions_lib.py`; `gates/lib/store.py` and `tests/test_store.py` from block 1c's merge (window O2); `gates/schemas/claim.yml`, `gates/lib/claims.py`, `gates/lib/gitinfo.py` (additive `blob_id`), `tests/test_claims_lib.py`; `gates/gate_claims.py`, `tests/test_gate_claims.py`; `gates/__main__.py` (`GATES["claims"]` only) from block 1d's merge (window O3); `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-d/` |
   | A | every path of the block-1 file lists (Tasks 1a.1-1d.2), every path block 2 and the programs block create, `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/`, and every path not listed for B or C |
 
   When a stream's last block merges into `main`, every path in its row passes to A, the residual owner (owner answer DS-3). Until then the row stands.
@@ -5570,6 +5672,8 @@ Owner decision 2026-10-31: two streams run beside stream A (block 1 in order, th
   - `tests/helpers.py`;
   - `.gitignore`;
   - `docs/strict-delivery/INDEX.md`. This file is generated and git-ignored (spec §5), so nobody edits it. `python3 -m gates index` writes it (Task 1c.3).
+
+  Path windows for stream D (stream breakdown, order rules O1-O3): `gates/lib/store.py` and `tests/test_store.py` are A's until block 1c's pull request merges and D's after, until PR-D; D's `GATES["claims"]` edit in `gates/__main__.py` (Task 2a.3) is committed only after `block/sd1` has merged `main` containing block 1d's pull request; `gates/lib/gitinfo.py` has no concurrent writer (1c0.1's change is on `main` before D starts, and A's next writer, 2b.2, starts after PR-D).
 
   Two more paths have owners outside the table. The plan file and both specs belong to the session controller and the owner; no stream edits them. Decision and finding records (`.strict-delivery/state/decisions/`, `.strict-delivery/state/findings/`) are global records, and only the session controller writes them. This mirrors design §12, under which the program controller "is the only writer of global records within the program". Before `findings new` exists (Task 1d.2), a finding is a ledger row in the stream that raised it.
 - **Requests (by hand until `gate_streams`).** A non-owner never edits another stream's file, shared files included. It writes the need in its report under `## Requests` (file, what and why, the spec or plan section that requires it) and stops at a step boundary if it is blocked.
@@ -5599,7 +5703,7 @@ Owner decision 2026-10-31: two streams run beside stream A (block 1 in order, th
   - A stream never rebases a block branch (DS-2): a rebase would orphan reviewed shas that review reports and `<sha>:<path>` evidence cite.
   - After the update the stream re-runs the full test command on both interpreters and every enabled gate. It then appends `UPDATE <block> from=main@<sha> head=<sha> tests=<passed>/<total> gates=<PASS|n/a>` to its ledger. A conflict, or a red result caused by A's change, stops the stream with status BLOCKED and a message to the controller. The stream never edits A's file to fix it.
 - **Checkpoints per stream.** Design §12: "Each stream owns its own plan workspace".
-  - Stream B checkpoints in `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/` and stream C in `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-c/`. Each holds that stream's `ledger.md` and `handoff.md`.
+  - Stream B checkpoints in `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/`, stream C in `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-c/` and stream D in `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-d/`. Each holds that stream's `ledger.md` and `handoff.md`.
   - Both use the formats of "Process for this plan": the `CHECKPOINT` line, handoff front matter `schema: handoff/1` with the spec §9 fields, and the resume line. The `block` field is `sb1`, `sb2`, `sc1` or `sc2`, and the branch is the block branch.
   - The checkpoint commit is on the block branch, and that worktree is clean after it. Other worktrees may be dirty (spec §9: "other streams' worktrees may be dirty").
   - Continuation is as in "Process for this plan": one block per agent context, a fresh controller per block from the stream's handoff and ledger.
@@ -5614,7 +5718,7 @@ Owner decision 2026-10-31: two streams run beside stream A (block 1 in order, th
     - If block 2 reaches that task first, A runs its other block-2 tasks first and ledgers the wait; if none is left, A stops with status BLOCKED until B1 merges.
   - **`FIXED_RULES` and `playbook/rules.md`.** `decisions.validate` refuses an `overrides` naming a fixed rule, from the constant `FIXED_RULES` in A's code (block 2, the `decision/2` task, owner answer F-2). `test_fixed_rules_match_decisions_constant` in `tests/test_playbook.py` keeps it equal to the `fixed: yes` rows of `playbook/rules.md` (Task B2.1). Whoever lands second writes that test:
     - If the `decision/2` task is on `main` before block B2 merges, stream B writes the test on `block/sb2`: in Task B2.1 when it is already there when B2.1 starts, else in a commit after B2's update from `main` and before B2's final review. If the `decision/2` task reaches `main` after B2's final review and before B2's merge, B2 updates from `main` again, adds the test, and its final review and verifier run again before the merge grant.
-    - If B2 merges first, `tests/test_playbook.py` is A's (DS-3), and A's `decision/2` task adds the test.
+    - If B2 merges first, `tests/test_playbook.py` is A's (DS-3), and A adds the test in Task 2b.1, its first task after both PR-D and PR-B2 are on `main` (stream breakdown).
 - **Cross-stream checks the controller runs by hand before each block merge.** Each must print nothing:
   - Every changed path is owned by the merging stream: `git diff --name-only main...block/<branch>` filtered against the stream's row in the table above.
   - Nothing outside the stream's rows changed: `git diff --name-only main...block/sb<n> | grep -v -E '^(skills/strict-delivery/(SKILL\.md|prompts/(controller|implementer|implementer_transcription|task_reviewer|final_reviewer|final_verifier|exception_reviewer|audit_reviewer|audit_verifier|investigator|program_controller|stream_controller)\.md)|playbook/(rules|roles|decisions|sessions|streams|review)\.md|tests/(prose_check|test_prompt_blocks|test_playbook|test_skill)\.py|\.strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/.*)$'`. Stream C uses the same check with its own rows.
@@ -5897,7 +6001,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
     | SD-R3 | Owner-only | decision log + owner-only gate | light, standard, strict | gate_decisions |
     | SD-R4 | Report before plan | none | light, standard, strict | judgment |
 
-    `SD-R4` also carries spec §8's plan-in-full rule and the stream breakdown (owner answer Q-PL-1 (a)): its rule text states both, and its `enforced by` reads `program create (programs); judgment` (cross-block request from A, Programs block cross-block notes "Stream B (Q-PL-1 (a))"; review F-QPL-5). The row above is the pre-request text; B updates it when the request arrives.
+    `SD-R4` also carries spec §8's plan-in-full rule and the stream breakdown (owner answer Q-PL-1 (a)): its rule text states both, and its `enforced by` reads `program create (programs); judgment` (Programs block cross-block notes "Stream B (Q-PL-1 (a))"; review F-QPL-5). This task writes the row that way; no request.
     | SD-R5 | Zero bugs | none | light, standard, strict | judgment |
     | SD-R6 | deleted test | none | light, standard, strict | judgment |
     | SD-R7 | epic | none | light, standard, strict | judgment |
@@ -5995,9 +6099,9 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
 
     The table covers spec §10: "Each role names its prompt block, minimum tier, budget cap, whether it needs a brief, and which finding states it may take". The budget cap is config `budgets` (no default in the spec), so the table names the key, not a number.
   - `decisions.md`: spec §7 in operating terms, covering `ask` / `decide` / `find` / `withdraw`, the human-only answer rule, search before asking, and `landed_in` (spec §7.2: "a decision's `landed_in` is never a spec").
-  - `sessions.md`: session kinds, start order, blocks, checkpoints, handoffs and continuation (spec §9, design §4.4, §10), and the planning steps for agents: plan in full before code, the stream breakdown plan (`breakdown/1`) as the last planning step, streams run as they unblock (spec §8 as edited for owner answer Q-PL-1 (a); cross-block request from A, Programs block cross-block notes "Stream B (Q-PL-1 (a))"; if this task is already done when the request arrives, B adds the section in a follow-up commit).
-  - `streams.md`: design §4-§6 and §10-§12 in operating terms.
-  - `review.md`: task and final review, the verifier, the fix loop and the process-defect stop (spec §8, §10).
+  - `sessions.md`: session kinds, start order, blocks, checkpoints, handoffs and continuation (spec §9, design §4.4, §10), and the planning steps for agents: plan in full before code, the stream breakdown plan (`breakdown/1`) as the last planning step, streams run as they unblock (spec §8 as edited for owner answer Q-PL-1 (a); no request); and the default agent tree (owner answer Q-BD-5 (a), from the former Task 3d.2): the session acting as program controller by default, the levels (stream controller 1, sub-controller 2, workers 3; deeper only within the configured depth), workers never dispatch.
+  - `streams.md`: design §4-§6 and §10-§12 in operating terms, and the pull-request flow (Q-BD-5 (a)): one PR to `main` per finished stream, the owner's approval naming the PR and its head sha, `gh pr merge --merge --match-head-commit`, the `MERGED` line, and the Bash hook refusing agents' pushes and merges to the base branch.
+  - `review.md`: task and final review, the verifier, the fix loop and the process-defect stop (spec §8, §10), and Rules N and T (owner answers Q-ES (a), Q-B22-3 (a)): the advisory novelty and trend signals of Task 6E.3, naming `python3 -m gates loopstats` and the `Loopstats:` ledger line.
 
 **Input-domain dimensions:**
 - `roles.md`: a role missing, a role extra, a prompt path to a file that does not exist (B roles only; `PROGRAM_ROLES` paths may be absent until P4), a tier outside `tier1`-`tier4`, any role at a tier other than DB-2's.
@@ -6024,6 +6128,10 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
           t = read("playbook/%s.md" % stem); assert t.split("\n", 1)[0] == "# Base playbook: " + stem and forbidden_hits(t) == []
   def test_decisions_playbook_human_only():
       assert "decisions decide" in read("playbook/decisions.md") and "human" in read("playbook/decisions.md")
+  def test_sessions_names_default_tree():     # Q-BD-5 (a)
+      assert "workers never dispatch" in section(read("playbook/sessions.md"), "Agent tree")
+  def test_streams_names_pr_flow():           # Q-BD-5 (a)
+      assert "--match-head-commit" in section(read("playbook/streams.md"), "Pull-request flow")
   PLAYBOOK_SECTIONS = {   # file stem -> [(heading, key phrases)]; each phrase is quoted from the source cited on its line
       "decisions": [("Asking", ["`decisions ask`", "decisions find", "search before asking"]),              # spec §7.4
                     ("Answering", ["`decisions decide`", "`decisions withdraw`", "human"]),                  # spec §7.1
@@ -6031,16 +6139,20 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       "sessions": [("Session kinds", ["`program`", "`program-controller`", "`sync`"]),                       # design §10
                    ("Start order", ["`in-force.md`", "`python3 -m gates context"]),                          # design §10, spec §9
                    ("Blocks and checkpoints", ["`block.max_tasks`", "`CHECKPOINT`"]),                        # spec §8, §9
-                   ("Handoffs and continuation", ["handoff", "80 %", "Nothing continues from inherited memory"])],  # design §4.4
+                   ("Handoffs and continuation", ["handoff", "80 %", "Nothing continues from inherited memory"]),  # design §4.4
+                   ("Agent tree", ["program controller", "workers never dispatch", "configured depth"]),   # Q-H5 (a), Q-BD-5 (a)
+                   ("Planning", ["planned in full before", "stream breakdown", "as they unblock"])],      # spec §8, Q-PL-1 (a)
       "streams": [("Programs and streams", ["program_controller", "stream_controller", "disjoint set of files"]),  # spec §11
                   ("Cross-stream requests", ["never edits", "request"]),                                     # design §6
                   ("Syncs", ["`sync`", "integration branch"]),                                               # design §10
-                  ("Status page", ["status page"])],                                                         # design §11
+                  ("Status page", ["status page"]),                                                         # design §11
+                  ("Pull-request flow", ["`gh pr merge --merge --match-head-commit`", "head sha", "`MERGED`"])],  # spec §8, Q-BD-5 (a)
       "review": [("Task review", ["re-run every gate"]),                                                     # spec §8
                  ("Final review", ["whole branch"]),                                                   # Task B1.2
                  ("Verifier", ["`final_verifier`", "tier4"]),                                                # DB-2
                  ("Fix loop", ["rounds 1-3", "rounds 4-5", "owner question"]),                               # spec §10
-                 ("Process-defect stop", ["process defect", "stop fixing"])],                                # spec §8
+                 ("Process-defect stop", ["process defect", "stop fixing"]),                                # spec §8
+                 ("Rules N and T", ["Rule N", "Rule T", "`python3 -m gates loopstats`"])],                # spec §10, Q-ES (a), Q-B22-3 (a)
   }
   def test_playbook_sections_and_key_phrases():
       for stem, secs in PLAYBOOK_SECTIONS.items():
@@ -6799,6 +6911,18 @@ print("lower", len(lower), "cased", len(cased), "case_ignorable", len(ignorable)
 
 ---
 
+## Stream breakdown (2026-11-02)
+
+The plan's last planning step (owner answer Q-PL-1 (a); spec §8). The reviewed human schedule is `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md`:
+- Part I (its sections 2-5), the pre-program schedule. It covers streams `a` (this plan's A: blocks 1c0, 1c, 1d, 2b, 2c, P1-P4), `b` (block B2), `c` (block C2's pull request) and `d` (sub-block 2a, Q-BDr-1 (a)), with owned paths, the order rules O1-O6 for shared paths, task-to-task edges, pull-request unblock conditions and the critical path. The session coordinates these streams by hand ("Streams before the programs block").
+- Part II (its section 6), the program record for blocks 3-6. It covers streams `residual` (Q-BD-4 (a)), `runtime`, `package`, `bash`, `tools`, `cfg4`, `rules4`, `init4`, `context`, `docs`, `evidence`, `checkpoint` and `release`, with periods and path windows (Q-BD-7 (a), Q-BDr2-1 (a)), the `done` list (controller ruling under Q-BD-7 (a)), edges, unblock conditions and parallel groups within `max_concurrent: 25` and `max_depth: 5`.
+
+Planned artifact, not written now: the `breakdown/1` record `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.yml`. It is Part II's content in the schema of Task P2.2, committed before `program create --plan 2026-10-31-strict-delivery-framework`, which checks it (Task P2.2). The tooling that checks it lands in the programs block.
+
+Owner answers behind it (2026-11-02): Q-BDr-1 (a), Q-BD-4 (a), Q-BD-5 (a), Q-BD-7 (a), Q-BD-8 (a), Q-BDr2-1 (a), Q-2c2-2 (a). Controller rulings: Q-BD-1 (`ask --overrides` in Task 2c.1), Q-BD-2 (P3 alongside P4), Q-BD-3 (Rq-5-4 landed by A in Task P3.2), Q-BD-6 (PR-1c0 carries only docs reviewed before its final review; later docs go in a docs-only PR), and the `done` field. The plan and spec edits E-1..E-21 of the reviewed draft are applied in the sections above, with the final re-review corrections F-BDr3-1 and F-BDr3-2.
+
+---
+
 ## Later blocks (outline; each gets its own detailed plan section, input-domain dimensions and owner batch before it starts, split into sub-blocks of at most 3 tasks)
 
 - **Block 2.** Planned in full in section "Block 2 (sub-blocks 2a, 2b, 2c)" above (owner answers 2026-11-01, "Block 2" below).
@@ -6999,3 +7123,14 @@ Spec edits applied with this section (each as its draft states it, for the chose
 Owner directive given later the same day:
 
 - **Q-PL-1 (a) (2026-11-02)** everything in a spec and its plan is planned in full before code; no outline-only block may start implementation. The last planning step is a parallelism and stream breakdown plan (`<paths.plan_state>/<plan>/breakdown.yml`, kind `breakdown/1`: streams with owned paths, tasks per stream, dependency edges task -> task, unblock conditions, parallel groups within the concurrency limit, the assumed concurrency and depth), and streams run as they unblock. Written into main spec section 8, section 5 and Appendix A, programs design section 5 step 1 and section 7.2, Task P2.2 (`program create` refuses a plan with an outline-only block or no valid breakdown; `breakdown.py`, `schemas/breakdown.yml`), and a cross-block request to stream B for `playbook/sessions.md` (Task B2.2).
+
+Stream breakdown answers (2026-11-02; section "Stream breakdown (2026-11-02)"):
+
+- **Q-BDr-1 (a)** stream D runs sub-block 2a (Tasks 2a.1-2a.3) on `block/sd1` after block 1c0's pull request; Task 2c.2 stays A's.
+- **Q-BD-4 (a)** A's residual ownership becomes the program stream `residual` (section "Stream `residual` (program)").
+- **Q-BD-5 (a)** the former Task 3d.2's prose (default agent tree, pull-request flow) folds into Task B2.2.
+- **Q-BD-7 (a)** `breakdown/1` streams carry an optional `period`; with it, a controller ruling adds the top-level `done` list (ledgered as a ruling; named for the owner in the PR description).
+- **Q-BD-8 (a)** `stream-ownership` decisions give `cfg4` `playbook/decisions.md`, `SKILL.md` and `tests/test_skill.py` (Task 4a.3), and give `init4` the registry files, `CLAUDE.md` and `.gitignore` from `merged:residual/R2` (Rq-4-2, Rq-4-5 and Rq-4-3 land in `init4`'s pull request).
+- **Q-BDr2-1 (a)** ownership is path-level, with windows `{path, from, until}` in `breakdown/1` and `streams/1`.
+- **Q-2c2-2 (a)** A builds test configs only with `tests/helpers.minimal_config()`; Task 2c.2 rewrites any `config/1` literal left in A's tests (stream D's included) at its last update from `main`.
+- Controller rulings recorded with them: Q-BD-1, Q-BD-2, Q-BD-3, Q-BD-6 (section "Stream breakdown (2026-11-02)"); final re-review corrections F-BDr3-1 (no ledger check for `done` tasks) and F-BDr3-2 (`merged:<stream>` is the stream's last sub-block merge).
