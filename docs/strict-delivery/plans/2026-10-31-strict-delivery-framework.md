@@ -2222,7 +2222,7 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
   - `@dataclass(frozen=True) Problem(source: str, reason: str)`: a candidate source that could not be read. It is reported for init to show, never raised.
   - `@dataclass(frozen=True) Detection(proposals: tuple, problems: tuple)`.
   - `detect(root: str) -> Detection`. It reads only regular files directly in `root` (DC-3). It never runs a command, never writes, and never needs git.
-    - It raises `GateError` when `root` is not a `str`, is not a directory (`"<root>: not a directory"`), or is a directory that cannot be read or searched (`"<root>: cannot read (<reason>)"`, owner Q-C11-1); every other failure is a `Problem` (controller ruling, block C1 final review F-C1fin-1: plan states the code's fail-closed root checks).
+    - It raises `GateError` when `root` is not exactly a `str` (a `str` subclass is refused too; owner Q-C1ver-3), is not a directory (`"<root>: not a directory"`), or is a directory that cannot be read or searched (`"<root>: cannot read (<reason>)"`, owner Q-C11-1); every other failure is a `Problem` (controller ruling, block C1 final review F-C1fin-1: plan states the code's fail-closed root checks).
     - Order: source order (`SOURCES`, Task C1.2's table), then slot order within a source. Duplicates across sources are kept, since the owner chooses.
     - `test_one` is never proposed; init always asks for it (DC-2).
   - `package.json` (DC-4: always `npm run`, whatever lockfile is present):
