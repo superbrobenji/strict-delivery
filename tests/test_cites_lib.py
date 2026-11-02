@@ -535,5 +535,27 @@ class ProblemTest(unittest.TestCase):
         self.assertIsInstance(one("`a/b.py:1`"), Cite)
 
 
+class ExtractLoopControlTest(unittest.TestCase):
+    """A non-matching item must not end the scan of the later items on the same line."""
+
+    def tokens(self, text):
+        return [c.token for c in extract("d/x.md", text)]
+
+    def test_longer_backtick_run_does_not_end_the_line(self):
+        self.assertEqual(self.tokens("``x`` `a/b.py:1`"), ["`a/b.py:1`"])
+
+    def test_non_cite_span_does_not_end_the_line(self):
+        self.assertEqual(self.tokens("`a b` `a/b.py:1`"), ["`a/b.py:1`"])
+
+    def test_path_without_slash_or_dot_does_not_end_the_line(self):
+        self.assertEqual(self.tokens("`ab:1` `a/b.py:1`"), ["`a/b.py:1`"])
+
+    def test_unparsable_destination_does_not_end_the_line(self):
+        self.assertEqual(self.tokens("[a](b.md#c x) [b](c.md#d)"), ["c.md#d"])
+
+    def test_non_cite_destination_does_not_end_the_line(self):
+        self.assertEqual(self.tokens("[a](https://x#y) [b](c.md#d)"), ["c.md#d"])
+
+
 if __name__ == "__main__":
     unittest.main()

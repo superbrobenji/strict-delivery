@@ -644,6 +644,23 @@ class TestFixRound1(CitesCase):
         self.assertEqual(got, ["FAIL cites.doc.docs/b%d.md: not UTF-8" % i for i in range(5)])
 
 
+class TestLoopControl(CitesCase):
+    def test_anchorless_landed_entry_does_not_end_the_list(self):
+        self.add(PB, "# Present\n")
+        write_record(self.root, "%s/%s.yml" % (DEC, DEC_ID), dec(landed_in=["CLAUDE.md", PB + "#bad"]))
+        out, code = self.run_root()
+        self.assertIn("FAIL cites.landed.%s: %s#bad: " % (DEC_ID, PB), out)
+        self.assertEqual(code, 1)
+
+    def test_missing_doc_does_not_end_the_doc_loop(self):
+        self.add("a.md", "x\n")
+        self.add("b.md", "`b.md:9`\n")
+        os.remove(os.path.join(self.root, "a.md"))
+        out, code = self.run_root()
+        self.assertIn("FAIL cites.doc.a.md: tracked but missing from the working tree\n", out)
+        self.assertIn("FAIL cites.line.b.md:1: `b.md:9`: b.md: line 9 is past the end (1 lines)\n", out)
+
+
 class TestThisRepository(unittest.TestCase):
     def test_this_repository_passes(self):  # E1
         top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
