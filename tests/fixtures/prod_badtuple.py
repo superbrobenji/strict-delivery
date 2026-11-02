@@ -1,0 +1,1 @@
+PRODUCES = ("claim", 1)
