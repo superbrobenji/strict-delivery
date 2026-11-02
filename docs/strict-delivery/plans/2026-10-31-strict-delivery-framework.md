@@ -475,6 +475,57 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
 
 ## Block 1c: gates and indexes (branch `block/b1c`)
 
+### Task 1c.0: library hardening (owner Q-U2, Q-1bfin-2, U-1bfin-1)
+
+**Files:**
+- Modify: `gates/lib/result.py` (`_raw`), `gates/lib/gitinfo.py` (the root-taking functions), `gates/lib/store.py` (`Store`, `base_errors`), `gates/lib/config.py` (`load`), `gates/lib/findings.py` (`evidence_errors`, `may_delete`)
+- Test: `tests/test_result.py`, `tests/test_gitinfo.py`, `tests/test_store.py`, `tests/test_config.py`, `tests/test_findings_lib.py`, `tests/test_decisions_lib.py`
+
+**Owner answers applied:** Q-U2 (a map item in a reason is escaped exactly once); Q-1bfin-2 (a) (every library function taking a repository root refuses a root that is not the top level); U-1bfin-1 (`store.base_errors` checks that the `Store` it is given belongs to the root it is given); Q-1a-fin-1 (the existing `_require_toplevel` rule, now applied everywhere).
+
+**Interfaces:**
+- Consumes: `gitinfo._require_toplevel/toplevel`, `result.Result/render/safe_text/_exc_text/run_check`, `store.Store/base_errors`, `config.load`, `findings.evidence_errors/may_delete`, `decisions.landed_errors`, `helpers.make_repo/GitIsolatedTestCase`.
+- Produces (every signature unchanged):
+  - `result._raw(x)` gains a mapping case: a `dict` renders as `{` + `, `.join(`_raw(key) + ": " + _raw(value)`) + `}`, in insertion order, recursively, like the list case. So `Result.render`'s one `safe_text` pass is the only escaping a map key or value gets: a backslash in a value prints as `\\`, never `\\\\`, and a newline as `\n`, never `\\n`.
+  - Root check (Q-1bfin-2 (a)): every library function with a `root` parameter calls `gitinfo._require_toplevel(root)` before any other work, and so raises `GateError("git rev-parse --show-toplevel: root must be the repository top level")` for a subdirectory, a missing path or a non-repository. Newly covered: `gitinfo.head_sha`, `commit_exists`, `merge_base`, `user_email`; `store.Store.__init__` (so `load`, `create` and `replace` inherit it) and `store.base_errors`; `config.load`; `findings.evidence_errors` and `findings.may_delete`. Already covered and unchanged: `gitinfo.blob_exists`, `tracked_files`, `show`, `ls_tree`, `decisions.landed_errors`, `schema.entries_of`. `gitinfo.toplevel` is the one exception: it is how the top level is found. Gates already resolve `--root` to the top level, so their behaviour does not change; a missing config still fails `<gate>.input` naming `/strict-delivery:init` (Review Focus 5).
+  - `store.base_errors(root, store, base, is_resolved, may_delete)`: before reading git, it raises `GateError("base_errors: the store's root <a> is not the root given <b>")` unless `os.path.samefile(store.root, root)` (U-1bfin-1), so a record set from one tree is never compared with another tree's history.
+- Cross-stream note: stream C's `tests/test_gate_cites.py` has a line that pins today's repr-style output for a map item in a reason. It changes when C next updates from `main` past this task. That line is C's to fix in its own file (stream rules, "Keeping up with `main`"); A raises no edit to it.
+
+**Input-domain dimensions:**
+- `_raw` values: a flat `dict`; nested `dict` in `list` and `list` in `dict`; keys and values holding a backslash, a newline, a tab, a quote, a non-printable character, non-ASCII; an empty `dict`; a `dict` subclass (`OrderedDict`); a non-`str` key (`int`, `None`); a value that is a `GateError` reason passed through `run_check` (the decisions reason path) and a map item as `gate_cites` prints it.
+- Root forms, for each newly covered function: the top level; a subdirectory; a symlink to the top level (`samefile` accepts it); a path with a trailing `/`; a missing path; a regular file; a directory outside any repository; a linked worktree's top level (accepted); a bare repository.
+- `base_errors` stores: a `Store` built on the same root; on a symlink to it (accepted); on another clone of the same repository (refused); on a subdirectory (refused already at `Store(...)`).
+- `config.load`: a subdirectory of a repository that has a config (refused, not silently read from the top level).
+
+- [ ] **Step 1: Write the failing tests:**
+  ```python
+  # test_result.py
+  def test_map_item_escaped_once():            # Q-U2
+      r = run_check("g", lambda a: (_ for _ in ()).throw(GateError({"k": "a\\b\nc"})), [])
+      assert r.render() == "FAIL g.input: {k: a\\\\b\\nc}"
+  def test_nested_map_and_list_escaped_once():
+      assert _raw({"a": ["x\\y", {"b": "\n"}]}) == "{a: [x\\y, {b: \n}]}"
+  # test_gitinfo.py, test_store.py, test_config.py, test_findings_lib.py
+  def test_subdirectory_root_refused_everywhere():   # Q-1bfin-2 (a); subTest per function
+      for call in (lambda r: head_sha(r), lambda r: commit_exists(r, "HEAD"), lambda r: merge_base(r, "HEAD", "HEAD"),
+                   lambda r: user_email(r), lambda r: Store(r, "decision", cfg), lambda r: config.load(r),
+                   lambda r: evidence_errors(ROW, r, cfg, [], frozenset()), lambda r: may_delete(ROW, r, cfg, [])):
+          with self.assertRaises(GateError) as e: call(sub)
+          assert "root must be the repository top level" in str(e.exception)
+  def test_symlinked_top_level_accepted():
+      assert head_sha(link) == head_sha(root)
+  def test_base_errors_refuses_foreign_store():      # U-1bfin-1
+      with self.assertRaises(GateError) as e: base_errors(root, Store(clone, "decision", cfg), "HEAD", is_resolved, never)
+      assert "is not the root given" in str(e.exception)
+  # test_decisions_lib.py
+  def test_decision_reason_with_map_item_escaped_once():
+      assert "\\\\\\\\" not in render_of(map_reason_case)
+  ```
+- [ ] **Step 2: Run the test command; expect FAIL.**
+- [ ] **Step 3: Implement** the `_raw` mapping case, the root checks and the `base_errors` store check. Write one mutant per changed condition (PC3): drop each `_require_toplevel` call, drop the `samefile` check, and render a `dict` with `str()`; each mutant must fail a test.
+- [ ] **Step 4: Run the test command on both interpreters with `-W error`, and every enabled gate (`check schema`); expect PASS.**
+- [ ] **Step 5: Commit** `fix(lib): escape map items once; every root-taking function refuses a non-toplevel root; base_errors checks its store's root`, then checkpoint.
+
 ### Task 1c.1: `gate_decisions`; enable `check decisions`
 
 **Files:**
