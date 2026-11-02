@@ -5,11 +5,12 @@ import io
 import os
 import stat
 import unittest
+from unittest import mock
 
 from gates.lib import config
 from gates.lib.result import GateError, Result, gate_args, run_gate
 from gates.lib.yamlsub import emit
-from tests.helpers import GitIsolatedTestCase, make_repo, minimal_config
+from tests.helpers import E128, TOP, GitIsolatedTestCase, check_root_forms, make_repo, minimal_config, root_forms
 
 MISSING = ".strict-delivery/config.yml: missing; run /strict-delivery:init"
 
@@ -145,11 +146,11 @@ class DefaultsTest(ConfigCase):
         sub = os.path.join(self.root, "sub")
         os.mkdir(sub)
         self.assertEqual(config.load(self.root), EXPECTED)
-        for root in (sub, os.path.join(self.root, "nope"), self.path):
+        for root, want in ((sub, TOP), (os.path.join(self.root, "nope"), E128), (self.path, E128)):
             with self.subTest(root=root):
                 with self.assertRaises(GateError) as e:
                     config.load(root)
-                self.assertEqual(str(e.exception), MISSING)
+                self.assertEqual(str(e.exception), want)
 
 
 class FileKindTest(ConfigCase):
@@ -174,7 +175,8 @@ class FileKindTest(ConfigCase):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = run_gate("x", check, ["--root", root])
             self.assertEqual(code, 1)
-            self.assertEqual(out.getvalue(), "FAIL x.input: " + MISSING + "\n")
+            want = MISSING if root == self.root else E128  # a non-repository root is refused first (Q-1bfin-2)
+            self.assertEqual(out.getvalue(), "FAIL x.input: " + want + "\n")
             self.assertNotIn("Traceback", err.getvalue())
 
     def test_directory_fifo_and_symlinks(self):
@@ -467,6 +469,51 @@ class OwnerOnlyTest(ConfigCase):
 
     def test_empty_decision_classes_mapping_is_not_possible_but_none_is_refused(self):
         self.refused({"decision_classes": None}, "decision_classes")
+
+
+
+class RootGuardTest(ConfigCase):
+    """Q-1bfin-2 (a): config.load refuses a root that is not the top level before reading anything (C1-C3, O6)."""
+
+    def test_subdirectory_root_refused_everywhere(self):  # T1-T12, T15
+        forms = root_forms(self.tmp, self.root)
+        check_root_forms(self, forms, {"load": config.load})
+
+    def test_accepted_forms_load_the_same_config(self):  # T3, T5, T9
+        for name, path, verdict in root_forms(self.tmp, self.root):
+            if verdict == "ok" and name != "nested":
+                with self.subTest(form=name):
+                    self.assertEqual(config.load(path), EXPECTED)
+
+    def test_subdirectory_of_a_tree_with_a_config_is_not_read_from_the_top_level(self):  # C1
+        sub = os.path.join(self.root, "sub")
+        os.mkdir(sub)
+        with mock.patch("gates.lib.config.yamlsub.load", side_effect=AssertionError("config read")):
+            with self.assertRaises(GateError) as e:
+                config.load(sub)
+        self.assertEqual(str(e.exception), TOP)
+
+    def test_subdirectory_with_its_own_config_is_refused(self):  # C2
+        sub = os.path.join(self.root, "sub")
+        os.mkdir(sub)
+        os.makedirs(os.path.join(sub, ".strict-delivery"))
+        with open(os.path.join(sub, ".strict-delivery", "config.yml"), "w", encoding="utf-8") as fh:
+            fh.write(emit(minimal_config()))
+        with self.assertRaises(GateError) as e:
+            config.load(sub)
+        self.assertEqual(str(e.exception), TOP)
+
+    def test_root_check_comes_before_the_missing_config_text(self):  # O6
+        os.remove(self.path)
+        sub = os.path.join(self.root, "sub")
+        os.mkdir(sub)
+        plain = os.path.join(self.tmp, "plain-nongit")
+        os.mkdir(plain)
+        for root, want in ((sub, TOP), (plain, E128), (self.root, MISSING)):
+            with self.subTest(root=root):
+                with self.assertRaises(GateError) as e:
+                    config.load(root)
+                self.assertEqual(str(e.exception), want)
 
 
 if __name__ == "__main__":

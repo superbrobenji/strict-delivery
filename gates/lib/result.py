@@ -115,10 +115,24 @@ def gate_args(prog: str) -> argparse.ArgumentParser:
 
 def _raw(x: object) -> str:
     """``x`` as text without Python's repr escaping, so that ``Result.render`` escapes it exactly once."""
+    return _raw_on(x, ())
+
+
+def _raw_on(x: object, path: tuple) -> str:
+    """``_raw`` with the ids of the containers on the current path: one that contains itself renders as
+    ``{...}`` or ``[...]``, as ``repr`` does (owner Q-1c0-3)."""
     if isinstance(x, str):
         return x
+    if isinstance(x, dict):
+        if id(x) in path:
+            return "{...}"
+        inner = path + (id(x),)
+        return "{" + ", ".join(_raw_on(k, inner) + ": " + _raw_on(v, inner) for k, v in x.items()) + "}"
     if isinstance(x, (list, tuple)):
-        return "[" + ", ".join(_raw(i) for i in x) + "]"
+        if id(x) in path:
+            return "[...]"
+        inner = path + (id(x),)
+        return "[" + ", ".join(_raw_on(i, inner) for i in x) + "]"
     return str(x)
 
 
@@ -140,7 +154,7 @@ def run_check(name: str, check, args: list) -> Result:
     try:
         result = check(args)
     except GateError as e:
-        return _input_fail(name, str(e))
+        return _input_fail(name, _raw(e.args[0]) if len(e.args) == 1 else str(e))
     except SystemExit as e:
         return _input_fail(name, "exit requested (%s)" % ("'%s'" % e.code if isinstance(e.code, str) else _raw(e.code),))
     except Exception as e:

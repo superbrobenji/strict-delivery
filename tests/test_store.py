@@ -9,9 +9,10 @@ import unittest
 from unittest import mock
 
 from gates.lib import config, store as store_mod, yamlsub
-from gates.lib.result import GateError, Result, repo_root, run_gate
+from gates.lib.result import GateError, Result, repo_root, run_check, run_gate
 from gates.lib.store import Record, Store, base_errors, store_errors
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, write_record
+from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms,
+                           write_record)
 
 DIR = ".strict-delivery/state/decisions"
 FDIR = ".strict-delivery/state/findings"
@@ -59,11 +60,15 @@ class Base(GitIsolatedTestCase):
         self.n += 1
         root = os.path.join(self.tmp, "case%d" % self.n)
         os.mkdir(root)
+        git(root, "init", "-q", "-b", "main")  # Store refuses a root that is not a top level (Q-1bfin-2)
         return root
 
     def newstore(self, root=None, kind="decision"):
         root = root or self.newroot()
         return root, Store(root, kind, self.cfg)
+
+    def ls(self, root):
+        return [n for n in os.listdir(root) if n != ".git"]  # the fixture root is a repository
 
     def mkdir(self, root, rel=DIR):
         path = os.path.join(root, rel)
@@ -316,7 +321,7 @@ class PathCreateReplaceTest(Base):
                 for fn in (s.create, s.replace):
                     with self.assertRaises(GateError):
                         fn({"id": bad})
-                self.assertEqual(os.listdir(root), [])  # not even the register directory
+                self.assertEqual(self.ls(root), [])  # not even the register directory
 
     def test_create_and_replace_refuse_missing_id_and_non_dict(self):  # S4
         root, s = self.newstore()
@@ -324,7 +329,7 @@ class PathCreateReplaceTest(Base):
             for r in ({}, {"status": "open"}, [], None, "x"):
                 with self.assertRaises(GateError):
                     fn(r)
-        self.assertEqual(os.listdir(root), [])
+        self.assertEqual(self.ls(root), [])
 
     def test_create_writes_exactly_emit_bytes_and_parents(self):  # S5, S7
         root, s = self.newstore()
@@ -390,7 +395,7 @@ class PathCreateReplaceTest(Base):
         root, s = self.newstore()
         with self.assertRaises(GateError):
             s.create({"id": A, "x": object()})
-        self.assertEqual(os.listdir(root), [])
+        self.assertEqual(self.ls(root), [])
 
     def test_create_write_failure_removes_the_partial_file(self):  # S5
         root, s = self.newstore()
@@ -416,7 +421,7 @@ class PathCreateReplaceTest(Base):
         with self.assertRaises(GateError) as cm:
             s.replace(row(A))
         self.assertIn(A, str(cm.exception))
-        self.assertEqual(os.listdir(root), [])
+        self.assertEqual(self.ls(root), [])
         self.mkdir(root)
         with self.assertRaises(GateError):
             s.replace(row(A))
@@ -1029,6 +1034,144 @@ class BaseErrorsContentTest(GitCase):
         self.fork()
         import gates.lib.store as m
         self.assertFalse(hasattr(m, "subprocess"))
+
+
+
+class RootGuardTest(GitIsolatedTestCase):
+    """Q-1bfin-2 (a): Store(...) refuses a root that is not the top level (so load, create and replace, which
+    need a Store, inherit it); O4 (task 1c0.1)."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = make_repo(self.work)
+        self.cfg = config.load(self.root)
+
+    def test_subdirectory_root_refused_everywhere(self):  # T1-T12, T15
+        forms = root_forms(self.tmp, self.root)
+        check_root_forms(self, forms, {"Store": lambda r: Store(r, "decision", self.cfg),
+                                       "Store finding": lambda r: Store(r, "finding", self.cfg)})
+
+    def test_accepted_forms_give_a_working_store(self):  # T3, T5, T9
+        forms = dict((n, p) for n, p, v in root_forms(self.tmp, self.root) if v == "ok")
+        for name in ("top", "top/", "link", "link/", "worktree"):
+            with self.subTest(form=name):
+                s = Store(forms[name], "decision", self.cfg)
+                self.assertEqual(s.load(), [])
+                self.assertEqual(s.path_for(A), "%s/%s.yml" % (DIR, A))
+
+    def test_root_check_comes_before_kind_and_config_checks(self):  # O4
+        sub = os.path.join(self.root, "sub")
+        os.mkdir(sub)
+        for kind, cfg in (("widget", self.cfg), ("decision", {}), ("claim", {})):
+            with self.subTest(kind=kind, cfg=cfg):
+                with self.assertRaises(GateError) as e:
+                    Store(sub, kind, cfg)
+                self.assertEqual(str(e.exception), TOP)
+        with self.assertRaises(GateError) as e:
+            Store(self.root, "widget", self.cfg)
+        self.assertEqual(str(e.exception), "store kind must be 'decision' or 'finding'")
+
+
+class BaseErrorsStoreRootTest(GitCase):
+    """U-1bfin-1: base_errors refuses a Store that belongs to another root (B1-B8, O7)."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.fork()
+        git(self.root, "rm", "-q", "--", "%s/%s.yml" % (DIR, A))
+        commit_all(self.root, "delete A")
+
+    def clone(self, name="clone"):
+        dest = os.path.join(self.tmp, name)
+        subprocess.run(["git", "clone", "-q", "--branch", "feature", self.root, dest], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        git(dest, "fetch", "-q", "origin", "main:main")
+        return dest
+
+    def no_history_reads(self):
+        boom = AssertionError("git history read before the store check")
+        return mock.patch.multiple("gates.lib.store.gitinfo", merge_base=mock.Mock(side_effect=boom),
+                                   ls_tree=mock.Mock(side_effect=boom), show=mock.Mock(side_effect=boom))
+
+    def test_same_root(self):  # B1
+        self.assertEqual(self.suffixes(), ["deleted." + A])
+
+    def test_symlink_to_the_same_root_is_accepted_both_ways(self):  # B2
+        link = os.path.join(self.tmp, "alias")
+        os.symlink(self.root, link)
+        for given, held in ((self.root, link), (link, self.root), (link + "/", self.root)):
+            with self.subTest(given=given, held=held):
+                errs = base_errors(given, Store(held, "decision", self.cfg), "main", resolved, never)
+                self.assertEqual([s for s, _ in errs], ["deleted." + A])
+
+    def test_another_clone_is_refused_before_any_history_is_read(self):  # B3
+        clone = self.clone()
+        foreign = Store(clone, "decision", self.cfg)
+        with self.no_history_reads(), self.assertRaises(GateError) as e:
+            base_errors(self.root, foreign, "main", resolved, never)
+        self.assertEqual(str(e.exception), "base_errors: the store's root %s is not the root given %s"
+                         % (clone, self.root))
+        # the clone's own store with the clone's own root is accepted
+        self.assertEqual([s for s, _ in base_errors(clone, foreign, "main", resolved, never)], ["deleted." + A])
+
+    def test_linked_worktree_is_refused(self):  # B4
+        wt = os.path.join(self.tmp, "wt")
+        git(self.root, "worktree", "add", "-q", "--detach", wt)
+        with self.no_history_reads(), self.assertRaises(GateError) as e:
+            base_errors(self.root, Store(wt, "decision", self.cfg), "main", resolved, never)
+        self.assertIn("is not the root given", str(e.exception))
+
+    def test_subdirectory_store_is_refused_at_construction(self):  # B5
+        sub = os.path.join(self.root, "pkg")
+        os.mkdir(sub)
+        with self.assertRaises(GateError) as e:
+            Store(sub, "decision", self.cfg)
+        self.assertEqual(str(e.exception), TOP)
+
+    def test_store_root_gone_at_check_time_is_a_gate_error(self):  # B6
+        clone = self.clone()
+        foreign = Store(clone, "decision", self.cfg)
+        os.rename(clone, clone + ".moved")
+        with self.no_history_reads(), self.assertRaises(GateError) as e:
+            base_errors(self.root, foreign, "main", resolved, never)
+        self.assertEqual(str(e.exception), "base_errors: the store's root %s is not the root given %s"
+                         % (clone, self.root))
+
+    def test_samefile_oserror_counts_as_not_the_same(self):  # B6: the first call is the root check
+        with mock.patch("gates.lib.store.os.path.samefile", side_effect=[True, OSError("boom")]):
+            with self.no_history_reads(), self.assertRaises(GateError) as e:
+                self.errs()
+        self.assertIn("is not the root given", str(e.exception))
+
+    def test_not_a_store_is_a_gate_error(self):  # B7
+        for bogus in (None, {}, {"root": self.root}, "store", object()):
+            with self.subTest(store=repr(bogus)):
+                with self.no_history_reads(), self.assertRaises(GateError) as e:
+                    base_errors(self.root, bogus, "main", resolved, never)
+                self.assertIn("is not the root given", str(e.exception))
+
+    def test_message_with_a_newline_in_the_root_renders_once(self):  # B8
+        clone = self.clone("cl\none")
+        out = run_check("x", lambda a: base_errors(self.root, Store(clone, "decision", self.cfg), "main",
+                                                   resolved, never), []).render(False)
+        self.assertEqual(out, "FAIL x.input: base_errors: the store's root %s is not the root given %s\n"
+                         % (clone.replace("\n", "\\n"), self.root))
+
+    def test_order_root_then_store_then_base(self):  # O7
+        sub = os.path.join(self.root, "pkg")
+        os.mkdir(sub)
+        clone = self.clone()
+        foreign = Store(clone, "decision", self.cfg)
+        with self.assertRaises(GateError) as e:
+            base_errors(sub, foreign, 5, resolved, never)
+        self.assertEqual(str(e.exception), TOP)
+        with self.assertRaises(GateError) as e:
+            base_errors(self.root, foreign, 5, resolved, never)
+        self.assertIn("is not the root given", str(e.exception))
+        with self.assertRaises(GateError) as e:
+            base_errors(self.root, self.store, 5, resolved, never)
+        self.assertEqual(str(e.exception), "the base ref must be a string")
 
 
 if __name__ == "__main__":

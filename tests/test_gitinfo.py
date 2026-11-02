@@ -7,8 +7,9 @@ import unittest
 from unittest import mock
 
 from gates.lib import gitinfo
-from gates.lib.result import GateError
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo
+from gates.lib.result import GateError, GitNotFound
+from tests.helpers import (E128, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo,
+                           root_forms)
 
 INVALID_UTF8 = b"ok \xff\xfe bad\n"
 
@@ -145,9 +146,11 @@ class RootKindsTest(Fixture):
     def test_repo_and_subdir_work(self):  # G1
         sub = os.path.join(self.root, "dir")
         self.assertEqual(gitinfo.head_sha(self.root), self.head)
-        self.assertEqual(gitinfo.head_sha(sub), self.head)
-        self.assertTrue(gitinfo.commit_exists(sub, self.head))
-        self.assertEqual(gitinfo.toplevel(sub), self.root)
+        self.assertEqual(gitinfo.toplevel(sub), self.root)  # toplevel is the one function that accepts a subdirectory
+        for fn in (gitinfo.head_sha, lambda r: gitinfo.commit_exists(r, self.head)):  # Q-1bfin-2 (a)
+            with self.assertRaises(GateError) as e:
+                fn(sub)
+            self.assertEqual(str(e.exception), TOP)
 
     def test_path_functions_refuse_non_toplevel_root(self):  # F-1a-fin-1, Q-1a-fin-1
         sub = os.path.join(self.root, "dir")
@@ -227,9 +230,11 @@ class RootKindsTest(Fixture):
                         fn(root)
                     self.assertIn("git ", str(e.exception))
                     self.assertNotIn(root, str(e.exception))
-        self.assertIsNone(gitinfo.user_email(plain))
-        with self.assertRaises(GateError):
-            gitinfo.user_email(missing)
+        for root in (plain, missing, afile):  # user_email too (Q-1bfin-2 (a)): no longer the global email or None
+            with self.subTest(root=root, fn="user_email"):
+                with self.assertRaises(GateError) as e:
+                    gitinfo.user_email(root)
+                self.assertEqual(str(e.exception), E128)
 
     def test_git_not_installed_is_gate_error(self):
         with mock.patch.dict(os.environ, {"PATH": os.path.join(self.tmp, "nowhere")}):
@@ -856,10 +861,10 @@ class EnvAndFlagsTest(Fixture):
 
         def answers():
             return (gitinfo.commit_exists(self.root, other_head), gitinfo.commit_exists(self.root, self.head),
-                    gitinfo.head_sha(self.root), gitinfo.head_sha(sub), gitinfo.commit_exists(sub, self.head),
+                    gitinfo.head_sha(self.root), gitinfo.toplevel(sub) == self.root,
                     gitinfo.merge_base(self.root, "HEAD", "main"), gitinfo.ls_tree(self.root, "HEAD", "dir"),
                     gitinfo.show(self.root, "HEAD", "a.txt"), "a.txt" in gitinfo.tracked_files(self.root))
-        want = (False, True, self.head, self.head, True, self.head, ["dir/x.txt"], "alpha\n", True)
+        want = (False, True, self.head, True, self.head, ["dir/x.txt"], "alpha\n", True)
         self.assertEqual(answers(), want)
         rows = (
             ("GIT_DIR", other_git),
@@ -901,6 +906,76 @@ class EnvAndFlagsTest(Fixture):
             gitinfo.head_sha(self.root)
         self.assertTrue(all(isinstance(argv, list) and all(isinstance(a, str) for a in argv)
                             for argv, _ in calls))
+
+
+
+class RootGuardTest(Fixture):
+    """Q-1bfin-2 (a): head_sha, commit_exists, merge_base and user_email refuse a root that is not the top level,
+    before any other work (task 1c0.1, T1-T15, O1-O3)."""
+
+    def calls(self):
+        return {
+            "head_sha": gitinfo.head_sha,
+            "commit_exists": lambda r: gitinfo.commit_exists(r, self.head),
+            "merge_base": lambda r: gitinfo.merge_base(r, "HEAD", "HEAD"),
+            "user_email": gitinfo.user_email,
+        }
+
+    def test_subdirectory_root_refused_everywhere(self):  # T1-T12, T15
+        check_root_forms(self, root_forms(self.tmp, self.root), self.calls())
+
+    def test_symlinked_top_level_accepted_with_the_same_answers(self):  # T3
+        link = os.path.join(self.tmp, "alias")
+        os.symlink(self.root, link)
+        for spelling in (link, link + "/", self.root + "/"):
+            with self.subTest(root=spelling):
+                self.assertEqual(gitinfo.head_sha(spelling), self.head)
+                self.assertTrue(gitinfo.commit_exists(spelling, self.head))
+                self.assertEqual(gitinfo.merge_base(spelling, "HEAD", "HEAD"), self.head)
+                self.assertEqual(gitinfo.user_email(spelling), "fixture@example.invalid")
+
+    def test_linked_worktree_top_level_accepted(self):  # T9
+        wt = os.path.join(self.tmp, "wt")
+        git(self.root, "worktree", "add", "-q", "--detach", wt)
+        self.assertEqual(gitinfo.head_sha(wt), self.head)
+        self.assertEqual(gitinfo.user_email(wt), "fixture@example.invalid")
+
+    def test_unborn_repository_passes_the_root_check(self):  # T13
+        unborn = os.path.join(self.tmp, "unborn")
+        os.mkdir(unborn)
+        git(unborn, "init", "-q", "-b", "main")
+        with self.assertRaises(GateError) as e:
+            gitinfo.head_sha(unborn)
+        self.assertEqual(str(e.exception), "git rev-parse HEAD failed (exit 128)")
+        self.assertIsNone(gitinfo.user_email(unborn))
+        self.assertIs(gitinfo.commit_exists(unborn, "0" * 40), False)
+
+    def test_git_not_on_path_is_git_not_found_from_every_function(self):  # T14
+        for name, fn in self.calls().items():
+            with self.subTest(fn=name), mock.patch.dict(os.environ, {"PATH": os.path.join(self.tmp, "nowhere")}):
+                with self.assertRaises(GitNotFound) as e:
+                    fn(self.root)
+                self.assertEqual(str(e.exception), "git not found on PATH; install git")
+
+    def test_root_check_comes_before_ref_and_sha_checks(self):  # O1, O2, O3
+        sub = os.path.join(self.root, "dir")
+        for sha in ("-x", "^x", "a" * 41):
+            with self.subTest(sha=sha):
+                with self.assertRaises(GateError) as e:
+                    gitinfo.commit_exists(sub, sha)
+                self.assertEqual(str(e.exception), TOP)
+                self.assertIs(gitinfo.commit_exists(self.root, sha), False)
+        with self.assertRaises(GateError) as e:
+            gitinfo.merge_base(sub, "-x", "HEAD")
+        self.assertEqual(str(e.exception), TOP)
+        with self.assertRaises(GateError) as e:
+            gitinfo.merge_base(self.root, "-x", "HEAD")
+        self.assertEqual(str(e.exception), "ref must not start with '-'")
+        for fn in (gitinfo.show, gitinfo.ls_tree):  # unchanged: the ref check still precedes the root check
+            with self.subTest(fn=fn.__name__):
+                with self.assertRaises(GateError) as e:
+                    fn(sub, "-x", "dir")
+                self.assertEqual(str(e.exception), "ref must not start with '-'")
 
 
 if __name__ == "__main__":

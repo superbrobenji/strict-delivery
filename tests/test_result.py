@@ -1,17 +1,22 @@
 """Tests for the gate result contract (gates.lib.result), the dispatcher and the producers registry."""
+import collections
 import contextlib
 import io
 import json
 import os
+import random
 import subprocess
 import sys
+import types
 import unittest
 from unittest import mock
 
 from gates import __main__ as gates_main
 from gates import producers
-from gates.lib.result import (GateError, Line, Result, gate_args, repo_root, run_check, run_gate,
-                              safe_text)
+from gates.lib import config, decisions, findings
+from gates.lib.result import (GateError, GitNotFound, Line, Result, _raw, gate_args, repo_root, run_check,
+                              run_gate, safe_text)
+from gates.lib.store import Record, Store, store_errors
 from tests.helpers import GitIsolatedTestCase, make_repo
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -417,6 +422,175 @@ class RepoRootTest(GitIsolatedTestCase):
         self.assertIn("/strict-delivery:init", out)
         self.assertEqual(len(out.splitlines()), 1)
         self.assertNotIn("Traceback", err)
+
+
+
+def raise_gate(*args):
+    def check(a):
+        raise GateError(*args)
+    return check
+
+
+def rendered(check):
+    return run_check("g", check, []).render(False)
+
+
+class RawMapTest(unittest.TestCase):
+    """Q-U2: a map item in a reason is escaped exactly once, by Result.render (task 1c0.1, R1-R16)."""
+
+    def test_map_item_escaped_once(self):  # R10
+        self.assertEqual(rendered(raise_gate({"k": "a\\b\nc"})), "FAIL g.input: {k: a\\\\b\\nc}\n")
+
+    def test_map_item_json_escaped_once(self):  # R16
+        out = run_check("g", raise_gate({"k": "a\\b\nc"}), []).render(True)
+        self.assertEqual(json.loads(out)["lines"][0]["reason"], "{k: a\\b\nc}")
+        self.assertEqual(out, '{"gate": "g", "ok": false, "lines": [{"status": "FAIL", "id": "g.input", '
+                              '"reason": "{k: a\\\\b\\nc}"}]}\n')
+
+    def test_nested_map_and_list_escaped_once(self):  # R2
+        self.assertEqual(_raw({"a": ["x\\y", {"b": "\n"}]}), "{a: [x\\y, {b: \n}]}")
+        self.assertEqual(_raw([{"a": "b"}]), "[{a: b}]")
+        self.assertEqual(_raw({"a": {"b": "c"}}), "{a: {b: c}}")
+        self.assertEqual(rendered(raise_gate({"a": ["x\\y", {"b": "\n"}]})),
+                         "FAIL g.input: {a: [x\\\\y, {b: \\n}]}\n")
+
+    def test_flat_dict_insertion_order(self):  # R1
+        self.assertEqual(_raw({"k": "v"}), "{k: v}")
+        self.assertEqual(_raw({"b": "2", "a": "1"}), "{b: 2, a: 1}")
+
+    def test_character_classes_in_key_and_value(self):  # R3
+        table = (("\\", "\\\\"), ("\n", "\\n"), ("\t", "\\t"), ('"', '"'), ("'", "'"), ("\x00", "\\x00"),
+                 ("\x7f", "\\x7f"), ("\u00e9", "\u00e9"), ("\u2028", "\\u2028"))
+        for ch, shown in table:
+            with self.subTest(ch=ch):
+                self.assertEqual(_raw({"k" + ch: "v" + ch}), "{k%s: v%s}" % (ch, ch))
+                self.assertEqual(rendered(raise_gate({"k" + ch: "v" + ch})),
+                                 "FAIL g.input: {k%s: v%s}\n" % (shown, shown))
+
+    def test_empty_dict(self):  # R4
+        self.assertEqual(_raw({}), "{}")
+        self.assertEqual(_raw({"a": {}}), "{a: {}}")
+
+    def test_dict_subclasses(self):  # R5
+        self.assertEqual(_raw(collections.OrderedDict([("b", 1), ("a", 2)])), "{b: 1, a: 2}")
+
+        class Loud(dict):
+            def __str__(self):
+                return "LOUD"
+        self.assertEqual(_raw(Loud(k="v")), "{k: v}")
+
+    def test_non_str_keys(self):  # R6
+        self.assertEqual(_raw({1: "a"}), "{1: a}")
+        self.assertEqual(_raw({None: "b"}), "{None: b}")
+        self.assertEqual(_raw({True: "c"}), "{True: c}")
+        self.assertEqual(_raw({(1, 2): "d"}), "{[1, 2]: d}")
+
+    def test_plain_form_is_ambiguous_like_the_list_case(self):  # R7
+        self.assertEqual(_raw({"a: b": "c"}), _raw({"a": "b: c"}))
+        self.assertEqual(_raw({"1": "x"}), _raw({1: "x"}))
+        self.assertEqual(_raw(["a, b"]), _raw(["a", "b"]))
+
+    def test_other_containers_unchanged(self):  # R8
+        mp = types.MappingProxyType({"a": 1})
+        self.assertEqual(_raw(mp), str(mp))
+        self.assertEqual(_raw({1}), "{1}")
+        self.assertEqual(_raw(frozenset([2])), str(frozenset([2])))
+        self.assertEqual(_raw(b"x"), "b'x'")
+
+    def test_raw_self_containing_containers(self):  # R9, Q-1c0-3 (a)
+        d = {}
+        d["a"] = d
+        lst = []
+        lst.append(lst)
+        self.assertEqual(_raw(d), "{a: {...}}")
+        self.assertEqual(_raw(lst), "[[...]]")
+        mixed = {}
+        mixed["l"] = [mixed]
+        self.assertEqual(_raw(mixed), "{l: [{...}]}")
+        self.assertEqual(rendered(raise_gate(d)), "FAIL g.input: {a: {...}}\n")
+
+    def test_shared_but_acyclic_container_is_rendered_in_full(self):  # R9: the guard is the current path only
+        shared = {"k": "v"}
+        self.assertEqual(_raw([shared, shared]), "[{k: v}, {k: v}]")
+        self.assertEqual(_raw({"a": shared, "b": shared}), "{a: {k: v}, b: {k: v}}")
+
+    def test_gate_error_arity(self):  # R11
+        self.assertEqual(rendered(raise_gate("text")), "FAIL g.input: text\n")
+        self.assertEqual(rendered(raise_gate()), "FAIL g.input: \n")
+        self.assertEqual(rendered(raise_gate("a", "b")), "FAIL g.input: ('a', 'b')\n")
+        self.assertEqual(rendered(lambda a: (_ for _ in ()).throw(GitNotFound("x"))), "FAIL g.input: x\n")
+
+    def test_other_exception_paths_with_a_map(self):  # R12
+        def key_error(a):
+            raise KeyError({"k": "\\"})
+
+        def exit_(a):
+            raise SystemExit({"k": "\\"})
+        self.assertEqual(rendered(key_error), "FAIL g.input: KeyError: {k: \\\\}\n")
+        self.assertEqual(rendered(exit_), "FAIL g.input: exit requested ({k: \\\\})\n")
+
+    def test_generated_nesting_is_escaped_once(self):  # oracle: an independent recursive formatter
+        leaves = ["a", "\\", "\n", "\t", '"', "'", "\x00", "\x7f", "\u00e9", "\u2028", "x\\y\nz"]
+        rng = random.Random(20261102)
+
+        def make(depth):
+            kind = rng.randrange(3) if depth else 0
+            if kind == 0:
+                return rng.choice(leaves)
+            if kind == 1:
+                return [make(depth - 1) for _ in range(rng.randrange(3))]
+            return {rng.choice(leaves) + str(i): make(depth - 1) for i in range(rng.randrange(3))}
+
+        def fmt(v):
+            if isinstance(v, dict):
+                return "{" + ", ".join(fmt(k) + ": " + fmt(x) for k, x in v.items()) + "}"
+            if isinstance(v, list):
+                return "[" + ", ".join(fmt(x) for x in v) + "]"
+            return v
+        for n in range(200):
+            v = make(3)
+            with self.subTest(n=n):
+                self.assertEqual(rendered(raise_gate(v)), "FAIL g.input: " + safe_text(fmt(v)) + "\n")
+
+
+class ReasonSitesTest(GitIsolatedTestCase):
+    """Q-1c0-2 (a): every reason that formats a caller value renders a map once (store.py:71 and :227, schema.py:350,
+    findings.py:94, decisions.py:122)."""
+
+    MAP = {"k": "a\\b"}
+
+    def fail_line(self, reason):
+        res = Result("x", [])
+        res.fail("x.r", reason)
+        return res.render(False)
+
+    def test_reason_sites_render_map_once(self):
+        root = make_repo(self.work)
+        cfg = config.load(root)
+        sites = {
+            "store.path_for": lambda: run_check("x", lambda a: Store(root, "decision", cfg).path_for(self.MAP),
+                                                [self.MAP]).render(False),
+            "store.store_errors name": lambda: self.fail_line([r for s, r in store_errors([Record(self.MAP, {}, "d/c.yml")], "DEC")
+                                                if s.startswith("name.")][0]),
+            "schema.validate": lambda: self.fail_line(findings.validate({"schema": self.MAP}, cfg)[0]),
+            "findings.transition_errors": lambda: self.fail_line(findings.transition_errors(
+                {"status": self.MAP, "history": [{"status": "open"}]})[-1]),
+            "decisions.landed_errors": lambda: self.fail_line(decisions.landed_errors(
+                {"landed_in": [self.MAP]}, root, cfg, frozenset())[0]),
+        }
+        want = {
+            "store.path_for": "FAIL x.input: cannot use id {k: a\\\\b}: id is not a string (dict); ",
+            "store.store_errors name": "FAIL x.r: file name c.yml differs from the record id {k: a\\\\b}\n",
+            "schema.validate": "FAIL x.r: schema: expected finding/1, got {k: a\\\\b}\n",
+            "findings.transition_errors": "FAIL x.r: status: {k: a\\\\b} differs from the last history entry (open)\n",
+            "decisions.landed_errors": "FAIL x.r: landed_in: {k: a\\\\b} is not a string\n",
+        }
+        for name, site in sites.items():
+            with self.subTest(site=name):
+                line = site()
+                self.assertNotIn("\\\\\\\\", line)
+                self.assertNotIn("{'", line)
+                self.assertTrue(line.startswith(want[name]), line)
 
 
 if __name__ == "__main__":

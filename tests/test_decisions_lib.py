@@ -8,7 +8,7 @@ import unittest
 from gates.lib import config, gitinfo, schema, yamlsub
 from gates.lib.decisions import (current, find, in_force, is_resolved, landed_errors, ref_errors, superseded_ids,
                                  validate)
-from gates.lib.result import GateError
+from gates.lib.result import GateError, Result, run_check
 from gates.lib.store import Record
 from tests.helpers import GitIsolatedTestCase, commit_all, make_repo, write_record
 
@@ -812,6 +812,22 @@ class FindTests(unittest.TestCase):
         recs = [rec(dec(A, question="t")), rec(dec(B, supersedes=A)), rec(dec(C, supersedes=A))]
         with self.assertRaises(GateError):
             find(recs, ["t"], None, None, False)
+
+
+
+class LandedMapReasonTest(GitIsolatedTestCase):
+    """Q-U2 / Q-1c0-2 (a): a map cite in landed_in is escaped exactly once (decisions.py:122; task 1c0.1, R13)."""
+
+    def test_decision_reason_with_map_item_escaped_once(self):
+        make_repo(self.work)
+        errs = landed_errors({"id": A, "landed_in": [{"k": "a\\b"}]}, self.work, cfg_default(), frozenset())
+        self.assertEqual(errs, ["landed_in: {k: a\\b} is not a string"])
+        res = Result("x", [])
+        res.fail("x.landed", errs[0])
+        self.assertEqual(res.render(False), "FAIL x.landed: landed_in: {k: a\\\\b} is not a string\n")
+        raised = run_check("x", lambda a: (_ for _ in ()).throw(GateError(errs[0])), []).render(False)
+        self.assertEqual(raised, "FAIL x.input: landed_in: {k: a\\\\b} is not a string\n")
+        self.assertNotIn("\\\\\\\\", res.render(False))
 
 
 if __name__ == "__main__":

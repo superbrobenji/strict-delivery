@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from gates.lib import gitinfo, ids, yamlsub
-from gates.lib.result import GateError, safe_text
+from gates.lib.result import GateError, _raw, safe_text
 
 _PATH_KEY = {"decision": "decisions", "finding": "findings"}
 _GENERATED = ("index.yml", "in-force.md")
@@ -52,6 +52,7 @@ def _parse(text: str) -> object:
 
 class Store:
     def __init__(self, root: str, kind: str, cfg: dict) -> None:
+        gitinfo._require_toplevel(root)
         if kind not in _PATH_KEY:
             raise GateError("store kind must be 'decision' or 'finding'")
         try:
@@ -68,7 +69,7 @@ class Store:
     def _check_id(self, id: object) -> None:
         problem = ids.id_problem(id, self.prefix)
         if problem:
-            raise GateError("cannot use id %s: %s" % (id, problem))
+            raise GateError("cannot use id %s: %s" % (_raw(id), problem))
 
     def path_for(self, id: str) -> str:
         """The repo-relative path of the record file for ``id``; the id must pass ``id_problem``."""
@@ -225,7 +226,7 @@ def store_errors(records: list, prefix: str) -> list:
         stem = posixpath.basename(rec.file)[:-len(".yml")] if rec.file.endswith(".yml") else rec.file
         if stem != rec.id:
             out.append(("name." + rec.file, "file name %s.yml differs from the record id %s"
-                        % (stem, rec.id)))
+                        % (stem, _raw(rec.id))))
         if type(rec.id) is str:
             files_by_id.setdefault(rec.id, []).append(rec.file)
     for id_ in sorted(files_by_id):
@@ -263,6 +264,14 @@ def base_errors(root: str, store: Store, base: str, is_resolved: Callable[[dict]
     """``(suffix, reason)`` pairs from comparing the working tree with the base branch ``base``:
     ``deleted.<id>`` and ``immutable.<id>`` against the merge base with HEAD, ``collision.<id>`` against the
     tip of ``base``. Records are compared as parsed values, not as bytes."""
+    gitinfo._require_toplevel(root)
+    try:
+        same = isinstance(store, Store) and os.path.samefile(store.root, root)
+    except OSError:
+        same = False
+    if not same:
+        raise GateError("base_errors: the store's root %s is not the root given %s"
+                        % (_raw(getattr(store, "root", None)), _raw(root)))
     if type(base) is not str:
         raise GateError("the base ref must be a string")
     mb = gitinfo.merge_base(root, base, "HEAD")
