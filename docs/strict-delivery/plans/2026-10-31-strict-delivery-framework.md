@@ -1471,7 +1471,14 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
 **Files:**
 - Modify: `gates/lib/detect.py`, `tests/test_detect.py`
 
-**Owner answers applied:** DC-1 (the seven-row table below; lint only from a project file that names it), DC-3.
+**Owner answers applied:** DC-1 (the seven-row table below; lint only from a project file that names it), DC-3; Q-C12-1 to Q-C12-5 (2026-11-01, all option (a)):
+- Q-C12-1: any `"""` or `'''` anywhere in `pyproject.toml` gives one `Problem("pyproject.toml", "unsupported line <n>: multi-line string")` (n the first such line) and no proposals from that file; no TOML lexing.
+- Q-C12-2: "file present" for rows 3-6 means the file is opened through `_fetch` (an unreadable file is a `Problem`), content not examined; `mvnw` and `gradlew` must have an execute bit (`st_mode & 0o111`), else `Problem("<name>", "not executable")`. The plan test `test_toolchain_sources` therefore `chmod`s the wrappers.
+- Q-C12-3: a row 3-7 source counts only under its exact spelling in `os.listdir(root)`; a case variant is nothing.
+- Q-C12-4: Task C1.1's Makefile name match compares ASCII case only (fixes K1, a KELVIN SIGN name): an entry with a non-ASCII character never matches a probe; when `lstat` finds the probe but no listing entry matches exactly or by ASCII case, the result is `Problem("<probe>", "name not ASCII")` and no later name is read.
+- Q-C12-5: `[tool.ruff.format]` (a sub-table whose first key is `format`) gives no lint proposal; `[tool.ruff]` or any other `[tool.ruff.<sub>]` still does.
+- Controller row S1: `SOURCES` is the tuple of the seven labels (`"Makefile"` stands for row 2); `detect` reads through one private label -> reader table whose keys a test checks against `SOURCES`.
+- Controller ruling (reason text not fixed by the owner): a UTF-8 byte order mark at the start of `pyproject.toml` gives `Problem("pyproject.toml", "unsupported line 1: byte order mark")` and no proposals.
 
 **Interfaces:**
 - Consumes: Task C1.1.
