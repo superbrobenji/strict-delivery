@@ -138,14 +138,16 @@ def _raw_on(x: object, path: tuple) -> str:
 
 def _exc_text(e: BaseException) -> str:
     """``str(e)`` with the repr that KeyError and OSError-with-filename apply to their text undone."""
-    if isinstance(e, KeyError) and len(e.args) == 1:
-        return _raw(e.args[0])
+    if isinstance(e, KeyError) and e.args:
+        return _raw(e.args[0] if len(e.args) == 1 else list(e.args))
     if isinstance(e, OSError) and e.filename is not None:
         head = "[Errno %s] " % e.errno if e.errno is not None else ""
         out = head + (e.strerror or type(e).__name__) + ": " + _raw(e.filename)
         if e.filename2 is not None:
             out += " -> " + _raw(e.filename2)
         return out
+    if type(e).__str__ is BaseException.__str__:  # the default text is the repr of the arguments: render them once
+        return _raw(e.args[0] if len(e.args) == 1 else list(e.args)) if e.args else ""
     return str(e)
 
 

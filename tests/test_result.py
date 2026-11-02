@@ -524,6 +524,24 @@ class RawMapTest(unittest.TestCase):
         self.assertEqual(rendered(raise_gate("a\\b", {"k": "c\\d"}, "x\ny")),
                          "FAIL g.input: [a\\\\b, {k: c\\\\d}, x\\ny]\n")
 
+    def test_unexpected_exception_reasons_escaped_once(self):  # owner Q-1c0-2 (a)
+        def raising(exc):
+            def check(a):
+                raise exc
+            return check
+        cases = (
+            (ValueError({"k": "a\\b"}), "FAIL g.input: ValueError: {k: a\\\\b}\n"),
+            (ValueError("a\\b", "c"), "FAIL g.input: ValueError: [a\\\\b, c]\n"),
+            (ValueError("a\\b", {"k": "x\ny"}), "FAIL g.input: ValueError: [a\\\\b, {k: x\\ny}]\n"),
+            (KeyError("a\\b", "c"), "FAIL g.input: KeyError: [a\\\\b, c]\n"),
+            (RuntimeError(), "FAIL g.input: RuntimeError: \n"),
+            (RuntimeError("a\\b"), "FAIL g.input: RuntimeError: a\\\\b\n"),
+            (OSError(2, "gone"), "FAIL g.input: FileNotFoundError: [Errno 2] gone\n"),
+        )
+        for exc, want in cases:
+            with self.subTest(exc=repr(exc)):
+                self.assertEqual(rendered(raising(exc)), want)
+
     def test_other_exception_paths_with_a_map(self):  # R12
         def key_error(a):
             raise KeyError({"k": "\\"})
