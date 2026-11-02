@@ -1934,6 +1934,11 @@ class B13KeyTest(unittest.TestCase):
                     bad = in_para(disk(role), label, fn)
                     self.assertTrue(key_problems(role, bad) or b13_problems(role, bad))
 
+    def test_controller_intro_does_not_claim_every_worker(self):  # owner Q-B1f-1 (a): sub-controllers may dispatch
+        t = disk("controller")
+        self.assertNotIn("every worker", t)
+        self.assertIn("and dispatch workers. These rules override", t.splitlines()[2])
+
     def test_status_precedence_sentence_in_every_block(self):   # owner Q-B13rr-1 (a)
         sentence = PRECEDENCE
         for role in WRITTEN:
