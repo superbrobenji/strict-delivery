@@ -1,0 +1,134 @@
+kind: decision
+version: 1
+format: yaml
+files:
+  - dir: decisions
+    glob: "*.yml"
+    exclude:
+      - index.yml
+fields:
+  schema:
+    type: str
+  id:
+    type: id
+    id_kind: decision
+  status:
+    type: enum
+    values:
+      - open
+      - answered
+      - withdrawn
+  class:
+    type: str
+  question:
+    type: str
+  options:
+    type: list
+    min: 2
+    items:
+      type: map
+      fields:
+        label:
+          type: str
+        cost:
+          type: str
+  asked_at:
+    type: sha
+  asked_by:
+    type: str
+  topics:
+    type: list
+    items:
+      type: str
+  applies_to:
+    type: list
+    items:
+      type: glob
+  checked_against:
+    type: list
+    items:
+      type: id
+      id_kind: decision
+  effect:
+    type: enum
+    values:
+      - lasting
+      - one-off
+  supersedes:
+    type: id
+    id_kind: decision
+    required: false
+  answer:
+    type: str
+    required_when:
+      - status:
+          - answered
+    absent_when:
+      - status:
+          - open
+          - withdrawn
+  answered_at:
+    type: map
+    required_when:
+      - status:
+          - answered
+    absent_when:
+      - status:
+          - open
+          - withdrawn
+    fields:
+      at:
+        type: sha
+      by:
+        type: str
+  rule:
+    type: str
+    required: false
+    absent_when:
+      - status:
+          - open
+          - withdrawn
+  withdrawn:
+    type: map
+    required_when:
+      - status:
+          - withdrawn
+    absent_when:
+      - status:
+          - open
+          - answered
+    fields:
+      at:
+        type: sha
+      by:
+        type: str
+      reason:
+        type: str
+  plan:
+    type: str
+    required_when:
+      - class:
+          - merge-grant
+  program:
+    type: str
+    required: false
+  stream:
+    type: str
+    required: false
+  landed_in:
+    type: list
+    min: 1
+    items:
+      type: cite
+    required_when:
+      - status:
+          - answered
+        effect:
+          - lasting
+    absent_when:
+      - effect:
+          - one-off
+      - status:
+          - open
+      - status:
+          - withdrawn
