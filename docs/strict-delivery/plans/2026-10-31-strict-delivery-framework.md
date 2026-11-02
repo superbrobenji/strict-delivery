@@ -1724,7 +1724,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       - `model-name` (`\b(haiku|sonnet|opus|fable)(?=\d|\b)`, so `opus4` and `sonnet45` match and `opusculum` does not (owner Q-B11-1): prose speaks in tiers; models come from `models.tiers`, spec §6);
       - `old-steps` (`\bS\d+ block b\d+\b`).
     - `forbidden_hits(text: str) -> list` of `(name, line_no, match)`. It scans each line, and also each paragraph with its line breaks read as spaces, so a phrase split by a line wrap (`lap` / `timer`, `serial` / `port`) is found; a paragraph hit reports the line where the match starts, and a match found both ways is listed once (owner Q-B11-5).
-    - `labels(text: str) -> list`: the label of each paragraph after the intro. A label is the text up to and including the first `. ` of a paragraph's first line, so the label keeps its full stop.
+    - `labels(text: str) -> list`: the label of each paragraph after the intro. A label is the text up to and including the first `. ` of a paragraph's first line, so the label keeps its full stop. A paragraph whose first line holds no `. ` has the label `""` (owner Q-B11r-2), which no `LABELS` row contains, so the paragraph is refused.
     - `paragraph(text: str, label: str) -> str`.
     - `LABELS: dict` from role to the ordered label list (table below).
   - Prompt-block format (consumed by `gate_dispatch`, block 2, and checked on every file present in `PROMPTS_DIR`):
@@ -1857,14 +1857,18 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
   WRITTEN = (..., "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer")
   def test_reviewer_blocks_differ_in_scope():
       assert paragraph(read("task_reviewer"), "Verdict.") != paragraph(read("final_reviewer"), "Verdict.")
-      assert "whole branch" in paragraph(read("final_reviewer"), "Branch scope.")
-  def test_reviewers_rerun_gates():
-      for r in ("task_reviewer", "final_reviewer", "final_verifier"): assert "python3 -m gates run_all" in read(r)
-  def test_exception_reviewer_scope():          # DB-5
+      assert whole_token("whole branch", paragraph(read("final_reviewer"), "Branch scope."))      # owner Q-B12-1
+  def test_reviewers_rerun_gates():             # owner Q-B12-1: whole token, in the named paragraph
+      for r in ("task_reviewer", "final_reviewer"):
+          for s in ("python3 -m gates run_all", "every claim"): assert whole_token(s, paragraph(read(r), "Method."))
+      assert whole_token("python3 -m gates run_all", paragraph(read("final_verifier"), "Adversarial scope."))
+  def test_exception_reviewer_scope():          # DB-5, owner Q-B12-1 and Q-B12-2
       p = paragraph(read("exception_reviewer"), "Exception scope.")
-      for s in ("one proposed exception", "`rule-override`", "only the proposal and its evidence"): assert s in p
-  def test_top_tier_blocks_name_tier4():        # DB-2
-      for r in ("final_verifier", "exception_reviewer"): assert "tier4" in read(r)
+      for s in ("one proposed exception", "`rule-override`", "only the proposal and its evidence", "playbook",
+                "before the owner rules"): assert whole_token(s, p)
+  def test_top_tier_blocks_name_tier4():        # DB-2, owner Q-B12-1
+      for r, lab in (("final_verifier", "Adversarial scope."), ("exception_reviewer", "Exception scope.")):
+          assert whole_token("tier4", paragraph(read(r), lab))
   ```
 - [ ] **Step 2: Run; expect FAIL** (files missing).
 - [ ] **Step 3: Write the four blocks.**
@@ -1898,26 +1902,32 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
              "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier")
   def test_all_b_roles_written():
       assert sorted(WRITTEN) == sorted(B_ROLES)
+  # `disk(role)` is Task B1.2's helper (the real file's text), reused, never redefined. Every phrase is a whole token
+  # (Global Constraints) in a named paragraph (owner Q-B12-1, Q-B13-1 (a)); a missing heading fails the check.
   def test_controller_dispatch_grammar_in_order():
-      p = paragraph(read("controller"), "Dispatch discipline.")
-      pos = [p.index("`" + h + "`") for h in DISPATCH_HEADINGS]
-      assert pos == sorted(pos) and "fork" in p
-  def test_controller_fix_loop():
-      assert "rounds 1-3" in read("controller") and "rounds 4-5" in read("controller")
+      p = paragraph(disk("controller"), "Dispatch discipline.")
+      at = [_find_token("`" + h + "`", p) for h in DISPATCH_HEADINGS]
+      assert min(at) >= 0 and at == sorted(at) and whole_token("fork dispatch is refused", p)
+  def test_controller_fix_loop():               # spec §10; the paragraph is `Continuation.` (owner Q-B13-1 (a))
+      p = paragraph(disk("controller"), "Continuation.")
+      assert all(whole_token(s, p) for s in ("rounds 1-3", "rounds 4-5", "one tier up", "owner question"))
   def test_controller_ruling_format():
-      p = paragraph(read("controller"), "Rulings.")
-      assert "Ruling: what -- why -- cost if wrong -- spec cite" in p and "`rulings.max_per_block`" in p   # spec §7.1
+      p = paragraph(disk("controller"), "Rulings.")
+      assert whole_token("Ruling: what -- why -- cost if wrong -- spec cite", p) and whole_token("`rulings.max_per_block`", p)   # spec §7.1
   def test_controller_model_choice():           # spec §8 "the top tier only for `top_tier_roles`"; spec §6 `models.tiers`
-      p = paragraph(read("controller"), "Dispatch discipline.")
-      assert "`models.tiers`" in p and "`top_tier_roles`" in p
-  def test_audit_blocks_triage_before_plan():   # spec §8 "the owner rules on triage before any plan"
+      p = paragraph(disk("controller"), "Dispatch discipline.")
+      assert whole_token("`models.tiers`", p) and whole_token("`top_tier_roles`", p)
+  def test_audit_blocks_triage_before_plan():   # spec §8 "the owner rules on triage before any plan"; `Owner-only decisions.` (owner Q-B13-1 (a))
       for r in ("audit_reviewer", "audit_verifier"):
-          assert "before any plan" in read(r) and "`triage`" in read(r), r
+          p = paragraph(disk(r), "Owner-only decisions.")
+          assert all(whole_token(s, p) for s in ("the owner rules", "before any plan", "`triage`")), r
   def test_audit_coverage_and_reproducers():
-      assert "coverage list" in paragraph(read("audit_reviewer"), "Coverage first.")
-      m = paragraph(read("audit_verifier"), "Method.")
-      assert "reproducer" in m and "coverage list" in m
+      p = paragraph(disk("audit_reviewer"), "Coverage first.")
+      assert whole_token("coverage list", p) and whole_token("progress file", p)
+      m = paragraph(disk("audit_verifier"), "Method.")
+      assert all(whole_token(s, m) for s in ("every reproducer", "coverage list", "extends"))
   ```
+  Also, from the B1.2 carry-overs: the controller's `Report contract.` and the audit verifier's `Verdict.` name only `STATUS_LINE` values; `tier4` appears in neither audit block; the two audit `Method.` paragraphs differ. The B1.2 test that pins `WRITTEN` to seven roles pins `WRITTEN[:7]`.
 - [ ] **Step 2: Run; expect FAIL.**
 - [ ] **Step 3: Write the three blocks.**
 - [ ] **Step 4: Run on both interpreters and every enabled gate; expect PASS.**
