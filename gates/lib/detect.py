@@ -143,8 +143,10 @@ def _number(_text: str) -> _Number:
     return _Number()
 
 
-def _package_json(root: str) -> tuple:
-    """(proposals, problems) from package.json."""
+def _package_json(root: str, listing: list) -> tuple:
+    """(proposals, problems) from package.json, only under that exact spelling in the listing (owner Q-C12r-2)."""
+    if "package.json" not in listing:
+        return (), ()
     try:
         data = _fetch(root, "package.json")
     except _Unreadable as e:
@@ -296,7 +298,8 @@ def _toolchain(name: str, commands: tuple, executable: bool) -> Callable:
     return read
 
 
-_PYPROJECT_HEADER = re.compile(r"[ \t]*\[(tool\.pytest\.ini_options|tool\.ruff(?:\.[A-Za-z0-9_-]+)*)\][ \t]*(?:#.*)?")
+_PYPROJECT_HEADER = re.compile(r"[ \t]*\[(tool\.pytest\.ini_options|tool\.ruff(?:\.[A-Za-z0-9_-]+)*)\][ \t]*(#.*)?")
+_PY_CONTROL = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f]")  # Unicode Cc other than TAB (owner Q-C12r-1)
 
 
 def _pyproject(root: str, listing: list) -> tuple:
@@ -304,7 +307,8 @@ def _pyproject(root: str, listing: list) -> tuple:
 
     Not a TOML parser. A table header line is matched as written: optional blanks, ``[tool.pytest.ini_options]``
     (test) or ``[tool.ruff]`` / ``[tool.ruff.<sub>]`` (lint; ``<sub>`` ASCII bare keys, the first not ``format``),
-    then optional blanks and a ``#`` comment. The first match of each slot is kept. A byte order mark, or a
+    then optional blanks and a ``#`` comment (a comment holding a Cc character other than TAB, a lone CR
+    included, gives one Problem: owner Q-C12r-1). The first match of each slot is kept. A byte order mark, or a
     ``\"\"\"`` or ``'''`` anywhere, gives one Problem and no proposals."""
     name = "pyproject.toml"
     if name not in listing:
@@ -330,6 +334,8 @@ def _pyproject(root: str, listing: list) -> tuple:
         m = _PYPROJECT_HEADER.fullmatch(line)
         if not m:
             continue
+        if m.group(2) and _PY_CONTROL.search(m.group(2)):
+            return (), (Problem(name, "unsupported line %d: control character" % lineno),)
         table = m.group(1)
         if table == "tool.pytest.ini_options":
             test_line = test_line or lineno
@@ -345,7 +351,7 @@ def _pyproject(root: str, listing: list) -> tuple:
 
 # Source label -> reader(root, listing); the order is SOURCES (a test pins that the two agree).
 _READERS = {
-    "package.json": lambda root, listing: _package_json(root),
+    "package.json": _package_json,
     "Makefile": _makefile,
     "Cargo.toml": _toolchain("Cargo.toml", (("test", "cargo test"), ("build", "cargo build")), False),
     "go.mod": _toolchain("go.mod", (("test", "go test ./..."), ("build", "go build ./...")), False),

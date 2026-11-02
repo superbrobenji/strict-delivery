@@ -1140,6 +1140,26 @@ class ToolchainTests(Base):
         with mock.patch("os.lstat", ci_lstat):
             self.assertEqual(detect(self.tmp), Detection((), ()))
 
+    def test_package_json_case_variants_are_nothing(self):  # U1 (owner Q-C12r-2 (a))
+        for v in ("Package.json", "PACKAGE.JSON", "package.JSON"):
+            with self.subTest(name=v), tempfile.TemporaryDirectory() as d:
+                self.put(v, '{"scripts": {"test": "t"}}', root=d)
+                self.assertEqual(detect(d), Detection((), ()))
+
+    def test_package_json_case_variant_on_a_case_insensitive_filesystem(self):  # U1, simulated
+        self.put("Package.json", '{"scripts": {"test": "t"}}')
+        real_lstat = os.lstat
+
+        def ci_lstat(path, *a, **k):
+            d, base = os.path.split(path)
+            if d == self.tmp:
+                for e in os.listdir(d):
+                    if e.lower() == base.lower():
+                        return real_lstat(os.path.join(d, e), *a, **k)
+            return real_lstat(path, *a, **k)
+        with mock.patch("os.lstat", ci_lstat):
+            self.assertEqual(detect(self.tmp), Detection((), ()))
+
     def test_sub_directory_only(self):  # T9, O5
         for rel in ("crates/a/Cargo.toml", "svc/go.mod", "x/mvnw", "y/gradlew", "z/pyproject.toml", "packages/a/package.json",
                     "m/Makefile"):
@@ -1188,6 +1208,30 @@ class ToolchainTests(Base):
                         self.assertNotIn(p, seen)
                         want = tuple(Proposal(*t) for t in EXPECTED[posix]) if beside else ()
                         self.assertEqual(res, Detection(want, ()))
+
+    def test_vanished_after_the_listing(self):  # F3: listed, gone by the read
+        for name in EXPECTED:
+            with self.subTest(name=name):
+                with mock.patch("os.listdir", lambda root: [name]):
+                    res = detect(self.tmp)
+                self.assertEqual(res, Detection((), (Problem(name, "No such file or directory"),)))
+
+    def test_mode_check_failure_is_a_problem(self):  # F3: the execute-bit lstat fails after _fetch succeeded
+        for name in WRAPPERS:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                self.put(name, "x", root=d)
+                real_lstat = os.lstat
+                calls = []
+
+                def second_fails(path, *a, **k):
+                    if os.path.basename(path) == name:
+                        calls.append(path)
+                        if len(calls) > 1:
+                            raise PermissionError(13, DENIED)
+                    return real_lstat(path, *a, **k)
+                with mock.patch("os.lstat", second_fails):
+                    res = detect(d)
+                self.assertEqual(res, Detection((), (Problem(name, DENIED),)))
 
     def test_wrapper_support_files_not_required(self):  # T11
         self.put("mvnw", "")
@@ -1252,6 +1296,43 @@ class PyprojectTests(Base):
         self.assertEqual(self.run_text("# caf\u00e9 \u00ef\n[tool.ruff]\n").proposals, (py_lint(2),))
         self.assertEqual(self.run_text("\ufeff[tool.ruff]\n"), Detection((), (PY_BOM,)))
         self.assertEqual(self.run_text("\ufeff[project]\n"), Detection((), (PY_BOM,)))
+
+    def test_vanished_after_the_listing(self):  # F3
+        with mock.patch("os.listdir", lambda root: ["pyproject.toml"]):
+            res = detect(self.tmp)
+        self.assertEqual(res, Detection((), (Problem("pyproject.toml", "No such file or directory"),)))
+
+    def test_comment_control_characters_make_the_file_unsupported(self):  # F1 (owner Q-C12r-1 (a))
+        cases = (
+            ("[tool.ruff] # x\r", 1),  # a lone CR at the end of the file
+            ("[tool.ruff] #\\x00\n", 1),
+            ("[tool.ruff] #a\rb\n", 1),
+            ("[tool.pytest.ini_options]#\\x01\n", 1),
+            ("x = 1\n[tool.ruff] # a\\x7fb\n", 2),
+            ("x = 1\n[tool.ruff] # a\\u0085b\n", 2),
+            ("x = 1\n[tool.ruff] # a\\u009fb\n", 2),
+            ("x = 1\n[tool.ruff] # a\\x1fb\n", 2),
+            ("x = 1\n[tool.ruff] # a\\x08b\n", 2),
+            ("x = 1\n[tool.ruff] # a\\x0bb\n", 2),
+            ("x = 1\n[tool.ruff] # a\\x0cb\n", 2),
+            ("[tool.ruff.lint] # \\x00\n[tool.ruff]\n", 1),
+            ("[tool.ruff]\n[tool.pytest.ini_options] # \\x00\n", 2),  # also after an earlier good header
+        )
+        for text, line in cases:
+            text = text.encode("ascii").decode("unicode_escape") if "\\" in text else text
+            with self.subTest(text=text):
+                self.assertEqual(self.run_text(text),
+                                 Detection((), (Problem("pyproject.toml", "unsupported line %d: control character" % line),)))
+
+    def test_comment_characters_that_are_allowed(self):  # F1: TAB, U+00A0, U+2028, U+00AD are not Cc; CRLF is the line end
+        for tail in ("# a\tb", "#\t", "# \u00a0 \u2028 \u00ad \ufeff", "# \u00e9"):
+            with self.subTest(tail=repr(tail)):
+                self.assertEqual(self.run_text("[tool.ruff] " + tail + "\n"), Detection((py_lint(1),), ()))
+        self.assertEqual(self.run_text("[tool.ruff] # a\r\n"), Detection((py_lint(1),), ()))
+
+    def test_control_characters_elsewhere_still_not_examined(self):  # F1 scope: only a matched header's comment
+        text = '[project]\nname = "x" # \x00\n# \x01\n[tool.ruff] x \x00\n[tool.ruffx] # \x00\n[tool.ruff]\n'
+        self.assertEqual(self.run_text(text), Detection((py_lint(6),), ()))
 
     def test_empty_and_no_header(self):  # P3
         for text in ("", '[project]\nname = "x"\n', "\n\n"):
@@ -1496,6 +1577,17 @@ class MakefileAsciiNameTests(Base):
     def test_kelvin_sign_in_the_other_probes(self):  # K1
         self.assertEqual(self.probe("GNUma\u212aefile"), Detection((), (Problem("GNUmakefile", "name not ASCII"),)))
         self.assertEqual(self.probe("Ma\u212aefile"), Detection((), (Problem("makefile", "name not ASCII"),)))
+
+    def test_lstat_failure_on_the_probe_keeps_the_probe_name(self):  # F2: found=False keeps C1.1's fall-back to the probe
+        real_lstat = os.lstat
+
+        def deny(path, *a, **k):
+            if os.path.basename(path) == "GNUmakefile":
+                raise OSError(5, "Input/output error")
+            return real_lstat(path, *a, **k)
+        with mock.patch("os.lstat", deny):
+            res = detect(self.tmp)
+        self.assertEqual(res, Detection((), (Problem("GNUmakefile", "Input/output error"),)))
 
     def test_other_non_ascii_name_is_not_the_makefile(self):  # K1
         self.assertEqual(self.probe("Makefile\u0307"), Detection((), ()))
