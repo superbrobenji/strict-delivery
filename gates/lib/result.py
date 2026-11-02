@@ -98,9 +98,18 @@ class _GateParser(argparse.ArgumentParser):
         raise GateError("invalid arguments: %s" % message)
 
 
+class _Once(argparse.Action):
+    """Store the value; a second occurrence (in full, with ``=`` or abbreviated) is an argument error."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error("%s given more than once" % self.option_strings[0])
+        setattr(namespace, self.dest, values)
+
+
 def gate_args(prog: str) -> argparse.ArgumentParser:
     p = _GateParser(prog=prog, add_help=True)
-    p.add_argument("--root", default=None, help="the tree to check (default: the repository root)")
+    p.add_argument("--root", default=None, action=_Once, help="the tree to check (default: the repository root)")
     return p
 
 
