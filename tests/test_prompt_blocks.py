@@ -1536,7 +1536,7 @@ EXACT_PARAGRAPHS = {
             "You dispatch workers, and you may dispatch a sub-controller when the stream controller judges it better, within the configured depth and concurrency limits; workers never dispatch.",
             "Give every dispatch the headings `## Role`, `## Brief`, `## Findings`, `## Claims`, `## Budget: tokens=<n> minutes=<n>`, `## Model`, `## Report`, `## Strict block` and `## Task`, in that order; the strict block is the role's prompt block, byte for byte.",
             "A fork dispatch is refused: dispatch a fresh agent with that grammar instead.",
-            "Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top tier only to the roles in `top_tier_roles`.",
+            "Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top tier only to the roles in `top_tier_roles` (by default the final verifier and the exception reviewer).",
             "Name tiers in every brief and report, never a model.",
         )),
         ("Zero bugs.", (
@@ -1662,7 +1662,7 @@ EXACT_PARAGRAPHS = {
             "Verdict.",
             "The owner rules, not you.",
             "Report status DONE when the case against the exception did not survive your checks.",
-            "Report DONE_WITH_FINDINGS when it did, and put the argument against the exception in the findings, each as file:line or command and output.",
+            "Report DONE_WITH_FINDINGS when it did, and write the argument against the exception in its own report section, apart from the findings, each point as file:line or command and output.",
             "Report NEEDS_DECISION when the proposal needs a ruling in the owner-only classes beyond the exception itself, and BLOCKED when you could not run the evidence's commands.",
         )),
         ("No subagents.", (
@@ -1693,13 +1693,14 @@ EXACT_PARAGRAPHS = {
     "audit_verifier": [
         ("Zero bugs.", (
             "Zero bugs.",
-            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in your findings, so the controller registers it with an owner.",
+            "A defect you find is not fixed by you: record file:line, a reproducer and the class statement in the report (in findings, or under Unrelated findings when it lies outside the audited area), so the controller registers it with an owner.",
         )),
         ("Verdict.", (
             "Verdict.",
             "You judge whether the audit report stands.",
             "Report status DONE when every reproducer re-ran as the report wrote it and your extension found nothing the report misses.",
-            "Report DONE_WITH_FINDINGS when a reproducer did not reproduce or your extension found a defect the report misses, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+            "Report DONE_WITH_FINDINGS when a reproducer did not reproduce or your extension found a defect in the audited area that the report misses, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+            "A defect found outside the audited area goes under Unrelated findings and does not change the status.",
             "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
         )),
         ("No subagents.", (
@@ -1711,6 +1712,7 @@ EXACT_PARAGRAPHS = {
             "Method.",
             "Re-run every reproducer in the reviewer's report yourself, with its direct command and a contradiction command, and compare your output with the report's excerpt; a reproducer that does not reproduce is a finding against the report.",
             "Then write your own coverage list, which extends the reviewer's coverage list with every file, spec section and input-domain row the reviewer's list leaves out, and audit those parts yourself.",
+            "Every defect you see is reported, whether the audited area touches it or not: one in the audited area goes in findings, and one outside it goes under Unrelated findings.",
             "A pasted result is evidence of what its author saw, so you re-run it before you rely on it.",
         )),
     ],
@@ -1722,9 +1724,9 @@ SINGLE_SENTENCES = {
         ("Owner-only decisions.",
          "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
         ("Merge and checkpoint.",
-         "Main is protected: you never merge into main locally and never push to it; main changes only by merging an approved PR."),
+         "The base branch (`base_branch`, default `main`) is protected: you never merge into it locally and never push to it; it changes only by merging an approved PR."),
         ("Merge and checkpoint.",
-         "A finished block or stream opens a pull request to main, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
+         "A finished block or stream opens a pull request to the base branch, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
         ("Continuation.",
          "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner question."),
         ("Continuation.",
@@ -1767,6 +1769,8 @@ SINGLE_SENTENCES = {
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "final_verifier": [
+        ("Adversarial scope.",
+         "You run at the top tier, which only the roles in `top_tier_roles` use (by default the final verifier and the exception reviewer): `tier4`, or the configured `top_tier_fallback` when the project sets no `tier4`."),
         ("Owner-only decisions.",
          "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
@@ -1775,6 +1779,8 @@ SINGLE_SENTENCES = {
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "exception_reviewer": [
+        ("Exception scope.",
+         "You run at the top tier, which only the roles in `top_tier_roles` use (by default the final verifier and the exception reviewer): `tier4`, or the configured `top_tier_fallback` when the project sets no `tier4`."),
         ("Owner-only decisions.",
          "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
