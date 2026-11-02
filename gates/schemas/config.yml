@@ -1,0 +1,135 @@
+kind: config
+version: 1
+format: yaml
+files:
+  - path: config
+fields:
+  schema:
+    type: str
+  framework_version:
+    type: str
+  profile:
+    type: enum
+    values:
+      - light
+      - standard
+      - strict
+  paths:
+    type: map
+    required: false
+    fields:
+      state:
+        type: str
+        required: false
+      decisions:
+        type: str
+        required: false
+      findings:
+        type: str
+        required: false
+      claims:
+        type: str
+        required: false
+      plan_state:
+        type: str
+        required: false
+      programs:
+        type: str
+        required: false
+      playbooks:
+        type: str
+        required: false
+      receipts:
+        type: str
+        required: false
+      context:
+        type: str
+        required: false
+      architecture:
+        type: str
+        required: false
+      index:
+        type: str
+        required: false
+      specs:
+        type: str
+        required: false
+      plans:
+        type: str
+        required: false
+      reviews:
+        type: str
+        required: false
+  ids:
+    type: map
+    required: false
+    fields:
+      decision:
+        type: str
+        required: false
+      finding:
+        type: str
+        required: false
+      claim:
+        type: str
+        required: false
+      request:
+        type: str
+        required: false
+  base_branch:
+    type: str
+    required: false
+  decisions:
+    type: map
+    required: false
+    fields:
+      scan:
+        type: list
+        required: false
+        items:
+          type: glob
+  decision_classes:
+    type: map
+    required: false
+    fields:
+      owner_only:
+        type: list
+        required: false
+        min: 1
+        items:
+          type: str
+  commands:
+    type: any-map
+    required: false
+  models:
+    type: any-map
+    required: false
+  roles:
+    type: any-map
+    required: false
+  block:
+    type: any-map
+    required: false
+  rulings:
+    type: any-map
+    required: false
+  dispatch:
+    type: any-map
+    required: false
+  budgets:
+    type: any-map
+    required: false
+  drift:
+    type: any-map
+    required: false
+  overrides:
+    type: any-map
+    required: false
+  top_tier_roles:
+    type: list
+    required: false
+    items:
+      type: str
+  top_tier_fallback:
+    type: str
+    required: false

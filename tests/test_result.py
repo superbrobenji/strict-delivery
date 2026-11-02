@@ -167,6 +167,14 @@ class RunGateTest(unittest.TestCase):
         run("x", check, [])
         self.assertEqual(got, ["somewhere", None])
 
+    def test_repeated_root_is_input_fail(self):
+        want = "FAIL x.input: invalid arguments: --root given more than once\n"
+        for argv in (["--root", "a", "--root", "b"], ["--root=a", "--root", "b"], ["--ro", "a", "--roo=b"],
+                     ["--root", "a", "--root", "a"], ["--root", "", "--root", "b"], ["--root=", "--root", "b"]):
+            code, out, _ = run("x", one_pass, argv)
+            self.assertEqual((code, out), (1, want), argv)
+        self.assertEqual(run("x", one_pass, ["--root", "a"])[0], 0)
+
     def test_help_is_input_fail_and_goes_to_stderr(self):
         code, out, err = run("x", one_pass, ["--help"])
         self.assertEqual((code, out), (1, "FAIL x.input: help requested; no gate was run\n"))
