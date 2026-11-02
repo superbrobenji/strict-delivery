@@ -1722,7 +1722,7 @@ SINGLE_SENTENCES = {
         ("Owner-only decisions.",
          "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
         ("Merge and checkpoint.",
-         "Main is protected: you never merge into main and never push to it."),
+         "Main is protected: you never merge into main locally and never push to it; main changes only by merging an approved PR."),
         ("Merge and checkpoint.",
          "A finished block or stream opens a pull request to main, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
         ("Continuation.",
