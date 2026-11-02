@@ -10,7 +10,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from gates.lib.result import GateError
 
@@ -247,15 +247,19 @@ def _makefile_proposals(name: str, text: str) -> tuple:
 def _makefile(root: str, listing: list) -> tuple:
     """(proposals, problems) from the first Makefile name that exists, as GNU make picks it."""
     for probe in _MAKEFILE_NAMES:
+        found = True
         try:
             os.lstat(os.path.join(root, probe))
         except FileNotFoundError:
             continue
         except OSError:
-            pass  # exists but cannot be examined: _fetch reports it below under this name
-        # On a case-insensitive filesystem the probe can match an entry spelled differently.
+            found = False  # exists but cannot be examined: _fetch reports it below under this name
+        # On a case-insensitive filesystem the probe can match an entry spelled differently. Only ASCII
+        # case counts (owner Q-C12-4): `str.lower()` also folds U+212A (KELVIN SIGN) to `k`.
         exact = [e for e in listing if e == probe]
-        folded = [e for e in listing if e.lower() == probe.lower()]
+        folded = [e for e in listing if e.isascii() and e.lower() == probe.lower()]
+        if not exact and not folded and found:
+            return (), (Problem(probe, "name not ASCII"),)
         name = exact[0] if exact else (folded[0] if folded else probe)
         try:
             data = _fetch(root, name)
@@ -271,10 +275,91 @@ def _makefile(root: str, listing: list) -> tuple:
     return (), ()
 
 
+def _toolchain(name: str, commands: tuple, executable: bool) -> Callable:
+    """The reader for a toolchain file whose presence alone gives ``commands`` ((slot, command) pairs in SLOTS order).
+
+    The file counts only under its exact spelling in the directory listing (owner Q-C12-3) and is opened
+    through _fetch, its content never examined (owner Q-C12-2). A wrapper must also have an execute bit."""
+    def read(root: str, listing: list) -> tuple:
+        if name not in listing:
+            return (), ()
+        try:
+            if _fetch(root, name) is None:  # vanished since the listing
+                return (), (Problem(name, "No such file or directory"),)
+            if executable and not os.lstat(os.path.join(root, name)).st_mode & 0o111:
+                return (), (Problem(name, "not executable"),)
+        except _Unreadable as e:
+            return (), (Problem(name, str(e)),)
+        except OSError as e:
+            return (), (Problem(name, e.strerror or type(e).__name__),)
+        return tuple(Proposal(slot, command, name) for slot, command in commands), ()
+    return read
+
+
+_PYPROJECT_HEADER = re.compile(r"[ \t]*\[(tool\.pytest\.ini_options|tool\.ruff(?:\.[A-Za-z0-9_-]+)*)\][ \t]*(?:#.*)?")
+
+
+def _pyproject(root: str, listing: list) -> tuple:
+    """(proposals, problems) from pyproject.toml, read for header lines only (owner Q-C12-1, Q-C12-5).
+
+    Not a TOML parser. A table header line is matched as written: optional blanks, ``[tool.pytest.ini_options]``
+    (test) or ``[tool.ruff]`` / ``[tool.ruff.<sub>]`` (lint; ``<sub>`` ASCII bare keys, the first not ``format``),
+    then optional blanks and a ``#`` comment. The first match of each slot is kept. A byte order mark, or a
+    ``\"\"\"`` or ``'''`` anywhere, gives one Problem and no proposals."""
+    name = "pyproject.toml"
+    if name not in listing:
+        return (), ()
+    try:
+        data = _fetch(root, name)
+    except _Unreadable as e:
+        return (), (Problem(name, str(e)),)
+    if data is None:
+        return (), (Problem(name, "No such file or directory"),)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return (), (Problem(name, "not valid UTF-8"),)
+    if text.startswith("\ufeff"):
+        return (), (Problem(name, "unsupported line 1: byte order mark"),)
+    lines = text.split("\n")
+    test_line = lint_line = None
+    for lineno, raw in enumerate(lines, 1):
+        if '"""' in raw or "'''" in raw:
+            return (), (Problem(name, "unsupported line %d: multi-line string" % lineno),)
+        line = raw[:-1] if raw.endswith("\r") and lineno < len(lines) else raw
+        m = _PYPROJECT_HEADER.fullmatch(line)
+        if not m:
+            continue
+        table = m.group(1)
+        if table == "tool.pytest.ini_options":
+            test_line = test_line or lineno
+        elif table.split(".")[2:3] != ["format"]:
+            lint_line = lint_line or lineno
+    out = []
+    if test_line:
+        out.append(Proposal("test", "python3 -m pytest", "%s:%d tool.pytest.ini_options" % (name, test_line)))
+    if lint_line:
+        out.append(Proposal("lint", "ruff check .", "%s:%d tool.ruff" % (name, lint_line)))
+    return tuple(out), ()
+
+
+# Source label -> reader(root, listing); the order is SOURCES (a test pins that the two agree).
+_READERS = {
+    "package.json": lambda root, listing: _package_json(root),
+    "Makefile": _makefile,
+    "Cargo.toml": _toolchain("Cargo.toml", (("test", "cargo test"), ("build", "cargo build")), False),
+    "go.mod": _toolchain("go.mod", (("test", "go test ./..."), ("build", "go build ./...")), False),
+    "mvnw": _toolchain("mvnw", (("test", "./mvnw test"), ("build", "./mvnw package")), True),
+    "gradlew": _toolchain("gradlew", (("test", "./gradlew test"), ("build", "./gradlew build")), True),
+    "pyproject.toml": _pyproject,
+}
+SOURCES = tuple(_READERS)
+
+
 def detect(root: str) -> Detection:
     """The commands ``root`` already has for test, lint and build, and the sources that could not be read.
 
-    Order: source order (package.json, then the Makefile), then slot order within a source."""
+    Order: SOURCES order, then slot order within a source."""
     if type(root) is not str:
         raise GateError("root must be a str, not %s" % type(root).__name__)
     if not os.path.isdir(root):
@@ -287,8 +372,8 @@ def detect(root: str) -> Detection:
         raise GateError("%s: cannot read (%s)" % (root, e.strerror or type(e).__name__)) from None
     proposals = []
     problems = []
-    for read in (lambda: _package_json(root), lambda: _makefile(root, listing)):
-        found, bad = read()
+    for read in _READERS.values():
+        found, bad = read(root, listing)
         proposals.extend(found)
         problems.extend(bad)
     return Detection(tuple(proposals), tuple(problems))

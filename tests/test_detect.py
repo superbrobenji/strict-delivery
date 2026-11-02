@@ -946,5 +946,563 @@ class OrderAndEffectTests(Base):
         self.assertFalse(hasattr(detect_mod, "subprocess"))
 
 
+def triples(res: Detection) -> list:
+    return [(p.slot, p.command, p.source) for p in res.proposals]
+
+
+EXPECTED = {
+    "Cargo.toml": [("test", "cargo test", "Cargo.toml"), ("build", "cargo build", "Cargo.toml")],
+    "go.mod": [("test", "go test ./...", "go.mod"), ("build", "go build ./...", "go.mod")],
+    "mvnw": [("test", "./mvnw test", "mvnw"), ("build", "./mvnw package", "mvnw")],
+    "gradlew": [("test", "./gradlew test", "gradlew"), ("build", "./gradlew build", "gradlew")],
+}
+WRAPPERS = ("mvnw", "gradlew")
+DENIED = "Permission denied"
+
+
+def spy_open(seen: list):
+    real_open = os.open
+
+    def spy(path, *a, **k):
+        seen.append(path)
+        return real_open(path, *a, **k)
+    return mock.patch("os.open", spy)
+
+
+class SourcesTests(Base):
+    def test_sources_constant(self):  # S1
+        self.assertEqual(detect_mod.SOURCES, ("package.json", "Makefile", "Cargo.toml", "go.mod", "mvnw", "gradlew",
+                                              "pyproject.toml"))
+        self.assertIs(type(detect_mod.SOURCES), tuple)
+
+    def test_readers_follow_sources(self):  # S2: detect reads through one label -> reader table
+        self.assertEqual(tuple(detect_mod._READERS), detect_mod.SOURCES)
+
+    def test_detect_calls_readers_in_sources_order(self):  # S2 through detect()
+        calls = []
+
+        def spy(label):
+            def read(root, listing):
+                calls.append(label)
+                return (), ()
+            return read
+        table = {label: spy(label) for label in detect_mod.SOURCES}
+        with mock.patch.object(detect_mod, "_READERS", table):
+            detect(self.tmp)
+        self.assertEqual(calls, list(detect_mod.SOURCES))
+
+
+class ToolchainTests(Base):
+    def put(self, name: str, content="", mode=None, root=None) -> str:
+        path = self.write(name, content, root=root)
+        if mode is None:
+            mode = 0o755 if name in WRAPPERS else 0o644
+        os.chmod(path, mode)
+        return path
+
+    def test_toolchain_sources(self):  # T2, T12: empty file, exact commands, test before build, no lint, no test_one
+        for name, expected in EXPECTED.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                self.put(name, "", root=d)
+                res = detect(d)
+                self.assertEqual(res.problems, ())
+                self.assertEqual(triples(res), expected)
+
+    def test_absent(self):  # T1
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+
+    def test_content_never_examined(self):  # T3
+        contents = (b"\xff", b"\x00\x00", "[workspace]\n", "no module line\n", b"\xef\xbb\xbf", "x" * 200000)
+        for name, expected in EXPECTED.items():
+            for content in contents:
+                with self.subTest(name=name, content=repr(content)[:20]), tempfile.TemporaryDirectory() as d:
+                    self.put(name, content, root=d)
+                    self.assertEqual(detect(d), Detection(tuple(Proposal(*t) for t in expected), ()))
+
+    def test_symlink_is_a_problem_and_never_opened(self):  # T4
+        for name in EXPECTED:
+            for kind in ("file", "dir", "dangling"):
+                with self.subTest(name=name, kind=kind), tempfile.TemporaryDirectory() as d:
+                    target = os.path.join(d, "target")
+                    if kind == "file":
+                        self.write("target", "x", root=d)
+                    elif kind == "dir":
+                        os.mkdir(target)
+                    os.symlink(target, os.path.join(d, name))
+                    seen = []
+                    with spy_open(seen):
+                        res = detect(d)
+                    self.assertEqual(seen, [])
+                    self.assertEqual(res, Detection((), (Problem(name, "symlink; not read"),)))
+
+    def test_directory_and_fifo_never_opened(self):  # T5
+        for name in EXPECTED:
+            for kind in ("dir", "fifo"):
+                with self.subTest(name=name, kind=kind), tempfile.TemporaryDirectory() as d:
+                    p = os.path.join(d, name)
+                    if kind == "dir":
+                        os.mkdir(p)
+                    else:
+                        os.mkfifo(p)
+                    seen = []
+                    with spy_open(seen):
+                        res = detect(d)
+                    self.assertEqual(seen, [])
+                    self.assertEqual(res, Detection((), (Problem(name, "not a regular file"),)))
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
+    def test_unreadable_is_a_problem(self):  # T6
+        for name in EXPECTED:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                p = self.put(name, "x", mode=0o000, root=d)
+                self.assertEqual(detect(d), Detection((), (Problem(name, DENIED),)))
+
+    def test_lstat_failure_is_a_problem(self):  # T6: lstat fails with another OSError
+        for name in EXPECTED:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                self.put(name, "x", root=d)
+                real_lstat = os.lstat
+
+                def deny(path, *a, **k):
+                    if os.path.basename(path) == name:
+                        raise PermissionError(13, DENIED)
+                    return real_lstat(path, *a, **k)
+                with mock.patch("os.lstat", deny):
+                    res = detect(d)
+                self.assertEqual(res, Detection((), (Problem(name, DENIED),)))
+
+    def test_read_error_closes_descriptor(self):  # T6: the descriptor is closed on every path
+        for name in EXPECTED:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                self.put(name, "x", root=d)
+                opened, closed = [], []
+                real_open, real_close = os.open, os.close
+
+                def spy_o(path, *a, **k):
+                    fd = real_open(path, *a, **k)
+                    opened.append(fd)
+                    return fd
+
+                def spy_c(fd):
+                    closed.append(fd)
+                    return real_close(fd)
+
+                def boom(fd, n):
+                    raise OSError(5, "Input/output error")
+                with mock.patch("os.open", spy_o), mock.patch("os.close", spy_c), mock.patch("os.read", boom):
+                    res = detect(d)
+                self.assertEqual(res, Detection((), (Problem(name, "Input/output error"),)))
+                self.assertEqual(len(opened), 1)
+                self.assertEqual(opened, closed)
+
+    def test_wrapper_execute_bit(self):  # T7 (owner Q-C12-2 (a))
+        for name in WRAPPERS:
+            for mode, ok in ((0o644, False), (0o600, False), (0o755, True), (0o744, True), (0o700, True), (0o655, True),
+                             (0o645, True), (0o641, True), (0o444, False)):
+                with self.subTest(name=name, mode=oct(mode)), tempfile.TemporaryDirectory() as d:
+                    p = self.put(name, "x", mode=mode, root=d)
+                    want = Detection(tuple(Proposal(*t) for t in EXPECTED[name]), ()) if ok \
+                        else Detection((), (Problem(name, "not executable"),))
+                    self.assertEqual(detect(d), want)
+
+    def test_non_wrappers_need_no_execute_bit(self):  # T7
+        for name in ("Cargo.toml", "go.mod"):
+            with self.subTest(name=name):
+                self.put(name, "", mode=0o600)
+                self.assertEqual(len(detect(self.tmp).proposals), 2)
+                os.unlink(os.path.join(self.tmp, name))
+
+    def test_kind_is_reported_before_the_mode(self):  # T7
+        os.symlink("nowhere", os.path.join(self.tmp, "mvnw"))
+        os.mkdir(os.path.join(self.tmp, "gradlew"), 0o600)
+        self.assertEqual(detect(self.tmp).problems, (Problem("mvnw", "symlink; not read"),
+                                                     Problem("gradlew", "not a regular file")))
+
+    def test_case_variants_are_nothing(self):  # T8, P18 (owner Q-C12-3 (a)): the exact spelling in the listing only
+        for v in ("cargo.toml", "GO.MOD", "Mvnw", "GRADLEW", "PyProject.toml"):
+            with self.subTest(name=v):
+                self.put(v, "[tool.ruff]\n", mode=0o755)
+                self.assertEqual(detect(self.tmp), Detection((), ()))
+                os.unlink(os.path.join(self.tmp, v))
+
+    def test_case_variants_are_nothing_on_a_case_insensitive_filesystem(self):  # T8, P18, simulated
+        for v in ("cargo.toml", "GO.MOD", "Mvnw", "GRADLEW", "PyProject.toml"):
+            self.put(v, "[tool.ruff]\n", mode=0o755)
+        real_lstat = os.lstat
+
+        def ci_lstat(path, *a, **k):
+            d, base = os.path.split(path)
+            if d == self.tmp:
+                for e in os.listdir(d):
+                    if e.lower() == base.lower():
+                        return real_lstat(os.path.join(d, e), *a, **k)
+            return real_lstat(path, *a, **k)
+        with mock.patch("os.lstat", ci_lstat):
+            self.assertEqual(detect(self.tmp), Detection((), ()))
+
+    def test_sub_directory_only(self):  # T9, O5
+        for rel in ("crates/a/Cargo.toml", "svc/go.mod", "x/mvnw", "y/gradlew", "z/pyproject.toml", "packages/a/package.json",
+                    "m/Makefile"):
+            sub = os.path.join(self.tmp, os.path.dirname(rel))
+            os.makedirs(sub, exist_ok=True)
+            self.put(os.path.basename(rel), "[tool.ruff]\ntest:\n", root=sub)
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+
+    def test_other_toolchain_files_are_not_sources(self):  # T10
+        for name in ("Cargo.lock", "go.work", "go.sum", "pom.xml", "build.gradle", "settings.gradle.kts", "setup.py",
+                     "setup.cfg", "tox.ini", "pytest.ini", "ruff.toml", ".ruff.toml", "mvnw.cmd", "gradlew.bat"):
+            self.put(name, "[tool.ruff]\n[pytest]\n")
+        os.makedirs(os.path.join(self.tmp, ".mvn"))
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+
+    def test_windows_wrappers_alone_not_proposed(self):  # W1
+        self.put("mvnw.cmd", "")
+        self.assertEqual(detect(self.tmp).proposals, ())
+        self.put("gradlew.bat", "")
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+
+    def test_windows_wrapper_beside_the_posix_one(self):  # W2
+        for posix, win in (("mvnw", "mvnw.cmd"), ("gradlew", "gradlew.bat")):
+            with self.subTest(name=posix), tempfile.TemporaryDirectory() as d:
+                self.put(posix, "", root=d)
+                self.put(win, "", root=d)
+                self.assertEqual(detect(d), Detection(tuple(Proposal(*t) for t in EXPECTED[posix]), ()))
+
+    def test_windows_wrapper_of_odd_kind_never_examined(self):  # W3
+        for posix, win in (("mvnw", "mvnw.cmd"), ("gradlew", "gradlew.bat")):
+            for kind in ("symlink", "dir", "fifo"):
+                for beside in (False, True):
+                    with self.subTest(name=win, kind=kind, beside=beside), tempfile.TemporaryDirectory() as d:
+                        p = os.path.join(d, win)
+                        if kind == "symlink":
+                            os.symlink(os.path.join(d, "gone"), p)
+                        elif kind == "dir":
+                            os.mkdir(p)
+                        else:
+                            os.mkfifo(p)
+                        if beside:
+                            self.put(posix, "", root=d)
+                        seen = []
+                        with spy_open(seen):
+                            res = detect(d)
+                        self.assertNotIn(p, seen)
+                        want = tuple(Proposal(*t) for t in EXPECTED[posix]) if beside else ()
+                        self.assertEqual(res, Detection(want, ()))
+
+    def test_wrapper_support_files_not_required(self):  # T11
+        self.put("mvnw", "")
+        self.put("gradlew", "")
+        self.assertEqual(len(detect(self.tmp).proposals), 4)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".mvn")))
+
+
+def py_test(n: int) -> Proposal:
+    return Proposal("test", "python3 -m pytest", "pyproject.toml:%d tool.pytest.ini_options" % n)
+
+
+def py_lint(n: int) -> Proposal:
+    return Proposal("lint", "ruff check .", "pyproject.toml:%d tool.ruff" % n)
+
+
+PY_STRING = "unsupported line %d: multi-line string"
+PY_BOM = Problem("pyproject.toml", "unsupported line 1: byte order mark")
+
+
+class PyprojectTests(Base):
+    def run_text(self, text) -> Detection:
+        with tempfile.TemporaryDirectory() as d:
+            self.write("pyproject.toml", text, root=d)
+            return detect(d)
+
+    def test_pyproject_headers(self):  # P4, P5, P13: the plan's example
+        res = self.run_text('[project]\nname = "x"\n  [tool.pytest.ini_options]\n[tool.ruff.lint]\n')
+        self.assertEqual(res, Detection((py_test(3), py_lint(4)), ()))
+
+    def test_pyproject_trailing_comment_and_repeated_header(self):  # P11, P12, P13: the plan's example
+        res = self.run_text('[tool.ruff]  # lint\n[tool.ruff.lint]\n[tool.pytest.ini_options] \t\n')
+        self.assertEqual(res, Detection((py_test(3), py_lint(1)), ()))
+        self.assertEqual(self.run_text("[tool.ruff] x\n"), Detection((), ()))
+
+    def test_file_kinds(self):  # P1
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+        for kind, reason in (("symlink", "symlink; not read"), ("dir", "not a regular file"), ("fifo", "not a regular file")):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "pyproject.toml")
+                if kind == "symlink":
+                    self.write("t", "[tool.ruff]\n", root=d)
+                    os.symlink(os.path.join(d, "t"), p)
+                elif kind == "dir":
+                    os.mkdir(p)
+                else:
+                    os.mkfifo(p)
+                seen = []
+                with spy_open(seen):
+                    res = detect(d)
+                self.assertEqual(seen, [])
+                self.assertEqual(res, Detection((), (Problem("pyproject.toml", reason),)))
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
+    def test_unreadable(self):  # P1
+        p = self.write("pyproject.toml", "[tool.ruff]\n")
+        os.chmod(p, 0)
+        self.assertEqual(detect(self.tmp), Detection((), (Problem("pyproject.toml", DENIED),)))
+
+    def test_encoding(self):  # P2
+        self.assertEqual(self.run_text(b"\xff[tool.ruff]\n"), Detection((), (Problem("pyproject.toml", "not valid UTF-8"),)))
+        self.assertEqual(self.run_text("# caf\u00e9 \u00ef\n[tool.ruff]\n").proposals, (py_lint(2),))
+        self.assertEqual(self.run_text("\ufeff[tool.ruff]\n"), Detection((), (PY_BOM,)))
+        self.assertEqual(self.run_text("\ufeff[project]\n"), Detection((), (PY_BOM,)))
+
+    def test_empty_and_no_header(self):  # P3
+        for text in ("", '[project]\nname = "x"\n', "\n\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.run_text(text), Detection((), ()))
+
+    def test_lint_header_forms(self):  # P5, P6
+        for header in ("[tool.ruff]", "[tool.ruff.lint]", "[tool.ruff.lint.isort]", "[tool.ruff.lint.per-file-ignores]",
+                       "[tool.ruff.x_1]", "[tool.ruff.A-b.c9]", "[tool.ruff.formatx]", "[tool.ruff.lint.format]"):
+            with self.subTest(header=header):
+                self.assertEqual(self.run_text("x = 1\n" + header + "\n"), Detection((py_lint(2),), ()))
+
+    def test_headers_not_matched(self):  # P6, P8, P9
+        for header in ("[tool.ruff.]", '[tool.ruff."q"]', "[tool.ruff.l\u00efnt]", "[tool.ruff..lint]", "[tool.ruffx]",
+                       "[tool.ruff.lint.]", "[tool.Ruff]", "[Tool.ruff]", "[tool.ruff-x]", "[tool.pytest]",
+                       "[tool.pytest.ini_optionsx]", "[tool.pytest.ini_options.x]", "[tool.pytest.INI_options]",
+                       "[[tool.ruff]]", "[[tool.pytest.ini_options]]", '["tool".pytest.ini_options]', '[tool."ruff"]',
+                       "[ tool.ruff ]", "[tool . ruff]", "[ tool.pytest.ini_options]", "[tool.ruff ]",
+                       "[tool.pytest.ini_options ]", "[tool.ruff", "tool.ruff]", "[tool.ruff]]", "[[tool.ruff]",
+                       "x = [tool.ruff]", "[tool.ruff.lint] = 1", "[tool.ruff]=1"):
+            with self.subTest(header=header):
+                self.assertEqual(self.run_text(header + "\n"), Detection((), ()))
+
+    def test_ruff_format_alone_gives_no_lint(self):  # P7 (owner Q-C12-5 (a))
+        for text in ("[tool.ruff.format]\n", "[tool.ruff.format.x]\n", "[tool.ruff.format]\n[tool.ruff.format.y]\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.run_text(text), Detection((), ()))
+        self.assertEqual(self.run_text("[tool.ruff.format]\n[tool.ruff.lint]\n"), Detection((py_lint(2),), ()))
+        self.assertEqual(self.run_text("[tool.ruff.format]\n[tool.ruff]\n"), Detection((py_lint(2),), ()))
+        self.assertEqual(self.run_text("[tool.ruff.format]\n[tool.pytest.ini_options]\n"), Detection((py_test(2),), ()))
+
+    def test_leading_whitespace(self):  # P10
+        for lead, ok in (("", True), ("  ", True), ("\t", True), (" \t", True), ("\t \t ", True), ("\u00a0", False),
+                         ("\u3000", False), ("\f", False), ("\v", False)):
+            for header, want in (("[tool.pytest.ini_options]", py_test(1)), ("[tool.ruff]", py_lint(1))):
+                with self.subTest(lead=repr(lead), header=header):
+                    self.assertEqual(self.run_text(lead + header + "\n"), Detection((want,) if ok else (), ()))
+
+    def test_after_the_bracket(self):  # P11
+        good = ("", "  \t", " ", "  # lint", "# x", "#x", "\t# x", "  #", "# [tool.pytest.ini_options]", "# \u00e9 \u2603")
+        bad = (" x", "\f", "\u00a0", "x", "\v", " ,", "[", "\u00a0#", "=1", " .x", "\u2003")
+        for tail in good:
+            with self.subTest(tail=repr(tail)):
+                self.assertEqual(self.run_text("[tool.ruff]" + tail + "\n"), Detection((py_lint(1),), ()))
+        for tail in bad:
+            with self.subTest(tail=repr(tail)):
+                self.assertEqual(self.run_text("[tool.ruff]" + tail + "\n"), Detection((), ()))
+
+    def test_line_ends(self):  # P11
+        self.assertEqual(self.run_text("[tool.ruff]\r\n[tool.pytest.ini_options]\r\n"), Detection((py_test(2), py_lint(1)), ()))
+        self.assertEqual(self.run_text("[tool.ruff]\r\n"), Detection((py_lint(1),), ()))
+        self.assertEqual(self.run_text("[tool.ruff]"), Detection((py_lint(1),), ()))  # no final newline
+        self.assertEqual(self.run_text("[tool.ruff]\r"), Detection((), ()))  # a lone CR at the end of the file
+        self.assertEqual(self.run_text("[tool.ruff]\r\r\n"), Detection((), ()))  # only one CR belongs to the line end
+        self.assertEqual(self.run_text("[tool.ruff]\rx\n"), Detection((), ()))
+        self.assertEqual(self.run_text("a = 1\r\n\r\n[tool.ruff]  # c\r\n"), Detection((py_lint(3),), ()))
+
+    def test_repeated_headers_first_wins(self):  # P12
+        self.assertEqual(self.run_text("[tool.ruff]\n[tool.ruff.lint]\n"), Detection((py_lint(1),), ()))
+        self.assertEqual(self.run_text("[tool.ruff.lint]\n[tool.ruff]\n"), Detection((py_lint(1),), ()))
+        self.assertEqual(self.run_text("[tool.pytest.ini_options]\n[tool.pytest.ini_options]\n"), Detection((py_test(1),), ()))
+        self.assertEqual(self.run_text("x\n\n[tool.pytest.ini_options]\ny\n[tool.pytest.ini_options]\n"),
+                         Detection((py_test(3),), ()))
+
+    def test_slot_order(self):  # P13
+        self.assertEqual(self.run_text("[tool.ruff]\n[tool.pytest.ini_options]\n"), Detection((py_test(2), py_lint(1)), ()))
+
+    def test_triple_quotes_anywhere_are_unsupported(self):  # P14, P15 (owner Q-C12-1 (a)): one Problem, no proposals
+        cases = (
+            ('"""\n[tool.pytest.ini_options]\n"""\n', 1),
+            ("'''\n[tool.pytest.ini_options]\n'''\n", 1),
+            ('[tool.ruff]\nx = """\n[tool.pytest.ini_options]\n"""\n', 2),
+            ("[tool.ruff]\n\nx = '''\n[tool.pytest.ini_options]\n'''\n", 3),
+            ("a = '\"\"\"'\n[tool.ruff]\n", 1),
+            ('# """\n[tool.ruff]\n', 1),
+            ('x = """\n\'\'\'\n"""\n[tool.ruff]\n', 1),
+            ('x = """\n\\"""\n"""\n', 1),
+            ('x = """a""""\n[tool.ruff]\n', 1),
+            ('[tool.ruff]\nx = """never closed\n', 2),
+            ('description = """x"""\n[tool.ruff]\n', 1),
+            ("description = '''x'''\n[tool.ruff]\n", 1),
+            ("[tool.ruff]\nk = 1\n'''", 3),
+            ('"" "\n[tool.ruff]\n', None),  # not a triple quote
+            ('x = ""\n[tool.ruff]\n', None),
+            ("x = ''\n[tool.ruff]\n", None),
+            ('x = "a" "b"\n[tool.ruff]\n', None),
+        )
+        for text, line in cases:
+            with self.subTest(text=text):
+                if line is None:
+                    self.assertEqual(self.run_text(text), Detection((py_lint(2),), ()))
+                else:
+                    self.assertEqual(self.run_text(text), Detection((), (Problem("pyproject.toml", PY_STRING % line),)))
+
+    def test_first_triple_quote_line_is_reported_with_crlf(self):  # P15
+        res = self.run_text('a = 1\r\nb = """x"""\r\nc = \'\'\'y\'\'\'\r\n[tool.ruff]\r\n')
+        self.assertEqual(res, Detection((), (Problem("pyproject.toml", PY_STRING % 2),)))
+
+    def test_header_form_line_in_array_is_matched(self):  # P16: knowing divergence, the reader does not validate TOML
+        self.assertEqual(self.run_text("x = [\n[tool.ruff]\n]\n"), Detection((py_lint(2),), ()))
+        try:
+            import tomllib
+        except ImportError:
+            return
+        with self.assertRaises(tomllib.TOMLDecodeError):
+            tomllib.loads("x = [\n[tool.ruff]\n]\n")
+
+    def test_other_lines_not_examined(self):  # P17
+        text = 'a = "\u00e9\u2603"\nb = ???\n\x01\n[tool.ruff]\n=\n\x7f\n'
+        self.assertEqual(self.run_text(text), Detection((py_lint(4),), ()))
+
+    def test_tomllib_oracle(self):  # P11 oracle, 3.11+ only (detect never imports tomllib)
+        try:
+            import tomllib
+        except ImportError:
+            self.skipTest("no tomllib")
+        for text in ("  [tool.ruff]  # lint\n", "\t[tool.pytest.ini_options]\t\n", "[tool.ruff]# x\n", "[tool.ruff]\r\n",
+                     "[tool.ruff.lint]\n"):
+            with self.subTest(text=text):
+                tomllib.loads(text)
+        for text in ("[tool.ruff]\f\n", "[tool.ruff]\r", "\u00a0[tool.ruff]\n", "[tool.ruff] x\n", "\ufeff[tool.ruff]\n"):
+            with self.subTest(text=text):
+                with self.assertRaises(tomllib.TOMLDecodeError):
+                    tomllib.loads(text)
+
+
+class OrderTests(Base):
+    def all_seven(self, root=None):
+        root = root or self.tmp
+        self.write("package.json", '{"scripts": {"test": "t", "lint": "l", "build": "b"}}', root=root)
+        self.write("Makefile", "test:\nlint:\nbuild:\n", root=root)
+        for name in ("Cargo.toml", "go.mod", "mvnw", "gradlew"):
+            self.write(name, "", root=root)
+            os.chmod(os.path.join(root, name), 0o755 if name in WRAPPERS else 0o644)
+        self.write("pyproject.toml", "[tool.ruff]\n[tool.pytest.ini_options]\n", root=root)
+
+    def test_full_source_order(self):  # O1, O2, O4
+        self.all_seven()
+        res = detect(self.tmp)
+        self.assertEqual(res.problems, ())
+        self.assertEqual([p.source.split(" ")[0].split(":")[0] for p in res.proposals],
+                         ["package.json"] * 3 + ["Makefile"] * 3 + ["Cargo.toml"] * 2 + ["go.mod"] * 2 + ["mvnw"] * 2
+                         + ["gradlew"] * 2 + ["pyproject.toml"] * 2)
+        self.assertEqual(triples(res), [
+            ("test", "npm run test", "package.json scripts.test"), ("lint", "npm run lint", "package.json scripts.lint"),
+            ("build", "npm run build", "package.json scripts.build"),
+            ("test", "make test", "Makefile:1 test"), ("lint", "make lint", "Makefile:2 lint"),
+            ("build", "make build", "Makefile:3 build"),
+            ("test", "cargo test", "Cargo.toml"), ("build", "cargo build", "Cargo.toml"),
+            ("test", "go test ./...", "go.mod"), ("build", "go build ./...", "go.mod"),
+            ("test", "./mvnw test", "mvnw"), ("build", "./mvnw package", "mvnw"),
+            ("test", "./gradlew test", "gradlew"), ("build", "./gradlew build", "gradlew"),
+            ("test", "python3 -m pytest", "pyproject.toml:2 tool.pytest.ini_options"),
+            ("lint", "ruff check .", "pyproject.toml:1 tool.ruff")])
+        self.assertEqual(len([p for p in res.proposals if p.slot == "test"]), 7)
+        self.assertTrue(all(p.slot != "test_one" for p in res.proposals))  # O4
+
+    def test_problems_in_several_sources(self):  # O3
+        self.write("go.mod", "")
+        os.symlink("go.mod", os.path.join(self.tmp, "Cargo.toml"))
+        self.write("pyproject.toml", b"\xff")
+        res = detect(self.tmp)
+        self.assertEqual(res.proposals, (Proposal("test", "go test ./...", "go.mod"), Proposal("build", "go build ./...", "go.mod")))
+        self.assertEqual(res.problems, (Problem("Cargo.toml", "symlink; not read"),
+                                        Problem("pyproject.toml", "not valid UTF-8")))
+
+    def test_root_checks_run_before_any_source(self):  # O6
+        real = os.path.join(self.tmp, "real")
+        os.mkdir(real)
+        self.all_seven(real)
+        link = os.path.join(self.tmp, "link")
+        os.symlink(real, link)
+        self.assertEqual(detect(link), detect(real))
+        self.assertEqual(len(detect(link).proposals), 16)
+        for bad in (os.path.join(self.tmp, "nope"), self.tmp.encode()):
+            with self.subTest(root=bad), self.assertRaises(GateError):
+                detect(bad)
+
+    def test_no_side_effects_with_every_source(self):  # O7
+        self.all_seven()
+        os.mkdir(os.path.join(self.tmp, "sub"))
+        before = snapshot(self.tmp)
+        with mock.patch("subprocess.run") as run, mock.patch("os.system") as system, mock.patch("subprocess.Popen") as popen:
+            detect(self.tmp)
+        self.assertEqual(snapshot(self.tmp), before)
+        self.assertFalse(run.called or system.called or popen.called)
+
+    def test_no_side_effects_on_problem_paths(self):  # O7: T4 T5 T7 P2
+        os.symlink("x", os.path.join(self.tmp, "Cargo.toml"))
+        os.mkdir(os.path.join(self.tmp, "go.mod"))
+        os.mkfifo(os.path.join(self.tmp, "gradlew"))
+        self.write("mvnw", "x")
+        os.chmod(os.path.join(self.tmp, "mvnw"), 0o644)
+        self.write("pyproject.toml", b"\xff")
+        before = snapshot(self.tmp)
+        res = detect(self.tmp)
+        self.assertEqual(len(res.problems), 5)
+        self.assertEqual(snapshot(self.tmp), before)
+
+    def test_return_types(self):  # O8
+        self.all_seven()
+        res = detect(self.tmp)
+        self.assertIs(type(res.proposals), tuple)
+        self.assertIs(type(res.problems), tuple)
+        commands = {"npm run test", "npm run lint", "npm run build", "make test", "make lint", "make build", "cargo test",
+                    "cargo build", "go test ./...", "go build ./...", "./mvnw test", "./mvnw package", "./gradlew test",
+                    "./gradlew build", "python3 -m pytest", "ruff check ."}
+        for p in res.proposals:
+            self.assertIs(type(p), Proposal)
+            self.assertIn(p.slot, SLOTS)
+            self.assertIn(p.command, commands)
+
+    def test_monorepo_subdir_not_read(self):  # O5
+        os.makedirs(os.path.join(self.tmp, "packages", "a"))
+        self.write("package.json", '{"scripts": {"test": "t"}}', root=os.path.join(self.tmp, "packages", "a"))
+        self.assertEqual(detect(self.tmp), Detection((), ()))
+
+
+class MakefileAsciiNameTests(Base):
+    """K1 (owner Q-C12-4 (a)): the Makefile name match compares ASCII case only."""
+
+    def probe(self, name: str):
+        """detect() on a directory holding only `name`, with lstat simulating a case-insensitive filesystem."""
+        with tempfile.TemporaryDirectory() as d:
+            self.write(name, "test:\n", root=d)
+            real_lstat = os.lstat
+
+            def ci_lstat(path, *a, **k):
+                dd, base = os.path.split(path)
+                if dd == d:
+                    for e in os.listdir(dd):
+                        if e.lower() == base.lower():
+                            return real_lstat(os.path.join(dd, e), *a, **k)
+                return real_lstat(path, *a, **k)
+            with mock.patch("os.lstat", ci_lstat):
+                return detect(d)
+
+    def test_kelvin_sign_name_is_not_the_makefile(self):  # K1: str.lower() folds U+212A to k
+        self.assertEqual("ma\u212aefile".lower(), "makefile")  # the premise: why a str.lower() match accepted it
+        self.assertEqual(self.probe("ma\u212aefile"), Detection((), (Problem("makefile", "name not ASCII"),)))
+
+    def test_kelvin_sign_in_the_other_probes(self):  # K1
+        self.assertEqual(self.probe("GNUma\u212aefile"), Detection((), (Problem("GNUmakefile", "name not ASCII"),)))
+        self.assertEqual(self.probe("Ma\u212aefile"), Detection((), (Problem("makefile", "name not ASCII"),)))
+
+    def test_other_non_ascii_name_is_not_the_makefile(self):  # K1
+        self.assertEqual(self.probe("Makefile\u0307"), Detection((), ()))
+
+    def test_ascii_case_variant_still_found(self):  # K1: ASCII case folding stays
+        self.assertEqual(self.probe("MAKEFILE"), Detection((Proposal("test", "make test", "MAKEFILE:1 test"),), ()))
+
+
 if __name__ == "__main__":
     unittest.main()
