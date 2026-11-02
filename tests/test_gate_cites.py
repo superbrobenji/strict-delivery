@@ -618,6 +618,33 @@ class TestArgv(CitesCase):
         self.assertEqual(out, "FAIL cites.input: invalid arguments: --root given more than once\n")
 
 
+class TestFixRound1(CitesCase):
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root searches mode 000 directories")
+    def test_unsearchable_parent_fails_whole_run(self):  # Q-C22-1 (a), lstat branch
+        self.add("docs/a.md", "x\n")
+        d = os.path.join(self.root, "docs")
+        os.chmod(d, 0)
+        self.addCleanup(os.chmod, d, 0o755)
+        out, code = self.run_root()
+        self.assertTrue(out.startswith("FAIL cites.input: docs/a.md: cannot read ("), out)
+        self.assertEqual(len(self.lines(out)), 1)
+        self.assertEqual(code, 1)
+
+    def test_git_not_found_gets_no_init_hint(self):
+        with mock.patch.dict(os.environ, {"PATH": ""}):
+            out, code = self.run_root()
+        self.assertEqual(out, "FAIL cites.input: git not found on PATH; install git\n")
+        self.assertEqual(code, 1)
+
+    def test_not_utf8_at_each_bound_of_the_byte_range(self):
+        for i, byte in enumerate((b"\x80", b"\x81", b"\xbf", b"\xfe", b"\xff")):
+            put(self.root, "docs/b%d.md" % i, b"x " + byte + b"\n", binary=True)
+        git(self.root, "add", "-A")
+        out, code = self.run_root()
+        got = [ln for ln in self.lines(out) if ln.startswith("FAIL")]
+        self.assertEqual(got, ["FAIL cites.doc.docs/b%d.md: not UTF-8" % i for i in range(5)])
+
+
 class TestThisRepository(unittest.TestCase):
     @unittest.skip("row E1: this checkout has no .strict-delivery/config.yml until block/sc2 updates from main (block 1b); "
                    "the controller removes this skip at the update")
