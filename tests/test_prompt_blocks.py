@@ -1533,6 +1533,7 @@ EXACT_PARAGRAPHS = {
         ("Dispatch discipline.", (
             "Dispatch discipline.",
             "Dispatch only inside the role and model map.",
+            "You dispatch workers, and you may dispatch a sub-controller when the stream controller judges it better, within the configured depth and concurrency limits; workers never dispatch.",
             "Give every dispatch the headings `## Role`, `## Brief`, `## Findings`, `## Claims`, `## Budget: tokens=<n> minutes=<n>`, `## Model`, `## Report`, `## Strict block` and `## Task`, in that order; the strict block is the role's prompt block, byte for byte.",
             "A fork dispatch is refused: dispatch a fresh agent with that grammar instead.",
             "Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top tier only to the roles in `top_tier_roles`.",
@@ -1720,6 +1721,10 @@ SINGLE_SENTENCES = {
     "controller": [
         ("Owner-only decisions.",
          "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
+        ("Merge and checkpoint.",
+         "Main is protected: you never merge into main and never push to it."),
+        ("Merge and checkpoint.",
+         "A finished block or stream opens a pull request to main, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
         ("Continuation.",
          "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner question."),
         ("Continuation.",
@@ -1749,7 +1754,7 @@ SINGLE_SENTENCES = {
         ("Owner-only decisions.",
          "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
-         "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+         "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
@@ -1757,7 +1762,7 @@ SINGLE_SENTENCES = {
         ("Owner-only decisions.",
          "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
-         "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+         "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
@@ -1765,7 +1770,7 @@ SINGLE_SENTENCES = {
         ("Owner-only decisions.",
          "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
-         "Then, in order: the verdict; the attempts to break the branch (attempt, command, output excerpt, held or broke); gates you re-ran (command and result line); findings; unrelated findings; denials (verbatim); budget used."),
+         "Then, in order: the verdict; the attempts to break the branch (attempt, command, output excerpt, held or broke); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
@@ -1882,7 +1887,7 @@ class B13KeyTest(unittest.TestCase):
             self.assertTrue(whole_token("decision_classes.owner_only", owner[0]), role)
             for label, sentences in EXACT_PARAGRAPHS[role]:
                 self.assertTrue(sentences and all(s and s == s.strip() for s in sentences), (role, label))
-        self.assertEqual(len(SINGLE_SENTENCES["controller"]), 4)
+        self.assertEqual(len(SINGLE_SENTENCES["controller"]), 6)
         self.assertEqual({r for r in WRITTEN if any(l == "Report contract." for l, _ in SINGLE_SENTENCES[r])},
                          set(WRITTEN))
 
@@ -1943,6 +1948,30 @@ class B13KeyTest(unittest.TestCase):
                 with self.subTest(role=role, case=name):
                     bad = in_para(disk(role), "Report contract.", lambda q: q.replace(sentence, new, 1))
                     self.assertTrue(key_problems(role, bad))
+
+    def test_no_hardware_device_or_port_rule_in_any_block(self):    # F-B1f-1: a template-project rule, not a framework rule
+        pat = re.compile(r"\b(hardware|devices?|flash\w*|serial|ports?)\b", re.I)
+        for role in WRITTEN:
+            with self.subTest(role=role):
+                self.assertEqual(pat.findall(disk(role)), [])
+                bad = in_para(disk(role), "Owner-only decisions.",
+                              lambda p: p + " For hardware, never write to a device and never open its port.")
+                self.assertTrue(pat.findall(bad))
+
+    def test_report_contract_lists_every_required_section(self):    # F-B1f-2
+        for role in WRITTEN:
+            t = disk(role)
+            rc = paragraph(t, "Report contract.")
+            tail = rc[rc.index("Then, in order:"):]
+            if "under Unrelated findings" in t:
+                self.assertIn("; unrelated findings;", tail, role)
+            if "Decision needed" in t:
+                self.assertIn("; decision needed;", tail, role)
+            if role != "controller":
+                self.assertIn("Decision needed", t, role)
+                self.assertIn("; decision needed; denials (verbatim);", tail, role)
+            if role in ("implementer", "implementer_transcription", "investigator"):
+                self.assertIn("; unrelated findings; decision needed; denials", tail, role)
 
     def test_harmless_rewordings_pass(self):                    # re-review 1: R2 and its kind
         for role, label, old, new in HARMLESS:
