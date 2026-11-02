@@ -35,7 +35,7 @@
 ## Process for this plan
 
 - Bootstrap (spec §16): no gates existed when block 1a started; judgment rules apply by hand and the block-1a report says so. "Each gate is enabled on this repository as soon as it lands": `check schema` from Task 1b.1, `check decisions` from Task 1c.1, `check register` from Task 1c.2. From each enabling task on, the commit gate is the test command on both interpreters plus every enabled `python3 -m gates check <gate>` exiting 0, with a clean tree (`git status --porcelain --untracked-files=all` empty). `run_all` replaces this list in block 2.
-- Blocks. Spec §17 block 1 is split under the strict cap of 3 tasks per block into sub-blocks **1a** (Tasks 1a.1-1a.3), **1b** (1b.1-1b.3), **1c** (1c.1-1c.3) and **1d** (1d.1-1d.2), each on its own branch (`block/b1a` ... `block/b1d`). Under the strict profile each block ends with a final review (opus) and a top-tier final verifier. Blocks 1a and 1b then took an owner merge grant given in chat and ledgered verbatim, the merge as its own command, and the checkpoint. From block 1c on, `main` is protected (owner directive 2026-11-01) and every block, of every stream, ends in the pull-request flow: push the block branch; open a pull request to `main`; the owner approves it in chat naming the PR and its head sha; the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; the merge is read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`); the post-merge gates run on `main` updated from the remote; the merge is ledgered verbatim (from programs Task P1.2 as the `MERGED` line), written as the next branch's first commit; then the checkpoint and continuation. Merge approvals are not decision records (owner answer Q-15 (a), 2026-11-01).
+- Blocks. Spec §17 block 1 is split under the strict cap of 3 tasks per block into sub-blocks **1a** (Tasks 1a.1-1a.3), **1b** (1b.1-1b.3), **1c0** (Task 1c.0; owner answer F-docs-11 (c), 2026-11-02), **1c** (1c.1-1c.3) and **1d** (1d.1-1d.2), each on its own branch (`block/b1a`, `block/b1b`, `block/b1c` for 1c0, `block/b1c1` for 1c, `block/b1d`) and each with its own pull request from block 1c0 on. Under the strict profile each block ends with a final review (opus) and a top-tier final verifier. Blocks 1a and 1b then took an owner merge grant given in chat and ledgered verbatim, the merge as its own command, and the checkpoint. From block 1c on, `main` is protected (owner directive 2026-11-01) and every block, of every stream, ends in the pull-request flow: push the block branch; open a pull request to `main`; the owner approves it in chat naming the PR and its head sha; the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; the merge is read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`); the post-merge gates run on `main` updated from the remote; the merge is ledgered verbatim (from programs Task P1.2 as the `MERGED` line), written as the next branch's first commit; then the checkpoint and continuation. Merge approvals are not decision records (owner answer Q-15 (a), 2026-11-01).
 - Continuation (spec §8, design §4.4) replaces stopping for `/clear`: at a checkpoint, at 80 % of its token or time budget, or at a usage-limit stop, the controller writes its handoff and returns `status: DONE` with `next:` (or `BLOCKED: budget`); its dispatcher at once dispatches a fresh controller with a continue prompt built from the handoff and ledger. One block per agent context stays. Nothing continues from inherited memory.
 - Checkpoint after every task: append one line to `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/ledger.md`:
   `CHECKPOINT <block> <task> head=<short sha> tests=<passed>/<total> gates=<PASS|n/a> next=<task id>`
@@ -473,15 +473,17 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
 
 ---
 
-## Block 1c: gates and indexes (branch `block/b1c`)
+## Block 1c0: library hardening and the `cites` registration (branch `block/b1c`)
 
-### Task 1c.0: library hardening (owner Q-U2, Q-1bfin-2, U-1bfin-1)
+Owner answer F-docs-11 (c) (2026-11-02): Task 1c.0 is a sub-block of its own, with its own pull request from `block/b1c`, so block 1c keeps the cap of 3 tasks.
+
+### Task 1c.0: library hardening (owner Q-U2, Q-1bfin-2, U-1bfin-1); register `check cites` (owner Q-C2fin-1 (a))
 
 **Files:**
-- Modify: `gates/lib/result.py` (`_raw`), `gates/lib/gitinfo.py` (the root-taking functions), `gates/lib/store.py` (`Store`, `base_errors`), `gates/lib/config.py` (`load`), `gates/lib/findings.py` (`evidence_errors`, `may_delete`)
-- Test: `tests/test_result.py`, `tests/test_gitinfo.py`, `tests/test_store.py`, `tests/test_config.py`, `tests/test_findings_lib.py`, `tests/test_decisions_lib.py`
+- Modify: `gates/lib/result.py` (`_raw`), `gates/lib/gitinfo.py` (the root-taking functions), `gates/lib/store.py` (`Store`, `base_errors`), `gates/lib/config.py` (`load`), `gates/lib/findings.py` (`evidence_errors`, `may_delete`), `gates/__main__.py` (`GATES` gains `cites`)
+- Test: `tests/test_result.py`, `tests/test_gitinfo.py`, `tests/test_store.py`, `tests/test_config.py`, `tests/test_findings_lib.py`, `tests/test_decisions_lib.py`, `tests/test_gate_schema.py` (the dispatcher tests)
 
-**Owner answers applied:** Q-U2 (a map item in a reason is escaped exactly once); Q-1bfin-2 (a) (every library function taking a repository root refuses a root that is not the top level); U-1bfin-1 (`store.base_errors` checks that the `Store` it is given belongs to the root it is given); Q-1a-fin-1 (the existing `_require_toplevel` rule, now applied everywhere).
+**Owner answers applied:** Q-U2 (a map item in a reason is escaped exactly once); Q-1bfin-2 (a) (every library function taking a repository root refuses a root that is not the top level); U-1bfin-1 (`store.base_errors` checks that the `Store` it is given belongs to the root it is given); Q-1a-fin-1 (the existing `_require_toplevel` rule, now applied everywhere); Q-C2fin-1 (a) (stream A registers `cites` in the `check` dispatcher in this task, stream C's request R-20261102-bn3p).
 
 **Interfaces:**
 - Consumes: `gitinfo._require_toplevel/toplevel`, `result.Result/render/safe_text/_exc_text/run_check`, `store.Store/base_errors`, `config.load`, `findings.evidence_errors/may_delete`, `decisions.landed_errors`, `helpers.make_repo/GitIsolatedTestCase`.
@@ -489,6 +491,7 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
   - `result._raw(x)` gains a mapping case: a `dict` renders as `{` + `, `.join(`_raw(key) + ": " + _raw(value)`) + `}`, in insertion order, recursively, like the list case. So `Result.render`'s one `safe_text` pass is the only escaping a map key or value gets: a backslash in a value prints as `\\`, never `\\\\`, and a newline as `\n`, never `\\n`.
   - Root check (Q-1bfin-2 (a)): every library function with a `root` parameter calls `gitinfo._require_toplevel(root)` before any other work, and so raises `GateError`: for a subdirectory of a repository the text is `git rev-parse --show-toplevel: root must be the repository top level`; for a missing path or a directory outside any repository it is `git rev-parse --show-toplevel failed (exit 128)`, from `toplevel(root)` inside the check (measured 2026-11-02 on both). Newly covered: `gitinfo.head_sha`, `commit_exists`, `merge_base`, `user_email`; `store.Store.__init__` (so `load`, `create` and `replace` inherit it) and `store.base_errors`; `config.load`; `findings.evidence_errors` and `findings.may_delete`. Already covered and unchanged: `gitinfo.blob_exists`, `tracked_files`, `show`, `ls_tree`, `decisions.landed_errors`, `schema.entries_of`, and `schema.files_of` through `entries_of`. `gitinfo.toplevel` is the one exception: it is how the top level is found. Gates already resolve `--root` to the top level, so their behaviour does not change; a missing config still fails `<gate>.input` naming `/strict-delivery:init` (Review Focus 5).
   - `store.base_errors(root, store, base, is_resolved, may_delete)`: before reading git, it raises `GateError("base_errors: the store's root <a> is not the root given <b>")` unless `os.path.samefile(store.root, root)` (U-1bfin-1), so a record set from one tree is never compared with another tree's history.
+  - `gates/__main__.py`: `GATES` gains `"cites": "gates.gate_cites"` (Q-C2fin-1 (a); R-20261102-bn3p). The import stays lazy: `_check` imports a gate's module only when that gate is called (`importlib.import_module(GATES[name])` inside `_check`, as now), so no other command, `check schema` included, imports `gates.gate_cites`. `gates/gate_cites.py` is stream C's (Task C2.2) and is not on `block/b1c`; until C's pull request has merged, `check cites` on a tree without it fails at the import, and no commit gate runs it. `gates/producers.py` is not changed (C2.2 declares no kind here).
 - Cross-stream note: stream C's `tests/test_gate_cites.py` has a line that pins today's repr-style output for a map item in a reason. It changes when C next updates from `main` past this task. That line is C's to fix in its own file (stream rules, "Keeping up with `main`"); A raises no edit to it.
 
 **Input-domain dimensions:**
@@ -496,6 +499,7 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
 - Root forms, for each newly covered function: the top level; a subdirectory; a symlink to the top level (`samefile` accepts it); a path with a trailing `/`; a missing path; a regular file; a directory outside any repository; a linked worktree's top level (accepted); a bare repository.
 - `base_errors` stores: a `Store` built on the same root; on a symlink to it (accepted); on another clone of the same repository (refused); on a subdirectory (refused already at `Store(...)`).
 - `config.load`: a subdirectory of a repository that has a config (refused, not silently read from the top level).
+- Dispatcher: `check cites` with `gates/gate_cites.py` absent (this branch) and present (after stream C merges); `check schema` run in-process (must not import `gates.gate_cites`); the usage line lists `cites`.
 
 - [ ] **Step 1: Write the failing tests:**
   ```python
@@ -522,11 +526,24 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
   # test_decisions_lib.py
   def test_decision_reason_with_map_item_escaped_once():
       assert "\\\\\\\\" not in render_of(map_reason_case)
+  # test_gate_schema.py (dispatcher)
+  def test_cites_registered_lazily():               # Q-C2fin-1 (a)
+      assert gates_main.GATES["cites"] == "gates.gate_cites"
+      gates_main.main(["check", "schema", "--root", root])
+      assert "gates.gate_cites" not in sys.modules
+  def test_check_cites_runs():                      # skipTest naming gates/gate_cites.py while it is absent (until stream C merges)
+      assert gates_main.main(["check", "cites", "--root", repo_with_resolving_cite]) == 0 and "PASS cites" in out
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Implement** the `_raw` mapping case, the root checks and the `base_errors` store check. Write one mutant per changed condition (PC3): drop each `_require_toplevel` call, drop the `samefile` check, and render a `dict` with `str()`; each mutant must fail a test.
+- [ ] **Step 3: Implement** the `_raw` mapping case, the root checks and the `base_errors` store check. Add `"cites": "gates.gate_cites"` to `GATES`. Write one mutant per changed condition (PC3): drop each `_require_toplevel` call, drop the `samefile` check, render a `dict` with `str()`, drop the `cites` entry, and import every `GATES` module at load time; each mutant must fail a test.
 - [ ] **Step 4: Run the test command on both interpreters with `-W error`, and every enabled gate (`check schema`); expect PASS.**
-- [ ] **Step 5: Commit** `fix(lib): escape map items once; every root-taking function refuses a non-toplevel root; base_errors checks its store's root`, then checkpoint.
+- [ ] **Step 5: Commit** `fix(lib): escape map items once; every root-taking function refuses a non-toplevel root; base_errors checks its store's root; register check cites`, then checkpoint. This lands the registration part of R-20261102-bn3p; its `run_all` part waits for block 2 (stream rules, "Cross-stream order"). **Block 1c0 end:** final review, verifier, then the pull-request flow of Process for this plan, "Blocks" (branch `block/b1c`); checkpoint; continuation.
+
+---
+
+## Block 1c: gates and indexes (branch `block/b1c1`)
+
+Block 1c starts from `main` after block 1c0's pull request has merged.
 
 ### Task 1c.1: `gate_decisions`; enable `check decisions`
 
@@ -805,7 +822,7 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
 Spec §17 block 2: "`gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption, and the decision schema `decision/2` (the optional `overrides`, section 7.1) with its migration." Under the strict cap of 3 tasks per block it is split into three sub-blocks:
 - **2a** (Tasks 2a.1-2a.3): `decision/2` and claims.
 - **2b** (Tasks 2b.1-2b.3): `run_all`, the git hooks, and self-adoption.
-- **2c** (Tasks 2c.1-2c.3): the claims tool (2c.1, only under Q-B2plan-6 (a)), `config/2` with `limits` (2c.2), and `gate_dispatch` (2c.3).
+- **2c** (Tasks 2c.1-2c.3): the claims tool (2c.1, only under Q-B2plan-6 (a)), `config/2` with `limits`, `merge` and `escape_cost` (2c.2), and `gate_dispatch` (2c.3).
 
 Each sub-block has its own branch (`block/b2a`, `block/b2b`, `block/b2c`) and starts from the tip of `main`. Each ends as block 1d does: final review, verifier, the pull request, the owner's chat approval and `gh pr merge --merge --match-head-commit` (Process for this plan, "Blocks"; owner Q-15 (a)), checkpoint, continuation.
 
@@ -813,7 +830,7 @@ Only Task 2c.3 waits for block B1 to merge into `main` and for A to update from 
 
 The commit gate is the block-1 gate list until Task 2b.3. From Task 2b.3's commit on, it is `python3 -m gates run_all` plus the test command on both interpreters, with a clean tree (Process for this plan: "`run_all` replaces this list in block 2").
 
-Each answer in "## Owner batch (upfront)" is needed before the task that names it is dispatched. The task text states the recommended option, and a different answer is edited in before dispatch. Where the batch's answer changes a task's design (Q-B2plan-4), the task text names the answer it depends on rather than presenting one design as chosen.
+Each answer in "## Owner batch (upfront)" is needed before the task that names it is dispatched. The task text states the recommended option, and a different answer is edited in before dispatch. Q-B2plan-4, Q-B2plan-13 and Q-B2plan-24 were answered (a) (section "Owner answers", "Block 2 (2026-11-01)"), and their tasks state only that design.
 
 Owner answers on the controller tree, recorded since the first draft, are binding here:
 - **Q-H1:** `program_controller` is kept.
@@ -987,12 +1004,12 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 
 **Files:**
 - Create: `gates/schemas/claim.yml`, `gates/lib/claims.py`
-- Modify: `gates/lib/gitinfo.py`, an additive change that leaves every existing signature as it is: under Q-B2plan-4 (a), `blob_id`.
+- Modify: `gates/lib/gitinfo.py`, an additive change that leaves every existing signature as it is: `blob_id` (Q-B2plan-4 (a)).
 - Test: `tests/test_claims_lib.py`
 
 **Owner answers applied:** OQ-4, OQ-16; controller ruling on claim execution and shape; Q-B2plan-2, Q-B2plan-4, Q-B2plan-5.
 
-**Depends on Q-B2plan-4 (the freshness reference, F-B2p-1).** The draft's first design is not adopted: it compared a commit sha with the working tree, so a commit could not change a cited file while its claim exists. Q-B2plan-4 lists the options. The text below gives each option's fields and freshness rule. Dispatch waits for the answer, and the controller deletes the unchosen branches from the brief.
+**The freshness reference (F-B2p-1; owner answer Q-B2plan-4 (a), a blob id per cite).** The draft's first design is not adopted: it compared a commit sha with the working tree, so a commit could not change a cited file while its claim exists. Each cite records the blob id of the cited file, and freshness compares it with the file being committed.
 
 **Interfaces:**
 - Consumes: `schema.load_schema/validate/SCHEMAS_DIR`, `ids.id_problem`, `gitinfo.tracked_files/commit_exists/show/ls_tree/merge_base`, `migrations.migrate`, `yamlsub.load/parse`, `result.GateError`, `config.load`.
@@ -1001,10 +1018,8 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - top-level `schema` and `document` (`str`, the repo-relative path of the document the claims are about, per Q-B2plan-2);
     - `claims` (`list`, `min: 1`), items `map`: `id` (`id`, `id_kind: claim`), `text` (`str`), `cites` (`list`, `min: 1`), `direct` (`str`, a command), `contradiction` (`str`, a command), `by` (`str`).
     - Spec §8: "No claim is trusted: verify directly and by contradiction, record both commands." Spec §7.2: "`gate_claims` [reads record fields] from the claim schema (appendix A), never from hand-coded field lists."
-    - Cite items and the freshness field depend on Q-B2plan-4:
-      - (a) each cite is a `map {path: str, lines: str (optional, <n> or <first>-<last>), blob: sha (40 hex)}`, and there is no claim-level sha.
-      - (b) and (c) each cite is a `str` (`<path>`, `<path>:<n>`, `<path>:<first>-<last>`), plus a claim-level `verified_at` (`sha`).
-  - Under (a), `gitinfo.blob_id(root: str, path: str) -> str`: `git hash-object -- <path>`, run with `-C root`. It applies the same clean filters as `git add`, so the id equals the blob the path would be committed as.
+    - Each cite is a `map {path: str, lines: str (optional, <n> or <first>-<last>), blob: sha (40 hex)}`, and there is no claim-level sha (Q-B2plan-4 (a)).
+  - `gitinfo.blob_id(root: str, path: str) -> str`: `git hash-object -- <path>`, run with `-C root`. It applies the same clean filters as `git add`, so the id equals the blob the path would be committed as.
   - `@dataclass(frozen=True) ClaimFile(file: str, row: dict)`.
   - `load(root: str, cfg: dict) -> list` reads every `*.yml` directly under `cfg["paths"]["claims"]`. A missing directory is empty. A file that does not load, is not a regular file, or is not a top-level mapping raises `GateError` naming it.
   - `slug(document: str) -> str`, per Q-B2plan-2 (a): the path without its last `.md` suffix, each `/` replaced by `--`.
@@ -1014,11 +1029,9 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - `id.<file>`: an id fails `id_problem`;
     - `duplicate.<id>`: an id appears more than once; the reason lists every file.
   - `document_errors(cf: ClaimFile, tracked: frozenset) -> list` checks that `document` and each cited path are tracked.
-  - `stale_errors(cf: ClaimFile, root: str, base: Optional[str]) -> list` of `(id, reason)`. The rule depends on Q-B2plan-4:
-    - (a) A claim is fresh when each cite's `blob` equals `gitinfo.blob_id(root, path)`. The working tree is the tree being committed under the pre-commit hook's unstaged refusal (F-3), so a commit can change a cited file and record the new blob in the same commit.
-    - (b) A claim is stale when a cited file's text differs from its text at `verified_at`, unless that file is changed in the commit being made (its index entry differs from `HEAD`). A claim allowed this way must have a later commit that moves `verified_at`.
-    - (c) The same comparison as (b), run only when `base` is given (merge checks, `run_all --base`). Pre-commit does not run it.
-    - Every option fails when the cited path is absent or untracked. A line cite compares the whole file.
+  - `stale_errors(cf: ClaimFile, root: str, base: Optional[str]) -> list` of `(id, reason)` (Q-B2plan-4 (a)):
+    - A claim is fresh when each cite's `blob` equals `gitinfo.blob_id(root, path)`. The working tree is the tree being committed under the pre-commit hook's unstaged refusal (F-3), so a commit can change a cited file and record the new blob in the same commit.
+    - A claim fails when the cited path is absent or untracked. A line cite compares the whole file.
   - `base_errors(root: str, cfg: dict, files: list, base: str) -> list` of `(suffix, reason)` (no-delete extended to claim files, spec §7.2; Q-B2plan-5 (a)):
     - against `mb = gitinfo.merge_base(root, base, "HEAD")`:
       - `deleted.<file>`: a claim file at `mb` is gone, unless its `document` at `mb` is also gone;
@@ -1089,7 +1102,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       with self.assertRaises(GateError): base_errors(root, cfg, files, "no-such-ref")
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Implement `schemas/claim.yml`, `claims.py`** (and `gitinfo.blob_id` under (a): an argument list, `LC_ALL=C`, `--` before the path, as in Task 1a.2).
+- [ ] **Step 3: Implement `schemas/claim.yml`, `claims.py`** (and `gitinfo.blob_id`: an argument list, `LC_ALL=C`, `--` before the path, as in Task 1a.2).
 - [ ] **Step 4: Run the test command on both interpreters and every enabled gate; expect PASS.** `claim` has no producer yet, so `check schema` does not check claim files (Appendix A).
 - [ ] **Step 5: Commit** `feat(lib): claim schema and rules; freshness of cited files`, then checkpoint.
 
@@ -1130,7 +1143,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       assert code == 0
   def test_stale_claim_fails():
       assert "FAIL claims.stale." + CID in out and code == 1
-  def test_cited_file_and_claim_changed_together_pass():   # F-B2p-1, the chosen Q-B2plan-4 option
+  def test_cited_file_and_claim_changed_together_pass():   # F-B2p-1, Q-B2plan-4 (a)
       assert "PASS claims.stale" in out
   def test_deleted_claim_file_fails():
       assert "FAIL claims.base.deleted." in out
@@ -1155,7 +1168,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 
 **Files:**
 - Create: `gates/run_all.py`
-- Modify: `gates/__main__.py` (`COMMANDS["run_all"]`); `gates/__init__.py` (`__version__`) only under Q-B2plan-24 (b)
+- Modify: `gates/__main__.py` (`COMMANDS["run_all"]`)
 - Test: `tests/test_run_all.py`
 
 **Owner answers applied:** OQ-1; controller ruling on `PROFILE_GATES`; stream rules "Cross-stream order" (`cites`, D4); Q-B2plan-19 (the `dispatch` part), Q-B2plan-24 (version source).
@@ -1173,10 +1186,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - every sub-gate line is kept verbatim, in order;
     - a gate absent from `GATES`, a failed import, or a missing or non-callable `check` gives `FAIL run_all.missing.<gate>: <reason>` (spec §13: "a missing or raising gate fails");
     - a raising gate becomes its own `<gate>.input` line;
-    - The `run_all.version` line depends on Q-B2plan-24:
-      - Under (a) (recommended), `run_all` emits no version line in block 2. Spec §4's agreement check starts in the block that lands the second listed source (block 3's `.claude-plugin/plugin.json`), comparing `framework_version` with it.
-      - Under (b), `run_all.version` is PASS when `cfg["framework_version"] == gates.__version__`, and `FAIL run_all.version: framework_version <x> does not match the installed framework <y>; run /strict-delivery:upgrade` otherwise.
-  - Under Q-B2plan-24 (b) only: `gates/__init__.py` gains `__version__ = "0.0.0"`, and the spec §15 release list gains it.
+    - `run_all` emits no version line in block 2 (Q-B2plan-24 (a)). Spec §4's agreement check starts in the block that lands the second listed source (block 3's `.claude-plugin/plugin.json`), comparing `framework_version` with it.
 
 **Input-domain dimensions:**
 - Profile: each of the three.
@@ -1184,7 +1194,6 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 - `--base`: forwarded exactly to `BASE_GATES`; an absent ref.
 - argv: `--json` first or later; `--root` missing or repeated; an unknown flag; `--help`.
 - Config: missing; a YAML error.
-- Version (Q-B2plan-24 (b) only): equal; different; `"0.0.0 "`.
 - Output order and exit code.
 
 - [ ] **Step 1: Write the failing tests** (gate modules patched in `GATES`. Tests that run the real gates build a temporary repository with `helpers.make_repo`, whose first branch is `main`, or pass `--base HEAD`. No test relies on this checkout having a local `main`; F-B2p-3):
@@ -1204,7 +1213,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       assert "FAIL claims.input:" in out and code == 1
   def test_base_forwarded_only_to_base_gates():
       assert seen_args["decisions"][-2:] == ["--base", "x"] and "--base" not in seen_args["schema"]
-  def test_version_line():                     # Q-B2plan-24: (a) no run_all.version line; (b) mismatch fails naming upgrade
+  def test_version_line():                     # Q-B2plan-24 (a): no run_all.version line
       assert "run_all.version" not in out      # (a);  (b): "FAIL run_all.version:" in out and "/strict-delivery:upgrade" in out
   def test_missing_config_is_input_fail():
       assert out.startswith("FAIL run_all.input:") and "/strict-delivery:init" in out
@@ -1212,7 +1221,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       assert code == 0
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Implement `gates/run_all.py`** (and `__version__` under Q-B2plan-24 (b)).
+- [ ] **Step 3: Implement `gates/run_all.py`**.
 - [ ] **Step 4: Run the test command on both interpreters, every enabled gate, and `python3 -m gates run_all`; expect PASS.**
 - [ ] **Step 5: Commit** `feat(gates): run_all runs the profile's gates`, then checkpoint.
 
@@ -1234,7 +1243,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - A stat-only change is not listed. A deleted tracked file and an intent-to-add file are.
   - `gitinfo.hooks_dir(root: str) -> str`: `git rev-parse --git-path hooks`, made absolute.
   - `githook <pre-commit|pre-push> --root R [git's args]` (`main(argv: list) -> int`; F-B2p-2):
-    - **Root rule.** The root is always the `--root` value. Under Q-B2plan-13 (a) the shim passes it, because the shim's `cd` makes the current directory the framework's. Under (b) the shim passes `--root "$PWD"`, since git runs hooks from the top level.
+    - **Root rule.** The root is always the `--root` value, which the shim passes, because the shim's `cd` makes the current directory the framework's (Q-B2plan-13 (a)).
     - `CLAUDE_PROJECT_DIR` is never read. Every git call runs with `-C root`, and `commands.test` runs with `cwd=root`.
     - `pre-commit`:
       - when `unstaged_paths` is non-empty, print `FAIL githook.unstaged: <path>: tracked file has unstaged changes; stage it or stash it, so the gates read the tree being committed` and exit 1 before any gate runs (spec §13, F-3);
@@ -1243,7 +1252,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - `pre-push`: per Q-B2plan-12.
   - `githooks install [--root R]`, backed by `install(root: str, framework: str) -> list`:
     - writes `pre-commit` and `pre-push` into `hooks_dir(root)` with mode `0o755`;
-    - each file has three lines: `#!/bin/sh`, the header `# strict-delivery: generated by python3 -m gates githooks install; do not edit`, and the exec line of Q-B2plan-13;
+    - each file has three lines: `#!/bin/sh`, the header `# strict-delivery: generated by python3 -m gates githooks install; do not edit`, and the exec line of Q-B2plan-13 (a);
     - conflicts and `core.hooksPath` follow the controller ruling;
     - a file with the header is rewritten, byte-identical on a second run.
   - `githooks status [--root R]`: `PASS githooks.<name>`, or `FAIL githooks.<name>: missing | foreign | stale`. This is the input for block 4's `doctor`.
@@ -1378,11 +1387,11 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
 **Owner answers applied:** controller ruling on claim shape; Q-B2plan-2, Q-B2plan-4, Q-B2plan-6.
 
 **Interfaces:**
-- Consumes: `claims.*`, `ids.mint/utc_today`, `gitinfo.head_sha` (and `blob_id` under Q-B2plan-4 (a)), `yamlsub.emit`, `config.load`, and the ids of every register.
+- Consumes: `claims.*`, `ids.mint/utc_today`, `gitinfo.head_sha`, `gitinfo.blob_id` (Q-B2plan-4 (a)), `yamlsub.emit`, `config.load`, and the ids of every register.
 - Produces: `PRODUCES = ("claim",)`; `main(argv: list) -> int`:
   - `add --document D --text T --cite C (at least once) --direct CMD --contradiction CMD --by WHO [--root R]`:
     - mints `C-<YYYYMMDD>-<xxxx>` with `random.SystemRandom()`;
-    - records freshness per Q-B2plan-4: under (a), each cite's `blob` from `gitinfo.blob_id`; under (b) and (c), `verified_at` set to HEAD;
+    - records freshness as each cite's `blob` from `gitinfo.blob_id` (Q-B2plan-4 (a));
     - appends to `<paths.claims>/<slug(D)>.yml`;
     - validates the whole file before writing;
     - prints the id last.
@@ -1416,12 +1425,12 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
 - [ ] **Step 5: Commit** `feat(tools): claims add and verify`, then checkpoint.
 
-### Task 2c.2: `config/2` with `limits`, and its migration
+### Task 2c.2: `config/2` with `limits`, `merge` and `escape_cost`, and its migration
 
 **Files:**
 - Modify:
-  - `gates/schemas/config.yml`: version 2, `limits` and `merge` (owner Q-Pplan-14 (a), 2026-11-02).
-  - `gates/lib/config.py`: `CONFIG_KEYS` gains `limits` and `merge`; `DEFAULTS["merge"] = {"mode": "host"}`; the tag check uses the current version; the `limits` checks (no `DEFAULTS["limits"]`: every limit is absent by default).
+  - `gates/schemas/config.yml`: version 2, `limits`, `merge` (owner Q-Pplan-14 (a), 2026-11-02) and `escape_cost` (owner Q-B6plan-3 (a), 2026-11-02).
+  - `gates/lib/config.py`: `CONFIG_KEYS` gains `limits`, `merge` and `escape_cost`; `DEFAULTS["merge"] = {"mode": "host"}`; the tag check uses the current version; the `limits` and `escape_cost` checks (no `DEFAULTS["limits"]` and no `DEFAULTS["escape_cost"]`: both are absent by default).
   - `gates/lib/migrations.py`: the `("config", 1)` step.
   - `.strict-delivery/config.yml`: tag `config/2`, migrated in the same commit.
   - `tests/helpers.py` (A's shared file): `minimal_config()` returns `schema: config/2`. Otherwise every `make_repo` test fails once `config.load` refuses `config/1`. Measured by the reviewer: no `config/1` literal exists on `block/sb1`, `block/sc1` or `block/sc2` outside A's files.
@@ -1429,12 +1438,12 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
   - Any other `config/1` literal in A's tests: the implementer greps for them and lists them in the report.
 - Test: `tests/test_config.py`, `tests/test_migrations.py`, `tests/test_gate_schema.py`
 - **Spec and plan edits, made before dispatch by the session controller with the owner's approval.** These are Q-H2's consequence; the plan and specs belong to the session controller and the owner.
-  - Spec §6 gains the `limits` key: `max_children`, `max_depth`, `max_concurrent`, with their units; every limit is absent by default (no default value). It also gains `merge` (`mode: host | controller`, default `host`; owner Q-M1, Q-Pplan-14 (a)).
-  - Plan Task 1a.2 changes in three places: `CONFIG_KEYS` ("the spec §6 key set plus `schema`") gains `limits` and `merge`; `DEFAULTS` gains only `merge: {mode: host}` (no `limits` default; every limit is absent); and "`schema` equal to `config/1`" becomes "equal to the current config version".
+  - Spec §6 gains the `limits` key: `max_children`, `max_depth`, `max_concurrent`, with their units; every limit is absent by default (no default value). It also gains `merge` (`mode: host | controller`, default `host`; owner Q-M1, Q-Pplan-14 (a)) and `escape_cost` (unset by default; spec edit SE6-2, owner Q-B6plan-3 (a); applied 2026-11-02).
+  - Plan Task 1a.2 changes in three places: `CONFIG_KEYS` ("the spec §6 key set plus `schema`") gains `limits`, `merge` and `escape_cost`; `DEFAULTS` gains only `merge: {mode: host}` (no `limits` or `escape_cost` default); and "`schema` equal to `config/1`" becomes "equal to the current config version".
 
 **Why a new config version.** Q-H2 puts `limits.max_children.<role>` in config. `config.load` refuses a top-level key outside `CONFIG_KEYS` (OQ-16), and `config/1`'s schema refuses unknown keys. So adding `limits` is a shape change, and spec §15 requires "a new schema version plus a migration from the old version". The migration is placed here, in the registry Task 2a.1 created, before Task 2c.3 reads the key.
 
-**Owner answers applied:** Q-H2, OQ-1, OQ-16; Q-B2plan-22, Q-B2plan-23; Q-M1, Q-Pplan-14 (a).
+**Owner answers applied:** Q-H2, OQ-1, OQ-16; Q-B2plan-22, Q-B2plan-23; Q-M1, Q-Pplan-14 (a); Q-B6plan-3 (a).
 
 **Interfaces:**
 - Consumes: `migrations.MIGRATIONS/migrate/current_version`, `config.load/DEFAULTS/CONFIG_KEYS`, `schema.validate`.
@@ -1446,6 +1455,7 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
   - Both `max_depth` and `max_concurrent` are absent by default. When one is absent, only the Claude Code value counts (Task 2c.3, `limits_of`).
   - How a playbook or lasting decision tightens a cap (Q-H2) follows Q-B2plan-23.
   - `config/2` also adds the optional `merge` (`map {mode: enum [host, controller]}`), default `host` (fail-closed: no agent merges unless the project says so). Its reader is programs Task P3.1; this repository sets `controller` there.
+  - `config/2` also adds the optional `escape_cost` (`map {CRITICAL, HIGH, MEDIUM, LOW}`, each an `int` with `min: 0`), unset by default (no `DEFAULTS` entry). When the map is present all four severities are required, and an unknown key is refused (OQ-16). Its reader is block 6 Task 6E.3 (`loopstats`), which only reads it (Q-B6plan-3 (a)).
   - `MIGRATIONS[("config", 1)]` sets `schema: config/2` and nothing else.
   - `config.load` accepts only `config/<current>` and refuses the older tag. It names `run /strict-delivery:upgrade`, as `gate_schema` does.
 
@@ -1458,6 +1468,7 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
 - `max_depth` and `max_concurrent`: absent, `0`, `bool`, `str`, very large.
 - Tag `config/1` after this task: `gate_schema` and `config.load` refuse it with the upgrade hint, and `migrate` gives `config/2`.
 - `merge`: absent (default `host`), `{mode: controller}`, `{mode: auto}`, not a mapping, an unknown key.
+- `escape_cost`: absent (unset); all four `0`; all four set; one severity missing; an unknown key (`INFO`); values `-1`, `True`, `"2"`; not a mapping.
 - This repository's config migrated.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -1474,13 +1485,15 @@ Runs before block B1 merges; it depends only on 2a (F-B2p-8).
       assert "/strict-delivery:upgrade" in str(e.exception)
   def test_merge_mode_default_and_checked():   # Q-Pplan-14 (a); subTests per bad value
       assert config.load(root)["merge"]["mode"] == "host"
+  def test_escape_cost_optional_and_checked():  # Q-B6plan-3 (a); subTests per bad value
+      assert "escape_cost" not in config.load(root)
   def test_this_repo_config_is_current():
       assert "PASS schema.config" in out
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Implement**, and migrate this repository's `.strict-delivery/config.yml` with `migrations.migrate` (a config file, not a global record, so the implementer writes it).
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
-- [ ] **Step 5: Commit** `feat(lib): config/2 with limits; config migration`, then checkpoint.
+- [ ] **Step 5: Commit** `feat(lib): config/2 with limits, merge and escape_cost; config migration`, then checkpoint.
 
 ### Task 2c.3: dispatch rules and `gate_dispatch`; enable `check dispatch`
 
@@ -5574,7 +5587,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
   - The SessionStart hook prints "the instruction to invoke the strict-delivery skill" (skill `name` from Task B2.3) and lists active overrides (spec §4: "active rule overrides") from answered `rule-override` decisions. It refuses nothing. An override of a `fixed: yes` rule is refused when it is written, by `decisions.validate` (block 2, stream A) against `FIXED_RULES`, which a test keeps equal to `playbook/rules.md`'s `fixed` column (Task B2.1).
 - Block 4 code (later):
   - The CLAUDE.md managed block points at `playbook/` (spec §8: "The CLAUDE.md managed block points at it").
-  - The profiles' `roles` defaults name each role's prompt file and minimum tier (Task B2.2 `playbook/roles.md` is the prose source).
+  - Framework roles' prompt files and minimum tiers are fixed in the framework (`dispatch.ROLES`/`MIN_TIERS`), the same in every profile; config `roles` adds only project roles (spec §10 as edited by SE-B4-3; owner answer Q-B4plan-6 (a)). Task B2.2 `playbook/roles.md` is the prose source.
 
 ### Block B1: prompt blocks (branch `block/sb1`)
 
