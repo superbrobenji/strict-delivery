@@ -3,7 +3,7 @@ import importlib
 import sys
 from typing import Callable, Dict, List
 
-GATES: Dict[str, str] = {"schema": "gates.gate_schema"}  # gate name -> module defining check(args)
+GATES: Dict[str, str] = {"schema": "gates.gate_schema", "decisions": "gates.gate_decisions"}  # gate name -> module defining check(args)
 
 
 def _check(args: List[str]) -> int:
