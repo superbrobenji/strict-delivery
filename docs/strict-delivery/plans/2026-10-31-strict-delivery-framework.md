@@ -35,7 +35,7 @@
 ## Process for this plan
 
 - Bootstrap (spec §16): no gates existed when block 1a started; judgment rules apply by hand and the block-1a report says so. "Each gate is enabled on this repository as soon as it lands": `check schema` from Task 1b.1, `check decisions` from Task 1c.1, `check register` from Task 1c.2. From each enabling task on, the commit gate is the test command on both interpreters plus every enabled `python3 -m gates check <gate>` exiting 0, with a clean tree (`git status --porcelain --untracked-files=all` empty). `run_all` replaces this list in block 2.
-- Blocks. Spec §17 block 1 is split under the strict cap of 3 tasks per block into sub-blocks **1a** (Tasks 1a.1-1a.3), **1b** (1b.1-1b.3), **1c** (1c.1-1c.3) and **1d** (1d.1-1d.2), each on its own branch (`block/b1a` ... `block/b1d`). Under the strict profile each block ends with a final review (opus), a top-tier final verifier and an owner merge grant, then the merge as its own command, then the checkpoint. Grants for 1a-1c are given in chat and ledgered verbatim (no decision tool exists yet). From block 1c on, `main` is protected (owner directive 2026-11-01): each block ends with a pull request to `main`; the owner approves it in chat naming the PR and its head sha, and the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; the merge is read back from the host and ledgered (from programs Task P1.2 as the `MERGED` line). Merge approvals are not decision records (owner Q-15 (a), 2026-11-02).
+- Blocks. Spec §17 block 1 is split under the strict cap of 3 tasks per block into sub-blocks **1a** (Tasks 1a.1-1a.3), **1b** (1b.1-1b.3), **1c** (1c.1-1c.3) and **1d** (1d.1-1d.2), each on its own branch (`block/b1a` ... `block/b1d`). Under the strict profile each block ends with a final review (opus) and a top-tier final verifier. Blocks 1a and 1b then took an owner merge grant given in chat and ledgered verbatim, the merge as its own command, and the checkpoint. From block 1c on, `main` is protected (owner directive 2026-11-01) and every block, of every stream, ends in the pull-request flow: push the block branch; open a pull request to `main`; the owner approves it in chat naming the PR and its head sha; the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; the merge is read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`); the post-merge gates run on `main` updated from the remote; the merge is ledgered verbatim (from programs Task P1.2 as the `MERGED` line), written as the next branch's first commit; then the checkpoint and continuation. Merge approvals are not decision records (owner answer Q-15 (a), 2026-11-01).
 - Continuation (spec §8, design §4.4) replaces stopping for `/clear`: at a checkpoint, at 80 % of its token or time budget, or at a usage-limit stop, the controller writes its handoff and returns `status: DONE` with `next:` (or `BLOCKED: budget`); its dispatcher at once dispatches a fresh controller with a continue prompt built from the handoff and ledger. One block per agent context stays. Nothing continues from inherited memory.
 - Checkpoint after every task: append one line to `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/ledger.md`:
   `CHECKPOINT <block> <task> head=<short sha> tests=<passed>/<total> gates=<PASS|n/a> next=<task id>`
@@ -487,7 +487,7 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
 - Consumes: `gitinfo._require_toplevel/toplevel`, `result.Result/render/safe_text/_exc_text/run_check`, `store.Store/base_errors`, `config.load`, `findings.evidence_errors/may_delete`, `decisions.landed_errors`, `helpers.make_repo/GitIsolatedTestCase`.
 - Produces (every signature unchanged):
   - `result._raw(x)` gains a mapping case: a `dict` renders as `{` + `, `.join(`_raw(key) + ": " + _raw(value)`) + `}`, in insertion order, recursively, like the list case. So `Result.render`'s one `safe_text` pass is the only escaping a map key or value gets: a backslash in a value prints as `\\`, never `\\\\`, and a newline as `\n`, never `\\n`.
-  - Root check (Q-1bfin-2 (a)): every library function with a `root` parameter calls `gitinfo._require_toplevel(root)` before any other work, and so raises `GateError("git rev-parse --show-toplevel: root must be the repository top level")` for a subdirectory, a missing path or a non-repository. Newly covered: `gitinfo.head_sha`, `commit_exists`, `merge_base`, `user_email`; `store.Store.__init__` (so `load`, `create` and `replace` inherit it) and `store.base_errors`; `config.load`; `findings.evidence_errors` and `findings.may_delete`. Already covered and unchanged: `gitinfo.blob_exists`, `tracked_files`, `show`, `ls_tree`, `decisions.landed_errors`, `schema.entries_of`. `gitinfo.toplevel` is the one exception: it is how the top level is found. Gates already resolve `--root` to the top level, so their behaviour does not change; a missing config still fails `<gate>.input` naming `/strict-delivery:init` (Review Focus 5).
+  - Root check (Q-1bfin-2 (a)): every library function with a `root` parameter calls `gitinfo._require_toplevel(root)` before any other work, and so raises `GateError`: for a subdirectory of a repository the text is `git rev-parse --show-toplevel: root must be the repository top level`; for a missing path or a directory outside any repository it is `git rev-parse --show-toplevel failed (exit 128)`, from `toplevel(root)` inside the check (measured 2026-11-02 on both). Newly covered: `gitinfo.head_sha`, `commit_exists`, `merge_base`, `user_email`; `store.Store.__init__` (so `load`, `create` and `replace` inherit it) and `store.base_errors`; `config.load`; `findings.evidence_errors` and `findings.may_delete`. Already covered and unchanged: `gitinfo.blob_exists`, `tracked_files`, `show`, `ls_tree`, `decisions.landed_errors`, `schema.entries_of`, and `schema.files_of` through `entries_of`. `gitinfo.toplevel` is the one exception: it is how the top level is found. Gates already resolve `--root` to the top level, so their behaviour does not change; a missing config still fails `<gate>.input` naming `/strict-delivery:init` (Review Focus 5).
   - `store.base_errors(root, store, base, is_resolved, may_delete)`: before reading git, it raises `GateError("base_errors: the store's root <a> is not the root given <b>")` unless `os.path.samefile(store.root, root)` (U-1bfin-1), so a record set from one tree is never compared with another tree's history.
 - Cross-stream note: stream C's `tests/test_gate_cites.py` has a line that pins today's repr-style output for a map item in a reason. It changes when C next updates from `main` past this task. That line is C's to fix in its own file (stream rules, "Keeping up with `main`"); A raises no edit to it.
 
@@ -512,6 +512,8 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
                    lambda r: evidence_errors(ROW, r, cfg, [], frozenset()), lambda r: may_delete(ROW, r, cfg, [])):
           with self.assertRaises(GateError) as e: call(sub)
           assert "root must be the repository top level" in str(e.exception)
+          with self.assertRaises(GateError) as e: call(missing)
+          assert "git rev-parse --show-toplevel failed" in str(e.exception)
   def test_symlinked_top_level_accepted():
       assert head_sha(link) == head_sha(root)
   def test_base_errors_refuses_foreign_store():      # U-1bfin-1
@@ -684,7 +686,7 @@ Complete: commits `c4f36f1..004854a` (115 tests; closing review clean). Code: `g
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Implement `index.py`, the four schemas, the `.gitignore` lines.**
 - [ ] **Step 4: Run the test command on both interpreters; run `python3 -m gates index`, then `check schema`, `check decisions`, `check register`; expect all `PASS` and `git status --porcelain --untracked-files=all` empty (the generated files are ignored).**
-- [ ] **Step 5: Commit** `feat(tools): decision and finding indexes, in-force.md, overview; generated files ignored`, then checkpoint. **Block 1c end:** as block 1a.
+- [ ] **Step 5: Commit** `feat(tools): decision and finding indexes, in-force.md, overview; generated files ignored`, then checkpoint. **Block 1c end:** final review, verifier, then the pull-request flow of Process for this plan, "Blocks"; checkpoint; continuation.
 
 ---
 
@@ -1660,12 +1662,12 @@ Starts only after block B1 merges into `main` and A updates from `main`.
 Spec §17: "Programs block, placed after block 2 so this repository can run its remaining blocks as a program: the program_controller and stream_controller prompt blocks, automatic continuation, the upward-question path, a basic `gate_checkpoint`, `gate_streams`, and `gate_cleanup` (for plain plans and programs). The plan fixes its exact order." Programs design §16: "It carries the minimum it relies on from later blocks". The outline's order P1-P4 stands, each a sub-block of at most 3 tasks:
 - **P1** (Tasks P1.1-P1.3): schema vocabulary for nested and front-matter files, the handoff and ledger schemas (with the `MERGED` line), basic `gate_checkpoint`.
 - **P2** (Tasks P2.1-P2.3): program records (streams, request, status, sync log), the `program` tool, `gate_streams`.
-- **P3** (Tasks P3.1-P3.3): the pull-request merge policy (`merge.mode`, merges checked against the ledger's `MERGED` lines, no push to the base branch), cleanup rules with the merge-commit half of the deletion proof, `gate_cleanup`. A cleanup tool, only under Q-Pplan-9 (b), is a sub-block P3b of its own.
+- **P3** (Tasks P3.1-P3.3): the pull-request merge policy (`merge.mode`, merges checked against the ledger's `MERGED` lines, no push to the base branch), cleanup rules with the merge-commit half of the deletion proof, `gate_cleanup`.
 - **P4** (Tasks P4.1-P4.3): the upward-question path, automatic continuation, `gate_dispatch` for live programs with the two prompt blocks.
 
 Each sub-block has its own branch (`block/p1` ... `block/p4`) from the tip of `main`, starts after block 2 has merged into `main`, and is pushed at every checkpoint. It ends in the pull-request flow (owner directive and Q-15 below): final review, verifier, a pull request to `main` (`gh pr create`), the owner's approval in chat naming the PR and its head sha, `gh pr merge <n> --merge --match-head-commit <that sha>` (GitHub refuses the merge if the head moved), the merge read back from the host (`gh pr view <n> --json number,headRefOid,mergeCommit,mergedAt,mergedBy`), the post-merge gate run on an updated `main`, and a `MERGED` ledger line (Task P1.2) as the first commit of the next branch (the next sub-block's branch, or the cleanup branch after the plan's last PR, with `final=yes`). The commit gate is `python3 -m gates run_all` plus the test command on both interpreters, with a clean tree (block 2, Task 2b.3). From Task P1.3 the checkpoint step also runs `python3 -m gates check checkpoint --plan 2026-10-31-strict-delivery-framework`, and expects PASS after the checkpoint commit.
 
-Owner answers (2026-11-02): every question of the programs batch was answered (a) (section "Programs block (2026-11-02)" in the owner answers below). Where task text names an (a) or (b) branch of a `Q-Pplan-<n>`, the (a) branch applies and the (b) text is history.
+Owner answers (2026-11-02): every question of the programs batch was answered (a) (section "Programs block (2026-11-02)" in the owner answers below). The tasks state those answers.
 
 **Owner answers applied across the block (binding, 2026-11-01; written into the specs by edits SE-1..SE-19, listed in "Programs block (2026-11-02)" in the owner answers below):**
 - **Q-H1:** `program_controller` stays a role.
@@ -2022,7 +2024,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 - Consumes: `programs.*` (Task P2.1), `ids.mint/utc_today`, `decisions.is_resolved`, `store.Store("decision")`, `gitinfo.current_branch/head_sha/local_branches/show`, `yamlsub.emit`, `config.load`, and the ids of every register (decisions, findings, claims, every program's requests).
 - Produces: `PRODUCES = ("streams", "status", "sync-log", "request")`; `main(argv: list) -> int` for `python3 -m gates program <sub>`. Every subcommand refuses (exit 1, nothing written) unless `current_branch` is `<program>/integration`, validates every file it writes before writing it, and writes with `yamlsub.emit` or the canonical table form.
   - `create <program> --streams FILE --decision DEC [--root R]`: refuses an invalid name, a name whose folder exists in the working tree, at `HEAD`, or at the tip of `base_branch` (programs design §7.3: "a name already on main or on the branch is refused"), an id that is not an answered `program-create` decision, and a streams file that fails `streams/1` or `streams_errors`. It writes `streams.yml`, `status.md` (one row per stream: `block` and `next task` `none`, `estimate` from `streams.yml`, `used` `0`, `status` `ready`, `blockers` and `pending decisions` `none`, `delivers` the stream's `purpose`) and `sync-log.md` (its first line).
-    - Where it runs depends on Q-Pplan-11. Under (a) (recommended), the session first creates the branch and its worktree with one git command of its own, `git worktree add -b <program>/integration <worktrees>/<program>/integration <base_branch>`, and runs `create` (and every later `program`, `questions` and `decisions` write of the program) with `--root` that worktree. `create` then also refuses when the top level of `--root` is not `<worktrees>/<program>/integration`, with `<worktrees>` from the streams file resolved against the main worktree (the parent of `git rev-parse --path-format=absolute --git-common-dir`). The main checkout is never switched.
+    - Where it runs (owner answer Q-Pplan-11 (a)): the session first creates the branch and its worktree with one git command of its own, `git worktree add -b <program>/integration <worktrees>/<program>/integration <base_branch>`, and runs `create` (and every later `program`, `questions` and `decisions` write of the program) with `--root` that worktree. `create` then also refuses when the top level of `--root` is not `<worktrees>/<program>/integration`, with `<worktrees>` from the streams file resolved against the main worktree (the parent of `git rev-parse --path-format=absolute --git-common-dir`). The main checkout is never switched.
   - After every successful write the tool prints `push <program>/integration`; the program controller pushes the integration branch as its own command (owner directive; CI reads program files from it).
   - `status <program> <stream> [--block B] [--next-task T] [--used N] [--status S] [--blockers IDS] [--pending IDS] [--delivers TEXT]`: rewrites that one row; every other row is byte-identical.
   - `request new <program> --from S --to T --file F (at least once) --interface CITE --need TEXT --by S`: mints `R-<YYYYMMDD>-<xxxx>` with `ids.mint(cfg["ids"]["request"], <every id>, utc_today(), random.SystemRandom())`, writes `requests/<id>.yml` with `status: open` and `raised_at {sha: HEAD, by}`, prints the id last (spec §7.2: "Within one program only the program controller mints ids").
@@ -2153,7 +2155,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 **Files:**
 - Create: `gates/lib/merge.py`
 - Modify:
-  - Config, per Q-Pplan-14. Under (a) (recommended), Block 2's Task 2c.2 already adds `merge` to `config/2`, and this task only reads it. Under (b): `gates/schemas/config.yml` (version 3, `merge`), `gates/lib/config.py` (`CONFIG_KEYS` gains `merge`; `DEFAULTS["merge"] = {"mode": "host"}`), `gates/lib/migrations.py` (the `("config", 2)` step), `tests/helpers.py` (`minimal_config()` returns `config/3`) and every `config/2` literal in A's tests (listed in the report). Either way `.strict-delivery/config.yml` gets `merge: {mode: controller}` (owner Q-M1 for this repository).
+  - Config (owner answer Q-Pplan-14 (a)): Block 2's Task 2c.2 already adds `merge` to `config/2`, and this task only reads it. `.strict-delivery/config.yml` gets `merge: {mode: controller}` (owner Q-M1 for this repository).
   - `gates/gate_checkpoint.py` (Task P1.3's gate gains `checkpoint.merges`).
   - `gates/tools/githooks.py` (`githook pre-push` refuses a push to the base branch).
   - `.github/workflows/strict-delivery.yml`: a pull-request job that checks out `github.event.pull_request.head.sha` with full history (not the test-merge ref, review 4 F-Pp4-4), creates local `<p>/integration` branches from the fetched `origin/*/integration` refs, and runs `check streams --branch <head ref>`. The existing `run_all` job is unchanged.
@@ -2176,7 +2178,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
   - `githook pre-push`: in addition to block 2's rule (Q-B2plan-12 (a)), a stdin line whose remote ref is `refs/heads/<base_branch>` fails `githook.base: <base_branch> is protected; open a pull request` before any gate runs (owner directive).
 
 **Input-domain dimensions:**
-- Config: `merge` absent (default `host`), `{mode: controller}`, `{mode: auto}`, not a map, unknown key; under Q-Pplan-14 (b), tag `config/2` (refused naming upgrade; `migrate` gives `config/3`).
+- Config: `merge` absent (default `host`), `{mode: controller}`, `{mode: auto}`, not a map, unknown key.
 - `MERGED` line against git: a real `--no-ff` merge whose second parent is `head`; a squash (one parent); a merge whose second parent is another commit (the head moved); a merge off the first-parent line; a sha unknown locally; `approval` disagreeing with `merge.mode`; a `chat` approval naming another PR or head; a line copied from another plan's ledger (review 5 F-Pp5-1); another plan's PR whose branch was cut from a `main` that already holds this plan's ledger (its head tree holds this ledger, its merge diff does not touch this plan's workspace: fails; review 6 F-Pp6-1); a PR that touches only code (fails); a PR that touches this plan's ledger (passes); a PR that touches both plans' workspaces (counts for both).
 - Pre-push: pushing a work branch; pushing `HEAD:main`; deleting the remote base branch; base branch configured as another name.
 - Workflow: the PR job's checkout is the head sha with full history; integration branches created before `check streams`.
@@ -2212,7 +2214,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
       assert "github.event.pull_request.head.sha" in text and "check streams --branch" in text
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Implement**, set this repository's `merge.mode` (and, under Q-Pplan-14 (b), migrate its config with `migrations.migrate`); cite Q-M1 in the commit body.
+- [ ] **Step 3: Implement**, set this repository's `merge.mode`; cite Q-M1 in the commit body.
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.** From here every `MERGED` line is checked at each checkpoint.
 - [ ] **Step 5: Commit** `feat(gates): PR merge policy: merge.mode, MERGED lines checked against git, no push to the base branch`, then checkpoint.
 
@@ -2323,7 +2325,7 @@ Owner answers (2026-11-02): every question of the programs batch was answered (a
 - [ ] **Step 3: Implement** `gate_cleanup.py` and the workflow step.
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
 - [ ] **Step 5: Enable.** This repository has no finished plan yet, so the gate is exercised in a `mktemp -d` clone with a local bare remote: two sub-block branches of a fixture plan merged with `git merge --no-ff` (the PR merge commit's shape), their `MERGED` lines (the second `final=yes`) written as the next branch's first commit, then `cleanup/<fixture>` removing the set; run `check cleanup --plan <fixture>`; expect PASS; ledger it. Its first real run is this plan's own close.
-- [ ] **Step 6: Commit** `feat(gates): gate_cleanup for plans and programs; cleanup pull requests`, then checkpoint with `gates=PASS`. **Block P3 end:** as block 1d. Under Q-Pplan-9 (b), a sub-block P3b (one task: a `cleanup` tool that makes the cleanup branch and alone may set `merged`) is written in full and runs next.
+- [ ] **Step 6: Commit** `feat(gates): gate_cleanup for plans and programs; cleanup pull requests`, then checkpoint with `gates=PASS`. **Block P3 end:** as block 1d.
 
 ---
 
@@ -2534,12 +2536,12 @@ Owner decision 2026-10-31: two streams run beside stream A (block 1 in order, th
 - **Merging each block.** Each B and C block merges exactly as A's blocks do (Process for this plan, "Blocks"):
   1. a final review (top-tier reviewer role, as A);
   2. the top-tier final verifier;
-  3. a pull request to `main` and the owner's approval in chat naming the PR and its head sha;
-  4. `gh pr merge <n> --merge --match-head-commit <sha>` (owner directive 2026-11-01, Q-15 (a)), read back from the host and ledgered;
-  5. the post-merge gate run on `main`;
-  6. the checkpoint.
+  3. the block branch pushed, a pull request to `main`, and the owner's approval in chat naming the PR and its head sha;
+  4. `gh pr merge <n> --merge --match-head-commit <sha>` (owner directive 2026-11-01, Q-15 (a)), read back from the host;
+  5. the post-merge gate run on `main` updated from the remote;
+  6. the merge ledgered (from programs Task P1.2 as the `MERGED` line) as the next branch's first commit, and the checkpoint.
 
-  Approvals are given in chat and ledgered verbatim in that stream's ledger, with the PR number, head sha and merge commit read back from the host; they are not decision records (owner Q-15 (a), 2026-11-02).
+  Approvals are given in chat and ledgered verbatim in that stream's ledger, with the PR number, head sha and merge commit read back from the host; they are not decision records (owner answer Q-15 (a), 2026-11-01).
 
   The session controller merges into `main` one block at a time. Before a stream's block merges, its branch is brought up to date with `main` (next item) and the full commit gate is re-run on that branch head.
 - **Keeping up with `main`, and interface changes.** C consumes A's interfaces, listed under each C task's Consumes.
@@ -2813,7 +2815,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
 - [ ] **Step 2: Run; expect FAIL.**
 - [ ] **Step 3: Write the three blocks.**
 - [ ] **Step 4: Run on both interpreters and every enabled gate; expect PASS.**
-- [ ] **Step 5: Commit** `docs(prompts): controller and audit blocks`, then checkpoint. **Block B1 end:** final review, verifier, merge grant, merge into `main`, checkpoint, continuation (stream rules above).
+- [ ] **Step 5: Commit** `docs(prompts): controller and audit blocks`, then checkpoint. **Block B1 end:** final review, verifier, then the pull-request flow (stream rules, "Merging each block"), checkpoint, continuation (stream rules above).
 
 ### Block B2: base playbook and skill (branch `block/sb2`)
 
@@ -3078,7 +3080,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
 - [ ] **Step 2: Run; expect FAIL.**
 - [ ] **Step 3: Write `SKILL.md`.**
 - [ ] **Step 4: Run on both interpreters and every enabled gate; expect PASS.**
-- [ ] **Step 5: Commit** `docs(skill): strict-delivery skill`, then checkpoint. **Block B2 end:** final review, verifier, merge grant, merge into `main`, checkpoint. Stream B is then done: its paths pass to A (DS-3).
+- [ ] **Step 5: Commit** `docs(skill): strict-delivery skill`, then checkpoint. **Block B2 end:** final review, verifier, then the pull-request flow (stream rules, "Merging each block"), checkpoint. Stream B is then done: its paths pass to A (DS-3).
 
 ---
 
@@ -3273,7 +3275,7 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
 - [ ] **Step 2: Run; expect FAIL.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run on both interpreters and every enabled gate; expect PASS.**
-- [ ] **Step 5: Commit** `feat(lib): toolchain detection sources and order`, then checkpoint. **Block C1 end:** final review, verifier, merge grant, merge into `main`, checkpoint, continuation.
+- [ ] **Step 5: Commit** `feat(lib): toolchain detection sources and order`, then checkpoint. **Block C1 end:** final review, verifier, then the pull-request flow (stream rules, "Merging each block"), checkpoint, continuation.
 
 ### Block C2: `gate_cites` (branch `block/sc2`)
 
@@ -3742,7 +3744,7 @@ print("lower", len(lower), "cased", len(cased), "case_ignorable", len(ignorable)
 - [ ] **Step 3: Implement `gates/gate_cites.py`.** Raise the request to stream A for the `check cites` registration.
 - [ ] **Step 4: Run on both interpreters and every enabled gate; expect PASS.**
 - [ ] **Step 5: Commit** `feat(gates): gate_cites`, then checkpoint.
-- [ ] **Step 6: Enable** (after stream A's registration commit is on `main` and C has updated from `main`). Run `python3 -m gates check cites`; expect every line `PASS` and exit 0. From then on, every stream's commit gate includes `check cites`. If block 2 has merged into `main` by then, raise the second request to A, to add `cites` to `run_all`'s gate list; until A's commit is on `main`, every stream's commit gate runs `check cites` beside `run_all` (stream rules, "Cross-stream order"). **Block C2 end:** final review, verifier, merge grant, merge into `main`, checkpoint. Stream C is then done: its paths pass to A (DS-3).
+- [ ] **Step 6: Enable** (after stream A's registration commit is on `main` and C has updated from `main`). Run `python3 -m gates check cites`; expect every line `PASS` and exit 0. From then on, every stream's commit gate includes `check cites`. If block 2 has merged into `main` by then, raise the second request to A, to add `cites` to `run_all`'s gate list; until A's commit is on `main`, every stream's commit gate runs `check cites` beside `run_all` (stream rules, "Cross-stream order"). **Block C2 end:** final review, verifier, then the pull-request flow (stream rules, "Merging each block"), checkpoint. Stream C is then done: its paths pass to A (DS-3).
 
 ---
 
@@ -3858,7 +3860,7 @@ The detailed Block 2 section above was reviewed three times until clean. Owner a
 
 ### Programs block (2026-11-02)
 
-The detailed Programs block section above was reviewed six times until clean. The owner signed it off on 2026-11-02 ("recommended for all"): Q-Pplan-1, Q-Pplan-2, Q-Pplan-4, Q-Pplan-5, Q-Pplan-6, Q-Pplan-8, Q-Pplan-9, Q-Pplan-11, Q-Pplan-12 and Q-Pplan-14, all option (a):
+The detailed Programs block section above was reviewed seven times until clean. The owner signed it off on 2026-11-02 ("recommended for all"): Q-Pplan-1, Q-Pplan-2, Q-Pplan-4, Q-Pplan-5, Q-Pplan-6, Q-Pplan-8, Q-Pplan-9, Q-Pplan-11, Q-Pplan-12 and Q-Pplan-14, all option (a):
 
 - **Q-Pplan-1 (a)** every ledger line whose first token is `CHECKPOINT`, `Ruling`, `Request`, `UPDATE` or `MERGED` matches its form exactly; other lines are free prose; Task P1.3's migration rewrites this repository's nonconforming keyword lines, keeping their text (Tasks P1.2, P1.3).
 - **Q-Pplan-2 (a)** `gate_checkpoint` declares no kinds while stream B or C is live; the `handoff` and `ledger` producer declaration is the scheduled one-line commit after the last of them merges (Task P1.3).
@@ -3878,7 +3880,7 @@ Owner answers and directives on the agent tree and the pull-request flow (2026-1
 - **Protected main (directive, 2026-11-01):** nothing merges or pushes to `main` directly, in this repository and every target repository; work branches are pushed at checkpoints; a finished stream opens its own pull request to `main`.
 - **Q-M1:** the PR merge mode is a per-project setting, `merge.mode`: `host` (the owner merges on the host) or `controller` (the owner approves in chat and the controller runs `gh pr merge`); this repository uses `controller`.
 - **Q-M4 (a):** each finished stream opens its own PR to `main`; the integration branch holds only program records and combined testing and never merges into `main`.
-- **Q-15 (a):** merge approvals are not decision records. In `controller` mode the owner approves in chat naming the PR and its head sha and the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; in `host` mode the owner's host merge is the approval. The plan's ledger `MERGED` line records the PR, head sha, merge commit, `merged_by`, time, `final` and the approval (the owner's words verbatim with the PR and sha they named, or `host`).
+- **Q-15 (a) (2026-11-01):** merge approvals are not decision records, from block 1c on. In `controller` mode the owner approves in chat naming the PR and its head sha and the controller runs `gh pr merge <n> --merge --match-head-commit <sha>`; in `host` mode the owner's host merge is the approval. The plan's ledger `MERGED` line records the PR, head sha, merge commit, `merged_by`, time, `final` and the approval (the owner's words verbatim with the PR and sha they named, or `host`).
 - **Q-16 (a):** block 3's hook refuses any agent Edit or Write under `paths.decisions`; only the `decisions` tool writes there, and it refuses answers from agents.
 - **Owner steps:** set this repository's host merge methods to merge commits only before block P3 (branch protection with pull requests required and admins enforced is already on).
 
@@ -3898,7 +3900,7 @@ Spec edits SE-1..SE-19, applied to both specs with this section (the edit ids th
 | SE-10 | owner directive (protected base) | Main spec §8 merge rule; §11 bullet on merges; §13 | Now (§8): "Merge only on all-green under an owner grant; the merge runs as its own command. The owner grants merges into a program's integration branch and into main." Becomes: the base branch is protected; nothing is pushed or merged to it directly; every change reaches it by a pull request merged by merge commit on the owner's approval (Q-15 (a): in chat, with the controller's `gh pr merge --match-head-commit`, or by the owner's own merge on the host), recorded as a `MERGED` ledger line; work branches are pushed at checkpoints. §13: the git pre-push hook refuses a push to the base branch, and block 3's Bash hook refuses an agent's push or merge to it. |
 | SE-11 | Q-M4 (a) | Programs design §5 steps 2 and 4; §4 table (program_controller and stream_controller "Never" cells); §7.2 program folder row; main spec §11 | Now (§5.4): "Each completed block merges into the integration branch on the owner's grant ... The integration branch merges to main at milestones the program plan names, and at close". Now (§5.2): "Each stream branch starts from the integration branch." Becomes: stream branches start from the base branch; blocks accumulate on the stream branch; a finished stream opens its own PR to the base branch; the integration branch holds only program records and combined testing and never merges into the base branch. The §4 "Never" cells change from merging into integration to opening, not merging, the stream PR. |
 | SE-12 | Q-M4 (a) | Programs design §12 `gate_streams` and `gate_drift`; main spec §9 `gate_drift` | Now (§12): "The base for `base..HEAD` is the integration branch, or the stream branch named as `stacked_on`"; "a stream branch behind `<program>/integration`, or an integration branch behind main, fails until a sync". Becomes: the base is the base branch (or `stacked_on`); a stream branch behind the base branch, or an integration branch behind it, fails until a sync; a merge of integration into a stream branch fails. |
-| SE-13 | Q-M1 | Main spec §6; §4 (init asks; `doctor` reports) | New key `merge.mode` (`host` \| `controller`, default `host`) in `config/3`: who presses merge on a granted PR. |
+| SE-13 | Q-M1 | Main spec §6; §4 (init asks; `doctor` reports) | New key `merge.mode` (`host` \| `controller`, default `host`) in `config/2` (owner answer Q-Pplan-14 (a)): who presses merge on an approved PR. |
 | SE-14 | Q-M4 (a), the merge-method ruling, Q-15 (a) | Main spec §7.2 deletion proof and no-delete paragraph; programs design §8.1 | Now (§7.2): the cleanup may delete a resolved finding "only when that plan's merge grant is answered and its merge commit exists on the target branch"; "Until `gate_cleanup` lands ..., `gate_register` lets a branch delete a resolved finding only when an answered `merge-grant` names its `resolved_by` plan". Becomes: only when the plan's ledger records its final PR merge (`MERGED ... final=yes`) and that merge commit is on the target branch's first-parent history with the recorded head as its second parent; the cleanup is its own PR (Q-Pplan-9). |
 | SE-15 | owner directive | Main spec §4 (init) | `init` offers to configure host branch protection on the base branch (PR required, merge-commit method); `doctor` reports it. |
 | SE-17 | owner directive, review 3 F-Pp3-5, review 4 F-Pp4-4 | Main spec §4 (CI and the PreToolUse Bash list); programs design §11 | §4: CI also runs, on pull requests at the head sha, `check streams --branch` and, for cleanup heads, `check cleanup`; the Bash list gains the refusals of an agent's push or merge to the base branch, a commit or merge while it is checked out, and `gh pr merge` without `--merge` and `--match-head-commit`, or in `host` mode, plus any agent merge through `gh api` (the REST pull-request merge endpoint, GraphQL `mergePullRequest`) and any agent `git push` to the base branch in any refspec form (review 5 F-Pp5-3). §11: status `merged` means the stream's PR has merged into the base branch. |

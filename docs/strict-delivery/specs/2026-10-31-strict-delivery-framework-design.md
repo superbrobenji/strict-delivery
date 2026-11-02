@@ -203,8 +203,7 @@ Lean tree. Three kinds of path:
   blocks, the extras).
 - Per effort, tracked while live and cleaned when done: specs, plans, program folders, plan
   workspaces, review reports, claims (with the document they cite) and resolved findings (with
-  the effort that resolved them). After a merge, and at a program's close, the cleanup step
-  deletes them from the tree. They stay in git history. Evidence that cites them uses the form
+  the effort that resolved them). After a merge, and at a program's close, the cleanup step deletes them from the tree, in a pull request of its own; in v0.1 it sets no finding to `merged` (owner answer Q-Pplan-9 (a)). They stay in git history. Evidence that cites them uses the form
   `<sha>:<path>`, resolved with `git cat-file` (and required to name a commit in the
   repository), never a file at HEAD. A finding's evidence entry is a commit sha, a
   `<sha>:<path>`, or a plain path tracked at HEAD that lies outside every per-effort path and
@@ -305,7 +304,7 @@ in `supersedes`. At most one open or answered decision may name a given id in `s
 a withdrawn one is ignored, and `ask` refuses a second (owner answer 2026-10-31). The decision schema (appendix A) holds the exact shape. Grants use class
 `merge-grant` and name the plan; a grant inside a program also names the program and the
 stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant; `program` and
-`stream` together or not at all; none of the three on any other class; owner answer 2026-10-31). A pull-request merge approval is not a decision record (owner answer Q-15 (a), 2026-11-02): in `controller` mode the owner approves in chat naming the PR and its head sha, in `host` mode the owner's merge on the host is the approval, and the plan's ledger records each merge as a `MERGED` line (who merged, when, PR, head sha, merge commit, the approval). `merge-grant` records and their fields stay valid for records already written.
+`stream` together or not at all; none of the three on any other class; owner answer 2026-10-31). A pull-request merge approval is not a decision record (owner answer Q-15 (a), 2026-11-01): in `controller` mode the owner approves in chat naming the PR and its head sha, in `host` mode the owner's merge on the host is the approval, and the plan's ledger records each merge as a `MERGED` line (who merged, when, PR, head sha, merge commit, the approval). `merge-grant` records and their fields stay valid for records already written.
 
 ### 7.2 Storage and ids
 
@@ -313,8 +312,7 @@ stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant
   `R` (cross-stream request); the UTC creation date; four characters from the lowercase base32
   alphabet without `0`, `1`, `l`, `o`, drawn at random. Example `DEC-20261031-k3f9`. The date
   must be a valid calendar date and is never compared with the clock (owner answer
-  2026-10-31). No person's name or handle appears in any id. Within one program only the
-  program controller mints ids; a plain plan's controller mints its own.
+  2026-10-31). No person's name or handle appears in any id. Within one program only the program controller (the program session by default, programs design section 4) mints ids; a plain plan's controller mints its own.
 - One file per record, named by id. Decisions and findings carry `status`; a record stays in
   its folder whatever its status, and no status has a folder of its own.
 - Shapes: `gate_decisions` and `gate_register` read record fields from the decision and
@@ -335,7 +333,7 @@ stream, as the fields `plan`, `program` and `stream` (`plan` required on a grant
   deleted by a branch. The only deletions allowed are the cleanup step's (resolved findings and
   per-effort files, section 5). Until `gate_cleanup` lands (programs block), `gate_register`
   lets a branch delete a resolved finding only when an answered `merge-grant` names its
-  `resolved_by` plan; the merge-commit check arrives with `gate_cleanup` (owner answer 2026-10-31). From the programs block, merge approvals are not decision records (owner answer Q-15 (a)), and the deletion proof is the plan's final `MERGED` ledger line checked against git, as below.
+  `resolved_by` plan; the merge-commit check arrives with `gate_cleanup` (owner answer 2026-10-31). From block 1c on, merge approvals are not decision records (owner answer Q-15 (a), 2026-11-01), and the deletion proof is the plan's final `MERGED` ledger line checked against git, as below.
 - "Resolved" covers answered, withdrawn and superseded decisions; resolved decisions are
   permanent, and resolved rulings stay binding.
 - Findings: an open finding (status open, planned, in-progress, fixed-unpinned, pinned or

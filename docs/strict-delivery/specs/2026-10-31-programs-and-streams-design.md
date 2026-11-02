@@ -256,7 +256,7 @@ States are derived from git, plan ledgers and status pages; nothing in the index
 
 `programs/<program>/status.md`: a table with header exactly `stream | block | branch | worktree |
 next task | estimate | used | status | blockers | pending decisions | delivers`; `status` is one of `ready | running | blocked | checkpoint | merged | closed`; `merged` means the stream's pull request has merged into the base branch. The page lives on the integration
-branch and only the program controller edits it, from the streams' messages and handoffs. Stream
+branch and only the program controller (the program session by default, section 4) edits it, from the streams' messages and handoffs. Stream
 branches never carry a copy, so rows never conflict at a merge.
 
 ## 12. Gates
