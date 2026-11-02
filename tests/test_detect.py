@@ -4,6 +4,7 @@ Expected values are written out literally. The Makefile verdicts follow the whit
 (owner Q-C11rr-3 and the controller rulings under it); detect() never runs make. A comment that
 cites make 3.81 for a case is one reproduced with `make -n` in a scratch directory.
 """
+import errno
 import os
 import pathlib
 import stat
@@ -1594,6 +1595,40 @@ class MakefileAsciiNameTests(Base):
 
     def test_ascii_case_variant_still_found(self):  # K1: ASCII case folding stays
         self.assertEqual(self.probe("MAKEFILE"), Detection((Proposal("test", "make test", "MAKEFILE:1 test"),), ()))
+
+
+class VanishedAndSwappedTests(Base):
+    """Block C1 verifier F-C1ver-1 and F-C1ver-2."""
+
+    SOURCES_READ = {"package.json": "{}", "Makefile": "test:\n", "Cargo.toml": "", "go.mod": "", "mvnw": "", "gradlew": "",
+                    "pyproject.toml": "[tool.ruff]\n"}
+
+    def test_every_listed_source_gone_by_the_read_is_a_problem(self):  # F-C1ver-1
+        for name in (n for n in self.SOURCES_READ if n != "Makefile"):  # the Makefile is probed by lstat (N6 test covers its vanish)
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                with mock.patch("os.listdir", lambda root: [name]):
+                    res = detect(d)
+                self.assertEqual(res, Detection((), (Problem(name, "No such file or directory"),)))
+
+    def test_symlink_swapped_in_after_the_lstat_is_not_followed(self):  # F-C1ver-2: O_NOFOLLOW in _read_regular
+        eloop = os.strerror(errno.ELOOP)
+        for name, content in self.SOURCES_READ.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as d:
+                target = os.path.join(outside, "secret")
+                with open(target, "w") as fh:
+                    fh.write(content)
+                os.chmod(target, 0o755)
+                os.symlink(target, os.path.join(d, name))
+                real_lstat = os.lstat
+
+                def lie(path, *a, **k):  # lstat reports the regular file; the path is a symlink by the time it is opened
+                    if os.path.dirname(path) == d and os.path.basename(path) == name:
+                        return real_lstat(target, *a, **k)
+                    return real_lstat(path, *a, **k)
+                with mock.patch("os.lstat", lie):
+                    res = detect(d)
+                self.assertEqual(res.proposals, ())
+                self.assertEqual(res.problems, (Problem(name, eloop),))
 
 
 if __name__ == "__main__":

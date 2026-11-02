@@ -151,8 +151,8 @@ def _package_json(root: str, listing: list) -> tuple:
         data = _fetch(root, "package.json")
     except _Unreadable as e:
         return (), (Problem("package.json", str(e)),)
-    if data is None:
-        return (), ()
+    if data is None:  # vanished since the listing
+        return (), (Problem("package.json", "No such file or directory"),)
 
     def bad(reason: str) -> tuple:
         return (), (Problem("package.json", reason),)
