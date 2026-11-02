@@ -614,7 +614,7 @@ freezes the config and state schemas.
    registers with the id format of section 7.2 and the no-delete rule, `gate_register`,
    `gate_decisions`, decisions/findings tools (`ask`,
    `decide`, `find`, indexes, `in-force.md`).
-2. `gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption, and the decision schema `decision/2` (the optional `overrides`, section 7.1) with its migration; `config/2` with its migration carries `merge.mode` (owner answer Q-Pplan-14 (a)).
+2. `gate_claims`, `gate_dispatch`, `run_all`, git hook shims and installer, self-adoption, and the decision schema `decision/2` (the optional `overrides`, section 7.1) with its migration; `config/2` with its migration carries `merge.mode` (owner answer Q-Pplan-14 (a)) and the optional `escape_cost` (owner answer Q-B6plan-3 (a)).
 
 Programs block, placed after block 2 so this repository can run its remaining blocks as a
 program: the program_controller and stream_controller prompt blocks, automatic continuation,
