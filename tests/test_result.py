@@ -517,8 +517,12 @@ class RawMapTest(unittest.TestCase):
     def test_gate_error_arity(self):  # R11
         self.assertEqual(rendered(raise_gate("text")), "FAIL g.input: text\n")
         self.assertEqual(rendered(raise_gate()), "FAIL g.input: \n")
-        self.assertEqual(rendered(raise_gate("a", "b")), "FAIL g.input: ('a', 'b')\n")
+        self.assertEqual(rendered(raise_gate("a", "b")), "FAIL g.input: [a, b]\n")
         self.assertEqual(rendered(lambda a: (_ for _ in ()).throw(GitNotFound("x"))), "FAIL g.input: x\n")
+
+    def test_multi_argument_gate_error_escaped_once(self):  # owner Q-1c0-5
+        self.assertEqual(rendered(raise_gate("a\\b", {"k": "c\\d"}, "x\ny")),
+                         "FAIL g.input: [a\\\\b, {k: c\\\\d}, x\\ny]\n")
 
     def test_other_exception_paths_with_a_map(self):  # R12
         def key_error(a):

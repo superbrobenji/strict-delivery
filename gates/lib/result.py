@@ -154,7 +154,7 @@ def run_check(name: str, check, args: list) -> Result:
     try:
         result = check(args)
     except GateError as e:
-        return _input_fail(name, _raw(e.args[0]) if len(e.args) == 1 else str(e))
+        return _input_fail(name, _raw(e.args[0] if len(e.args) == 1 else list(e.args)) if e.args else "")
     except SystemExit as e:
         return _input_fail(name, "exit requested (%s)" % ("'%s'" % e.code if isinstance(e.code, str) else _raw(e.code),))
     except Exception as e:
