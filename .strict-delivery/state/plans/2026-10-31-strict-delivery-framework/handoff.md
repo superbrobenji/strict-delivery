@@ -32,7 +32,7 @@ Resume strict-delivery as session controller from this handoff. Session-resume f
 - Main checkout /Users/benji/projects/personal/strict-delivery on block/b1c at 228c872 = origin/block/b1c, plus this checkpoint commit; untracked: the design doc only.
 - Worktrees, all clean: ../strict-delivery-worktrees/a/b1b3 block/b1b-1b3 bfe187c; a/b1c1 block/b1c1 c0bf4a6; b/sb1 block/sb1 1bcf8e3; b/sb1-b13 block/sb1-b13 7b27fe1; c/sc1 block/sc1 a1b1c8b; c/sc2 block/sc2 f87016f; d/sd1 block/sd1 f39e418.
 - main at d9798af (PRs #1-#3 merged: blocks 1a, 1b, B1, C1). Local branch backup/b1c-post-clear at 1506363: the scrapped post-/clear commits, kept, never pushed.
-- Live subagents: none. Every agent of this session has returned; no background jobs. (Plan writers A-D and their reviewers were resumable only inside the session that dispatched them; a new session dispatches fresh agents of the same role from the drafts.)
+- Live subagents: none (2026-11-03); no background jobs. Finished checks to read before acting: owner-batch-2026-11-03.md and owner-batch-2026-11-03-check.md (.superpowers/sdd/2026-10-31-strict-delivery-framework-plans/), method-audit-2026-11-03.md and post-clear-answer-check-2026-11-03.md (.superpowers/sdd/2026-10-31-strict-delivery-framework/). Plan writers and reviewers were resumable only inside the session that dispatched them; a new session dispatches fresh agents of the same role from the drafts.
 - Tests at this checkpoint: 716 OK (1 skip) on /usr/bin/python3 3.9.6 and python3.13 with `PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=<fresh dir> python3 -W error -m unittest discover -s tests -t .`; `python3 -m gates check schema` PASS.
 
 ## Findings in flight
