@@ -4,23 +4,68 @@ plan: docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md
 spec: docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md
 branch: block/b1c
 base: 3094724
-head: 80158a4
+head: 228c872
 ledger: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework/ledger.md
 block: 1c0
-next_task: 1c0 block end
-open_decisions: none
-in_progress_outside_plan: streams run by hand per the plan's "Stream breakdown (2026-11-02)" section and breakdown.md; block/b1c1 (block 1c, worktree ../strict-delivery-worktrees/a/b1c1, Task 1c.1 at c0bf4a6 reviewed, fix round pending); block/sd1 (stream D, worktree ../strict-delivery-worktrees/d/sd1, waits for the 1c0 PR); block/sc2 (block C2 done, PR waits for the 1c0 PR, then Step 6 enable check cites); stream B block B2 starts from main after the 1c0 PR
+next_task: plan reviews of the resume-plan drafts A-D (writing-plans for the approved 2026-11-02 design)
+open_decisions: none (no decision records yet; owner questions are pending inside the drafts, see "Open owner questions")
+in_progress_outside_plan: writing-plans for docs/strict-delivery/specs/2026-11-02-session-resume-and-questions-design.md (approved, untracked); then the pre-existing 1c0 block end and streams as listed under "After the planning"
 ---
-Resume strict-delivery as session controller from this handoff and the ledger's last 60 lines (tail the ledger; do not read it whole).
+Resume strict-delivery as session controller from this handoff. Session-resume fields below are carried in this body until programs Task P1.2 gives the session handoff kind its schema (design §3.2; owner answer Q-RA-4 pending, recommended (a)).
 
-Where things stand (2026-11-02): on main: blocks 1a, 1b, B1, C1 (PRs #1-#3 merged). block/b1c (main checkout) carries sub-block 1c0: Task 1c0.1 complete at ea8355b (library hardening, cites registration) plus all plan/spec work: Blocks 3-6 and Programs sections, every owner answer, spec edits, Q-PL-1 (plan in full before code; stream breakdown as last planning step), the stream breakdown (80158a4, breakdown.md committed).
+## Start (do this first, read-only, no edit and no dispatch before step 5)
+1. Invoke these skills, in order: `strict-delivery` (user-level; its lap-timer paths are replaced by this repository's: gates are `python3 -m gates`, docs under `docs/strict-delivery/`, records under `.strict-delivery/state/`), `superpowers:using-superpowers`; for planning work `superpowers:writing-plans` (the active step), for a new rule or format `superpowers:brainstorming`, for execution `superpowers:subagent-driven-development` (design §3.5, owner PC-R5).
+2. Read every entry of "Required reads" in full, in order.
+3. Check each fact of "State to verify" against git, the worktrees and the files named; a read-only `investigator` agent may do it (design §3.1).
+4. Append one ledger line `RESUME head=<sha> reads=<n> diffs=<list or none>`.
+5. Report to the owner "where we are, what I will do next" with any differences. With no differences, carry on with "Next, in order". With any difference, stop and wait for the owner.
 
-Next, in order:
-1. Docs review of 80158a4 (scoped; base 615bc21). Then the small-re-review cost rule plan/spec edits (ledger "Pending plan/spec edits"), reviewed.
-2. Sub-block 1c0 end: final branch review (base 3094724), verifier (opus, top tier fallback), then PR to main; the owner approves in chat naming PR and head sha; merge with `gh pr merge --merge --match-head-commit <sha>`; ledger a MERGED line with the owner's words.
-3. After the 1c0 PR: update block/sc2 from main, controller removes nothing (A6/E1 already on), run Step 6 (check cites passes), short check, PR for block C2. Update block/b1c1 and block/sd1 from main.
-4. Task 1c.1 fix round (resume its implementer or fresh): F-1c1-r1 (untested J2/R4/C9 values), F-1c1-r2 (literal finding/1 -> schema file), merge resolution of the GATES line, E2 string and CitesDispatchTest usage string. Then 1c.2 (needs store.py after 1c0), 1c.3; stream D 2a.1 -> 2a.2 -> 2a.3; block B2 (answers recorded; B2.1-B2.3 tables in .superpowers/sdd/...-b/).
+## Required reads
+- docs/strict-delivery/specs/2026-11-02-session-resume-and-questions-design.md (all; approved 2026-11-02; untracked in the main checkout): the design being planned, its Appendix S catch-up catalog and the owner's answers on it.
+- .strict-delivery/state/plans/2026-10-31-strict-delivery-framework/ledger.md lines 411 to the end: every owner answer and ruling since the post-/clear scrap; lines 1-410 are the pre-/clear record, read by line when a cite points there.
+- .superpowers/sdd/2026-10-31-strict-delivery-framework-plans/resume-plan-brief.md (all): the brief the four plan writers follow.
+- The four drafts and their latest reviews, all in .superpowers/sdd/2026-10-31-strict-delivery-framework-plans/: resume-plan-A-draft.md with resume-plan-A-review.md; resume-plan-B-draft.md with resume-plan-B-review.md and resume-plan-B-rereview1.md; resume-plan-C-draft.md with resume-plan-C-review.md and resume-plan-C-rereview1.md; resume-plan-D-draft.md with resume-plan-D-review.md. Each draft ends with "## Fix round <n>" sections listing what changed.
+- .superpowers/sdd/2026-10-31-strict-delivery-framework/session-resume-investigation.md section 3 (PC-R1..R5, adopted).
+- docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md lines 1-65 (header, Global Constraints, Process, Review Focus) and lines 6914-6936 (Stream breakdown, Later blocks); other sections by the task ids a draft names.
 
-Cost and pace rules (owner 2026-11-02): weekly limit ~78% used at hand-off; slow lane until ~95%, then stop and wait for the Friday 20:00 reset. One or two streams at a time. Small re-review rule: a scoped re-review runs on sonnet only when (1) it is a re-review, (2) the fix diff is <=150 changed lines in <=4 files, (3) no gates/lib, git ops, hooks, dispatch, registry or schema paths, (4) findings LOW/MEDIUM only, no open owner question, (5) the previous round found no fix-caused defect, (6) Rule N not firing (judge by hand until loopstats); escalate to opus on a defect, NEEDS_DECISION or uncertainty; fix round 5's re-review always opus. Drafting agents sonnet; plan writers/reviewers opus. Do re-review LOW findings (the owner kept re-reviews).
+## State to verify (at 2026-11-03)
+- Main checkout /Users/benji/projects/personal/strict-delivery on block/b1c at 228c872 = origin/block/b1c, plus this checkpoint commit; untracked: the design doc only.
+- Worktrees, all clean: ../strict-delivery-worktrees/a/b1b3 block/b1b-1b3 bfe187c; a/b1c1 block/b1c1 c0bf4a6; b/sb1 block/sb1 1bcf8e3; b/sb1-b13 block/sb1-b13 7b27fe1; c/sc1 block/sc1 a1b1c8b; c/sc2 block/sc2 f87016f; d/sd1 block/sd1 f39e418.
+- main at d9798af (PRs #1-#3 merged: blocks 1a, 1b, B1, C1). Local branch backup/b1c-post-clear at 1506363: the scrapped post-/clear commits, kept, never pushed.
+- Live subagents: none. Every agent of this session has returned; no background jobs. (Plan writers A-D and their reviewers were resumable only inside the session that dispatched them; a new session dispatches fresh agents of the same role from the drafts.)
+- Tests at this checkpoint: 716 OK (1 skip) on /usr/bin/python3 3.9.6 and python3.13 with `PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=<fresh dir> python3 -W error -m unittest discover -s tests -t .`; `python3 -m gates check schema` PASS.
 
-Standing rules: main is protected (PRs only; controller mode merge); subagents never stash/reset/checkout in shared trees, no heredocs, no rm; never retry a command a subagent was denied; owner-only questions get options with a recommendation; repo is public (copy nothing from the template project). Briefs for gates: list-only gates pass through gitinfo._require_toplevel; once-only options use gate_args _Once.
+## Findings in flight
+None as register rows. Open review findings live in the draft reviews above (A: fix round 1 done, not re-reviewed; B: fix round 2 done, not re-reviewed; C: re-review 1 found F-RCr-1..9, fix round 2 needed; D: review found F-RDp-1..20, fix round 1 needed).
+
+## Rulings this block
+Block 1c0 controller rulings remain as ledgered; none new this session beyond those the drafts propose (listed in each draft as "Controller ruling:" lines, not yet ledgered).
+
+## Grant
+None awaited.
+
+## Open owner questions (held for one combined batch once the drafts are clean; numbers as of now)
+- Part A: Q-RA-1, Q-RA-2, Q-RA-4, Q-RAp-1, Q-RAp-2 (+1 in the draft).
+- Part B: Q-RB-1 (C-1 forbidden-list narrowing), Q-RB-2 (C-16 "Ruling" wording vs MS:280-281 and V-8), Q-RB-3 (store helpers resting on mismatch M2 of task-1c.2-domain.md).
+- Part C: Q-RC-1 (git output pins; `color.*` is an invalid key), Q-RCp-1 (dependency skips), Q-RCp-2 (Unicode output differs between 3.9 and 3.13).
+- Part D: 10 kept plus Q-RDp-A, Q-RDp-B (Q-RD-1 and Q-RD-5 settled: tier3 for plan_writer/plan_reviewer by Q-B2plan-16 (a) and L406; L319).
+- Known cross-draft conflict: parts A and C both add "Task 1d.3"; they cannot merge (C-rereview1): C's task needs a distinct id (for example a sub-block 1d2).
+
+## Next, in order
+1. Fix and review rounds until each draft is clean (owner L98: re-reviews in full; cosmetic items are not findings): A re-review 1; B re-review 2; C fix round 2 (fresh plan writer: the first is over budget) then re-review; D fix round 1 then re-review. Plan reviewers are opus with the plan-reviewer strict lines used in this session's dispatches.
+2. One combined owner batch in the agreed format (design §3.6-3.7: each question whole; "Also open" repeats earlier open questions whole, grouped by source).
+3. Splice: one writer applies the four drafts (keeping one text where drafts overlap: C-2, C-9, C-24, C-43, C-46, C-47, C-56, C-68, `required_reads`, SE-B-18 vs D's V-14) to the plan and both specs on a branch; docs review in full until clean.
+4. Stream breakdown revision (breakdown.md and the plan's "Stream breakdown" section: new Tasks 1c0.2, 1d.3, P5.1, R3.3, R4.1 and the second 1d task) and its review.
+5. Commit the design doc and land everything in a docs-only PR (Q-BD-6); then Task 1c0.2 (interim project skill `strict-delivery-repo` and CLAUDE.md).
+
+## After the planning (unchanged from the pre-/clear handoff, still pending)
+- Docs review of 80158a4 (scoped; base 615bc21) and the small-re-review rule edits (now inside part D).
+- Sub-block 1c0 end: final branch review (base 3094724), verifier, PR to main, owner approval in chat naming PR and head sha, `gh pr merge --merge --match-head-commit <sha>`, MERGED ledger line.
+- Then block/sc2 PR after updating from main; Task 1c.1 fix round (F-1c1-r1, F-1c1-r2, merge resolution of GATES, E2 and CitesDispatchTest strings); 1c.2, 1c.3; stream D 2a.1 -> 2a.2 -> 2a.3; block B2.
+
+## Pace and standing rules
+- Weekly usage 94% at 2026-11-03; the owner keeps this session and continues until the limit; the reset is Friday 2026-11-06 20:00.
+- Dispatches carry this repository's merged prompt blocks from `skills/strict-delivery/prompts/<role>.md` on main, verbatim (Q-SDDT-4); plan writers and reviewers carry the rules of resume-plan-brief.md.
+- Before asking the owner anything, check every guess against the repository; unchecked guesses are not presented.
+- Agents: own `mktemp -d`; no stash, reset, checkout or clean in shared trees; no heredocs, no `$(...)` except mktemp, never rm; budgets in tokens and minutes, stop at 80 %; report background jobs as finished or stopped.
+- main is protected (PRs only; controller merge mode after the owner's chat approval).
