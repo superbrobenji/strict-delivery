@@ -5771,7 +5771,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       - `model-name` (`\b(haiku|sonnet|opus|fable)(?=\d|\b)`, so `opus4` and `sonnet45` match and `opusculum` does not (owner Q-B11-1): prose speaks in tiers; models come from `models.tiers`, spec §6);
       - `old-steps` (`\bS\d+ block b\d+\b`).
     - `forbidden_hits(text: str) -> list` of `(name, line_no, match)`. It scans each line, and also each paragraph with its line breaks read as spaces, so a phrase split by a line wrap (`lap` / `timer`, `serial` / `port`) is found; a paragraph hit reports the line where the match starts, and a match found both ways is listed once (owner Q-B11-5).
-    - `labels(text: str) -> list`: the label of each paragraph after the intro. A label is the text up to and including the first `. ` of a paragraph's first line, so the label keeps its full stop.
+    - `labels(text: str) -> list`: the label of each paragraph after the intro. A label is the text up to and including the first `. ` of a paragraph's first line, so the label keeps its full stop. A paragraph whose first line holds no `. ` has the label `""` (owner Q-B11r-2), which no `LABELS` row contains, so the paragraph is refused.
     - `paragraph(text: str, label: str) -> str`.
     - `LABELS: dict` from role to the ordered label list (table below).
   - Prompt-block format (consumed by `gate_dispatch`, block 2, and checked on every file present in `PROMPTS_DIR`):
@@ -5904,14 +5904,18 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
   WRITTEN = (..., "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer")
   def test_reviewer_blocks_differ_in_scope():
       assert paragraph(read("task_reviewer"), "Verdict.") != paragraph(read("final_reviewer"), "Verdict.")
-      assert "whole branch" in paragraph(read("final_reviewer"), "Branch scope.")
-  def test_reviewers_rerun_gates():
-      for r in ("task_reviewer", "final_reviewer", "final_verifier"): assert "python3 -m gates run_all" in read(r)
-  def test_exception_reviewer_scope():          # DB-5
+      assert whole_token("whole branch", paragraph(read("final_reviewer"), "Branch scope."))      # owner Q-B12-1
+  def test_reviewers_rerun_gates():             # owner Q-B12-1: whole token, in the named paragraph
+      for r in ("task_reviewer", "final_reviewer"):
+          for s in ("python3 -m gates run_all", "every claim"): assert whole_token(s, paragraph(read(r), "Method."))
+      assert whole_token("python3 -m gates run_all", paragraph(read("final_verifier"), "Adversarial scope."))
+  def test_exception_reviewer_scope():          # DB-5, owner Q-B12-1 and Q-B12-2
       p = paragraph(read("exception_reviewer"), "Exception scope.")
-      for s in ("one proposed exception", "`rule-override`", "only the proposal and its evidence"): assert s in p
-  def test_top_tier_blocks_name_tier4():        # DB-2
-      for r in ("final_verifier", "exception_reviewer"): assert "tier4" in read(r)
+      for s in ("one proposed exception", "`rule-override`", "only the proposal and its evidence", "playbook",
+                "before the owner rules"): assert whole_token(s, p)
+  def test_top_tier_blocks_name_tier4():        # DB-2, owner Q-B12-1
+      for r, lab in (("final_verifier", "Adversarial scope."), ("exception_reviewer", "Exception scope.")):
+          assert whole_token("tier4", paragraph(read(r), lab))
   ```
 - [ ] **Step 2: Run; expect FAIL** (files missing).
 - [ ] **Step 3: Write the four blocks.**
@@ -5945,26 +5949,32 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
              "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier")
   def test_all_b_roles_written():
       assert sorted(WRITTEN) == sorted(B_ROLES)
+  # `disk(role)` is Task B1.2's helper (the real file's text), reused, never redefined. Every phrase is a whole token
+  # (Global Constraints) in a named paragraph (owner Q-B12-1, Q-B13-1 (a)); a missing heading fails the check.
   def test_controller_dispatch_grammar_in_order():
-      p = paragraph(read("controller"), "Dispatch discipline.")
-      pos = [p.index("`" + h + "`") for h in DISPATCH_HEADINGS]
-      assert pos == sorted(pos) and "fork" in p
-  def test_controller_fix_loop():
-      assert "rounds 1-3" in read("controller") and "rounds 4-5" in read("controller")
+      p = paragraph(disk("controller"), "Dispatch discipline.")
+      at = [_find_token("`" + h + "`", p) for h in DISPATCH_HEADINGS]
+      assert min(at) >= 0 and at == sorted(at) and whole_token("fork dispatch is refused", p)
+  def test_controller_fix_loop():               # spec §10; the paragraph is `Continuation.` (owner Q-B13-1 (a))
+      p = paragraph(disk("controller"), "Continuation.")
+      assert all(whole_token(s, p) for s in ("rounds 1-3", "rounds 4-5", "one tier up", "owner question"))
   def test_controller_ruling_format():
-      p = paragraph(read("controller"), "Rulings.")
-      assert "Ruling: what -- why -- cost if wrong -- spec cite" in p and "`rulings.max_per_block`" in p   # spec §7.1
+      p = paragraph(disk("controller"), "Rulings.")
+      assert whole_token("Ruling: what -- why -- cost if wrong -- spec cite", p) and whole_token("`rulings.max_per_block`", p)   # spec §7.1
   def test_controller_model_choice():           # spec §8 "the top tier only for `top_tier_roles`"; spec §6 `models.tiers`
-      p = paragraph(read("controller"), "Dispatch discipline.")
-      assert "`models.tiers`" in p and "`top_tier_roles`" in p
-  def test_audit_blocks_triage_before_plan():   # spec §8 "the owner rules on triage before any plan"
+      p = paragraph(disk("controller"), "Dispatch discipline.")
+      assert whole_token("`models.tiers`", p) and whole_token("`top_tier_roles`", p)
+  def test_audit_blocks_triage_before_plan():   # spec §8 "the owner rules on triage before any plan"; `Owner-only decisions.` (owner Q-B13-1 (a))
       for r in ("audit_reviewer", "audit_verifier"):
-          assert "before any plan" in read(r) and "`triage`" in read(r), r
+          p = paragraph(disk(r), "Owner-only decisions.")
+          assert all(whole_token(s, p) for s in ("the owner rules", "before any plan", "`triage`")), r
   def test_audit_coverage_and_reproducers():
-      assert "coverage list" in paragraph(read("audit_reviewer"), "Coverage first.")
-      m = paragraph(read("audit_verifier"), "Method.")
-      assert "reproducer" in m and "coverage list" in m
+      p = paragraph(disk("audit_reviewer"), "Coverage first.")
+      assert whole_token("coverage list", p) and whole_token("progress file", p)
+      m = paragraph(disk("audit_verifier"), "Method.")
+      assert all(whole_token(s, m) for s in ("every reproducer", "coverage list", "extends"))
   ```
+  Also, from the B1.2 carry-overs: the controller's `Report contract.` and the audit verifier's `Verdict.` name only `STATUS_LINE` values; `tier4` appears in neither audit block; the two audit `Method.` paragraphs differ. The B1.2 test that pins `WRITTEN` to seven roles pins `WRITTEN[:7]`.
 - [ ] **Step 2: Run; expect FAIL.**
 - [ ] **Step 3: Write the three blocks.**
 - [ ] **Step 4: Run on both interpreters and every enabled gate; expect PASS.**
@@ -6279,7 +6289,7 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
   - `@dataclass(frozen=True) Problem(source: str, reason: str)`: a candidate source that could not be read. It is reported for init to show, never raised.
   - `@dataclass(frozen=True) Detection(proposals: tuple, problems: tuple)`.
   - `detect(root: str) -> Detection`. It reads only regular files directly in `root` (DC-3). It never runs a command, never writes, and never needs git.
-    - If `root` is not a directory, it raises `GateError("<root>: not a directory")`.
+    - It raises `GateError` when `root` is not exactly a `str` (a `str` subclass is refused too; owner Q-C1ver-3), is not a directory (`"<root>: not a directory"`), or is a directory that cannot be read or searched (`"<root>: cannot read (<reason>)"`, owner Q-C11-1); every other failure is a `Problem` (controller ruling, block C1 final review F-C1fin-1: plan states the code's fail-closed root checks).
     - Order: source order (`SOURCES`, Task C1.2's table), then slot order within a source. Duplicates across sources are kept, since the owner chooses.
     - `test_one` is never proposed; init always asks for it (DC-2).
   - `package.json` (DC-4: always `npm run`, whatever lockfile is present):
@@ -6292,19 +6302,27 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
     - Of `GNUmakefile`, `makefile` and `Makefile`, in the order GNU make looks for them, only the first name that exists (by `os.lstat`) is a candidate, since GNU make reads that one and never a later one. Checked with GNU Make 3.81: a symlinked `GNUmakefile` is followed and `Makefile` is ignored; a directory or a dangling symlink named `GNUmakefile` stops make with an error.
       - If that entry is a regular file, it is read.
       - If it is a symlink, the result is `Problem("<name>", "symlink; not read")`, as for every source (Task C1.2). Any other kind (directory, FIFO) gives `Problem("<name>", "not a regular file")`.
-      - In both problem cases no later name is read, so nothing is proposed that `make` would not run.
-    - A rule line does not start with `\t` (that is a recipe line, or a "commands commence before first target" error). Its leading spaces, and any tabs after a first space, are skipped, as GNU make skips them. The rest does not start with `#` or `.`, and it matches `^([A-Za-z0-9_.-]+(?:[ \t]+[A-Za-z0-9_.-]+)*)[ \t]*::?(?![:=])`.
-      - The lookahead refuses `:=`, `::=` and `:::=` at the colon: GNU make 4.x reads these as variable assignments, and GNU Make 3.81 fails on them (rc 2).
-      - The target group admits only `[A-Za-z0-9_.-]` and blanks, so a line with `=`, `?=`, `+=` or `!=` before its first colon never matches. These are assignments too.
-      - Checked with GNU Make 3.81, `make -n <target>` on a one-rule Makefile, recipe `\t@echo ran`:
-        - rc 0, so proposed: `test:`, `test::`, `build test:` (both targets), `  test:` (leading spaces), ` \ttest:` (a space, then a tab).
-        - Proposed as well, `test: dep` and `test : x`: with the prerequisite file present (`dep`, `x`) make gives rc 0 and runs the recipe; without it, rc 2 with "No rule to make target `dep', needed by `test'" (and the same for `x`), which names `test` as a rule. A target with no rule gives "No rule to make target `lint'" with no "needed by".
-        - rc 2, so not proposed: `test := x`, `test ?= x`, `test += x`, `test != x`, `test=x`, `test:=x` ("No rule to make target `test'"); `test ::= x` ("No rule to make target `='"); `test::=x` ("No rule to make target `=x'"); `test :::= x` ("missing target pattern"); `\ttest:` as the first line or after an assignment ("commands commence before first target"); `\ttest:` after a rule (a recipe line); `# test:` and `  # test:`; `  test := x`.
-        - Not proposed although make runs them, since detection reads literal target names only: `.PHONY: test` (rc 0, "Nothing to be done"), `$(T):` with `T = test`, `%:` and `test.o:` (implicit rules).
-    - A line ending in `\` is joined with the next line, as GNU make joins them: the backslash, the newline and the next line's leading whitespace become one space. The joined text is one logical line, numbered by its first physical line. So `x \` followed by `test:` is the rule line `x test:` at line 1 (`make test` runs that target), while a recipe line `\t@echo a \` followed by `test:` stays a recipe line (`make test` finds no rule).
-    - Lines between `define` and `endef` are skipped.
+      - In both problem cases no later name is read, so nothing is proposed from a file `make` would not read.
+    - What a Makefile proposal promises (owner Q-C11r4-0 (a)): only that it names a literal target of a plain rule in a file whose every line is one of the allowed forms below. It does not promise that `make` will run that rule; init shows the source line and the owner confirms.
+    - The file is read line by line (physical lines; a CR directly before the newline is part of the line end) as a fail-closed whitelist (owner Q-C11rr-3). Before the forms below, each line is refused, in this order (owner Q-C11r4-0 (a)), when it holds:
+      - a control character, Unicode category Cc (U+0000-U+001F, U+007F-U+009F) other than TAB, NUL included; a CR anywhere but directly before the newline (also a CR at the end of a file with no final newline) counts as one (reason `control character`; F-C11r4-4);
+      - a line ending in `\` (reason `line ends in a backslash`);
+      - a call to `eval`, `error`, `shell`, `file`, `call`, `value`, `info` or `warning` in `$(...)` or `${...}` form: `$(` or `${`, the name, then any character other than an ASCII letter, ASCII digit, `_` or `-` (so `$(eval.x)` and `$(evalé x)` are refused; controller ruling D-C11r4r-1 (a) under owner Q-C11r4-0), or the end of the line. This applies to every line, comment and recipe lines included, and `$$(shell x)` is refused as well (reason `make function call`; F-C11r4-2).
+    Every line must then be one of:
+      1. blank or whitespace-only;
+      2. a comment: optional blanks, then `#`;
+      3. a simple assignment, not starting with `\t`: `NAME op value`, with NAME `[A-Za-z_][A-Za-z0-9_.-]*` and `op` one of `=`, `:=`, `?=`, `+=` (blanks around `op` optional); an assignment to `MAKEFLAGS` or `MFLAGS` (exact names, any operator, any value) is refused (reason `assignment to MAKEFLAGS or MFLAGS`; owner Q-C11r4-0 (a), F-C11r4-3);
+      4. a rule, not starting with `\t`: one or more literal targets (each `[A-Za-z0-9_.-]+`, so no `$`, `%`, `=` or `/`; `./test:` is refused, since make reads `test` and `./test` as one target; owner Q-C11r4-0 (a), F-C11r4-1), then `:` or `::`, then text that holds no `=`, no `;`, no `\` and no second `:`; a `#` ends the text, and what follows it is a comment. A target must not appear under both `:` and `::` in the file. Leading blanks of forms 3 and 4 are skipped; a first character `\t` makes the line a recipe line. A line is a directive line, and refused, when its first word (after leading blanks, up to a blank, `:`, `=`, `?`, `+` or `!`) is a directive word (`export`, `unexport`, `override`, `private`, `vpath`, `include`, `-include`, `sinclude`, `undefine`, `define`, `endef`, `ifdef`, `ifndef`, `ifeq`, `ifneq`, `else`, `endif`), whatever follows (`include:`, `ifdef ::`, `export =x` included), or when a directive word is any of its targets (`test export:`); this applies to forms 3 and 4 alike (controller ruling R2 under owner Q-C11rr-3);
+      5. a recipe line: starts with `\t`, and only once a rule line has appeared since the last assignment (blank and comment lines between keep that context). Its text is not examined.
+    - Any other line, and any line ending in `\`, gives no proposals from that Makefile and exactly one `Problem("<name>", "unsupported line <n>: <reason>")`, where `<n>` is the first such line (1-based) and `<name>` the Makefile name as listed. The reason is fixed text and never quotes the file. Refused, with examples: `define`/`endef`; `ifeq`/`ifneq`/`ifdef`/`ifndef`/`else`/`endif`; `include`/`-include`/`sinclude`; `export`/`unexport`/`override`/`private`/`vpath`/`undefine`, also alone or as a target (`include:`, `test export:`); a target-specific variable (`test: X = 1`, `test: X != 1`); `;` after the colon (`test: ; echo`); a second `:` after the colon (`test ::: x`, `test: a:b`); a target under both `:` and `::` (the Problem names the second line); a backslash (`x \` then `test:`; `test: a\;b`); a tab-led line before the first rule or after an assignment; `$(T):`, `%:`; a `/` in a target (`./test:`, `out/x.o:`); `test != x`, `test ::= x`; a control character (`\0`, a form feed, a lone CR); `MAKEFLAGS = -q`, `MFLAGS += -t`; `X := $(error x)`, `# $(shell x)`, `\t@echo ${info x}`; any text that is none of the five forms. Nothing is guessed: a Makefile that uses a construct outside the whitelist is not read at all, and init asks the owner for the commands.
+    - Checked with GNU Make 3.81, `make -n <target>` in a scratch directory, recipe `\t@echo ran`:
+      - rc 0, so proposed: `test:`, `test::`, `build test:` (both targets), `  test:` (leading spaces), ` \ttest:` (a space, then a tab).
+      - `test: dep` and `test : x` are proposed as well: without the prerequisite file make gives rc 2 with "No rule to make target `dep', needed by `test'", which names `test` as a rule. A target with no rule gives "No rule to make target `lint'" with no "needed by". This stands (owner Q-C11r4-3 (a)): the rule exists, and a prerequisite that make cannot build is not a reason to withhold the proposal.
+      - `test := x` and `test: X = 1` define no target: rc 2 "No rule to make target `test'".
+      - `.PHONY: test` is accepted as a rule line but proposes nothing (its target is `.PHONY`); make runs it (rc 0, "Nothing to be done").
     - Each target named exactly `test`, `lint` or `build` gives `Proposal(name, "make " + name, "<file>:<line> " + name)`, the first definition only.
     - A file that is not UTF-8 gives a `Problem`.
+    - Out of scope (owner Q-C11r4-0 (a), F-C11r4-5): repository state. Detection reads only the source files; it does not check whether an entry named like a slot (a `test/` folder or a `test` file in `root` or in a `VPATH` directory) would make `make test` report "up to date" instead of running the rule.
 
 **Input-domain dimensions:**
 - `root`: missing, a file, a symlink to a directory (accepted, read through), unreadable.
@@ -6316,15 +6334,15 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
   - a script value non-str, empty str or whitespace only;
   - key case (`Test`), extra keys (`start`, `test:unit`), duplicate key.
 - Makefile file names: each of the three; several present; lowercase-only on a case-insensitive filesystem; the first existing name a symlink (to a regular file, dangling), a directory or a FIFO, with a regular `Makefile` after it (one `Problem` for the first name; nothing read from `Makefile`).
-- Rule lines:
-  - `test:`, `test: dep`, `test::`, `build test:`;
-  - `.PHONY: test`, `test := x`, `test ?= x`, `test += x`, `test != x`, `test ::= x`, `test :::= x`, `test::=x`, `test=x`, `test : x`;
-  - leading spaces `  test:` (a rule), a space then a tab ` \ttest:` (a rule), `  test := x` (not a rule), `  # test:` (not a rule);
-  - a recipe line `\ttest:` (after a rule; first in the file), `# test:`;
-  - `$(T):`, `%:`, `test.o:`;
-  - a rule line continued by `\` onto `test:` (a rule, numbered line 1); a recipe line continued by `\` onto `test:` (not a rule);
-  - `define`/`endef`;
-  - CRLF line ends, no final newline, a duplicate definition.
+- Makefile lines (the whitelist; owner Q-C11rr-3):
+  - blank and whitespace-only lines; comments (`# test:`, `  # test:`);
+  - simple assignments with each operator (`=`, `:=`, `?=`, `+=`), with and without blanks around it, also leading blanks (`test := x`: not a rule);
+  - rules: `test:`, `test: dep`, `test::`, `build test:`, `test : x`, leading spaces `  test:`, a space then a tab ` \ttest:`, a trailing `#` comment, `.PHONY: test` (accepted, proposes nothing), literal targets with `.`, `-`, `_` and digits, `/` after the colon (`test: src/a.c`);
+  - recipe lines: after a rule (also past blank and comment lines), not before the first rule, not after an assignment;
+  - refused with one `Problem`, the first such line named: `define`/`endef`; `ifeq`/`ifneq`/`ifdef`/`ifndef`/`else`/`endif`; `include`/`-include`/`sinclude`; `export`/`unexport`/`override`/`private`/`vpath`/`undefine` as first word or as a target, also alone (`include:`, `include :`); target-specific variables; `;`, `\` or a second `:` after the colon (`test ::: x`, `test: a:b`); a target under both `:` and `::` (the Problem names the second line; controller ruling R3 under owner Q-C11rr-3); any line ending in `\`; a tab-led line before the first rule; `$` or `%` in a target; `test != x`, `test ::= x`; unmatched text, a BOM, a form feed;
+  - refused under owner Q-C11r4-0 (a), on any line: every Cc character other than TAB (NUL, form feed, U+0085), a CR not directly before the newline; a `/` in a target (`./test:`, `./test::` after `test:`, `out/x.o:`); an assignment to `MAKEFLAGS` or `MFLAGS` with each operator; a call to each of `eval`, `error`, `shell`, `file`, `call`, `value`, `info`, `warning` in `$(...)` and `${...}` form in an assignment value of each flavour, after the colon, in a recipe and in a comment, nested, after `$$`; accepted neighbours (U+0020, U+007E, U+00A0, U+00AD in a comment; `makeflags`, `MAKEFLAGSX`, `MAKEFLAGS:` as a target; `$(CC)`, `$(SHELL)`, `$(evaluate x)`, `$( shell x)`, `$(filter a,b)`);
+  - repository state (a `test/` folder or `test` file in `root`): out of scope, the proposal stands (owner Q-C11r4-0 (a));
+  - CRLF line ends, no final newline, a duplicate definition, physical line numbers.
 - Order: several sources and slots at once.
 - Side effects: the tree is unchanged (a byte and mtime snapshot); no subprocess (patched `subprocess.run` and `os.system` assert not called).
 
@@ -6350,17 +6368,16 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
       write("Makefile", "VAR := test\n.PHONY: test\nbuild test: dep\n\t@echo\nlint:: x\n  check:\n# lint:\n")
       assert [(p.slot, p.command, p.source) for p in detect(tmp).proposals] == [
           ("test", "make test", "Makefile:3 test"), ("lint", "make lint", "Makefile:5 lint"), ("build", "make build", "Makefile:3 build")]
-  def test_makefile_variable_and_recipe_lines_are_not_rules():
-      # subTests (each the whole Makefile; GNU Make 3.81 `make -n test` exits 2 on every one):
-      #   "test=x\n", "test:=x\n", "test := x\n", "test ?= x\n", "test += x\n", "test != x\n",
-      #   "test ::= x\n", "test::=x\n", "test :::= x\n", "  test := x\n", "  # test:\n", "# test:\n",
-      #   "\ttest:\n", "x = 1\n\ttest:\n", "all:\n\ttest:\n", "all:\n\t@echo a \\\ntest:\n", "define D\ntest:\nendef\n"
-      assert detect(tmp).proposals == ()
+  def test_makefile_assignments_are_not_rules():
+      # subTests (each the whole Makefile): "test=x\n", "test:=x\n", "test := x\n", "test ?= x\n", "test += x\n",
+      #   "  test := x\n", "  # test:\n", "# test:\n", ".PHONY: test\n"
+      assert detect(tmp).proposals == () and detect(tmp).problems == ()
   def test_makefile_rule_after_leading_blanks():        # subTests: "  test:\n\t@echo ran\n", " \ttest:\n\t@echo ran\n" (3.81: rc 0, `ran`)
       assert [(p.slot, p.command, p.source) for p in detect(tmp).proposals] == [("test", "make test", "Makefile:1 test")]
-  def test_makefile_continued_rule_line_joins():      # GNU make: `make test` runs this target
-      write("Makefile", "x \\\ntest:\n\t@echo ran\n")
-      assert [(p.slot, p.command, p.source) for p in detect(tmp).proposals] == [("test", "make test", "Makefile:1 test")]
+  def test_makefile_unsupported_line_is_one_problem():  # subTests: "define D\ntest:\nendef\n", "ifdef X\n", "include x.mk\n",
+      # "export test:\n", "test: X = 1\n", "test: ; echo\n", "x \\\ntest:\n", "\ttest:\n", "$(T):\n", "test != x\n", "foo\n"
+      d = detect(tmp)
+      assert d.proposals == () and d.problems == (Problem("Makefile", "unsupported line 1: <reason>"),)
   def test_first_existing_makefile_name_not_regular():  # subTests: GNUmakefile a symlink (to a file; dangling), a directory, a FIFO; a regular Makefile with "test:" after it
       d = detect(tmp); assert d.proposals == () and [p.source for p in d.problems] == ["GNUmakefile"]
   def test_gnu_make_file_precedence():                # GNUmakefile and Makefile both present
@@ -6382,7 +6399,16 @@ C starts after block 1a merges into `main`. Global Constraints, the Process for 
 **Files:**
 - Modify: `gates/lib/detect.py`, `tests/test_detect.py`
 
-**Owner answers applied:** DC-1 (the seven-row table below; lint only from a project file that names it), DC-3.
+**Owner answers applied:** DC-1 (the seven-row table below; lint only from a project file that names it), DC-3; Q-C12-1 to Q-C12-5 (2026-11-01, all option (a)):
+- Q-C12-1: any `"""` or `'''` anywhere in `pyproject.toml` gives one `Problem("pyproject.toml", "unsupported line <n>: multi-line string")` (n the first such line) and no proposals from that file; no TOML lexing.
+- Q-C12-2: "file present" for rows 3-6 means the file is opened through `_fetch` (an unreadable file is a `Problem`), content not examined; `mvnw` and `gradlew` must have an execute bit (`st_mode & 0o111`), else `Problem("<name>", "not executable")`. The plan test `test_toolchain_sources` therefore `chmod`s the wrappers.
+- Q-C12-3: a row 3-7 source counts only under its exact spelling in `os.listdir(root)`; a case variant is nothing.
+- Q-C12-4: Task C1.1's Makefile name match compares ASCII case only (fixes K1, a KELVIN SIGN name): an entry with a non-ASCII character never matches a probe; when `lstat` finds the probe but no listing entry matches exactly or by ASCII case, the result is `Problem("<probe>", "name not ASCII")` and no later name is read.
+- Q-C12-5: `[tool.ruff.format]` (a sub-table whose first key is `format`) gives no lint proposal; `[tool.ruff]` or any other `[tool.ruff.<sub>]` still does.
+- Controller row S1: `SOURCES` is the tuple of the seven labels (`"Makefile"` stands for row 2); `detect` reads through one private label -> reader table whose keys a test checks against `SOURCES`.
+- Q-C12r-1 (2026-11-02, (a)): a trailing comment on a matched `pyproject.toml` header line that holds a Unicode Cc character other than TAB (a lone CR included) gives `Problem("pyproject.toml", "unsupported line <n>: control character")` and no proposals, as for C1.1's control-character rule. Control characters on other lines are not examined.
+- Q-C12r-2 (2026-11-02, (a)): Q-C12-3 extends to row 1: `package.json` counts only under its exact spelling in `os.listdir(root)`; `Package.json` gives nothing.
+- A UTF-8 byte order mark at the start of `pyproject.toml` (domain P2: one `Problem`, no proposals) is reported in the existing format `Problem("pyproject.toml", "unsupported line 1: byte order mark")`; the owner fixed no reason text, so the reason follows `unsupported line <n>: <reason>`.
 
 **Interfaces:**
 - Consumes: Task C1.1.
