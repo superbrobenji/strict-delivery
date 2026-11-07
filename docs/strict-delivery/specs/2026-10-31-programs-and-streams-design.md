@@ -112,7 +112,7 @@ A stream is not one agent at a time. It runs as a tree of worktrees:
 A blocked agent writes its question (options and cost, the recommended option, and the report it came from as `source`) into its handoff, then messages its
 parent: sub-controller to stream controller, stream controller to program controller, program controller to the program session (directly to the program session when it acts as program controller). The session batches the questions for the owner. Answers go
 down as decision records, and the waiting agent is told to continue. Completion and checkpoint
-reports travel the same path.
+reports travel the same path. Each agent restarts as soon as every question it raised is answered (main spec section 7.1); the session asks them with their `source` and prints every batch with `decisions batch`.
 
 ### 4.4 Automatic continuation (replaces "stop for the owner's `/clear`")
 
