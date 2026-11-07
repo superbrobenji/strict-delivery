@@ -48,7 +48,7 @@ max_depth: 5         # the session runs with CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPT
 
 | id | period | branch | owns (paths) | open tasks | starts when |
 |---|---|---|---|---|---|
-| `a` | now -> program start | `block/b1c` (1c0), `block/b1c1`, `block/b1d`, `block/b2b`, `block/b2c`, `block/p1`..`p4` | residual: every path not owned by `b`, `c` or `d` in the same window (P:5527). The five shared files stay A's (P:5532), except the `__main__.py` window below. | 1c0.1 (fix round), 1c.1-1c.3, 1d.1, 1d.2, 2b.1-2b.3, 2c.1 (with `ask --overrides`), 2c.2, 2c.3, P1.1-P4.3 | running |
+| `a` | now -> program start | `block/b1c` (1c0), `block/b1c1`, `block/b1d`, `block/b1d2`, `block/b2b`, `block/b2c`, `block/p1`..`p4` | residual: every path not owned by `b`, `c` or `d` in the same window (P:5527). The five shared files stay A's (P:5532), except the `__main__.py` window below. | 1c0.1 (fix round), 1c.1-1c.3, 1d.1, 1d.2, 1d2.1, 2b.1-2b.3, 2c.1 (with `ask --overrides`), 2c.2, 2c.3, P1.1-P4.3 | running |
 | `b` | -> PR-B2 merged | `block/sb2` | P:5525 row, plus B2.2's added prose (Q-BD-5 (a)) | B2.1, B2.2, B2.3 | PR-1c0 merged (L:374) |
 | `c` | -> PR-C2 merged | `block/sc2` | P:5526 row | none: C2.1 and C2.2 are complete (L:313, L:352); only the PR is left | PR-C2 may merge after PR-1c0 (P:6956) |
 | `d` | PR-1c0 merged -> PR-D merged | `block/sd1` | 2a.1 Files without `decisions_cli` (Q-2a1-1 (a), L:387): `gates/lib/migrations.py`, `gates/schemas/decision.yml`, `gates/lib/decisions.py`, `tests/test_playbook_drift.py`, `tests/test_migrations.py`, `tests/test_decisions_lib.py`, and `gates/lib/store.py` and `tests/test_store.py` **both from PR-1c merged** (order rule O2; R2:F-BDr2-3). 2a.2: `gates/schemas/claim.yml`, `gates/lib/claims.py`, `gates/lib/gitinfo.py` (additive `blob_id`), `tests/test_claims_lib.py`. 2a.3: `gates/gate_claims.py`, `tests/test_gate_claims.py`, and `gates/__main__.py` `GATES["claims"]` **from PR-1d merged** (order rule O3). | 2a.1, 2a.2, 2a.3 | PR-1c0 merged and `sd1` updated (L:389) |
@@ -59,9 +59,9 @@ max_depth: 5         # the session runs with CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPT
   - D's `blob_id` (2a.2) reaches `main` with PR-D.
   - A's next writer, 2b.2, starts only after PR-D, because 2b.1 waits for PR-D (E15). So there is no concurrent writer.
 - **O2 `gates/lib/store.py` (1c.2 and 2a.1).**
-  - 1c.2 adds its private merge-base row helpers (Q-1c2-1 (a), L:387; L:383) on `block/b1c1`.
+  - 1c.2 adds its private merge-base row helpers (mismatch M2, L:383; breakdown edit E-8; store.py order L:387) on `block/b1c1`.
   - 2a.1 writes its `base_errors` change (P:889) only after `sd1` has merged `main` containing PR-1c. Its commit waits for PR-1c anyway (E09).
-  - The same window covers `tests/test_store.py`. 1c.2 may test its new helpers there (Q-1c2-1 (a)); 2a.1's `base_errors` rows (P:892) are written after the update.
+  - The same window covers `tests/test_store.py`. 1c.2 may test its new helpers there (mismatch M2, L:383; breakdown edit E-8); 2a.1's `base_errors` rows (P:892) are written after the update.
   - Until then 2a.1 works in its other files. The `store.py` and `test_store.py` part takes about 0.5 h after the update, so 2a.1 commits at 7.5, not 7.0 (R2:F-BDr2-3).
   - So both files are A's until PR-1c merges and D's after: one writer at a time.
 - **O3 `gates/__main__.py` (2a.3 and A's 1d).**
@@ -82,10 +82,11 @@ max_depth: 5         # the session runs with CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPT
 |---|---|---|---|---|---|
 | 1c0.1 | a | PR-1c0 | fix round (U1, L:393) | see P:483-484 | P:480 |
 | 1c.1 | a | PR-1c | M (running) | C `gate_decisions.py`; M `__main__.py`; T | P:561-563 |
-| 1c.2 | a | PR-1c | M | C `gate_register.py`; M `__main__.py`, `store.py` (helpers, Q-1c2-1 (a)); T | P:619-621; L:383, L:387 |
+| 1c.2 | a | PR-1c | M | C `gate_register.py`; M `__main__.py`, `store.py` (helpers, mismatch M2, L:383; breakdown edit E-8); T | P:619-621; L:383, L:387 |
 | 1c.3 | a | PR-1c | M | C `tools/__init__.py`, `tools/index.py`, 4 schemas; M `__main__.py`, `producers.py`, `.gitignore`, `tests/test_schema_lib.py` (K6, L:383); T | P:667-669 |
 | 1d.1 | a | PR-1d | M | C `tools/decisions_cli.py`; M `__main__.py`, `producers.py`; T | P:725-727 |
 | 1d.2 | a | PR-1d | M | C `tools/findings_cli.py`; M `__main__.py`, `producers.py`; T | P:781-783 |
+| 1d2.1 | a | PR-1d2 | M | C `print_table.py`, `tests/test_print_table.py`; M `result.py`, `config.py`, `schema.py`, `decisions.py`, `yamlsub.py`, `tests/test_schema_lib.py` | plan Task 1d2.1 (owner Q-RCp-2 (a)) |
 | 2a.1 | d | PR-D | L | section 2 row `d` (2a.1 part); records migration by the session (P:1011) | P:884-892 |
 | 2a.2 | d | PR-D | M | C `claim.yml`, `claims.py`; M `gitinfo.py`; T | P:1016-1019 |
 | 2a.3 | d | PR-D | M | C `gate_claims.py`; M `__main__.py` (O3); T | P:1122-1125 |
@@ -114,6 +115,8 @@ max_depth: 5         # the session runs with CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPT
 | E09 | 1c.1, 1c.2 | 2a.1 | O | Step 5 runs `check decisions` and `check register` before the commit (P:1011); review F-BDr-2; coordinator fact |
 | E10 | 2a.1 | 2a.2 | C | `migrations.migrate` P:1026; L:389 |
 | E11 | 2a.1 | 2c.2 | C+F | `migrations.*` P:1460; edits `migrations.py` P:1445 |
+| E11b | 2a.1 | 1d2.1 | F | `decisions.py` is stream `d`'s until PR-D merges (section 2 row `d`) |
+| E11c | 1d2.1 | 2c.2 | F | `config.py`; 2c.2 starts from `main` holding PR-1d2 |
 | E13 | 2a.2 | 2a.3 | C | `claims.*` P:1130 |
 | E13b | 1d.1, 1d.2 | 2a.3 (its `__main__.py` commit) | F | O3 |
 | E15 | 1c.1, 1c.2, 2a.3 | 2b.1 | C | `__main__.GATES` P:1188; strict tuple P:1214-1216; the real-gates fixture test (R:F-BDr-1, P:1231) |
@@ -153,7 +156,8 @@ The session merges one PR at a time and updates each branch before its merge (P:
 | PR-D | 2a.1, 2a.2, 2a.3 | PR-1c0 (L:389) | PR-1c0, PR-1c (E09), PR-1d (O3) | 2a.1 2.75 to 5.75; wait for PR-1c, then U and records, store.py and test_store.py part 0.5 h, commit at 7.5; 2a.2 7.5 to 9.5; 2a.3 9.5 to 11.5 (U for PR-1d inside); U; E | **13.25** |
 | PR-B2 | B2.1, B2.2, B2.3 | PR-1c0 | PR-1c0 | B2.1 to 4.5; B2.2 to 7.0; B2.3 to 9.0; U; E | **10.75** (after PR-1d in the merge queue) |
 | PR-1d | 1d.1, 1d.2 | PR-1c | PR-1c | 1d.1 \|\| 1d.2 6.5 to 8.5; U; E | **10.25** |
-| PR-2b | 2b.1, 2b.2, 2b.3 | PR-D (E15) and PR-B2 (E15b) | PR-D, PR-B2, PR-1c | 13.25 to 19.25; U; E | **21.0** |
+| PR-1d2 | 1d2.1 | PR-D (E11b) | PR-D | 1d2.1 13.25 to 15.25; E | **16.75** |
+| PR-2b | 2b.1, 2b.2, 2b.3 | PR-D (E15) and PR-B2 (E15b) | PR-D, PR-B2, PR-1c, PR-1d2 (its U) | 13.25 to 19.25; U; E | **21.0** |
 | PR-2c | 2c.1, 2c.2, 2c.3 | PR-2b (E12, E20), PR-1d (E20b), PR-D | PR-2b | 2c.1 \|\| 2c.2 21.0 to 23.0; 2c.3 (L) to 26.0; U; E | **27.75** |
 | PR-P1 | P1.1-P1.3 | PR-2c (P:1692) | PR-2c | serial 6 h; E | **35.25** |
 | PR-P2 | P2.1-P2.3 | PR-P1 | PR-P1 | P2.1 2 h; P2.2 (L) \|\| P2.3 3 h; E | **41.75** |
@@ -172,11 +176,11 @@ Notes.
 | W1 | 0-2.75 | 1c0 fix and end 4; 1c.1 2; 1c.3 2; C2 re-check 1; this revision 1; docs writer 1 = 11 |
 | W2 | 2.75-6.5 | 1c.2 2; 2a.1 2; B2.1 and B2.2 2; 1c end 2; PC1 drafters 2 = 10 |
 | W3 | 6.5-13.25 | 1d.1, 1d.2 4; 2a.2 or 2a.3 2; B2.3 and B2 end 2; 1d end 2; D end 2; PC1 drafter 1 = 13 |
-| W4 | 13.25-21.0 | 2b.x 2; 2b end 2; PC1 drafter 1 = 5 |
+| W4 | 13.25-21.0 | 2b.x 2; 1d2.1 2; 1d2 end 2; 2b end 2; PC1 drafter 1 = 9 |
 | W5 | 21.0-27.75 | 2c.1, 2c.2 4 (then 2c.3 2); 2c end 2 = 6 |
 | W6-W8 | 27.75-50.0 | P1 4; P2 6; P3 and P4 with both ends 10; program-plan writer and reviewer 2 = at most 12 |
 
-Antichains (all edges checked): {1c.3, 1c.2, 2a.1, B2.1}, {1d.1, 1d.2, 2a.2, B2.3}, {2c.1, 2c.2}, {P2.2, P2.3}, {P3.1, P4.1, P4.3}.
+Antichains (all edges checked): {1c.3, 1c.2, 2a.1, B2.1}, {1d2.1, 2b.1}, {1d.1, 1d.2, 2a.2, B2.3}, {2c.1, 2c.2}, {P2.2, P2.3}, {P3.1, P4.1, P4.3}.
 
 ---
 
@@ -196,7 +200,7 @@ plan: 2026-10-31-strict-delivery-framework
 max_concurrent: 25
 max_depth: 5
 done: [1a.1, 1a.2, 1a.3, 1b.1, 1b.2, 1b.3, 1c0.1, 1c.1, 1c.2, 1c.3, 1d.1, 1d.2,
-       2a.1, 2a.2, 2a.3, 2b.1, 2b.2, 2b.3, 2c.1, 2c.2, 2c.3,
+       1d2.1, 2a.1, 2a.2, 2a.3, 2b.1, 2b.2, 2b.3, 2c.1, 2c.2, 2c.3,
        P1.1, P1.2, P1.3, P2.1, P2.2, P2.3, P3.1, P3.2, P3.3, P4.1, P4.2, P4.3,
        B1.1, B1.2, B1.3, B2.1, B2.2, B2.3, C1.1, C1.2, C2.1, C2.2]
 streams:
