@@ -17,6 +17,8 @@ from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minim
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _S = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "decision.yml"))
 TAG = "%s/%d" % (_S.kind, _S.version)  # Q-2a1-3: the tag comes from the schema file
+_FS = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "finding.yml"))
+FTAG = "%s/%d" % (_FS.kind, _FS.version)  # Q-2a1-3: a finding row's tag, from the finding schema file
 DEC = ".strict-delivery/state/decisions"
 CATS = ["schema", "store", "base", "landed", "refs", "open-ref", "scan"]
 ID = "DEC-20261031-k3f9"
@@ -274,7 +276,7 @@ class RepoStateTests(Base):  # R1-R5
         self.assertEqual(code, 1)
 
     def test_r3_finding_file_in_decisions_dir(self):
-        finding = {"schema": "finding/1", "id": "F-20261031-k3f9"}
+        finding = {"schema": FTAG, "id": "F-20261031-k3f9"}
         write_record(make_repo(self.work), DEC + "/F-20261031-k3f9.yml", finding)
         commit_all(self.work, "f")
         out, code = self.run_()
@@ -287,7 +289,8 @@ class RepoStateTests(Base):  # R1-R5
 
     def test_r4_register_layout_is_input_fail(self):
         for name, make in (("x.yaml", lambda p: open(p, "w").close()), (".gitkeep", lambda p: open(p, "w").close()),
-                           ("sub", os.mkdir), ("lnk.yml", lambda p: os.symlink("/dev/null", p))):
+                           ("sub", os.mkdir), ("lnk.yml", lambda p: os.symlink("/dev/null", p)),
+                           ("fifo.yml", os.mkfifo)):
             with self.subTest(name):
                 self.work = os.path.join(self.tmp, "w_" + name.replace(".", "_"))
                 os.mkdir(self.work)
@@ -301,6 +304,18 @@ class RepoStateTests(Base):  # R1-R5
         os.makedirs(os.path.join(root, ".strict-delivery/state"))
         os.symlink(self.tmp, os.path.join(root, DEC))
         self.input_fail(*self.run_(), DEC)
+
+    def test_r4_directory_is_a_file(self):
+        self.build(files={DEC: "not a directory\n"})
+        self.input_fail(*self.run_(), DEC + ": is not a directory")
+
+    def test_r4_parent_is_a_symlink(self):
+        root = self.build()
+        real = os.path.join(self.tmp, "state")
+        os.makedirs(os.path.join(real, "decisions"))
+        os.makedirs(os.path.join(root, ".strict-delivery"), exist_ok=True)
+        os.symlink(real, os.path.join(root, ".strict-delivery/state"))
+        self.input_fail(*self.run_(), ".strict-delivery/state: is a symlink")
 
     def test_r4_record_yaml_error_or_non_mapping(self):
         root = self.build()
@@ -354,8 +369,8 @@ class CategoryTests(Base):  # C1-C12
         self.assertEqual(code, 1)
 
     def test_c1_wrong_tag_and_status_matrix(self):
-        self.build([row(ID, schema="finding/1")])
-        self.assertIn("FAIL decisions.schema.%s: schema: expected %s, got finding/1\n" % (ID, TAG), self.run_()[0])
+        self.build([row(ID, schema=FTAG)])
+        self.assertIn("FAIL decisions.schema.%s: schema: expected %s, got %s\n" % (ID, TAG, FTAG), self.run_()[0])
 
     def test_c1_answered_without_answer(self):
         self.build([row(ID, "answered", answer=None)])
@@ -508,6 +523,15 @@ class CategoryTests(Base):  # C1-C12
         os.unlink(os.path.join(root, "CLAUDE.md"))
         self.put("CLAUDE.md", b"\xff\xfe " + ID.encode())
         self.assertIn("cannot be read as a UTF-8 regular file (not valid UTF-8)", self.run_()[0])
+
+    def test_c9_tracked_cite_deleted_in_working_tree(self):
+        root = self.build([lasting(ID)], {"CLAUDE.md": CLAUDE})
+        os.rename(os.path.join(root, "CLAUDE.md"), os.path.join(self.tmp, "c.md"))
+        out, code = self.run_()
+        self.assertIn("FAIL decisions.landed.%s: landed_in: CLAUDE.md cannot be read as a UTF-8 regular file "
+                      "(No such file or directory)\n" % ID, out)
+        self.assertNotIn("PASS decisions.landed", out)
+        self.assertEqual(code, 1)
 
     def test_c10_staged_cite_counts_as_tracked(self):
         root = self.build([lasting(ID)], commit=False)
@@ -756,6 +780,13 @@ class OpenRefTests(Base):  # O1-O16
         out = self.run_()[0]
         self.assertIn("FAIL decisions.open-ref.docs/a\\\\b.md:1: docs/a\\\\b.md:1 references", out)
         self.assertIn("FAIL decisions.open-ref.docs/c\\nd.md:1: docs/c\\nd.md:1 references", out)
+        self.assertEqual(len(out.splitlines()), out.count("\n"))
+
+    def test_j2_cite_with_newline_and_backslash_is_escaped_once(self):
+        self.build([lasting(ID, landed_in=["CLAUDE.md\nx\\y"])], {"CLAUDE.md": CLAUDE})
+        out = self.run_()[0]
+        self.assertIn("FAIL decisions.landed.%s: landed_in: CLAUDE.md\\nx\\\\y is not a normalised repo-relative "
+                      "path with an optional non-empty #anchor\n" % ID, out)
         self.assertEqual(len(out.splitlines()), out.count("\n"))
 
 
