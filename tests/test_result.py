@@ -2085,5 +2085,88 @@ class RoundElevenTest(unittest.TestCase):
         self.assertEqual(outs["0"].splitlines(), want)
 
 
+# Fix round 12 (F-r11r-1, owner Q-ES-V1 (a), Q-1C0FIN3-1 (a)): (a) an own __str__ whose text is a built-in base's
+# own rendering (KeyError's repr form, OSError's filename form) has that form undone once, as the base branch does;
+# (b) "own" is judged against every built-in exception class's __str__ in the real __mro__, not only the branch's.
+def _sup(self):
+    return super(type(self), self).__str__()
+
+
+class _SupMixin:
+    def __str__(self):
+        return super().__str__()
+
+
+class _CountedRepr:
+    """A filename whose str is ``f\\n`` and whose repr counts its calls (and changes with each)."""
+    calls = 0
+
+    def __str__(self):
+        return "f\n"
+
+    def __repr__(self):
+        type(self).calls += 1
+        return "r%d" % type(self).calls
+
+
+_KEsup = type("KEsup", (KeyError,), {"__str__": _sup})
+_OEsup = type("OEsup", (OSError,), {"__str__": _sup})
+_FNFsup = type("FNFsup", (FileNotFoundError,), {"__str__": _sup})
+_SupK = type("SupK", (_SupMixin, KeyError), {})
+_SupO = type("SupO", (_SupMixin, OSError), {})
+_OK = type("OK", (OSError, KeyError), {})
+_FK = type("FK", (FileNotFoundError, KeyError), {})
+_OKsup = type("OKsup", (OSError, KeyError), {"__str__": _sup})
+_SupOK = type("SupOK", (_SupMixin, OSError, KeyError), {})
+_GK = type("GK", (GateError, KeyError), {})
+_KG = type("KG", (KeyError, GateError), {})
+_GO = type("GO", (GateError, OSError), {})
+_OG = type("OG", (OSError, GateError), {})
+
+DELEGATING_CASES = [  # (a): main d9798af gave each of these
+    ("ke_super_one", lambda: _KEsup("k\n"), "KEsup: k\\n"),
+    ("ke_super_two", lambda: _KEsup("k\n", "j"), "KEsup: [k\\n, j]"),
+    ("oe_super_filename", lambda: _OEsup(2, "No", "f\n"), "OEsup: [Errno 2] No: f\\n"),
+    ("oe_super_filename2", lambda: _OEsup(2, "No", "f\n", None, "g\n"), "OEsup: [Errno 2] No: f\\n -> g\\n"),
+    ("fnf_super_filename", lambda: _FNFsup(2, "No", "f\n"), "FNFsup: [Errno 2] No: f\\n"),
+    ("mixin_super_ke", lambda: _SupK("k\n"), "SupK: k\\n"),
+    ("mixin_super_oe", lambda: _SupO(2, "No", "f\n"), "SupO: [Errno 2] No: f\\n"),
+    ("oe_ke_super", lambda: _OKsup(2, "No", "f\n"), "OKsup: [Errno 2] No: f\\n"),
+    ("mixin_super_oe_ke", lambda: _SupOK(2, "No", "f\n"), "SupOK: [Errno 2] No: f\\n"),
+]
+INHERITED_CASES = [  # (b): no __str__ of the class's own; the built-in one it inherits has its form undone once
+    ("oe_ke_filename", lambda: _OK(2, "No", "f\n"), "OK: [Errno 2] No: f\\n"),
+    ("oe_ke_filename2", lambda: _OK(2, "No", "f\n", None, "g\n"), "OK: [Errno 2] No: f\\n -> g\\n"),
+    ("fnf_ke_filename", lambda: _FK(2, "No", "f\n"), "FK: [Errno 2] No: f\\n"),
+    ("oe_ke_errno", lambda: _OK(2, "No\n"), "OK: [Errno 2] No\\n"),
+    ("ge_ke", lambda: _GK("k\n"), "k\\n"),
+    ("ke_ge", lambda: _KG("k\n"), "k\\n"),
+    ("ge_oe_filename", lambda: _GO(2, "No", "f\n"), "[Errno 2] No: f\\n"),
+    ("oe_ge_filename", lambda: _OG(2, "No", "f\n"), "[Errno 2] No: f\\n"),
+]
+
+
+class RoundTwelveTest(unittest.TestCase):
+    """F-r11r-1: no ordinary class shows a built-in rendering escaped twice."""
+
+    def check_cases(self, cases):
+        for label, make, want in cases:
+            with self.subTest(label=label):
+                reason = want.replace("\\n", "\n")
+                self.assertEqual(both_modes(raising(make)), ("FAIL g.input: %s\n" % want, reason, str, str))
+
+    def test_an_own_str_returning_the_built_in_form_renders_once(self):  # F-r11r-1 (a)
+        self.check_cases(DELEGATING_CASES)
+
+    def test_an_inherited_built_in_str_is_not_an_own_str(self):  # F-r11r-1 (b)
+        self.check_cases(INHERITED_CASES)
+
+    def test_an_inherited_built_in_str_is_not_called(self):  # F-r11r-1 (b): as main d9798af, no repr of the filename
+        _CountedRepr.calls = 0
+        got = both_modes(raising(lambda: _OK(2, "No", _CountedRepr())))
+        self.assertEqual((got, _CountedRepr.calls),
+                         (("FAIL g.input: OK: [Errno 2] No: f\\n\n", "OK: [Errno 2] No: f\n", str, str), 0))
+
+
 if __name__ == "__main__":
     unittest.main()
