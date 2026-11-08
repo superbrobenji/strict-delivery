@@ -682,6 +682,7 @@ class RawMapTest(unittest.TestCase):
             (OSError(2, StrRaises()), "FileNotFoundError: [2, SR]"),
             (OSError(StrRaises()), "OSError: SR"),
             (OSError(ReprRaises(), 1, 2, 3, 4, 5), "OSError: [RS, 1, 2, 3, 4, 5]"),
+            (OSError(ReprRaises(), ("f\\g", 1)), "OSError: [Errno RS] [f\\\\g, 1]"),  # default text unreadable
             (ImportError(StrRaises(), 1), "ImportError: [SR, 1]"),
             (ImportError(BothRaise()), "ImportError: BothRaise"),
             (SyntaxError(StrRaises()), "SyntaxError: SR"),
@@ -719,6 +720,59 @@ class RawMapTest(unittest.TestCase):
                     out = escaping_or_rendered(exc)
                     self.assertTrue(out.startswith("FAIL g.input: %s: " % type(exc).__name__), out)
         self.assertGreater(swept, 1000)
+
+    def test_uniterable_container_collapses_to_the_type_name(self):  # V1r2-1, owner Q-1C0V1R-3 (b)(i)
+        class IterDict(dict):
+            def items(self):
+                raise RuntimeError("no items")
+
+        class IterList(list):
+            def __iter__(self):
+                raise RuntimeError("no iter")
+        cases = (
+            (ValueError(IterDict(k=1)), "ValueError: ValueError"),
+            (ValueError("ok", IterList([1])), "ValueError: ValueError"),  # the renderable "ok" is dropped too
+            (KeyError(IterList([1])), "KeyError: KeyError"),
+            (OSError(2, "s", IterList([1])), "FileNotFoundError: FileNotFoundError"),
+            (ImportError(IterDict(k="a\\b"), 1), "ImportError: ImportError"),  # own __str__ fell back to repr
+            (AttributeError(IterDict(k="a\\b"), 1), "AttributeError: AttributeError"),  # own __str__ on 3.12+
+            (OSError(2, IterList(["a\\b"])), "FileNotFoundError: FileNotFoundError"),  # the [Errno] form
+            (SyntaxError(IterList(["a\\b"])), "SyntaxError: SyntaxError"),
+            (SyntaxError(IterList(["a\\b"]), ("f", 1, 2, "t")), "SyntaxError: SyntaxError"),
+            (GateError(IterDict(k=1)), "GateError"),
+            (SystemExit(IterList([1])), "exit requested (SystemExit)"),
+        )
+        for exc, want in cases:
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(escaping_or_rendered(exc), "FAIL g.input: %s\n" % want)
+
+    def test_nesting_past_the_recursion_limit_collapses_to_the_type_name(self):  # V1r2-1, Q-1C0V1R-3 (b)(i)
+        deep = []
+        for _ in range(sys.getrecursionlimit() + 100):
+            deep = [deep]
+        for exc, want in ((ValueError(deep), "ValueError: ValueError"), (KeyError(deep), "KeyError: KeyError"),
+                          (GateError(deep), "GateError"), (SystemExit(deep), "exit requested (SystemExit)")):
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(escaping_or_rendered(exc), "FAIL g.input: %s\n" % want)
+
+    def test_base_exception_from_rendering_propagates(self):  # owner Q-1C0V1R-2 (a)(i): as from the check itself
+        class StrExit:
+            def __str__(self):
+                raise SystemExit("from str")
+            __repr__ = __str__
+
+        class StrKbd:
+            def __str__(self):
+                raise KeyboardInterrupt()
+            __repr__ = __str__
+        for exc in (ValueError(StrExit()), KeyError(StrExit()), OSError(2, "s", StrExit()), GateError(StrExit()),
+                    ImportError(StrExit(), 1)):
+            with self.subTest(exc=type(exc).__name__):
+                with self.assertRaises(SystemExit) as cm:
+                    rendered(lambda a, exc=exc: (_ for _ in ()).throw(exc))
+                self.assertEqual(cm.exception.code, "from str")
+        with self.assertRaises(KeyboardInterrupt):
+            rendered(lambda a: (_ for _ in ()).throw(ValueError(StrKbd())))
 
     def test_other_exception_paths_with_a_map(self):  # R12
         def key_error(a):

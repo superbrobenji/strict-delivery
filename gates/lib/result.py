@@ -170,20 +170,28 @@ def _exc_text(e: BaseException) -> str:
         text = str(e)
     except Exception:  # the own __str__ cannot render an argument: render the arguments themselves
         return _args_text(e)
+    return _own_str_text(e, text)
+
+
+def _text_of(make) -> Optional[str]:
+    """``make()``, or None if it raises: a form whose text cannot be computed is not the form of ``str(e)``."""
     try:
-        return _own_str_text(e, text)
-    except Exception:  # an argument that cannot render: str(e) did not need it, so its text stands
-        return text
+        return make()
+    except Exception:
+        return None
 
 
 def _own_str_text(e: BaseException, text: str) -> str:
-    """``text`` (``str(e)`` from an own ``__str__``) with the arguments rendered once where it shows them."""
-    if text == BaseException.__str__(e):  # an own __str__ that fell back to the default (OSError, ImportError, ...)
+    """``text`` (``str(e)`` from an own ``__str__``) with the arguments rendered once where it shows them. When
+    it shows them and they cannot render, the error propagates to ``_reason_text``, as for a default ``__str__``
+    (owner Q-1C0V1R-3 (b)(i)); a text that does not show them stands."""
+    if text == _text_of(lambda: BaseException.__str__(e)):  # an own __str__ that fell back to the default
         return _args_text(e)
-    if isinstance(e, OSError) and text == "[Errno %s] %s" % (e.errno, e.strerror):
+    if isinstance(e, OSError) and text == _text_of(lambda: "[Errno %s] %s" % (e.errno, e.strerror)):
         return "[Errno %s] %s" % (_raw(e.errno), _raw(e.strerror))
-    if isinstance(e, SyntaxError) and e.msg is not None and text.startswith(str(e.msg)):
-        return _raw(e.msg) + text[len(str(e.msg)):]
+    msg = _text_of(lambda: str(e.msg)) if isinstance(e, SyntaxError) and e.msg is not None else None
+    if msg is not None and text.startswith(msg):
+        return _raw(e.msg) + text[len(msg):]
     return text
 
 
