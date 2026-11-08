@@ -15,7 +15,12 @@ def _check(args: List[str]) -> int:
     return run_gate(args[0], importlib.import_module(GATES[args[0]]).check, args[1:])
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check}
+def _index(args: List[str]) -> int:
+    from gates.tools import index
+    return index.main(args)
+
+
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "index": _index}
 
 
 def main(argv: List[str]) -> int:

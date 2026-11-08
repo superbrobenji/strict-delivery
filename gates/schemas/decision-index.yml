@@ -1,0 +1,32 @@
+kind: decision-index
+version: 1
+format: yaml
+files:
+  - dir: decisions
+    glob: index.yml
+fields:
+  schema:
+    type: str
+  decisions:
+    type: list
+    items:
+      type: map
+      fields:
+        id:
+          type: id
+          id_kind: decision
+        file:
+          type: str
+        status:
+          type: enum
+          values:
+            - open
+            - answered
+            - withdrawn
+            - superseded
+        class:
+          type: str
+        topics:
+          type: list
+          items:
+            type: str
