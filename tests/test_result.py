@@ -1084,5 +1084,157 @@ class ExactReasonTest(unittest.TestCase):
         self.assertEqual(len(outs), 1, outs)
 
 
+class ROLine(Line):
+    """A Line whose attributes cannot be assigned once frozen (F-fin2r-1)."""
+
+    def __setattr__(self, k, v):
+        if getattr(self, "_frozen", False):
+            raise AttributeError("read-only line")
+        object.__setattr__(self, k, v)
+
+
+def frozen_line(*a):
+    ln = ROLine(*a)
+    ln._frozen = True
+    return ln
+
+
+class UnreadLine(Line):
+    """A Line whose ``reason`` cannot be read."""
+
+    def __getattribute__(self, k):
+        if k == "reason":
+            raise RuntimeError("no reason")
+        return object.__getattribute__(self, k)
+
+
+class KbdLine(Line):
+    def __getattribute__(self, k):
+        if k == "reason":
+            raise KeyboardInterrupt()
+        return object.__getattribute__(self, k)
+
+
+class UnreadResult(Result):
+    def __getattribute__(self, k):
+        if k == "lines":
+            raise RuntimeError("no lines")
+        return object.__getattribute__(self, k)
+
+
+class OddList(list):
+    def _no(self, *a):
+        raise RuntimeError("no")
+    __iter__ = __len__ = __bool__ = __getitem__ = _no
+
+
+def returning(make):
+    return lambda a: make()
+
+
+def shape_of(make):
+    """(text, json line, the json gate, the rendered lines' types) for a check returning ``make()``."""
+    check = returning(make)
+    try:
+        text = run("g", check, [])[1]
+        js = json.loads(run("g", check, ["--json"])[1])
+        r = run_check("g", check, [])
+    except Exception as x:
+        return "ESCAPED %s" % type(x).__name__
+    kinds = {(type(r.gate), type(ln.status), type(ln.id), type(ln.reason)) for ln in r.lines}
+    return text, js["lines"], js["gate"], kinds, type(r) is Result and all(type(ln) is Line for ln in r.lines)
+
+
+def refused(reason):
+    return ("FAIL g.input: %s\n" % safe_text(reason), [{"status": "FAIL", "id": "g.input", "reason": reason}], "g",
+            {(str, str, str, str)}, True)
+
+
+class ResultShapeTest(unittest.TestCase):
+    """F-fin2r-1 and owner Q-1C0FIN2-U2 (a): run_check checks the whole shape of a Result a check returns and fails
+    it on ``<gate>.input`` (spec §13) with a named reason, never raising; it never changes the check's Result."""
+
+    def test_line_whose_attributes_cannot_be_assigned(self):  # F-fin2r-1
+        got = shape_of(lambda: Result("g", [frozen_line("FAIL", "g.x", SBad("a\\b"))]))
+        self.assertEqual(got, ("FAIL g.x: a\\\\b\n", [{"status": "FAIL", "id": "g.x", "reason": "a\\b"}], "g",
+                               {(str, str, str, str)}, True))
+
+    def test_checks_result_is_not_changed(self):  # F-fin2r-1
+        ln = Line("FAIL", SBad("g.\\x"), SBad("r"))
+        shared = Result("g", [ln])
+        lines = shared.lines
+        self.assertEqual(run("g", returning(lambda: shared), [])[1], "FAIL g.\\\\x: r\n")
+        self.assertEqual(run("g", returning(lambda: shared), ["--json"])[0], 1)
+        self.assertIs(shared.lines, lines)
+        self.assertIs(shared.lines[0], ln)
+        self.assertEqual((type(ln.id), type(ln.reason)), (SBad, SBad))
+
+    def test_well_formed_shapes_render(self):
+        cases = [
+            (lambda: Result("g", [Line("PASS", "g.a"), Line("FAIL", "g.b", "r")]),
+             "PASS g.a\nFAIL g.b: r\n", [{"status": "PASS", "id": "g.a", "reason": ""},
+                                         {"status": "FAIL", "id": "g.b", "reason": "r"}]),
+            (lambda: Result("g", OddList([Line("PASS", "g.a")])), "PASS g.a\n",
+             [{"status": "PASS", "id": "g.a", "reason": ""}]),
+            (lambda: Result("g", [Line("PASS", "g.a", SBad("x"))]), "PASS g.a\n",
+             [{"status": "PASS", "id": "g.a", "reason": "x"}]),
+        ]
+        for n, (make, text, lines) in enumerate(cases):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(make), (text, lines, "g", {(str, str, str, str)}, True))
+
+    def test_gate_not_an_exact_str(self):
+        for n, (gate, name) in enumerate(((SOk("g"), "SOk"), (SBad("g"), "SBad"), (1, "int"), (None, "NoneType"),
+                                          (BothRaise(), "BothRaise"), (LeafSubNamed(), "Leaf\\Named"))):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result(gate, [Line("PASS", "g.a")])),
+                                 refused("the check returned a Result whose gate is %s, not a str" % name))
+
+    def test_lines_not_a_list(self):
+        for n, (lines, name) in enumerate((((Line("PASS", "g.a"),), "tuple"), (None, "NoneType"),
+                                           ("PASS", "str"), ({"a": 1}, "dict"),
+                                           ((x for x in [Line("PASS", "g.a")]), "generator"))):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result("g", lines)),
+                                 refused("the check returned a Result whose lines is %s, not a list" % name))
+
+    def test_entry_not_a_line(self):
+        for n, (entry, name) in enumerate((("x", "str"), (None, "NoneType"), (("PASS", "g.a"), "tuple"),
+                                           ({"status": "PASS"}, "dict"), (BothRaise(), "BothRaise"))):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line("PASS", "g.a"), entry])),
+                                 refused("line 2 of the Result is %s, not a Line" % name))
+
+    def test_status_not_an_exact_str(self):
+        for n, (status, name) in enumerate(((SOk("FAIL"), "SOk"), (SBad("PASS"), "SBad"), (1, "int"),
+                                            (None, "NoneType"), (BothRaise(), "BothRaise"))):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line(status, "g.a", "r")])),
+                                 refused("line 1 of the Result has a status of type %s, not str" % name))
+
+    def test_status_outside_pass_and_fail(self):
+        for n, status in enumerate(("pass", "OK", "", " PASS", "FAIL\n", "Fail", "a\\b")):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line(status, "g.a", "r")])),
+                                 refused("line 1 of the Result has status %s, not PASS or FAIL" % status))
+
+    def test_unreadable_result_and_line(self):
+        self.assertEqual(shape_of(lambda: UnreadResult("g", [Line("PASS", "g.a")])),
+                         refused("the check returned a Result that cannot be read"))
+        self.assertEqual(shape_of(lambda: Result("g", [Line("PASS", "g.a"), UnreadLine("FAIL", "g.b", "r")])),
+                         refused("line 2 of the Result cannot be read"))
+
+    def test_base_exception_while_reading_propagates(self):  # owner Q-1C0V1R-2 (a)(i)
+        with self.assertRaises(KeyboardInterrupt):
+            run_check("g", returning(lambda: Result("g", [KbdLine("FAIL", "g.b", "r")])), [])
+
+    def test_empty_and_not_a_result_unchanged(self):  # pins x.empty and "not a Result" keep their text
+        self.assertEqual(shape_of(lambda: Result("g", [])),
+                         ("FAIL g.empty: the gate produced no lines\n",
+                          [{"status": "FAIL", "id": "g.empty", "reason": "the gate produced no lines"}], "g",
+                          {(str, str, str, str)}, True))
+        self.assertEqual(shape_of(lambda: None), refused("the check returned NoneType, not a Result"))
+
+
 if __name__ == "__main__":
     unittest.main()

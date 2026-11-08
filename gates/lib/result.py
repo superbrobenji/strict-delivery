@@ -261,14 +261,43 @@ def run_check(name: str, check, args: list) -> Result:
         return _input_fail(name, "%s: %s" % (_type_name(e), _reason_text(e, _exc_text)))
     if not isinstance(result, Result):
         return _input_fail(name, "the check returned %s, not a Result" % _type_name(result))
-    if not result.lines:
-        out = Result(name, [])
-        out.fail(name + ".empty", "the gate produced no lines")
-        return out
-    for ln in result.lines:
-        if isinstance(ln, Line):
-            ln.id, ln.reason = _line_text(ln.id), _line_text(ln.reason)
-    return result
+    return _own_result(name, result)
+
+
+_STATUSES = ("PASS", "FAIL")  # spec §13: a gate prints PASS id or FAIL id: reason lines
+
+
+def _own_result(name: str, result: Result) -> Result:
+    """A new Result built from the one the check returned, which is never changed (F-fin2r-1). Its shape is checked
+    first (owner Q-1C0FIN2-U2 (a)): the gate an exact ``str``, ``lines`` a list (plan: ``Result(gate: str, lines:
+    list)``), each entry a Line whose status is the exact ``str`` PASS or FAIL. Any other shape fails
+    ``<name>.input`` with a named reason, as a value that is not a Result does; an empty list fails ``<name>.empty``."""
+    try:
+        gate, lines = result.gate, result.lines
+    except Exception:
+        return _input_fail(name, "the check returned a Result that cannot be read")
+    if type(gate) is not str:
+        return _input_fail(name, "the check returned a Result whose gate is %s, not a str" % _type_name(gate))
+    if not isinstance(lines, list):
+        return _input_fail(name, "the check returned a Result whose lines is %s, not a list" % _type_name(lines))
+    out = []
+    for n, ln in enumerate(list.copy(lines), 1):
+        if not isinstance(ln, Line):
+            return _input_fail(name, "line %d of the Result is %s, not a Line" % (n, _type_name(ln)))
+        try:
+            status, id_, reason = ln.status, ln.id, ln.reason
+        except Exception:
+            return _input_fail(name, "line %d of the Result cannot be read" % n)
+        if type(status) is not str:
+            return _input_fail(name, "line %d of the Result has a status of type %s, not str" % (n, _type_name(status)))
+        if status not in _STATUSES:
+            return _input_fail(name, "line %d of the Result has status %s, not PASS or FAIL" % (n, status))
+        out.append(Line(status, _line_text(id_), _line_text(reason)))
+    if not out:
+        empty = Result(name, [])
+        empty.fail(name + ".empty", "the gate produced no lines")
+        return empty
+    return Result(gate, out)
 
 
 def _input_fail(name: str, reason: str) -> Result:
