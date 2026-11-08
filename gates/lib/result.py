@@ -191,18 +191,22 @@ def _items_text(items: list, path: tuple) -> list:
 
 _MRO = type.__dict__["__mro__"]
 _BUILTIN_CLASSES = frozenset(id(v) for v in vars(builtins).values() if issubclass(type(v), type))
-_RANKS = {id(KeyboardInterrupt): 0, id(SystemExit): 1, id(GeneratorExit): 2}
+# Owner Q-R8R-0 (a), Q-R9R-1 (c): the rank order; an entry the interpreter lacks (BaseExceptionGroup before 3.11)
+# is skipped, so the remaining ranks keep their order.
+_RANK_ORDER = ("KeyboardInterrupt", "SystemExit", "GeneratorExit", "BaseExceptionGroup")
+_RANKS = {id(vars(builtins)[n]): r for r, n in enumerate(_RANK_ORDER) if n in vars(builtins)}
+_OTHER = len(_RANK_ORDER)
 
 
 def _rank(x: object) -> int:
     """The rank of ``x``'s type (smaller propagates first): the first built-in class in its real ``__mro__``,
     read through the ``type`` descriptor, so nothing the object or its metaclass defines is consulted (owner
-    Q-R8R-0 (a), Q-R6-3 (a)): KeyboardInterrupt 0, SystemExit 1, GeneratorExit 2, any other 3. Classes are
-    compared by identity, so no name, ``__module__``, ``__qualname__`` or ``__eq__`` is read."""
+    Q-R8R-0 (a), Q-R9R-1 (c), Q-R6-3 (a)): KeyboardInterrupt, SystemExit, GeneratorExit, BaseExceptionGroup, any
+    other. Classes are compared by identity, so no name, ``__module__``, ``__qualname__`` or ``__eq__`` is read."""
     for c in _MRO.__get__(type(x)):
         if id(c) in _BUILTIN_CLASSES:
-            return _RANKS.get(id(c), 3)
-    return 3  # not reached: a type an ``except BaseException`` arm catches has BaseException in its __mro__
+            return _RANKS.get(id(c), _OTHER)
+    return _OTHER  # not reached: a type an ``except BaseException`` arm catches has BaseException in its __mro__
 
 
 def _leaf_text(x: object) -> str:

@@ -1914,5 +1914,75 @@ class RoundNineTest(unittest.TestCase):
                     self.assertIs(type(cm.exception), exc)
 
 
+# Fix round 10 (owner Q-R9R-1 (c)): BaseExceptionGroup ranks after GeneratorExit, before any other.
+GROUP_CLASSES = RANK_CLASSES + (
+    "class GroupSub(BaseExceptionGroup):\n    pass\n"
+    "GROUP_CASES = [\n"
+    "    ('group_custom', [raises(lambda: BaseExceptionGroup('g', [KeyboardInterrupt()])),\n"
+    "                      raises(lambda: CustomBase('c'))]),\n"
+    "    ('group_exit', [raises(lambda: BaseExceptionGroup('g', [KeyboardInterrupt()])),\n"
+    "                    raises(lambda: SystemExit('s'))]),\n"
+    "    ('group_gen', [raises(lambda: BaseExceptionGroup('g', [KeyboardInterrupt()])),\n"
+    "                   raises(lambda: GeneratorExit('e'))]),\n"
+    "    ('groupsub_custom', [raises(lambda: GroupSub('h', [KeyboardInterrupt()])),\n"
+    "                         raises(lambda: CustomBase('c'))]),\n"
+    "]\n"
+)
+GROUP_PROBE = GROUP_CLASSES + "RANK_CASES = GROUP_CASES\n" + RANK_PROBE[len(RANK_CLASSES):]
+
+# The rank list without BaseExceptionGroup (Python 3.9 has none): the round-9 probe with the name removed first.
+NO_GROUP_PROBE = "import builtins\nvars(builtins).pop('BaseExceptionGroup', None)\n" + RANK_PROBE
+
+
+def _seed_outputs(code):
+    outs = {}
+    for seed in ("0", "1", "2", "3", "4", "5", "6", "7", "12345", "random"):
+        env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+        outs[seed] = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env, capture_output=True, text=True,
+                                    check=True).stdout
+    return outs
+
+
+class RoundTenTest(unittest.TestCase):
+    """Owner Q-R9R-1 (c): the ranks are KeyboardInterrupt, SystemExit, GeneratorExit, BaseExceptionGroup (where the
+    interpreter has it), any other; within one rank, the first collected."""
+
+    @unittest.skipUnless(sys.version_info >= (3, 11), "BaseExceptionGroup is new in Python 3.11")
+    def test_group_rank_one_outcome_on_every_hash_seed(self):  # Q-R9R-1
+        outs = _seed_outputs(GROUP_PROBE)
+        self.assertEqual(len(set(outs.values())), 1, outs)
+        want = []
+        for label, got in (("group_custom", "BaseExceptionGroup ('g', [KeyboardInterrupt()])"),
+                           ("group_exit", "SystemExit ('s',)"), ("group_gen", "GeneratorExit ('e',)"),
+                           ("groupsub_custom", "GroupSub ('h', [KeyboardInterrupt()])")):
+            for kind in ("set", "frozenset"):
+                for where in ("reason", "id", "raised"):
+                    want.append("%s %s %s %s" % (label, kind, where, got))
+        self.assertEqual(outs["0"].splitlines(), want)
+
+    @unittest.skipUnless(sys.version_info >= (3, 11), "BaseExceptionGroup is new in Python 3.11")
+    def test_group_rank_in_both_orders(self):  # Q-R9R-1: a list keeps its order, the rank still decides
+        ns = {}
+        exec(GROUP_CLASSES, ns)
+        r = ns["raises"]
+        group = lambda: BaseExceptionGroup("g", [KeyboardInterrupt()])  # noqa: E731
+        sub = lambda: ns["GroupSub"]("h", [KeyboardInterrupt()])  # noqa: E731
+        for high, low in ((SystemExit, group), (GeneratorExit, group), (group, ns["CustomBase"]),
+                          (sub, ns["CustomBase"])):
+            for first, value in (("high", [r(high)({"a"}), r(low)({"b"})]), ("low", [r(low)({"b"}), r(high)({"a"})])):
+                with self.subTest(high=high, low=low, first=first):
+                    for check in (returning(lambda: Result("g", [Line("FAIL", "g.a", value)])),
+                                  raising(lambda: ValueError(value))):
+                        with self.assertRaises(BaseException) as cm:
+                            run_check("g", check, [])
+                        self.assertIs(type(cm.exception), type(high()))
+
+    def test_the_rank_list_works_without_base_exception_group(self):  # Q-R9R-1: the 3.9 guard
+        outs = _seed_outputs(NO_GROUP_PROBE)
+        self.assertEqual(len(set(outs.values())), 1, outs)
+        self.assertEqual(outs["0"], _seed_outputs(RANK_PROBE)["0"])
+        self.assertIn("same_name set reason Same ('k',)", outs["0"].splitlines())
+
+
 if __name__ == "__main__":
     unittest.main()
