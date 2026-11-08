@@ -177,12 +177,12 @@ Notes.
 - FIXED_RULES test (F-BD-4). PR-D (15.5) merges after B2's final review (about 10.25-12.0) and after PR-B2 (12.0). So by P:5582 the "B2 merges first" branch applies, and A writes the test: in 2b.1, which is A's first task after both PRs are on `main` (plan stream rules, "Cross-stream order"). B2 does not wait, and its final review is not re-run.
 - PR-C2 carries `cites` into `run_all` from the start, because C2 merges before 2b.1 starts (P:1191, P:5574).
 
-**Pre-program waves (cap 25; peak 16):**
+**Pre-program waves (cap 25; peak 15):**
 
 | wave | window | agents |
 |---|---|---|
-| W1 | 0-3.75 | 1c0 fix and end 4; 1c.1 2; 1c.3 2; this revision 1; docs writer 1; 1c0.2 2; the docs-only PR's final review, verifier and tail 2 (to 3.75); PC1 drafters 2 (from 2.75) = 16 |
-| W2 | 3.75-7.75 | 1c.3 2 (to 4.0); C2's U and end 2 (3.75 to 5.5); 1c.2 2 (4.0 to 6.0); 1c's U and end 2 (6.0 to 7.75); 2a.1 2; B2.1 and B2.2 2 (from 3.75); PC1 drafters 2 = 14 |
+| W1 | 0-3.75 | 1c0 fix and end 4; 1c.1 2; 1c.3 2; this revision 1; docs writer 1; 1c0.2 2; the docs-only PR's final review, verifier and tail 2 (to 3.75) = 14 |
+| W2 | 3.75-7.75 | 1c.3 2 (to 4.0); C2's U and end 2 (3.75 to 5.5); 1c.2 2 (4.0 to 6.0); 1c's U and end 2 (6.0 to 7.75); 2a.1 2; B2.1 and B2.2 2 (from 3.75); PC1 drafters 2 (from 3.75, when the streams start) = 14 |
 | W3 | 7.75-15.5 | 1d.1, 1d.2 4 (then 1d.3 2); 2a.1's store.py part, 2a.2 or 2a.3 2; B2.2 and B2.3 2 (to 10.25); B2's U and end 2 (10.25 to 12.0); 1d end 2 (12.0 to 13.75); D end 2 (14.0 to 15.5); PC1 drafter 1 = 15 |
 | W4 | 15.5-23.25 | 2b.x 2; 1d2.1 2; 1d2 end 2; 2b end 2; PC1 drafter 1 = 9 |
 | W5 | 23.25-29.75 | 2c.1, 2c.2 4 (then 2c.3 2); 2c end 2 = 6 |
