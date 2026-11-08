@@ -1984,5 +1984,106 @@ class RoundTenTest(unittest.TestCase):
         self.assertIn("same_name set reason Same ('k',)", outs["0"].splitlines())
 
 
+# Fix round 11 (F-1c0fin3-1, owner Q-1C0FIN3-1 (a), Q-F80W-4 (a)): an own __str__ stands in the GateError, KeyError
+# and OSError-with-a-filename branches too; without one, each renders as before.
+OWN_STR_CLASSES = (
+    "from gates.lib.result import GateError\n"
+    "class S(str):\n"
+    "    def __str__(self):\n        return 'OTHER'\n"
+    "    def __eq__(self, o):\n        raise RuntimeError('eq')\n"
+    "    __hash__ = str.__hash__\n"
+    "class GE(GateError):\n    def __str__(self):\n        return 'custom-ge ' + self.args[0]\n"
+    "class KE(KeyError):\n    def __str__(self):\n        return 'custom-ke'\n"
+    "class OE(OSError):\n    def __str__(self):\n        return 'custom-oe'\n"
+    "class GERaise(GateError):\n    def __str__(self):\n        raise RuntimeError('no')\n"
+    "class GENonStr(GateError):\n    def __str__(self):\n        return 5\n"
+    "class GEStrSub(GateError):\n    def __str__(self):\n        return S('own')\n"
+    "class KERaise(KeyError):\n    def __str__(self):\n        raise RuntimeError('no')\n"
+    "class OERaise(OSError):\n    def __str__(self):\n        raise RuntimeError('no')\n"
+    "class GEPlain(GateError):\n    pass\n"
+    "class KEPlain(KeyError):\n    pass\n"
+    "class OEPlain(OSError):\n    pass\n"
+    "class NoStrMeta(type):\n"  # a metaclass that refuses __str__: the class still has no own __str__
+    "    def __getattribute__(cls, name):\n"
+    "        if name == '__str__':\n            raise RuntimeError('no')\n"
+    "        return type.__getattribute__(cls, name)\n"
+    "class GEMeta(GateError, metaclass=NoStrMeta):\n    pass\n"
+    "class KEMeta(KeyError, metaclass=NoStrMeta):\n    pass\n"
+    "class OEMeta(OSError, metaclass=NoStrMeta):\n    pass\n"
+    "OWN_STR_CASES = [\n"
+    "    ('ge_own', lambda: GE('x'), 'custom-ge x'),\n"
+    "    ('ke_own_one', lambda: KE('k'), 'KE: custom-ke'),\n"
+    "    ('ke_own_two', lambda: KE('k', 'j'), 'KE: custom-ke'),\n"
+    "    ('oe_own_filename', lambda: OE(2, 'No such', 'f'), 'OE: custom-oe'),\n"
+    "    ('ge_raises', lambda: GERaise('x'), 'x'),\n"
+    "    ('ge_non_str', lambda: GENonStr('x'), 'x'),\n"
+    "    ('ge_str_subclass', lambda: GEStrSub('x'), 'own'),\n"
+    "    ('ke_raises', lambda: KERaise('k', 'j'), 'KERaise: [k, j]'),\n"
+    "    ('oe_raises', lambda: OERaise(2, 'No such', 'f'), 'OERaise: [Errno 2] No such: f'),\n"
+    "]\n"
+    "PLAIN_CASES = [\n"
+    "    ('gateerror', lambda: GateError('x'), 'x'),\n"
+    "    ('ge_plain', lambda: GEPlain('x'), 'x'),\n"
+    "    ('keyerror_one', lambda: KeyError('k'), 'KeyError: k'),\n"
+    "    ('keyerror_two', lambda: KeyError('k', 'j'), 'KeyError: [k, j]'),\n"
+    "    ('ke_plain', lambda: KEPlain('k'), 'KEPlain: k'),\n"
+    "    ('oserror_filename', lambda: OSError(1000, 'No such', 'f'), 'OSError: [Errno 1000] No such: f'),\n"
+    "    ('oe_plain', lambda: OEPlain(2, 'No such', 'f', None, 'g'), 'OEPlain: [Errno 2] No such: f -> g'),\n"
+    "    ('ge_meta', lambda: GEMeta('x'), 'x'),\n"
+    "    ('ke_meta', lambda: KEMeta('k'), 'KEMeta: k'),\n"
+    "    ('oe_meta', lambda: OEMeta(2, 'No such', 'f'), 'OEMeta: [Errno 2] No such: f'),\n"
+    "    ('filenotfound', lambda: FileNotFoundError(2, 'No such', 'f'), 'FileNotFoundError: [Errno 2] No such: f'),\n"
+    "]\n"
+)
+_own_ns = {}
+exec(OWN_STR_CLASSES, _own_ns)
+
+OWN_STR_PROBE = OWN_STR_CLASSES + (
+    "import io, sys\n"
+    "from gates.lib.result import run_gate\n"
+    "for label, make, _ in OWN_STR_CASES + PLAIN_CASES:\n"
+    "    for argv in ([], ['--json']):\n"
+    "        def check(a, make=make):\n"
+    "            raise make()\n"
+    "        buf, old = io.StringIO(), sys.stdout\n"
+    "        sys.stdout = buf\n"
+    "        try:\n"
+    "            code = run_gate('g', check, argv)\n"
+    "        finally:\n"
+    "            sys.stdout = old\n"
+    "        print(label, code, buf.getvalue().rstrip('\\n'))\n"
+)
+
+
+class RoundElevenTest(unittest.TestCase):
+    """F-1c0fin3-1, owner Q-1C0FIN3-1 (a): a GateError, KeyError or OSError-with-a-filename class with its own
+    ``__str__`` gives that text (as an exact str); if it raises or returns a non-str, the branch's argument
+    rendering; a class without one renders as before."""
+
+    def test_own_str_stands_in_every_branch_and_mode(self):  # F-1c0fin3-1
+        for label, make, want in _own_ns["OWN_STR_CASES"]:
+            with self.subTest(label=label):
+                self.assertEqual(both_modes(raising(make)), ("FAIL g.input: %s\n" % want, want, str, str))
+
+    def test_without_own_str_each_branch_is_unchanged(self):  # F-1c0fin3-1: the pin for the classes as they were
+        for label, make, want in _own_ns["PLAIN_CASES"]:
+            with self.subTest(label=label):
+                self.assertEqual(both_modes(raising(make)), ("FAIL g.input: %s\n" % want, want, str, str))
+
+    def test_the_same_on_both_hash_seeds(self):  # F-1c0fin3-1, text and --json, PYTHONHASHSEED 0 and 12345
+        outs = {}
+        for seed in ("0", "12345"):
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+            outs[seed] = subprocess.run([sys.executable, "-c", OWN_STR_PROBE], cwd=REPO, env=env,
+                                        capture_output=True, text=True, check=True).stdout
+        self.assertEqual(outs["0"], outs["12345"])
+        want = []
+        for label, _, reason in _own_ns["OWN_STR_CASES"] + _own_ns["PLAIN_CASES"]:
+            want.append("%s 1 FAIL g.input: %s" % (label, reason))
+            want.append("%s 1 %s" % (label, json.dumps({"gate": "g", "ok": False, "lines": [
+                {"status": "FAIL", "id": "g.input", "reason": reason}]})))
+        self.assertEqual(outs["0"].splitlines(), want)
+
+
 if __name__ == "__main__":
     unittest.main()

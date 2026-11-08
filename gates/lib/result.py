@@ -237,21 +237,46 @@ def _args_text(e: BaseException) -> str:
 def _exc_text(e: BaseException) -> str:
     """``str(e)`` with the repr that the exception's ``__str__`` applies to its arguments undone (verifier V-1):
     KeyError; OSError with a filename, or in its ``[Errno <errno>] <strerror>`` form; SyntaxError's message;
-    and every ``__str__`` whose text is the default one, the repr of the arguments."""
+    and every ``__str__`` whose text is the default one, the repr of the arguments. In each branch a class's own
+    ``__str__`` text stands (``_own_str_or``, owner Q-F80W-4 (a), Q-1C0FIN3-1 (a))."""
     if issubclass(type(e), KeyError) and e.args:
-        return _args_text(e)
+        return _own_str_or(e, KeyError, _args_text)
     if issubclass(type(e), OSError) and e.filename is not None:
-        head = "[Errno %s] " % _raw(e.errno) if e.errno is not None else ""
-        out = head + _raw(e.strerror or _type_name(e)) + ": " + _raw(e.filename)
-        if e.filename2 is not None:
-            out += " -> " + _raw(e.filename2)
-        return out
+        return _own_str_or(e, OSError, _filename_text)
     if type(e).__str__ is BaseException.__str__:
         return _args_text(e)
     try:
         text = _s(e)
     except Exception:  # the own __str__ cannot render an argument: render the arguments themselves
         return _args_text(e)
+    return _own_str_text(e, text)
+
+
+def _filename_text(e: OSError) -> str:
+    """An OSError with a filename: ``[Errno <errno>] <strerror>: <filename>[ -> <filename2>]``, each part once."""
+    head = "[Errno %s] " % _raw(e.errno) if e.errno is not None else ""
+    out = head + _raw(e.strerror or _type_name(e)) + ": " + _raw(e.filename)
+    if e.filename2 is not None:
+        out += " -> " + _raw(e.filename2)
+    return out
+
+
+_DICT = type.__dict__["__dict__"]
+
+
+def _own_str_or(e: BaseException, base: type, fallback) -> str:
+    """``e``'s own ``__str__`` text, if the ``__str__`` its type's real ``__mro__`` resolves to is not ``base``'s
+    (read through the ``type`` descriptors, so a metaclass changes nothing and a class without an own ``__str__``
+    renders as before), as an exact ``str`` reconciled by ``_own_str_text``; otherwise, or if that ``__str__``
+    raises or returns a non-str, ``fallback(e)``, the branch's rendering of the arguments (owner Q-F80W-4 (a),
+    Q-1C0FIN3-1 (a), Q-1C0FIN2-R1 (a))."""
+    own = next(_DICT.__get__(c)["__str__"] for c in _MRO.__get__(type(e)) if "__str__" in _DICT.__get__(c))
+    if own is _DICT.__get__(base)["__str__"]:
+        return fallback(e)
+    try:
+        text = _s(e)
+    except Exception:  # the own __str__ cannot render an argument: render the arguments themselves
+        return fallback(e)
     return _own_str_text(e, text)
 
 
@@ -298,7 +323,7 @@ def run_check(name: str, check, args: list) -> Result:
     try:
         result = check(args)
     except GateError as e:
-        return _input_fail(name, _reason_text(e, _args_text))
+        return _input_fail(name, _reason_text(e, lambda x: _own_str_or(x, BaseException, _args_text)))
     except SystemExit as e:
         return _input_fail(name, "exit requested (%s)" % _reason_text(e, _exit_text))
     except Exception as e:
