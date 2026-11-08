@@ -789,6 +789,15 @@ class OpenRefTests(Base):  # O1-O16
                       "path with an optional non-empty #anchor\n" % ID, out)
         self.assertEqual(len(out.splitlines()), out.count("\n"))
 
+    @unittest.skip("Task 1c0.1 (block/b1c, PR-1c0) not on this branch: decisions.landed_errors escapes map/list "
+                   "cites once only from there")
+    def test_j2_map_and_list_cite_escaped_once(self):
+        self.build([lasting(ID, landed_in=[{"a": "b\nc"}, ["a\\b"]])], {"CLAUDE.md": CLAUDE})
+        out = self.run_()[0]
+        self.assertIn("FAIL decisions.landed.%s: landed_in: {a: b\\nc} is not a string\n" % ID, out)
+        self.assertIn("FAIL decisions.landed.%s: landed_in: [a\\\\b] is not a string\n" % ID, out)
+        self.assertEqual(len(out.splitlines()), out.count("\n"))
+
 
 class OutputTests(Base):  # J1, J3
     def test_json_output_shape(self):
