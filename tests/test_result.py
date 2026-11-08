@@ -1746,8 +1746,9 @@ BASE_PROBE = BASE_CLASSES + (
 
 
 class RoundEightTest(unittest.TestCase):
-    """F-r7r-1, owner Q-R7R-0 (a): of several non-Exception BaseExceptions collected while rendering, the one whose
-    type's qualified name (module + '.' + qualname) is smallest propagates; of equal types, the first collected."""
+    """F-r7r-1, owner Q-R7R-0 (a), with the rule of Q-R8R-0 (a): of several non-Exception BaseExceptions collected
+    while rendering, the one of highest rank propagates (KeyboardInterrupt, SystemExit, GeneratorExit, any other);
+    of one rank, the first collected."""
 
     def test_which_base_exception_propagates_does_not_depend_on_the_hash_seed(self):  # F-r7r-1
         outs = {}
@@ -1757,8 +1758,8 @@ class RoundEightTest(unittest.TestCase):
                                         text=True, check=True).stdout
         self.assertEqual(len(set(outs.values())), 1, outs)
         want = []
-        for label, name in (("kbd_exit", "builtins.KeyboardInterrupt"), ("exit_gen_custom", "builtins.GeneratorExit"),
-                            ("nested", "builtins.GeneratorExit")):
+        for label, name in (("kbd_exit", "builtins.KeyboardInterrupt"), ("exit_gen_custom", "builtins.SystemExit"),
+                            ("nested", "builtins.KeyboardInterrupt")):
             for kind in ("set", "frozenset"):
                 for where in ("reason", "id", "raised"):
                     want.append("%s %s %s %s" % (label, kind, where, name))
@@ -1768,8 +1769,8 @@ class RoundEightTest(unittest.TestCase):
         ns = _base_ns
         cases = [([ns["FKI"]({"a"}), ns["FSX"]({"b"})], KeyboardInterrupt),
                  ([ns["FSX"]({"b"}), ns["FKI"]({"a"})], KeyboardInterrupt),
-                 ([ns["FSX"]({"a"}), ns["FGE"]({"b"}), ns["FCB"]({"c"})], GeneratorExit),
-                 ([ns["FCB"]({"c"}), ns["FSX"]({"a"})], SystemExit),  # builtins.SystemExit < r8probe.CustomBase
+                 ([ns["FSX"]({"a"}), ns["FGE"]({"b"}), ns["FCB"]({"c"})], SystemExit),
+                 ([ns["FCB"]({"c"}), ns["FSX"]({"a"})], SystemExit),  # SystemExit ranks above any other
                  ([ns["FCB"]({"c"}), "x"], ns["CustomBase"])]
         for n, (value, exc) in enumerate(cases):
             with self.subTest(n=n):
@@ -1785,6 +1786,132 @@ class RoundEightTest(unittest.TestCase):
                     run_check("g", returning(lambda: Result("g", [Line("FAIL", "g.a", [first({"a"}), other({"b"})])])),
                               [])
                 self.assertEqual(cm.exception.code, code)
+
+
+# Fix round 9 (F-r8r-1..3, owner Q-R8R-0 (a)). Each item is a frozenset whose __iter__ raises the named exception.
+RANK_CLASSES = BASE_CLASSES + (
+    "def raises(make):\n"
+    "    class F(frozenset):\n"
+    "        def __iter__(self):\n"
+    "            raise make()\n"
+    "    return F\n"
+    "class CustomBase2(BaseException):\n    pass\n"
+    "SameKbd = type('Same', (KeyboardInterrupt,), {'__module__': 'r9probe', '__qualname__': 'Same'})\n"
+    "SameExit = type('Same', (SystemExit,), {'__module__': 'r9probe', '__qualname__': 'Same'})\n"
+    "_nomod = {'__builtins__': __builtins__}\n"
+    "exec(\"NoMod = type('NoMod', (KeyboardInterrupt,), {})\", _nomod)\n"
+    "NoMod = _nomod['NoMod']\n"
+    "class OnceMro(type):\n"  # mro() runs once, at class creation; a later call raises
+    "    calls = 0\n"
+    "    def mro(cls):\n"
+    "        OnceMro.calls += 1\n"
+    "        if OnceMro.calls > 1:\n"
+    "            raise RuntimeError('mro called again')\n"
+    "        return [cls, GeneratorExit, KeyboardInterrupt, BaseException, object]\n"
+    "class Rewritten(KeyboardInterrupt, metaclass=OnceMro):\n    pass\n"
+    "class NoAttr(type):\n"
+    "    def __getattribute__(cls, name):\n"
+    "        if name in ('__mro__', 'mro', '__module__', '__qualname__', '__name__', '__dict__', '__bases__'):\n"
+    "            raise RuntimeError('no ' + name)\n"
+    "        return type.__getattribute__(cls, name)\n"
+    "class Guarded(SystemExit, metaclass=NoAttr):\n    pass\n"
+    "class GenKbd(GeneratorExit, KeyboardInterrupt):\n    pass\n"
+    "RANK_CASES = [\n"
+    "    ('kbd_exit', [raises(lambda: KeyboardInterrupt('k')), raises(lambda: SystemExit('s'))]),\n"
+    "    ('exit_gen_custom', [raises(lambda: SystemExit('s')), raises(lambda: GeneratorExit('g')),\n"
+    "                         raises(lambda: CustomBase('c'))]),\n"
+    "    ('same_name', [raises(lambda: SameKbd('k')), raises(lambda: SameExit('s'))]),\n"
+    "    ('no_module', [raises(lambda: NoMod('n')), raises(lambda: SystemExit('s'))]),\n"
+    "    ('mro_rewritten', [raises(lambda: Rewritten('r')), raises(lambda: SystemExit('s'))]),\n"
+    "    ('meta_getattribute', [raises(lambda: Guarded('m')), raises(lambda: GeneratorExit('g'))]),\n"
+    "    ('first_builtin', [raises(lambda: GenKbd('gk')), raises(lambda: SystemExit('s'))]),\n"
+    "]\n"
+)
+_rank_ns = {}
+exec(RANK_CLASSES, _rank_ns)
+
+RANK_PROBE = RANK_CLASSES + (
+    "import io, sys\n"
+    "from gates.lib.result import GateError, Line, Result, run_gate\n"
+    "pad = {'p%d' % i for i in range(30)}\n"
+    "for label, makers in RANK_CASES:\n"
+    "    for kind in (set, frozenset):\n"
+    "        value = kind(m({'i%d' % n}) for n, m in enumerate(makers)) | pad\n"  # distinct items: none dedup
+    "        assert len(value) == len(makers) + 30\n"
+    "        for where in ('reason', 'id', 'raised'):\n"
+    "            def check(a, value=value, where=where):\n"
+    "                if where == 'raised':\n"
+    "                    raise GateError(value)\n"
+    "                return Result('g', [Line('FAIL', value if where == 'id' else 'g.a',\n"
+    "                                         'r' if where == 'id' else value)])\n"
+    "            buf, old = io.StringIO(), sys.stdout\n"
+    "            sys.stdout = buf\n"
+    "            try:\n"
+    "                run_gate('g', check, [])\n"
+    "                got = 'RETURNED ' + buf.getvalue().replace('\\n', '|')\n"
+    "            except BaseException as e:\n"
+    "                got = '%s %r' % (type.__dict__['__qualname__'].__get__(type(e)), BaseException.__dict__['args']\n"
+    "                                 .__get__(e))\n"
+    "            finally:\n"
+    "                sys.stdout = old\n"
+    "            print(label, kind.__name__, where, got)\n"
+)
+
+
+class RoundNineTest(unittest.TestCase):
+    """F-r8r-1..3, owner Q-R8R-0 (a): a non-Exception BaseException ranks by the first built-in class in its type's
+    real ``__mro__``: KeyboardInterrupt, then SystemExit, then GeneratorExit, then any other. No name is read."""
+
+    def test_one_outcome_per_case_on_every_hash_seed(self):  # F-r8r-1, F-r8r-2, F-r8r-3
+        outs = {}
+        for seed in ("0", "1", "2", "3", "4", "5", "6", "7", "12345", "random"):
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+            outs[seed] = subprocess.run([sys.executable, "-c", RANK_PROBE], cwd=REPO, env=env, capture_output=True,
+                                        text=True, check=True).stdout
+        self.assertEqual(len(set(outs.values())), 1, outs)
+        want = []
+        for label, got in (("kbd_exit", "KeyboardInterrupt ('k',)"), ("exit_gen_custom", "SystemExit ('s',)"),
+                           ("same_name", "Same ('k',)"), ("no_module", "NoMod ('n',)"),
+                           ("mro_rewritten", "SystemExit ('s',)"), ("meta_getattribute", "Guarded ('m',)"),
+                           ("first_builtin", "SystemExit ('s',)")):
+            for kind in ("set", "frozenset"):
+                for where in ("reason", "id", "raised"):
+                    want.append("%s %s %s %s" % (label, kind, where, got))
+        self.assertEqual(outs["0"].splitlines(), want)
+
+    def test_each_rank_boundary_in_both_orders(self):  # F-r8r-3: a list keeps its order, the rank still decides
+        ns = _rank_ns
+        r = ns["raises"]
+        pairs = [(KeyboardInterrupt, SystemExit), (SystemExit, GeneratorExit), (GeneratorExit, ns["CustomBase"]),
+                 (ns["SameKbd"], ns["SameExit"]), (ns["NoMod"], SystemExit), (SystemExit, ns["Rewritten"]),
+                 (ns["Guarded"], GeneratorExit), (SystemExit, ns["GenKbd"])]
+        for high, low in pairs:
+            for first, value in (("high", [r(high)({"a"}), r(low)({"b"})]), ("low", [r(low)({"b"}), r(high)({"a"})])):
+                with self.subTest(high=high, low=low, first=first):  # an item's repr would raise, so not a param
+                    for check in (returning(lambda: Result("g", [Line("FAIL", "g.a", value)])),
+                                  raising(lambda: ValueError(value))):
+                        with self.assertRaises(BaseException) as cm:
+                            run_check("g", check, [])
+                        self.assertIs(type(cm.exception), high)
+
+    def test_one_rank_the_first_collected(self):  # Q-R8-1 (a), now "the same built-in class"
+        r = _rank_ns["raises"]
+        a, b = _rank_ns["CustomBase"], _rank_ns["CustomBase2"]
+        for first, second in ((a, b), (b, a), (SystemExit, _rank_ns["SameExit"]), (_rank_ns["SameExit"], SystemExit)):
+            with self.subTest(first=first, second=second):
+                with self.assertRaises(BaseException) as cm:
+                    run_check("g", returning(lambda: Result("g", [Line("FAIL", "g.a", [r(first)({"a"}),
+                                                                                      r(second)({"b"})])])), [])
+                self.assertIs(type(cm.exception), first)
+
+    def test_a_base_exception_beats_the_depth_cap(self):  # Q-R7R-0 (a) with Q-R7R-1 (a)
+        r = _rank_ns["raises"]
+        for exc in (_rank_ns["SameKbd"], _rank_ns["NoMod"], _rank_ns["Guarded"], _rank_ns["CustomBase"]):
+            for first, value in (("deep", [deep_frozen(60), r(exc)({"a"})]), ("exc", [r(exc)({"a"}), deep_frozen(60)])):
+                with self.subTest(exc=exc, first=first):
+                    with self.assertRaises(BaseException) as cm:
+                        run_check("g", returning(lambda: Result("g", [Line("FAIL", "g.a", value)])), [])
+                    self.assertIs(type(cm.exception), exc)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
 import os
 import sys
@@ -170,8 +171,8 @@ def _items_text(items: list, path: tuple) -> list:
     exception's type name. Every item is rendered before anything propagates, so what propagates does not depend on
     the order of the items (a set's order depends on the hash seed): a non-Exception BaseException first, else a
     RecursionError, which collapses the whole value to the type name, as nesting past the cap does (owner Q-R6R-2
-    (b), Q-1C0V1R-3 (b)(i)). Of several non-Exception BaseExceptions, the one whose type has the smallest qualified
-    name (``_qual_name``) propagates; of equal types, the first collected (owner Q-R7R-0 (a), F-r7r-1)."""
+    (b), Q-1C0V1R-3 (b)(i)). Of several non-Exception BaseExceptions, the one of highest rank (``_rank``)
+    propagates; of one rank, the first collected (owner Q-R7R-0 (a), Q-R8-1 (a), Q-R8R-0 (a))."""
     out, stop = [], None
     for i in items:
         try:
@@ -181,23 +182,27 @@ def _items_text(items: list, path: tuple) -> list:
         except Exception as e:
             out.append(_type_name(e))
         except BaseException as e:
-            if stop is None or issubclass(type(stop), Exception) or _qual_name(e) < _qual_name(stop):
+            if stop is None or issubclass(type(stop), Exception) or _rank(e) < _rank(stop):
                 stop = e
     if stop is not None:
         raise stop
     return out
 
 
-_QUALNAME = type.__dict__["__qualname__"]
-_MODULE = type.__dict__["__module__"]
+_MRO = type.__dict__["__mro__"]
+_BUILTIN_CLASSES = frozenset(id(v) for v in vars(builtins).values() if issubclass(type(v), type))
+_RANKS = {id(KeyboardInterrupt): 0, id(SystemExit): 1, id(GeneratorExit): 2}
 
 
-def _qual_name(x: object) -> str:
-    """``<module>.<qualname>`` of ``x``'s type as an exact ``str``, read past a metaclass that overrides either; a
-    module that is not a str counts as empty."""
-    t = type(x)
-    module = _MODULE.__get__(t)
-    return (_exact(module) if issubclass(type(module), str) else "") + "." + _exact(_QUALNAME.__get__(t))
+def _rank(x: object) -> int:
+    """The rank of ``x``'s type (smaller propagates first): the first built-in class in its real ``__mro__``,
+    read through the ``type`` descriptor, so nothing the object or its metaclass defines is consulted (owner
+    Q-R8R-0 (a), Q-R6-3 (a)): KeyboardInterrupt 0, SystemExit 1, GeneratorExit 2, any other 3. Classes are
+    compared by identity, so no name, ``__module__``, ``__qualname__`` or ``__eq__`` is read."""
+    for c in _MRO.__get__(type(x)):
+        if id(c) in _BUILTIN_CLASSES:
+            return _RANKS.get(id(c), 3)
+    return 3  # not reached: a type an ``except BaseException`` arm catches has BaseException in its __mro__
 
 
 def _leaf_text(x: object) -> str:
