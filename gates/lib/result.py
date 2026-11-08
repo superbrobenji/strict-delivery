@@ -133,7 +133,18 @@ def _raw_on(x: object, path: tuple) -> str:
             return "[...]"
         inner = path + (id(x),)
         return "[" + ", ".join(_raw_on(i, inner) for i in x) + "]"
-    return str(x)
+    return _leaf_text(x)
+
+
+def _leaf_text(x: object) -> str:
+    """``str(x)``; if that raises, ``repr(x)``; if that raises too, the type name, as a missing ``strerror``
+    falls back to it (V1r-1, owner Q-1C0V1R-1 (a): a reason is always produced)."""
+    for text in (str, repr):
+        try:
+            return text(x)
+        except Exception:
+            pass
+    return type(x).__name__
 
 
 def _args_text(e: BaseException) -> str:
@@ -155,7 +166,10 @@ def _exc_text(e: BaseException) -> str:
         return out
     if type(e).__str__ is BaseException.__str__:
         return _args_text(e)
-    text = str(e)
+    try:
+        text = str(e)
+    except Exception:  # the own __str__ cannot render an argument: render the arguments themselves
+        return _args_text(e)
     try:
         return _own_str_text(e, text)
     except Exception:  # an argument that cannot render: str(e) did not need it, so its text stands
@@ -173,16 +187,29 @@ def _own_str_text(e: BaseException, text: str) -> str:
     return text
 
 
+def _exit_text(e: SystemExit) -> str:
+    return "'%s'" % e.code if isinstance(e.code, str) else _raw(e.code)
+
+
+def _reason_text(e: BaseException, text) -> str:
+    """``text(e)``; if the exception itself cannot be read (its ``args`` raise), its type name, the
+    ``_leaf_text`` fallback, so run_check always returns a reason (owner Q-1C0V1R-1 (a))."""
+    try:
+        return text(e)
+    except Exception:
+        return type(e).__name__
+
+
 def run_check(name: str, check, args: list) -> Result:
     """Run ``check(args)``; anything but a non-empty Result becomes a FAIL line."""
     try:
         result = check(args)
     except GateError as e:
-        return _input_fail(name, _raw(e.args[0] if len(e.args) == 1 else list(e.args)) if e.args else "")
+        return _input_fail(name, _reason_text(e, _args_text))
     except SystemExit as e:
-        return _input_fail(name, "exit requested (%s)" % ("'%s'" % e.code if isinstance(e.code, str) else _raw(e.code),))
+        return _input_fail(name, "exit requested (%s)" % _reason_text(e, _exit_text))
     except Exception as e:
-        return _input_fail(name, "%s: %s" % (type(e).__name__, _exc_text(e)))
+        return _input_fail(name, "%s: %s" % (type(e).__name__, _reason_text(e, _exc_text)))
     if not isinstance(result, Result):
         return _input_fail(name, "the check returned %s, not a Result" % type(result).__name__)
     if not result.lines:

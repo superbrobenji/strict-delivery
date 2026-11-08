@@ -435,6 +435,55 @@ def rendered(check):
     return run_check("g", check, []).render(False)
 
 
+class StrRaises:
+    """An argument whose ``str`` raises and whose ``repr`` works (V1r-1)."""
+
+    def __str__(self):
+        raise RuntimeError("no str")
+
+    def __repr__(self):
+        return "SR"
+
+
+class ReprRaises:
+    """An argument whose ``repr`` raises and whose ``str`` works."""
+
+    def __str__(self):
+        return "RS"
+
+    def __repr__(self):
+        raise RuntimeError("no repr")
+
+
+class BothRaise:
+    """An argument that cannot render at all (U-V1-1)."""
+
+    def __str__(self):
+        raise RuntimeError("no str")
+
+    __repr__ = __str__
+
+
+class BrokenArgs(Exception):
+    """An exception whose ``args`` cannot be read."""
+
+    @property
+    def args(self):
+        raise RuntimeError("no args")
+
+
+def escaping_or_rendered(exc):
+    """``rendered`` for a check raising ``exc``; an exception escaping run_check becomes ``ESCAPED <type>``, so the
+    assertion that reports it carries no unrenderable context."""
+    def check(a):
+        raise exc
+    try:
+        return rendered(check)
+    except Exception as x:
+        out = "ESCAPED %s" % type(x).__name__
+    return out
+
+
 class RawMapTest(unittest.TestCase):
     """Q-U2: a map item in a reason is escaped exactly once, by Result.render (task 1c0.1, R1-R16)."""
 
@@ -615,6 +664,61 @@ class RawMapTest(unittest.TestCase):
                           (OwnSyntax(Bad()), "OwnSyntax: own a\\\\b")):
             with self.subTest(exc=type(exc).__name__, n=len(exc.args)):
                 self.assertEqual(rendered(lambda a, exc=exc: (_ for _ in ()).throw(exc)), "FAIL g.input: %s\n" % want)
+
+    def test_unrenderable_arguments_still_give_a_reason(self):  # V1r-1, U-V1-1, owner Q-1C0V1R-1 (a)
+        cases = (
+            (ValueError(StrRaises()), "ValueError: SR"),
+            (ValueError(StrRaises(), 1), "ValueError: [SR, 1]"),  # b97db1f gave (SR, 1); escaped at ea8355b
+            (ValueError(ReprRaises(), 1), "ValueError: [RS, 1]"),
+            (ValueError(BothRaise()), "ValueError: BothRaise"),
+            (ValueError(BothRaise(), "a\\b"), "ValueError: [BothRaise, a\\\\b]"),
+            (ValueError({"k": BothRaise()}), "ValueError: {k: BothRaise}"),
+            (ValueError([StrRaises(), [BothRaise()]]), "ValueError: [SR, [BothRaise]]"),
+            (KeyError(StrRaises(), 1), "KeyError: [SR, 1]"),
+            (KeyError(BothRaise()), "KeyError: BothRaise"),
+            (OSError(2, "gone", StrRaises()), "FileNotFoundError: [Errno 2] gone: SR"),
+            (OSError(2, BothRaise(), "f"), "FileNotFoundError: [Errno 2] BothRaise: f"),
+            (OSError(2, "gone", "f", None, BothRaise()), "FileNotFoundError: [Errno 2] gone: f -> BothRaise"),
+            (OSError(2, StrRaises()), "FileNotFoundError: [2, SR]"),
+            (OSError(StrRaises()), "OSError: SR"),
+            (OSError(ReprRaises(), 1, 2, 3, 4, 5), "OSError: [RS, 1, 2, 3, 4, 5]"),
+            (ImportError(StrRaises(), 1), "ImportError: [SR, 1]"),
+            (ImportError(BothRaise()), "ImportError: BothRaise"),
+            (SyntaxError(StrRaises()), "SyntaxError: SR"),
+            (SyntaxError(BothRaise(), ("f", 1, 2, "t")), "SyntaxError: [BothRaise, [f, 1, 2, t]]"),
+            (AttributeError(StrRaises()), "AttributeError: SR"),
+            (NameError(BothRaise(), 1), "NameError: [BothRaise, 1]"),
+            (GateError(StrRaises()), "SR"),
+            (GateError(BothRaise(), "a\\b"), "[BothRaise, a\\\\b]"),
+            (SystemExit(StrRaises()), "exit requested (SR)"),
+            (SystemExit(BothRaise()), "exit requested (BothRaise)"),
+            (BrokenArgs("x"), "BrokenArgs: BrokenArgs"),
+        )
+        for exc, want in cases:
+            with self.subTest(exc=type(exc).__name__, n=len(exc.args) if type(exc) is not BrokenArgs else -1):
+                self.assertEqual(escaping_or_rendered(exc), "FAIL g.input: %s\n" % want)
+
+    def test_every_builtin_exception_gives_a_reason_for_unrenderable_arguments(self):  # V1r-1 sweep
+        import builtins
+        argsets = []
+        for bad in (StrRaises(), ReprRaises(), BothRaise()):
+            argsets += [(bad,), (bad, 1), ({"k": bad},), ([bad],), (2, bad), (2, "s", bad), (2, bad, "f"),
+                        (2, "s", "f", None, bad), (bad, ("f", 1, 2, "t")), (bad, 1, 2, 3, 4, 5)]
+        swept = 0
+        for name in sorted(dir(builtins)):
+            cls = getattr(builtins, name)
+            if not (isinstance(cls, type) and issubclass(cls, Exception)):
+                continue
+            for args in argsets:
+                try:
+                    exc = cls(*args)
+                except Exception:
+                    continue
+                swept += 1
+                with self.subTest(cls=name, args=len(args)):
+                    out = escaping_or_rendered(exc)
+                    self.assertTrue(out.startswith("FAIL g.input: %s: " % type(exc).__name__), out)
+        self.assertGreater(swept, 1000)
 
     def test_other_exception_paths_with_a_map(self):  # R12
         def key_error(a):
