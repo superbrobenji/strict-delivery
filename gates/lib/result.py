@@ -136,19 +136,41 @@ def _raw_on(x: object, path: tuple) -> str:
     return str(x)
 
 
+def _args_text(e: BaseException) -> str:
+    """``BaseException.__str__(e)`` with ``_raw`` in place of ``str`` and ``repr``: the arguments rendered once."""
+    return _raw(e.args[0] if len(e.args) == 1 else list(e.args)) if e.args else ""
+
+
 def _exc_text(e: BaseException) -> str:
-    """``str(e)`` with the repr that KeyError and OSError-with-filename apply to their text undone."""
+    """``str(e)`` with the repr that the exception's ``__str__`` applies to its arguments undone (verifier V-1):
+    KeyError; OSError with a filename, or in its ``[Errno <errno>] <strerror>`` form; SyntaxError's message;
+    and every ``__str__`` whose text is the default one, the repr of the arguments."""
     if isinstance(e, KeyError) and e.args:
-        return _raw(e.args[0] if len(e.args) == 1 else list(e.args))
+        return _args_text(e)
     if isinstance(e, OSError) and e.filename is not None:
-        head = "[Errno %s] " % e.errno if e.errno is not None else ""
-        out = head + (e.strerror or type(e).__name__) + ": " + _raw(e.filename)
+        head = "[Errno %s] " % _raw(e.errno) if e.errno is not None else ""
+        out = head + _raw(e.strerror or type(e).__name__) + ": " + _raw(e.filename)
         if e.filename2 is not None:
             out += " -> " + _raw(e.filename2)
         return out
-    if type(e).__str__ is BaseException.__str__:  # the default text is the repr of the arguments: render them once
-        return _raw(e.args[0] if len(e.args) == 1 else list(e.args)) if e.args else ""
-    return str(e)
+    if type(e).__str__ is BaseException.__str__:
+        return _args_text(e)
+    text = str(e)
+    try:
+        return _own_str_text(e, text)
+    except Exception:  # an argument that cannot render: str(e) did not need it, so its text stands
+        return text
+
+
+def _own_str_text(e: BaseException, text: str) -> str:
+    """``text`` (``str(e)`` from an own ``__str__``) with the arguments rendered once where it shows them."""
+    if text == BaseException.__str__(e):  # an own __str__ that fell back to the default (OSError, ImportError, ...)
+        return _args_text(e)
+    if isinstance(e, OSError) and text == "[Errno %s] %s" % (e.errno, e.strerror):
+        return "[Errno %s] %s" % (_raw(e.errno), _raw(e.strerror))
+    if isinstance(e, SyntaxError) and e.msg is not None and text.startswith(str(e.msg)):
+        return _raw(e.msg) + text[len(str(e.msg)):]
+    return text
 
 
 def run_check(name: str, check, args: list) -> Result:

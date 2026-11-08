@@ -542,6 +542,80 @@ class RawMapTest(unittest.TestCase):
             with self.subTest(exc=repr(exc)):
                 self.assertEqual(rendered(raising(exc)), want)
 
+    def test_own_str_exception_reasons_escaped_once(self):  # verifier V-1: classes with their own C __str__
+        def raising(exc):
+            def check(a):
+                raise exc
+            return check
+        cases = (
+            (AttributeError("a\\b", "c"), "AttributeError: [a\\\\b, c]"),
+            (AttributeError({"k": "a\\b"}), "AttributeError: {k: a\\\\b}"),
+            (NameError("a\\b", "c"), "NameError: [a\\\\b, c]"),
+            (UnboundLocalError(["a\\b"]), "UnboundLocalError: [a\\\\b]"),
+            (OSError({"k": "a\\b"}), "OSError: {k: a\\\\b}"),
+            (OSError(["a\\b"]), "OSError: [a\\\\b]"),
+            (OSError("a\\b", 1, 2, 3, 4, 5), "OSError: [a\\\\b, 1, 2, 3, 4, 5]"),
+            (OSError("a\\b", {"k": "c\\d"}), "OSError: [Errno a\\\\b] {k: c\\\\d}"),
+            (OSError(2, {"k": "a\\b"}), "FileNotFoundError: [Errno 2] {k: a\\\\b}"),
+            (OSError(None, "a\\b"), "OSError: [Errno None] a\\\\b"),
+            (OSError(2, {"k": "a\\b"}, "f"), "FileNotFoundError: [Errno 2] {k: a\\\\b}: f"),
+            (ImportError("a\\b", "c"), "ImportError: [a\\\\b, c]"),
+            (ImportError({"k": "a\\b"}), "ImportError: {k: a\\\\b}"),
+            (ImportError("a\\b"), "ImportError: a\\\\b"),
+            (ModuleNotFoundError("a\\b", {"k": "c\\d"}), "ModuleNotFoundError: [a\\\\b, {k: c\\\\d}]"),
+            (SyntaxError({"k": "a\\b"}), "SyntaxError: {k: a\\\\b}"),
+            (SyntaxError({"k": "a\\b"}, ("f", 1, 2, "t")), "SyntaxError: {k: a\\\\b} (f, line 1)"),
+            (SyntaxError("a\\b", 1, 2, 3, 4, 5), "SyntaxError: a\\\\b"),
+            (IndentationError(["a\\b"]), "IndentationError: [a\\\\b]"),
+            (TabError({"k": "a\\b"}), "TabError: {k: a\\\\b}"),
+        )
+        for exc, want in cases:
+            with self.subTest(exc=repr(exc)):
+                self.assertEqual(rendered(raising(exc)), "FAIL g.input: %s\n" % want)
+
+    def test_every_builtin_exception_reason_escaped_once(self):  # verifier V-1: the class x arity sweep
+        import builtins
+        argsets = (({"k": "a\\b"},), ("a\\b", "c"), ("a\\b",), (["a\\b"],), ("a\\b", 1, 2, 3, 4, 5),
+                   ("a\\b", {"k": "c\\d"}), (2, {"k": "a\\b"}), (2, "x", {"k": "a\\b"}), (2, {"k": "a\\b"}, "f"))
+        swept = 0
+        for name in sorted(dir(builtins)):
+            cls = getattr(builtins, name)
+            if not (isinstance(cls, type) and issubclass(cls, Exception)):
+                continue
+            for args in argsets:
+                try:
+                    exc = cls(*args)
+                except Exception:
+                    continue
+                swept += 1
+
+                def check(a, exc=exc):
+                    raise exc
+                with self.subTest(cls=name, args=repr(args)):
+                    out = rendered(check)  # an exception escaping run_check fails the subtest as an error
+                    self.assertTrue(out.startswith("FAIL g.input: %s: " % type(exc).__name__), out)
+                    self.assertNotIn("\\\\\\\\", out)  # one backslash in gives two out; four is a second escape
+                    self.assertNotIn("'", out)  # no repr quoting of a caller value
+        self.assertGreater(swept, 400)
+
+    def test_own_str_text_kept_when_the_arguments_cannot_render(self):  # V-1 fix: str(e) worked, so no new crash
+        class Bad:
+            def __str__(self):
+                raise RuntimeError("no str")
+            __repr__ = __str__
+
+        class Own(Exception):
+            def __str__(self):
+                return "own a\\b"
+
+        class OwnSyntax(SyntaxError):
+            def __str__(self):
+                return "own a\\b"
+        for exc, want in ((Own(Bad()), "Own: own a\\\\b"), (Own(Bad(), "x"), "Own: own a\\\\b"),
+                          (OwnSyntax(Bad()), "OwnSyntax: own a\\\\b")):
+            with self.subTest(exc=type(exc).__name__, n=len(exc.args)):
+                self.assertEqual(rendered(lambda a, exc=exc: (_ for _ in ()).throw(exc)), "FAIL g.input: %s\n" % want)
+
     def test_other_exception_paths_with_a_map(self):  # R12
         def key_error(a):
             raise KeyError({"k": "\\"})
