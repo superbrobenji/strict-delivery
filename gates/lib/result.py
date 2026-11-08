@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+from gates.lib.yamlsub import MAX_DEPTH  # owner Q-R6R-2 (b): the renderer's nesting cap is the plan's MAX_DEPTH
+
 
 class GateError(Exception):
     """A problem with a gate's input or environment; the message is the FAIL reason."""
@@ -144,26 +146,44 @@ def _raw_on(x: object, path: tuple) -> str:
         return _exact(x)
     if issubclass(t, bytes):
         return "b'" + bytes.decode(x, "latin-1") + "'"
+    if not issubclass(t, (set, frozenset, dict, list, tuple)):
+        return _leaf_text(x)
+    if id(x) in path:
+        return "[...]" if issubclass(t, (list, tuple)) else "{...}"
+    if len(path) >= MAX_DEPTH:  # owner Q-R6R-2 (b): a fixed nesting cap, the same on every interpreter
+        raise RecursionError("nesting deeper than %d" % MAX_DEPTH)
+    inner = path + (id(x),)
     if issubclass(t, (set, frozenset)):
-        if id(x) in path:
-            return "{...}"
-        inner = path + (id(x),)
-        items = sorted(_raw_on(i, inner) for i in x)
+        items = sorted(_items_text([i for i in x], inner))
         body = "{" + ", ".join(items) + "}" if items else ""
         if issubclass(t, frozenset):
             return "frozenset(" + body + ")"
         return body or "set()"
     if issubclass(t, dict):
-        if id(x) in path:
-            return "{...}"
-        inner = path + (id(x),)
-        return "{" + ", ".join(_raw_on(k, inner) + ": " + _raw_on(v, inner) for k, v in x.items()) + "}"
-    if issubclass(t, (list, tuple)):
-        if id(x) in path:
-            return "[...]"
-        inner = path + (id(x),)
-        return "[" + ", ".join(_raw_on(i, inner) for i in x) + "]"
-    return _leaf_text(x)
+        texts = _items_text([o for k, v in x.items() for o in (k, v)], inner)
+        return "{" + ", ".join(texts[n] + ": " + texts[n + 1] for n in range(0, len(texts), 2)) + "}"
+    return "[" + ", ".join(_items_text([i for i in x], inner)) + "]"
+
+
+def _items_text(items: list, path: tuple) -> list:
+    """Each item rendered under its own guard (owner Q-R6R-1 (b)): an item that raises an Exception renders as that
+    exception's type name. Every item is rendered before anything propagates, so what propagates does not depend on
+    the order of the items (a set's order depends on the hash seed): a non-Exception BaseException first, else a
+    RecursionError, which collapses the whole value to the type name, as nesting past the cap does (owner Q-R6R-2
+    (b), Q-1C0V1R-3 (b)(i))."""
+    out, stop = [], None
+    for i in items:
+        try:
+            out.append(_raw_on(i, path))
+        except RecursionError as e:
+            stop = e if stop is None else stop
+        except Exception as e:
+            out.append(_type_name(e))
+        except BaseException as e:
+            stop = e if stop is None or issubclass(type(stop), Exception) else stop
+    if stop is not None:
+        raise stop
+    return out
 
 
 def _leaf_text(x: object) -> str:
@@ -183,8 +203,12 @@ def _s(x: object) -> str:
 
 
 def _args_text(e: BaseException) -> str:
-    """``BaseException.__str__(e)`` with ``_raw`` in place of ``str`` and ``repr``: the arguments rendered once."""
-    return _raw(e.args[0] if len(e.args) == 1 else list(e.args)) if e.args else ""
+    """``BaseException.__str__(e)`` with ``_raw`` in place of ``str`` and ``repr``: the arguments rendered once. The
+    arguments are not a container's items (owner Q-R7-1 (a)): each renders unguarded, in order, and the first that
+    raises collapses the reason to the type name (Q-1C0V1R-3 (b)(i))."""
+    if len(e.args) == 1:
+        return _raw(e.args[0])
+    return "[" + ", ".join(_raw(a) for a in e.args) + "]" if e.args else ""
 
 
 def _exc_text(e: BaseException) -> str:

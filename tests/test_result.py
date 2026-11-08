@@ -1480,5 +1480,230 @@ class NeverRaisesTest(unittest.TestCase):
                           {(str, str, str, str)}, True))
 
 
+# Fix round 7 (F-r6r-1..3). The classes are one source text, so the hash-seed subprocess runs the same ones.
+ITEM_CLASSES = (
+    "class FTE(frozenset):\n    def __iter__(self):\n        raise TypeError('t')\n"
+    "class FVE(frozenset):\n    def __iter__(self):\n        raise ValueError('v')\n"
+    "class FRE(frozenset):\n    def __iter__(self):\n        raise RuntimeError('r')\n"
+    "class FKE(frozenset):\n    def __iter__(self):\n        raise KeyError('k')\n"
+    "class FKI(frozenset):\n    def __iter__(self):\n        raise KeyboardInterrupt\n"
+    "class FSX(frozenset):\n    def __iter__(self):\n        raise SystemExit(3)\n"
+    "def deep_frozen(n):\n    out = frozenset()\n    for _ in range(n - 1):\n        out = frozenset({out})\n"
+    "    return out\n"
+)
+_items_ns = {}
+exec(ITEM_CLASSES, _items_ns)
+FTE, FVE, FRE, FKI, FSX, deep_frozen = (_items_ns[n] for n in ("FTE", "FVE", "FRE", "FKI", "FSX", "deep_frozen"))
+
+
+def nested(n, make=lambda inner: [inner]):
+    """``n`` containers, one inside the other, the innermost an empty list: ``nested(1) == []``."""
+    out = []
+    for _ in range(n - 1):
+        out = make(out)
+    return out
+
+
+SEED_PROBE = ITEM_CLASSES + (
+    "import io, sys\n"
+    "from gates.lib.result import GateError, Line, Result, run_gate\n"
+    "def show(label, value, where):\n"
+    "    def check(a):\n"
+    "        if where == 'raised':\n"
+    "            raise GateError(value)\n"
+    "        return Result('g', [Line('PASS' if where == 'pass' else 'FAIL', value if where == 'id' else 'g.a',\n"
+    "                                 'r' if where == 'id' else value)])\n"
+    "    for mode in ([], ['--json']):\n"
+    "        buf, old = io.StringIO(), sys.stdout\n"
+    "        sys.stdout = buf\n"
+    "        try:\n"
+    "            run_gate('g', check, mode)\n"
+    "            got = buf.getvalue()\n"
+    "        except BaseException as e:\n"
+    "            got = 'PROPAGATES %s\\n' % type(e).__name__\n"
+    "        finally:\n"
+    "            sys.stdout = old\n"
+    "        print(label, where, mode, got, end='')\n"
+    "many = {cls({str(i) + cls.__name__}) for i in range(10) for cls in (FTE, FVE, FRE, FKE)} | {'a', 'z'}\n"
+    "cases = [('pair', {FTE({'a'}), FVE({'b'})}), ('many', many), ('kbd', {FKI({'a'}), FTE({'b'})}),\n"
+    "         ('kbd_many', many | {FKI({'x'})}), ('exit', {FSX({'a'}), FTE({'b'})}),\n"
+    "         ('kbd_in_list', [FTE({'a'}), FKI({'b'})]), ('dict', {'k': {FTE({'a'}), FVE({'b'})}}),\n"
+    "         ('frozen', {FTE({'a'}), frozenset({str(i) for i in range(5)})}),\n"
+    "         ('deep', {FTE({'a'}), deep_frozen(60), 'q'}), ('deep_kbd', {FKI({'a'}), deep_frozen(60)})]\n"
+    "for label, value in cases:\n"
+    "    for where in ('reason', 'id', 'pass', 'raised'):\n"
+    "        show(label, value, where)\n"
+)
+
+
+class RoundSevenTest(unittest.TestCase):
+    """Owner Q-R6R-1 (b): each item of a container renders under its own guard, an Exception as its type name; set
+    items are sorted after rendering; every item is rendered before a non-Exception BaseException propagates.
+    Owner Q-R6R-2 (b): nesting deeper than MAX_DEPTH (50) collapses to the type name (Q-1C0V1R-3 (b)(i)) on every
+    interpreter. F-r6r-3: the type() sites in safe_text and _own_str_text and the frozenset check in _raw_on."""
+
+    def test_each_container_item_renders_under_its_own_guard(self):  # Q-R6R-1 (b), F-r6r-1
+        cases = [
+            ({FTE({"a"}), FVE({"b"})}, "{TypeError, ValueError}"),
+            (frozenset({FVE({"b"}), FTE({"a"})}), "frozenset({TypeError, ValueError})"),
+            ({FTE({"a"}), "ok\\"}, "{TypeError, ok\\}"),
+            ([FVE({"b"}), "ok", FTE({"a"})], "[ValueError, ok, TypeError]"),
+            ((FTE({"a"}),), "[TypeError]"),
+            ({"k": FTE({"a"}), "j": [FVE({"b"})]}, "{k: TypeError, j: [ValueError]}"),
+            ({FTE({"a"}): "v"}, "{TypeError: v}"),
+            ([OddList([C]), C], "[RuntimeError, a\\b]"),
+            ({"k": {FTE({"a"}), FVE({"b"}), FRE({"c"})}}, "{k: {RuntimeError, TypeError, ValueError}}"),
+        ]
+        for n, (value, want) in enumerate(cases):
+            with self.subTest(reason=n):
+                self.assertEqual(returned_reason(value), ("FAIL x.a: %s\n" % safe_text(want), want, str))
+            with self.subTest(id=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", value, "r")])),
+                                 ("FAIL %s: r\n" % safe_text(want), [{"status": "FAIL", "id": want, "reason": "r"}],
+                                  "g", {(str, str, str, str)}, True))
+            with self.subTest(raised=n):
+                self.assertEqual(both_modes(raising(lambda: GateError(value))),
+                                 ("FAIL g.input: %s\n" % safe_text(want), want, str, str))
+                self.assertEqual(both_modes(raising(lambda: ValueError(value))),
+                                 ("FAIL g.input: ValueError: %s\n" % safe_text(want), "ValueError: " + want, str,
+                                  str))
+
+    def test_base_exception_from_an_item_propagates_after_every_item(self):  # Q-R6R-1 (b)
+        seen = []
+
+        class Seen:
+            def __init__(self, n):
+                self.n = n
+
+            def __str__(self):
+                seen.append(self.n)
+                return str(self.n)
+        cases = [({FKI({"a"}), FTE({"b"})}, KeyboardInterrupt, []),
+                 ([FKI({"a"}), Seen(1)], KeyboardInterrupt, [1]),
+                 ([Seen(1), FSX({"a"}), Seen(2)], SystemExit, [1, 2]),
+                 ({"k": FKI({"a"}), "j": Seen(1)}, KeyboardInterrupt, [1]),
+                 ([FKI({"a"}), nested(60), Seen(1)], KeyboardInterrupt, [1]),
+                 ([nested(60), KbdStr(), Seen(1)], KeyboardInterrupt, [1])]
+        for n, (value, exc, want_seen) in enumerate(cases):
+            del seen[:]
+            with self.subTest(n=n):
+                with self.assertRaises(exc):
+                    run_check("g", returning(lambda: Result("g", [Line("FAIL", "g.a", value)])), [])
+                with self.assertRaises(exc):
+                    run_check("g", returning(lambda: Result("g", [Line("FAIL", value, "r")])), [])
+                with self.assertRaises(exc):
+                    run_check("g", raising(lambda: ValueError(value)), [])
+                self.assertEqual(seen, want_seen * 3)
+
+    def test_item_guard_output_does_not_depend_on_the_hash_seed(self):  # Q-R6R-1 (b), F-r6r-1: seeds 0..7, random
+        outs = {}
+        for seed in ("0", "1", "2", "3", "4", "5", "6", "7", "12345", "random"):
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+            outs[seed] = subprocess.run([sys.executable, "-c", SEED_PROBE], cwd=REPO, env=env, capture_output=True,
+                                        text=True, check=True).stdout
+        self.assertEqual(len(set(outs.values())), 1, outs)
+        got = outs["0"]
+        many = "{" + ", ".join(["KeyError"] * 10 + ["RuntimeError"] * 10 + ["TypeError"] * 10 +
+                               ["ValueError"] * 10) + ", a, z}"
+        lines = ["pair reason [] FAIL g.a: {TypeError, ValueError}",
+                 'pair reason [\'--json\'] {"gate": "g", "ok": false, "lines": [{"status": "FAIL", "id": "g.a", '
+                 '"reason": "{TypeError, ValueError}"}]}',
+                 'pair pass [\'--json\'] {"gate": "g", "ok": true, "lines": [{"status": "PASS", "id": "g.a", '
+                 '"reason": "{TypeError, ValueError}"}]}',
+                 "pair id [] FAIL {TypeError, ValueError}: r",
+                 "pair raised [] FAIL g.input: {TypeError, ValueError}",
+                 "many reason [] FAIL g.a: " + many,
+                 "many id [] FAIL %s: r" % many,
+                 "dict reason [] FAIL g.a: {k: {TypeError, ValueError}}",
+                 "frozen reason [] FAIL g.a: {TypeError, frozenset({0, 1, 2, 3, 4})}"]
+        for label in ("kbd", "kbd_many", "exit", "kbd_in_list", "deep_kbd"):
+            for where in ("reason", "id", "pass", "raised"):
+                for mode in ("[]", "['--json']"):
+                    lines.append("%s %s %s PROPAGATES %s" % (label, where, mode,
+                                                             "SystemExit" if label == "exit" else "KeyboardInterrupt"))
+        for where in ("reason", "id", "pass", "raised"):
+            lines.append("deep %s [] FAIL g.input: RecursionError" % where if where != "raised" else
+                         "deep raised [] FAIL g.input: GateError")
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertIn(line + "\n", got)
+
+    def test_nesting_deeper_than_max_depth_collapses_to_the_type_name(self):  # Q-R6R-2 (b), F-r6r-2
+        from gates.lib.yamlsub import MAX_DEPTH
+        self.assertEqual(MAX_DEPTH, 50)
+        for depth in (49, 50, 51, 331, 497, 600):
+            value = nested(depth)
+            with self.subTest(depth=depth):
+                if depth <= 50:
+                    want = "[" * depth + "]" * depth
+                    self.assertEqual(returned_reason(value), ("FAIL x.a: %s\n" % want, want, str))
+                    self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", value, "r")]))[1][0]["id"], want)
+                    self.assertEqual(escaping_or_rendered(ValueError(value)), "FAIL g.input: ValueError: %s\n" % want)
+                    self.assertEqual(escaping_or_rendered(GateError(value)), "FAIL g.input: %s\n" % want)
+                    self.assertEqual(escaping_or_rendered(SystemExit(value)), "FAIL g.input: exit requested (%s)\n"
+                                     % want)
+                else:
+                    self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", "g.a", value)])),
+                                     refused("RecursionError"))
+                    self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", value, "r")])),
+                                     refused("RecursionError"))
+                    self.assertEqual(escaping_or_rendered(ValueError(value)), "FAIL g.input: ValueError: ValueError\n")
+                    self.assertEqual(escaping_or_rendered(GateError(value)), "FAIL g.input: GateError\n")
+                    self.assertEqual(escaping_or_rendered(SystemExit(value)),
+                                     "FAIL g.input: exit requested (SystemExit)\n")
+            with self.subTest(deep_list=depth):  # the reviewer's deep(N): N lists around an empty one, N + 1 in all
+                self.assertEqual(rendered(raise_gate(deep_list(depth))),
+                                 "FAIL g.input: %s\n" % ("[" * (depth + 1) + "]" * (depth + 1) if depth < 50
+                                                         else "GateError"))
+        for label, make in (("tuple", lambda i: (i,)), ("dict", lambda i: {"k": i})):
+            with self.subTest(shape=label):
+                self.assertTrue(returned_reason(nested(50, make))[0].startswith("FAIL x.a: "))
+                self.assertEqual(returned_reason(nested(51, make))[0], "FAIL x.input: RecursionError\n")
+        self.assertEqual(returned_reason(deep_frozen(50))[0],
+                         "FAIL x.a: " + "frozenset({" * 49 + "frozenset()" + "})" * 49 + "\n")
+        self.assertEqual(returned_reason(deep_frozen(51))[0], "FAIL x.input: RecursionError\n")
+        mixed = nested(17, lambda i: [{"k": (i,)}])  # 1 + 16 * 3 = 49 containers
+        self.assertTrue(returned_reason([mixed])[0].startswith("FAIL x.a: [[{k: [[{k: "))
+        self.assertEqual(returned_reason([[mixed]])[0], "FAIL x.input: RecursionError\n")
+        selfref = nested(49)
+        inner = selfref
+        while inner:
+            inner = inner[0]
+        inner.append(selfref)  # the innermost (49th) list holds the outermost: a cycle renders as repr does
+        self.assertEqual(returned_reason(selfref)[0], "FAIL x.a: " + "[" * 49 + "[...]" + "]" * 49 + "\n")
+
+    def test_too_deep_item_collapses_unless_a_base_exception_propagates(self):  # Q-R6R-1 (b) with Q-R6R-2 (b)
+        self.assertEqual(returned_reason({FTE({"a"}), "x", deep_frozen(50)})[0], "FAIL x.input: RecursionError\n")
+        self.assertEqual(returned_reason([nested(50), FTE({"a"})])[0], "FAIL x.input: RecursionError\n")
+        self.assertEqual(returned_reason([nested(49), FTE({"a"})])[0],
+                         "FAIL x.a: [" + "[" * 49 + "]" * 49 + ", TypeError]\n")
+        with self.assertRaises(KeyboardInterrupt):
+            run_check("x", returning(lambda: Result("x", [Line("FAIL", "x.a", [nested(60), KbdStr()])])), [])
+
+    def test_type_sites_read_type_not_class(self):  # F-r6r-3: the reviewer's sib.py and sib2.py
+        class SetClaimsFrozen(set):
+            @property
+            def __class__(self):
+                return frozenset
+
+        def own_str_claims(kind, attrs, text):
+            def __str__(self):
+                return text
+            ns = dict(attrs, __class__=property(lambda self: kind), __str__=__str__)
+            return type("OwnStrClaims" + kind.__name__, (Exception,), ns)()
+        self.assertEqual(returned_reason(SetClaimsFrozen({"z"})), ("FAIL x.a: {z}\n", "{z}", str))  # _raw_on frozenset
+        for exc, want in ((own_str_claims(OSError, {"errno": 2, "strerror": ["x"]}, "[Errno 2] ['x']"),
+                           "[Errno 2] ['x']"),  # _own_str_text OSError
+                          (own_str_claims(SyntaxError, {"msg": ["m"]}, "['m'] (line 1)"),
+                           "['m'] (line 1)")):  # _own_str_text SyntaxError
+            name = type(exc).__name__
+            with self.subTest(exc=name):
+                self.assertEqual(both_modes(raising(lambda: exc)),
+                                 ("FAIL g.input: %s: %s\n" % (name, safe_text(want)), "%s: %s" % (name, want), str,
+                                  str))
+        self.assertEqual(safe_text(ClassRaises()), "cr\\\\x")  # safe_text
+        self.assertEqual(safe_text(SpoofStr()), "ss\\\\x")
+
+
 if __name__ == "__main__":
     unittest.main()
