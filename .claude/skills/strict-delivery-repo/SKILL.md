@@ -1,6 +1,6 @@
 ---
 name: strict-delivery-repo
-description: Use at the start of every session in this repository, after a compaction or in a new session, and before every change: this repository's paths, the resume flow, checkpoints, background jobs, owner questions and the by-hand checklist. Read with the user-level strict-delivery skill.
+description: "Use at the start of every session in this repository, after a compaction or in a new session, and before every change: this repository's paths, the resume flow, checkpoints, background jobs, owner questions and the by-hand checklist. Read with the user-level strict-delivery skill."
 ---
 # strict-delivery: this repository
 
@@ -18,7 +18,7 @@ This is this repository's interim process text until the framework delivers it (
 - Plans: `docs/strict-delivery/plans/` (this plan: `docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md`).
 - Plan state: `.strict-delivery/state/plans/<plan>/`, holding `ledger.md`, `handoff.md` and `breakdown.md` (for this plan: `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/`).
 - Prompt blocks: `skills/strict-delivery/prompts/`, one file per role. A dispatch carries its role's block verbatim, as on `main` (`git show origin/main:skills/strict-delivery/prompts/<role>.md`), never edited.
-- Gates: the enabled `python3 -m gates check <gate>` list. On this branch's base: `check schema`, and `check cites` (registered; it fails `cites.input` until its module lands, Task C2.2). `check decisions` and `check register` join when block 1c merges (plan "Process for this plan", "Bootstrap"); `python3 -m gates run_all` replaces the list once block 2b lands (Task 2b.3).
+- Gates: the enabled `python3 -m gates check <gate>` list. On this branch's base: `check schema`, and `check cites` (registered; it fails `cites.input` until its module lands, Task C2.2). `check decisions` is enabled from Task 1c.1 and `check register` from Task 1c.2, each as soon as it lands (P:39, plan "Process for this plan", "Bootstrap"); neither is registered on this branch; `python3 -m gates run_all` replaces the list once block 2b lands (Task 2b.3).
 - Test command (plan Global Constraints): `/usr/bin/python3 -m unittest discover -s tests -t . -v` and `/opt/homebrew/bin/python3.13 -m unittest discover -s tests -t . -v`.
 - The file paths the user-level skill names belong to another repository and do not apply here; use the paths above.
 
