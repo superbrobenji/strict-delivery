@@ -1705,5 +1705,87 @@ class RoundSevenTest(unittest.TestCase):
         self.assertEqual(safe_text(SpoofStr()), "ss\\\\x")
 
 
+# Fix round 8 (F-r7r-1). The module name is fixed, so a custom class's qualified name is the same in every run.
+BASE_CLASSES = ITEM_CLASSES + (
+    "__name__ = 'r8probe'\n"
+    "class CustomBase(BaseException):\n    pass\n"
+    "class FGE(frozenset):\n    def __iter__(self):\n        raise GeneratorExit\n"
+    "class FCB(frozenset):\n    def __iter__(self):\n        raise CustomBase\n"
+    "class FS1(frozenset):\n    def __iter__(self):\n        raise SystemExit(1)\n"
+    "class FS2(frozenset):\n    def __iter__(self):\n        raise SystemExit(2)\n"
+)
+_base_ns = {}
+exec(BASE_CLASSES, _base_ns)
+
+BASE_PROBE = BASE_CLASSES + (
+    "import io, sys\n"
+    "from gates.lib.result import GateError, Line, Result, run_gate\n"
+    "pad = {'p%d' % i for i in range(30)}\n"
+    "cases = [('kbd_exit', [FKI({'a'}), FSX({'b'})]), ('exit_gen_custom', [FSX({'a'}), FGE({'b'}), FCB({'c'})]),\n"
+    "         ('nested', [FKI({'a'}), frozenset({FSX({'b'}), FGE({'c'})})])]\n"
+    "for label, items in cases:\n"
+    "    for kind in (set, frozenset):\n"
+    "        value = kind(items) | pad\n"
+    "        for where in ('reason', 'id', 'raised'):\n"
+    "            def check(a, value=value, where=where):\n"
+    "                if where == 'raised':\n"
+    "                    raise GateError(value)\n"
+    "                return Result('g', [Line('FAIL', value if where == 'id' else 'g.a',\n"
+    "                                         'r' if where == 'id' else value)])\n"
+    "            buf, old = io.StringIO(), sys.stdout\n"
+    "            sys.stdout = buf\n"
+    "            try:\n"
+    "                run_gate('g', check, [])\n"
+    "                got = 'RETURNED'\n"
+    "            except BaseException as e:\n"
+    "                got = '%s.%s' % (type(e).__module__, type(e).__qualname__)\n"
+    "            finally:\n"
+    "                sys.stdout = old\n"
+    "            print(label, kind.__name__, where, got)\n"
+)
+
+
+class RoundEightTest(unittest.TestCase):
+    """F-r7r-1, owner Q-R7R-0 (a): of several non-Exception BaseExceptions collected while rendering, the one whose
+    type's qualified name (module + '.' + qualname) is smallest propagates; of equal types, the first collected."""
+
+    def test_which_base_exception_propagates_does_not_depend_on_the_hash_seed(self):  # F-r7r-1
+        outs = {}
+        for seed in ("0", "1", "2", "3", "4", "5", "6", "7", "12345", "random"):
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+            outs[seed] = subprocess.run([sys.executable, "-c", BASE_PROBE], cwd=REPO, env=env, capture_output=True,
+                                        text=True, check=True).stdout
+        self.assertEqual(len(set(outs.values())), 1, outs)
+        want = []
+        for label, name in (("kbd_exit", "builtins.KeyboardInterrupt"), ("exit_gen_custom", "builtins.GeneratorExit"),
+                            ("nested", "builtins.GeneratorExit")):
+            for kind in ("set", "frozenset"):
+                for where in ("reason", "id", "raised"):
+                    want.append("%s %s %s %s" % (label, kind, where, name))
+        self.assertEqual(outs["0"].splitlines(), want)
+
+    def test_order_of_the_items_does_not_choose(self):  # F-r7r-1: a list keeps its order, the rule still decides
+        ns = _base_ns
+        cases = [([ns["FKI"]({"a"}), ns["FSX"]({"b"})], KeyboardInterrupt),
+                 ([ns["FSX"]({"b"}), ns["FKI"]({"a"})], KeyboardInterrupt),
+                 ([ns["FSX"]({"a"}), ns["FGE"]({"b"}), ns["FCB"]({"c"})], GeneratorExit),
+                 ([ns["FCB"]({"c"}), ns["FSX"]({"a"})], SystemExit),  # builtins.SystemExit < r8probe.CustomBase
+                 ([ns["FCB"]({"c"}), "x"], ns["CustomBase"])]
+        for n, (value, exc) in enumerate(cases):
+            with self.subTest(n=n):
+                for check in (returning(lambda: Result("g", [Line("FAIL", "g.a", value)])),
+                              raising(lambda: ValueError(value))):
+                    with self.assertRaises(BaseException) as cm:
+                        run_check("g", check, [])
+                    self.assertIs(type(cm.exception), exc)
+        for first, code in ((ns["FS1"], 1), (ns["FS2"], 2)):  # equal types: the first collected
+            other = ns["FS2"] if first is ns["FS1"] else ns["FS1"]
+            with self.subTest(first=code):
+                with self.assertRaises(SystemExit) as cm:
+                    run_check("g", returning(lambda: Result("g", [Line("FAIL", "g.a", [first({"a"}), other({"b"})])])),
+                              [])
+                self.assertEqual(cm.exception.code, code)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -170,7 +170,8 @@ def _items_text(items: list, path: tuple) -> list:
     exception's type name. Every item is rendered before anything propagates, so what propagates does not depend on
     the order of the items (a set's order depends on the hash seed): a non-Exception BaseException first, else a
     RecursionError, which collapses the whole value to the type name, as nesting past the cap does (owner Q-R6R-2
-    (b), Q-1C0V1R-3 (b)(i))."""
+    (b), Q-1C0V1R-3 (b)(i)). Of several non-Exception BaseExceptions, the one whose type has the smallest qualified
+    name (``_qual_name``) propagates; of equal types, the first collected (owner Q-R7R-0 (a), F-r7r-1)."""
     out, stop = [], None
     for i in items:
         try:
@@ -180,10 +181,23 @@ def _items_text(items: list, path: tuple) -> list:
         except Exception as e:
             out.append(_type_name(e))
         except BaseException as e:
-            stop = e if stop is None or issubclass(type(stop), Exception) else stop
+            if stop is None or issubclass(type(stop), Exception) or _qual_name(e) < _qual_name(stop):
+                stop = e
     if stop is not None:
         raise stop
     return out
+
+
+_QUALNAME = type.__dict__["__qualname__"]
+_MODULE = type.__dict__["__module__"]
+
+
+def _qual_name(x: object) -> str:
+    """``<module>.<qualname>`` of ``x``'s type as an exact ``str``, read past a metaclass that overrides either; a
+    module that is not a str counts as empty."""
+    t = type(x)
+    module = _MODULE.__get__(t)
+    return (_exact(module) if issubclass(type(module), str) else "") + "." + _exact(_QUALNAME.__get__(t))
 
 
 def _leaf_text(x: object) -> str:
