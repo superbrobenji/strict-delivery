@@ -275,12 +275,23 @@ def _own_str_or(e: BaseException, base: type, fallback) -> str:
     own = next(_DICT.__get__(c)["__str__"] for c in mro if "__str__" in _DICT.__get__(c))
     for c in mro:
         if id(c) in _BUILTIN_CLASSES and _DICT.__get__(c).get("__str__") is own:
+            if base is not BaseException and c is not OSError and _main_filename_form(e):  # F-r12r-1
+                return _filename_text(e)
             return fallback(e) if c is base else _built_in_text(e, c)
     try:
         text = _s(e)
     except Exception:  # the own __str__ cannot render an argument: render the arguments themselves
         return fallback(e)
     return _own_str_text(e, text)
+
+
+def _main_filename_form(e: BaseException) -> bool:
+    """Whether main d9798af's ``_exc_text`` gave ``e`` the filename form: an OSError with a filename, unless it is a
+    KeyError with one argument (main's KeyError branch came first). In the KeyError and OSError branches a class
+    with no own ``__str__`` keeps that form whichever built-in ``__str__`` it resolves to; a GateError's reason was
+    ``str(e)``, so not there (F-r12r-1, owner Q-ES-V1 (a))."""
+    t = type(e)
+    return issubclass(t, OSError) and e.filename is not None and not (issubclass(t, KeyError) and len(e.args) == 1)
 
 
 def _built_in_text(e: BaseException, c: type) -> str:

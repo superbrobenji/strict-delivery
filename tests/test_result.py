@@ -2168,5 +2168,68 @@ class RoundTwelveTest(unittest.TestCase):
                          (("FAIL g.input: OK: [Errno 2] No: f\\n\n", "OK: [Errno 2] No: f\n", str, str), 0))
 
 
+# Fix round 13 (F-r12r-1, owner Q-ES-V1 (a)): an OSError with a filename whose resolved __str__ is BaseException's
+# or KeyError's (an alias, a mixin, a KeyError base, or one inherited past OSError) has no own __str__, so it
+# renders main d9798af's filename form, each part once.
+class _PlainMix:
+    pass
+
+
+_BE, _KS = BaseException.__str__, KeyError.__str__
+_OEbe = type("OEbe", (OSError,), {"__str__": _BE})
+_FNFbe = type("FNFbe", (FileNotFoundError,), {"__str__": _BE})
+_PEbe = type("PEbe", (PermissionError,), {"__str__": _BE})
+_PmOEbe = type("PmOEbe", (_PlainMix, OSError), {"__str__": _BE})
+_OESmbe = type("OESmbe", (OSError, _SupMixin), {"__str__": _BE})
+_SmOEbe = type("SmOEbe", (_SupMixin, OSError), {"__str__": _BE})
+_OKke = type("OKke", (OSError, KeyError), {"__str__": _KS})
+_OKbe = type("OKbe", (OSError, KeyError), {"__str__": _BE})
+_FKke = type("FKke", (FileNotFoundError, KeyError), {"__str__": _KS})
+_SmOKke = type("SmOKke", (_SupMixin, OSError, KeyError), {"__str__": _KS})
+_KOplain = type("KO", (KeyError, OSError), {})
+_MidObe = type("MidObe", (OSError,), {"__str__": _BE})
+_SubMidObe = type("SubMidObe", (_MidObe,), {})
+_SubMidOKbe = type("SubMidOKbe", (_MidObe, KeyError), {})
+_GOEbe = type("GOEbe", (GateError, OSError), {"__str__": _BE})
+
+
+def _with_filename(make, name):
+    e = make()
+    e.filename = name
+    return e
+
+
+ALIAS_FILENAME_CASES = [  # main d9798af gave each of these
+    ("oe_be", lambda: _OEbe(2, "No", "f\n"), "OEbe: [Errno 2] No: f\\n"),
+    ("oe_be_filename2", lambda: _OEbe(2, "No", "f\n", None, "g\n"), "OEbe: [Errno 2] No: f\\n -> g\\n"),
+    ("fnf_be", lambda: _FNFbe(2, "No", "f\n"), "FNFbe: [Errno 2] No: f\\n"),
+    ("pe_be", lambda: _PEbe(13, "No", "f\n"), "PEbe: [Errno 13] No: f\\n"),
+    ("plainmix_oe_be", lambda: _PmOEbe(2, "No", "f\n"), "PmOEbe: [Errno 2] No: f\\n"),
+    ("oe_supmix_be", lambda: _OESmbe(2, "No", "f\n"), "OESmbe: [Errno 2] No: f\\n"),
+    ("supmix_oe_be", lambda: _SmOEbe(2, "No", "f\n"), "SmOEbe: [Errno 2] No: f\\n"),
+    ("oe_ke_ke", lambda: _OKke(2, "No", "f\n"), "OKke: [Errno 2] No: f\\n"),
+    ("oe_ke_ke_filename2", lambda: _OKke(2, "No", "f\n", None, "g\n"), "OKke: [Errno 2] No: f\\n -> g\\n"),
+    ("oe_ke_be", lambda: _OKbe(2, "No", "f\n"), "OKbe: [Errno 2] No: f\\n"),
+    ("fnf_ke_ke", lambda: _FKke(2, "No", "f\n"), "FKke: [Errno 2] No: f\\n"),
+    ("supmix_oe_ke_ke", lambda: _SmOKke(2, "No", "f\n"), "SmOKke: [Errno 2] No: f\\n"),
+    # KeyError first: KeyError.__init__ runs, so no errno or strerror, as main gave it
+    ("ke_oe_filename_set", lambda: _with_filename(lambda: _KOplain(2, "No"), "f\n"), "KO: KO: f\\n"),
+    ("inherited_past_oe", lambda: _SubMidObe(2, "No", "f\n"), "SubMidObe: [Errno 2] No: f\\n"),
+    ("inherited_past_oe_ke", lambda: _SubMidOKbe(2, "No", "f\n"), "SubMidOKbe: [Errno 2] No: f\\n"),
+    # main's KeyError branch came first: one argument renders it, whatever the filename
+    ("oe_ke_be_one_arg_filename_set", lambda: _with_filename(lambda: _OKbe("k\n"), "f\n"), "OKbe: k\\n"),
+    # a GateError's reason was str(e) in main, not the filename form: main's (2, 'No') with the arguments once
+    ("ge_oe_be", lambda: _GOEbe(2, "No", "f\n"), "[2, No]"),
+    ("oe_ke_ke_one_arg_filename_set", lambda: _with_filename(lambda: _OKke("k\n"), "f\n"), "OKke: k\\n"),
+]
+
+
+class RoundThirteenTest(unittest.TestCase):
+    """F-r12r-1: a built-in __str__ other than OSError's, aliased or inherited, on an OSError with a filename."""
+
+    def test_an_alias_of_a_built_in_str_renders_the_filename_form_once(self):  # F-r12r-1
+        RoundTwelveTest.check_cases(self, ALIAS_FILENAME_CASES)
+
+
 if __name__ == "__main__":
     unittest.main()
