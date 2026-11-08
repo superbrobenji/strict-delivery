@@ -124,7 +124,7 @@ EMPTY_FILES = {
     F_INDEX: "schema: finding-index/1\nfindings: []\n",
     IN_FORCE: INFORCE_HEAD,
     INDEX_MD: ("<!-- schema: overview/1 -->\n\n## Architecture\nnone\n\n## Open findings\n" + SEV_ZERO
-               + "\n## In-force decisions\n0 in force: [in-force.md](../../.strict-delivery/state/decisions/in-force.md)\n"),
+               + "\n## In-force decisions\n0 in force: [in-force.md](<../../.strict-delivery/state/decisions/in-force.md>)\n"),
 }
 
 
@@ -291,8 +291,8 @@ class RootArgvConfig(Base):
         self.assertEqual(list(files), ["reg/d/index.yml", "reg/f/index.yml", "reg/d/in-force.md", "out/deep/IDX.md"])
         self.assertEqual(entries(files["reg/d/index.yml"], "decisions")[DA]["file"], "reg/d/%s.yml" % DA)
         self.assertEqual(entries(files["reg/f/index.yml"], "findings")[FA]["file"], "reg/f/%s.yml" % FA)
-        self.assertIn("[A.md](../../arch/A.md)\n- One\n", files["out/deep/IDX.md"])
-        self.assertIn("1 in force: [in-force.md](../../reg/d/in-force.md)\n", files["out/deep/IDX.md"])
+        self.assertIn("[A.md](<../../arch/A.md>)\n- One\n", files["out/deep/IDX.md"])
+        self.assertIn("1 in force: [in-force.md](<../../reg/d/in-force.md>)\n", files["out/deep/IDX.md"])
 
     def test_A4_colliding_output_paths_refused(self):
         cfg = {**minimal_config(), "paths": {"index": DEC + "/in-force.md"}}
@@ -506,18 +506,18 @@ class Shapes(Base):
                                                           fnd(FA, "planned"), fnd(FC, "closed")],
                    files={ARCH: "# Title\n\n## Layers\ntext\n### Deep\n## Data flow\n"})
         self.assertEqual(self.render()[INDEX_MD], (
-            "<!-- schema: overview/1 -->\n\n## Architecture\n[architecture.md](architecture.md)\n- Layers\n"
+            "<!-- schema: overview/1 -->\n\n## Architecture\n[architecture.md](<architecture.md>)\n- Layers\n"
             "- Data flow\n\n## Open findings\n- CRITICAL: 0\n- HIGH: 1\n- MEDIUM: 0\n- LOW: 1\n- INFO: 0\n"
             "- %s (HIGH, planned): bug\n- %s (LOW, open): leak\n\n## In-force decisions\n"
-            "2 in force: [in-force.md](../../.strict-delivery/state/decisions/in-force.md)\n") % (FA, FB))
+            "2 in force: [in-force.md](<../../.strict-delivery/state/decisions/in-force.md>)\n") % (FA, FB))
 
     def test_F9_architecture_forms(self):
         self.build()
         self.assertIn("## Architecture\nnone\n", self.render()[INDEX_MD])
         self.put(ARCH, "# T\n```\n## In fence\n```\nno headings\n")
-        self.assertIn("## Architecture\n[architecture.md](architecture.md)\n- In fence\n\n", self.render()[INDEX_MD])
+        self.assertIn("## Architecture\n[architecture.md](<architecture.md>)\n- In fence\n\n", self.render()[INDEX_MD])
         self.put(ARCH, "# T\nno headings\n### three\n##two\n")
-        self.assertIn("## Architecture\n[architecture.md](architecture.md)\n\n## Open", self.render()[INDEX_MD])
+        self.assertIn("## Architecture\n[architecture.md](<architecture.md>)\n\n## Open", self.render()[INDEX_MD])
         self.put(ARCH, "## Architecture\n## Open findings\n")
         md = self.render()[INDEX_MD]
         self.assertIn("- Architecture\n- Open findings\n", md)
@@ -542,6 +542,14 @@ class Shapes(Base):
         self.build(files={"docs/strict-delivery": "a file"})  # a parent that is a regular file
         self.refused(ARCH + ": cannot be read as a UTF-8 regular file (a parent is not a real directory)")
 
+    def test_F10_link_targets_in_angle_brackets(self):  # owner Q-1c3-R1 (a): CommonMark [text](<path>)
+        self.build(cfg={**minimal_config(), "paths": {"architecture": "docs/my arch.md",
+                                                      "index": "docs/out dir/INDEX.md"}},
+                   files={"docs/my arch.md": "## H\n"})
+        md = self.render()["docs/out dir/INDEX.md"]
+        self.assertIn("\n[my arch.md](<../my arch.md>)\n- H\n", md)
+        self.assertIn("\n0 in force: [in-force.md](<../../%s/in-force.md>)\n" % DEC, md)
+
     def test_F10_links_relative_to_index(self):
         for idx, arch, want_arch, want_inf in (
                 ("INDEX.md", "docs/a.md", "docs/a.md", DEC + "/in-force.md"),
@@ -554,8 +562,8 @@ class Shapes(Base):
             self.build(cfg={**minimal_config(), "paths": {"index": idx, "architecture": arch}},
                        files={arch: "## H\n"})
             md = self.render()[idx]
-            self.assertIn("[%s](%s)\n- H\n" % (posix_base(arch), want_arch), md)
-            self.assertIn("0 in force: [in-force.md](%s)\n" % want_inf, md)
+            self.assertIn("[%s](<%s>)\n- H\n" % (posix_base(arch), want_arch), md)
+            self.assertIn("0 in force: [in-force.md](<%s>)\n" % want_inf, md)
 
     def test_F11_open_findings_counts_and_lines(self):
         self.build(fins=[fnd(FA, "closed"), fnd(FB, "closed", severity="CRITICAL")])
@@ -574,7 +582,7 @@ class Shapes(Base):
 
     def test_F12_in_force_count(self):
         self.build(decs=[lasting(DA), lasting(DB), lasting(DC, supersedes=DB), dec(DD)])
-        self.assertIn("## In-force decisions\n2 in force: [in-force.md](../../%s/in-force.md)\n" % DEC,
+        self.assertIn("## In-force decisions\n2 in force: [in-force.md](<../../%s/in-force.md>)\n" % DEC,
                       self.render()[INDEX_MD])
 
     def test_F13_schema_files(self):
@@ -840,6 +848,57 @@ class Writing(Base):
             self.refused(DEC_INDEX + ": cannot emit (nesting too deep)")
             self.refused(DEC_INDEX + ": cannot emit", lambda: index.regenerate(self.work, self.cfg))
         self.assert_nothing_written()
+
+    def umask(self, mask):
+        old = os.umask(mask)
+        self.addCleanup(os.umask, old)
+
+    def mode(self, rel):
+        return stat.S_IMODE(os.lstat(os.path.join(self.work, rel)).st_mode)
+
+    def test_W6_existing_file_keeps_its_mode(self):  # owner Q-1c3-R2 (b), as Store.replace
+        self.umask(0o077)
+        root = self.build()
+        index.regenerate(root, self.cfg)
+        for want in (0o644, 0o600, 0o640):
+            for rel in ORDER:
+                os.chmod(os.path.join(root, rel), want)
+            self.assertEqual(run_main(["--root", root]), (WRITTEN, "", 0))
+            self.assertEqual([self.mode(rel) for rel in ORDER], [want] * 4, oct(want))
+
+    def test_W6_new_file_takes_the_umask(self):  # owner Q-1c3-R2 (b), as Store.create
+        for mask, want in ((0o022, 0o644), (0o077, 0o600), (0o002, 0o664)):
+            self.umask(mask)
+            root = self.build()
+            self.assertEqual(run_main(["--root", root]), (WRITTEN, "", 0))
+            self.assertEqual([self.mode(rel) for rel in ORDER], [want] * 4, oct(mask))
+            self.assertEqual(os.umask(mask), mask)  # the umask is left as it was
+
+    def test_W6_replaced_symlink_takes_the_umask(self):
+        self.umask(0o022)
+        self.build()
+        os.makedirs(os.path.join(self.work, DEC))
+        target = os.path.join(self.tmp, "target.yml")
+        with open(target, "w") as fh:
+            fh.write("keep\n")
+        os.chmod(target, 0o600)
+        os.symlink(target, os.path.join(self.work, DEC_INDEX))
+        index.regenerate(self.work, self.cfg)
+        self.assertEqual(self.mode(DEC_INDEX), 0o644)
+        self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o600)
+
+    def test_W6_unreadable_target_refused(self):
+        self.build()
+        real = os.lstat
+
+        def lstat(p, *a, **kw):
+            if p.endswith("INDEX.md"):
+                raise OSError(13, "Permission denied")
+            return real(p, *a, **kw)
+
+        with mock.patch("gates.tools.index._check_target"), mock.patch("gates.tools.index.os.lstat", lstat):
+            self.refused(INDEX_MD + ": cannot read (Permission denied)", lambda: index.regenerate(self.work, self.cfg))
+        self.assertFalse(os.path.lexists(os.path.join(self.work, INDEX_MD)))
 
     def test_W5_return_value(self):
         self.build()

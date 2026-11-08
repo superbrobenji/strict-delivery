@@ -96,7 +96,7 @@ def _overview(root: str, cfg: dict, fins: list, n_in_force: int, in_force_rel: s
     if arch is None:
         lines.append("none")
     else:
-        lines.append("[%s](%s)" % (posixpath.basename(paths["architecture"]), _link(paths["architecture"], here)))
+        lines.append("[%s](<%s>)" % (posixpath.basename(paths["architecture"]), _link(paths["architecture"], here)))
         lines.extend("- " + _one_line(ln[3:], " ") for ln in arch.split("\n") if ln.startswith("## "))
     lines += ["", "## Open findings"]
     open_ = [r for r in fins if not findings.is_resolved(r.row)]
@@ -105,7 +105,7 @@ def _overview(root: str, cfg: dict, fins: list, n_in_force: int, in_force_rel: s
     for r in open_:
         lines.append("- %s (%s, %s): %s" % (r.id, r.row["severity"], r.row["status"], _one_line(r.row["class"], " ")))
     lines += ["", "## In-force decisions",
-              "%d in force: [in-force.md](%s)" % (n_in_force, _link(in_force_rel, here))]
+              "%d in force: [in-force.md](<%s>)" % (n_in_force, _link(in_force_rel, here))]
     return "\n".join(lines) + "\n"
 
 
@@ -164,8 +164,22 @@ def _check_target(root: str, rel: str) -> None:
 
 
 def _write(root: str, rel: str, text: str) -> None:
-    """Write through a temp file in the same directory and ``os.replace`` (a symlink there is replaced)."""
+    """Write through a temp file in the same directory and ``os.replace`` (a symlink there is replaced). The mode
+    follows Store (owner Q-1c3-R2 (b)): an existing regular file keeps its mode, as ``Store.replace``; anything else
+    becomes a new file whose mode is 0666 less the umask, as ``Store.create``."""
     directory = os.path.join(root, *rel.split("/")[:-1])
+    path = os.path.join(root, *rel.split("/"))
+    try:
+        st = os.lstat(path)
+        mode = stat.S_IMODE(st.st_mode) if stat.S_ISREG(st.st_mode) else None
+    except FileNotFoundError:
+        mode = None
+    except OSError as e:
+        raise GateError("%s: cannot read (%s)" % (rel, _why(e))) from None
+    if mode is None:
+        mask = os.umask(0o022)  # read the umask; it is set back at once
+        os.umask(mask)
+        mode = 0o666 & ~mask
     try:
         fd, tmp = tempfile.mkstemp(dir=directory, prefix="." + posixpath.basename(rel) + ".", suffix=".tmp")
     except OSError as e:
@@ -181,7 +195,8 @@ def _write(root: str, rel: str, text: str) -> None:
             fh.write(text.encode("utf-8"))
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, os.path.join(root, *rel.split("/")))
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
         done = True
     except OSError as e:
         raise GateError("%s: cannot write (%s)" % (rel, _why(e))) from None
