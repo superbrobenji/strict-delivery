@@ -40,14 +40,14 @@ A program session keeps no handoff: after any compaction it re-reads the overvie
 The investigator answers each question with one line, `Q<n> <fact>: match` or `Q<n> <fact>: differs: <recorded value> vs <real value> (<command>)`; G<n> the same.
 
 For a handoff:
-- Q1 each `worktrees` entry: `git -C <path> merge-base --is-ancestor <head> HEAD` exits 0, and `git -C <path> symbolic-ref --quiet --short HEAD` equals `branch` (no output for `null`).
+- Q1 each `worktrees` entry: `git -C <path> merge-base --is-ancestor <head> HEAD` exits 0 and `git -C <path> symbolic-ref --quiet --short HEAD` equals `branch` (no output for `null`).
 - Q2 each entry's `git -C <path> status --porcelain --untracked-files=all`, without the handoff's and the ledger's lines, equals `porcelain`.
-- Q3 the handoff's `head` is an ancestor of `HEAD` of its worktree, and its `branch` is that worktree's branch (the P:2309 rule).
-- Q4 the ledger is committed (`git status --porcelain -- <ledger>` empty), and its line `ledger_from - 1` is its last `CHECKPOINT` line.
+- Q3 the handoff's `head` is an ancestor of `HEAD` of its worktree and its `branch` is that worktree's branch (the P:2309 rule).
+- Q4 the ledger is committed (`git status --porcelain -- <ledger>` empty) and its line `ledger_from - 1` is its last `CHECKPOINT` line.
 - Q5 each `live_subagents` entry: the last record of its `transcript` equals `last_record`.
 - Q6 each entry: every background job id its transcript starts has a completion record or a TaskStop, and the states agree with `jobs` (a job with neither is `running`).
 - Q7 no agent transcript of the session newer than the handoff's commit is missing from `live_subagents`.
-- Q8 each `required_reads` path exists, and its line range lies within the file.
+- Q8 each `required_reads` path exists and its line range lies within the file.
 - Q9 the open decision records equal `open_decisions`, each `findings_in_flight` id has a record, and `batch_cut`, when set, is an ancestor of `HEAD`.
 
 For a program session:
@@ -99,9 +99,9 @@ Only the session writes decision records; workers never do, and never change any
 
 ## By-hand checklist
 
-Until the framework delivers each rule's tool or skill text, these bind the session and every dispatch it makes (session-resume design §3.12; owner answer Q-AUD-1 (a), L:491):
+Until the framework delivers each rule's tool or skill text, these bind the session and every dispatch it makes (session-resume design §3.12; owner answer Q-AUD-1 (a), L:491). CB is the controller block, `skills/strict-delivery/prompts/controller.md`:
 
-- B1 the main session follows the controller block (CB) as its own block (§3.12; Q-AUD-1 (a), L:491);
+- B1 the main session follows CB as its own block (§3.12; Q-AUD-1 (a), L:491);
 - B2 every statement read or written is checked directly and by contradiction, both commands recorded; no unchecked guess is shown to the owner (CB "Verification method."; L:415);
 - B3 search before asking, by topics, paths and words of at least 4 characters, over the ledger, the plan's owner-answer sections and "Owner answers applied" lines, the breakdown and its edits, both specs and the design, plus `git log -S` of every quoted line; each kept question lists its search terms and says "no answer found" (spec §7.4; L:103; L:490);
 - B4 an owner-only class is never decided or inferred from chat (CB "Owner-only decisions."; spec §7.1);
