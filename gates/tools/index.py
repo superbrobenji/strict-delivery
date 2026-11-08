@@ -77,6 +77,12 @@ def _link(target: str, start_dir: str) -> str:
     return "/".join([".."] * (len(s) - n) + t[n:])
 
 
+def _dest(path: str) -> str:
+    """``path`` as a CommonMark ``<...>`` link destination that reads back as exactly ``path`` (owner Q-1c3-R1 (a),
+    Q-1c3-F1-1 (a)): ``\\`` first, then ``<`` and ``>``, are backslash-escaped."""
+    return "<" + path.replace("\\", "\\\\").replace("<", "\\<").replace(">", "\\>") + ">"
+
+
 def _architecture(root: str, rel: str) -> Optional[str]:
     """The text of the architecture file, None when it is absent; anything else unreadable is a GateError."""
     try:
@@ -96,7 +102,8 @@ def _overview(root: str, cfg: dict, fins: list, n_in_force: int, in_force_rel: s
     if arch is None:
         lines.append("none")
     else:
-        lines.append("[%s](<%s>)" % (posixpath.basename(paths["architecture"]), _link(paths["architecture"], here)))
+        lines.append("[%s](%s)" % (posixpath.basename(paths["architecture"]),
+                                   _dest(_link(paths["architecture"], here))))
         lines.extend("- " + _one_line(ln[3:], " ") for ln in arch.split("\n") if ln.startswith("## "))
     lines += ["", "## Open findings"]
     open_ = [r for r in fins if not findings.is_resolved(r.row)]
@@ -105,7 +112,7 @@ def _overview(root: str, cfg: dict, fins: list, n_in_force: int, in_force_rel: s
     for r in open_:
         lines.append("- %s (%s, %s): %s" % (r.id, r.row["severity"], r.row["status"], _one_line(r.row["class"], " ")))
     lines += ["", "## In-force decisions",
-              "%d in force: [in-force.md](<%s>)" % (n_in_force, _link(in_force_rel, here))]
+              "%d in force: [in-force.md](%s)" % (n_in_force, _dest(_link(in_force_rel, here)))]
     return "\n".join(lines) + "\n"
 
 
@@ -139,7 +146,7 @@ def render(root: str, cfg: dict) -> dict:
 
 
 def _check_target(root: str, rel: str) -> None:
-    """Every existing parent of ``rel`` is a real directory and ``rel`` is not a directory."""
+    """Every existing parent of ``rel`` is a real directory; ``rel`` is absent, a regular file or a symlink."""
     parts = rel.split("/")
     for i in range(1, len(parts)):
         sub = "/".join(parts[:i])
@@ -161,6 +168,8 @@ def _check_target(root: str, rel: str) -> None:
         raise GateError("%s: cannot read (%s)" % (rel, _why(e))) from None
     if stat.S_ISDIR(mode):
         raise GateError("%s: is a directory" % rel)
+    if not stat.S_ISREG(mode) and not stat.S_ISLNK(mode):  # a symlink is replaced (W2); owner Q-1c3-RR1 (a)
+        raise GateError("%s: is not a regular file" % rel)
 
 
 def _write(root: str, rel: str, text: str) -> None:

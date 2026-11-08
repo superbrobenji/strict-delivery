@@ -550,6 +550,22 @@ class Shapes(Base):
         self.assertIn("\n[my arch.md](<../my arch.md>)\n- H\n", md)
         self.assertIn("\n0 in force: [in-force.md](<../../%s/in-force.md>)\n" % DEC, md)
 
+    def test_F10_link_destinations_escaped(self):  # owner Q-1c3-F1-1 (a): \, < and > backslash-escaped
+        arch = "a\\/x<y>.md"       # a directory named 'a\' holding 'x<y>.md'
+        dec_dir = "r\\/d<1>"       # the in-force link goes through 'r\' and 'd<1>'
+        self.build(cfg={**minimal_config(), "paths": {"architecture": arch, "decisions": dec_dir,
+                                                      "index": "docs/IN\\<DEX>.md"}},
+                   files={arch: "## H\n"})
+        md = self.render()["docs/IN\\<DEX>.md"]
+        lines = md.split("\n")
+        arch_line = next(ln for ln in lines if ln.startswith("[x<y>.md]("))
+        force_line = next(ln for ln in lines if ln.startswith("0 in force: "))
+        self.assertEqual(arch_line, "[x<y>.md](<../a\\\\/x\\<y\\>.md>)")
+        self.assertEqual(force_line, "0 in force: [in-force.md](<../r\\\\/d\\<1\\>/in-force.md>)")
+        self.assertEqual(commonmark_dest(arch_line), "../" + arch)
+        self.assertEqual(commonmark_dest(force_line), "../" + dec_dir + "/in-force.md")
+        self.assertTrue(os.path.isfile(os.path.normpath(os.path.join(self.work, "docs", commonmark_dest(arch_line)))))
+
     def test_F10_links_relative_to_index(self):
         for idx, arch, want_arch, want_inf in (
                 ("INDEX.md", "docs/a.md", "docs/a.md", DEC + "/in-force.md"),
@@ -638,6 +654,44 @@ class Shapes(Base):
 
 def posix_base(p):
     return p.rsplit("/", 1)[-1]
+
+
+_ASCII_PUNCT = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+
+
+def commonmark_dest(line):
+    """The link destination of the one inline link ``[text](<dest>)`` in ``line``, read as CommonMark 0.31 does:
+    section 6.3 (a ``<...>`` destination holds no line ending and no unescaped ``<`` or ``>``) and section 2.4 (a
+    backslash before an ASCII punctuation character is that character; any other backslash is literal). Written
+    from the spec text, independent of index.py."""
+    start = line.index("](<") + 3
+    out, i = [], start
+    while True:
+        c = line[i]
+        if c == "\\" and line[i + 1:i + 2] and line[i + 1] in _ASCII_PUNCT:
+            out.append(line[i + 1])
+            i += 2
+            continue
+        if c == ">":
+            if line[i + 1:i + 2] != ")":
+                raise ValueError("not a link: %r" % line)
+            return "".join(out)
+        if c in "<\n\r":
+            raise ValueError("unescaped %r in a pointy-bracket destination: %r" % (c, line))
+        out.append(c)
+        i += 1
+
+
+class CommonMarkReader(unittest.TestCase):  # the oracle itself, on spec examples
+    def test_reader(self):
+        self.assertEqual(commonmark_dest("[a](<b c>)"), "b c")
+        self.assertEqual(commonmark_dest("[a](<b\\>c>)"), "b>c")
+        self.assertEqual(commonmark_dest("[a](<b\\\\c>)"), "b\\c")
+        self.assertEqual(commonmark_dest("[a](<b\\qc>)"), "b\\qc")  # not punctuation: the backslash stays
+        self.assertEqual(commonmark_dest("[a](<a\\/b>)"), "a/b")  # '/' is punctuation: the backslash goes
+        for bad in ("[a](<b<c>)", "[a](<b>c>)"):
+            with self.assertRaises(ValueError):
+                commonmark_dest(bad)
 
 
 # ---------------------------------------------------------------- T: text in rendered values
@@ -766,6 +820,17 @@ class Writing(Base):
         self.assertEqual(self.read(DEC_INDEX), EMPTY_FILES[DEC_INDEX])
         with open(target) as fh:
             self.assertEqual(fh.read(), "keep\n")
+
+    def test_W3_output_is_a_fifo(self):  # owner Q-1c3-RR1 (a), as Store.replace
+        self.build()
+        os.makedirs(os.path.join(self.work, "docs/strict-delivery"))
+        os.mkfifo(os.path.join(self.work, INDEX_MD))
+        self.refused(INDEX_MD + ": is not a regular file", lambda: index.regenerate(self.work, self.cfg))
+        self.assertTrue(stat.S_ISFIFO(os.lstat(os.path.join(self.work, INDEX_MD)).st_mode))
+        for rel in ORDER[:3]:
+            self.assertFalse(os.path.lexists(os.path.join(self.work, rel)), rel)
+        out, err, code = run_main(["--root", self.work])
+        self.assertEqual((out, err, code), ("", "index: %s: is not a regular file\n" % INDEX_MD, 1))
 
     def test_W3_output_is_a_directory(self):
         self.build()
