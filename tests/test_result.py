@@ -847,5 +847,242 @@ class ReasonSitesTest(GitIsolatedTestCase):
                 self.assertTrue(line.startswith(want[name]), line)
 
 
+class SOk(str):
+    """A str subclass with its own working ``__str__`` (F-1c0fin2-2)."""
+
+    def __str__(self):
+        return "OTHER"
+
+
+class SBad(str):
+    """A str subclass whose ``__str__``, ``__repr__``, ``__add__``, ``__radd__``, ``__mod__``, ``__eq__`` and
+    ``__format__`` raise (F-1c0fin2-1): if any of them ran, the reason would not be its characters."""
+
+    def _no(self, *a):
+        raise RuntimeError("no")
+    __str__ = __repr__ = __add__ = __radd__ = __mod__ = __eq__ = __format__ = _no
+    __hash__ = str.__hash__
+
+
+class SOdd(str):
+    """A str subclass whose ``__str__`` returns an ``SBad``."""
+
+    def __str__(self):
+        return SBad("inner")
+
+
+class IOdd(int):
+    """An int subclass whose ``__str__`` returns an ``SBad`` (the text a ``__str__`` returns is its characters)."""
+
+    def __str__(self):
+        return SBad("7")
+
+
+class FSub(float):
+    def __str__(self):
+        return "F"
+
+
+class OwnStrBad(Exception):
+    """An own ``__str__`` returning an ``SBad``."""
+
+    def __str__(self):
+        return SBad("own\\x")
+
+
+class OwnStrOk(Exception):
+    def __str__(self):
+        return SOk("own\\x")
+
+
+class _RaisingName(type):
+    @property
+    def __name__(cls):
+        raise RuntimeError("no name")
+
+
+class MetaNamed(Exception, metaclass=_RaisingName):
+    """An exception whose class's ``__name__`` lookup raises."""
+
+
+class SubNamed(Exception):
+    pass
+
+
+SubNamed.__name__ = SBad("Sub\\Named")  # a type name that is a str subclass
+
+
+class LeafSubNamed:
+    def __str__(self):
+        raise RuntimeError("no str")
+    __repr__ = __str__
+
+
+LeafSubNamed.__name__ = SBad("Leaf\\Named")
+
+C = "a\\b"
+# (label, argument factory, text the argument renders as): owner Q-1C0FIN2-R1 (a), a str subclass is its characters
+KINDS = [
+    ("exact", lambda: C, C),
+    ("SOk", lambda: SOk(C), C),
+    ("SBad", lambda: SBad(C), C),
+    ("SOdd", lambda: SOdd(C), C),
+    ("IOdd", lambda: IOdd(7), "7"),
+    ("FSub", lambda: FSub(1.5), "F"),
+    ("list", lambda: [SBad(C), SOk(C)], "[a\\b, a\\b]"),
+    ("dict", lambda: {SBad("k"): SOk("v"), IOdd(1): SBad("w")}, "{k: v, 7: w}"),
+    ("BothRaise", BothRaise, "BothRaise"),
+    ("LeafSubNamed", LeafSubNamed, "Leaf\\Named"),
+]
+STR_KINDS = ("exact", "SOk", "SBad", "SOdd")
+
+
+def _forms(label, v):
+    """(form label, exception factory taking the argument, the reason): every run_check branch."""
+    se = "exit requested ('%s')" % v if label in STR_KINDS else "exit requested (%s)" % v
+    # [2, ...]: CPython's own str(e) cannot run, so the arguments are shown (as the OSError(2, StrRaises()) pin)
+    oss = "FileNotFoundError: [2, %s]" % v if label in ("SBad", "list", "dict", "BothRaise", "LeafSubNamed") else \
+        "FileNotFoundError: [Errno 2] %s" % v
+    return [
+        ("GateError", GateError, v),
+        ("SystemExit", SystemExit, se),
+        ("KeyError", KeyError, "KeyError: " + v),
+        ("ValueError", ValueError, "ValueError: " + v),
+        ("ValueError2", lambda a: ValueError(a, 1), "ValueError: [%s, 1]" % v),
+        ("OSError strerror", lambda a: OSError(2, a), oss),
+        ("OSError filename", lambda a: OSError(2, "s", a), "FileNotFoundError: [Errno 2] s: " + v),
+    ]
+
+
+def both_modes(check):
+    """(text line, json reason, the reason's type, the id's type) through run_gate and run_check; an escaping
+    exception becomes ``ESCAPED <type>``."""
+    try:
+        text = run("g", check, [])[1]
+        reason = json.loads(run("g", check, ["--json"])[1])["lines"][0]["reason"]
+        ln = run_check("g", check, []).lines[0]
+    except Exception as x:
+        return "ESCAPED %s" % type(x).__name__
+    return text, reason, type(ln.reason), type(ln.id)
+
+
+def raising(make):
+    def check(a):
+        raise make()
+    return check
+
+
+class ExactReasonTest(unittest.TestCase):
+    """F-1c0fin2-1, F-1c0fin2-2, owner Q-1C0FIN2-R1 (a) and Q-1C0FIN2-R2 (a): every reason and id that leaves
+    run_check is an exact str, the same in text and --json, and no method of a str subclass runs."""
+
+    def test_every_kind_in_every_branch_and_mode(self):  # F-1c0fin2-1, F-1c0fin2-2
+        for label, make_arg, v in KINDS:
+            for form, make_exc, want in _forms(label, v):
+                with self.subTest(kind=label, form=form):
+                    got = both_modes(raising(lambda: make_exc(make_arg())))
+                    self.assertEqual(got, ("FAIL g.input: %s\n" % safe_text(want), want, str, str))
+
+    def test_str_subclass_same_rule_in_both_modes(self):  # F-1c0fin2-2: its characters, never its __str__
+        for n, make in enumerate((lambda: GateError(SOk(C)), lambda: ValueError(SOk(C)), lambda: KeyError(SOk(C)),
+                                  lambda: SystemExit(SOk(C)), lambda: OSError(2, SOk(C)))):
+            with self.subTest(n=n):
+                got = both_modes(raising(make))
+                self.assertNotIn("OTHER", "".join(got[:2]))
+                self.assertEqual(got[0], "FAIL g.input: %s\n" % safe_text(got[1]))
+
+    def test_own_str_returning_a_str_subclass(self):  # the text an own __str__ returns is its characters
+        self.assertEqual(both_modes(raising(lambda: OwnStrBad("x"))),
+                         ("FAIL g.input: OwnStrBad: own\\\\x\n", "OwnStrBad: own\\x", str, str))
+        self.assertEqual(both_modes(raising(lambda: OwnStrOk("x"))),
+                         ("FAIL g.input: OwnStrOk: own\\\\x\n", "OwnStrOk: own\\x", str, str))
+
+    def test_type_names(self):  # a type name that is a str subclass, or whose lookup raises
+        self.assertEqual(both_modes(raising(lambda: SubNamed("x"))),
+                         ("FAIL g.input: Sub\\\\Named: x\n", "Sub\\Named: x", str, str))
+        self.assertEqual(both_modes(raising(lambda: MetaNamed("x"))),
+                         ("FAIL g.input: MetaNamed: x\n", "MetaNamed: x", str, str))
+        self.assertEqual(both_modes(lambda a: SubNamed()),
+                         ("FAIL g.input: the check returned Sub\\\\Named, not a Result\n",
+                          "the check returned Sub\\Named, not a Result", str, str))
+
+    def test_own_result_reasons_and_ids(self):  # owner Q-1C0FIN2-R2 (a); X5: a non-str value goes through str()
+        reasons = [(C, C), (SOk(C), C), (SBad(C), C), (SOdd(C), C), (IOdd(7), "7"), (FSub(1.5), "F"),
+                   ([C], "['a\\\\b']"), ({"k": "v"}, "{'k': 'v'}"), (BothRaise(), "BothRaise"),
+                   (LeafSubNamed(), "Leaf\\Named"), (None, "None"), (1, "1")]
+        for n, (value, want) in enumerate(reasons):
+            with self.subTest(reason=n):
+                self.assertEqual(both_modes(result_with(value)),
+                                 ("FAIL x.bad: %s\n" % safe_text(want), want, str, str))
+        for n, (value, want) in enumerate(((SBad("x.\\id"), "x.\\id"), (SOk("x.id"), "x.id"), (5, "5"),
+                                           (BothRaise(), "BothRaise"))):
+            with self.subTest(id=n):
+                try:
+                    text = run("g", result_with("r", id=value), [])[1]
+                    out = json.loads(run("g", result_with("r", id=value), ["--json"])[1])["lines"][0]
+                    ln = run_check("g", result_with("r", id=value), []).lines[0]
+                    got = (text, out["id"], type(ln.id))
+                except Exception as x:
+                    got = "ESCAPED %s" % type(x).__name__
+                self.assertEqual(got, ("FAIL %s: r\n" % safe_text(want), want, str))
+
+    def test_sets_escaped_once_in_sorted_order(self):  # owner Q-1C0FIN2-1 (b): items sorted by their rendered text
+        class SetSub(set):
+            def __repr__(self):
+                raise RuntimeError("no repr")
+        cases = [({"b\\", "a\\"}, "{a\\, b\\}"), (frozenset({"z", "a\nb"}), "frozenset({a\nb, z})"),
+                 (set(), "set()"), (frozenset(), "frozenset()"), ({SBad("y"), 2, "x"}, "{2, x, y}"),
+                 ([frozenset({"q\\"})], "[frozenset({q\\})]"), ({"k": {"v\\"}}, "{k: {v\\}}"),
+                 (SetSub({"s\\"}), "{s\\}"), ({frozenset({"b"}), "a"}, "{a, frozenset({b})}")]
+        for n, (value, want) in enumerate(cases):
+            with self.subTest(n=n):
+                try:
+                    got = (_raw(value), type(_raw(value)), rendered(raise_gate(value)),
+                           rendered(raising(lambda: ValueError(value))))
+                except Exception as x:
+                    got = "ESCAPED %s" % type(x).__name__
+                self.assertEqual(got, (want, str, "FAIL g.input: %s\n" % safe_text(want),
+                                       "FAIL g.input: ValueError: %s\n" % safe_text(want)))
+
+    def test_bytes_escaped_once(self):  # owner Q-1C0FIN2-1 (b), Q-F80W-3 (a): b' + Latin-1 + ', always '
+        class BSub(bytes):
+            def decode(self, *a):
+                raise RuntimeError("no decode")
+            __repr__ = __str__ = decode
+        cases = [(b"a\\b", "b'a\\b'"), (b"it's", "b'it's'"), (b"'\"", "b''\"'"), (b"", "b''"),
+                 (b"\x00\n\t\x7f\x80\xe9", "b'\x00\n\t\x7f\x80\xe9'"), ([b"a\\b"], "[b'a\\b']"),
+                 (BSub(b"s\\"), "b's\\'")]
+        for n, (value, want) in enumerate(cases):
+            with self.subTest(n=n):
+                try:
+                    got = (_raw(value), type(_raw(value)), both_modes(raise_gate(value)),
+                           both_modes(raising(lambda: KeyError(value))))
+                except Exception as x:
+                    got = "ESCAPED %s" % type(x).__name__
+                self.assertEqual(got, (want, str, ("FAIL g.input: %s\n" % safe_text(want), want, str, str),
+                                       ("FAIL g.input: KeyError: %s\n" % safe_text(want), "KeyError: " + want,
+                                        str, str)))
+        self.assertEqual(safe_text(_raw(b"\x00\n\\")), repr(b"\x00\n\\"))  # ASCII, no quote: repr's text
+
+    def test_oserror_bytes_filename_escaped_once(self):  # owner Q-1C0FIN2-1 (b)
+        for exc, want in ((OSError(2, "s", b"a\\b"), "FileNotFoundError: [Errno 2] s: b'a\\b'"),
+                          (OSError(2, "s", "f", None, b"g\\h"), "FileNotFoundError: [Errno 2] s: f -> b'g\\h'"),
+                          (OSError(2, b"e\\r"), "FileNotFoundError: [Errno 2] b'e\\r'")):
+            with self.subTest(exc=want):
+                self.assertEqual(both_modes(raising(lambda: exc)),
+                                 ("FAIL g.input: %s\n" % safe_text(want), want, str, str))
+
+    def test_set_order_does_not_depend_on_the_hash_seed(self):
+        code = ("from gates.lib.result import _raw; "
+                "print(_raw([{'q%d' % i for i in range(40)} | {frozenset({'b', 'a', 'c'}), b'x\\\\y'},"
+                " frozenset('abcdefgh')]))")
+        outs = set()
+        for seed in ("0", "1", "12345"):
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+            outs.add(subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env, capture_output=True,
+                                    text=True, check=True).stdout)
+        self.assertEqual(len(outs), 1, outs)
+
+
 if __name__ == "__main__":
     unittest.main()

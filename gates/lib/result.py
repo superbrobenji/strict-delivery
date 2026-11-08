@@ -113,6 +113,20 @@ def gate_args(prog: str) -> argparse.ArgumentParser:
     return p
 
 
+def _exact(s: str) -> str:
+    """The characters of ``s`` (a ``str`` or a subclass) as an exact ``str``; no method of a subclass runs
+    (owner Q-1C0FIN2-R1 (a)), so a later ``%s``, ``+``, ``str()`` or json step cannot reach one."""
+    return str.__str__(s)
+
+
+_TYPE_NAME = type.__dict__["__name__"]
+
+
+def _type_name(x: object) -> str:
+    """The name of ``x``'s type as an exact ``str``, read past a metaclass that overrides ``__name__``."""
+    return _exact(_TYPE_NAME.__get__(type(x)))
+
+
 def _raw(x: object) -> str:
     """``x`` as text without Python's repr escaping, so that ``Result.render`` escapes it exactly once."""
     return _raw_on(x, ())
@@ -120,9 +134,23 @@ def _raw(x: object) -> str:
 
 def _raw_on(x: object, path: tuple) -> str:
     """``_raw`` with the ids of the containers on the current path: one that contains itself renders as
-    ``{...}`` or ``[...]``, as ``repr`` does (owner Q-1c0-3)."""
+    ``{...}`` or ``[...]``, as ``repr`` does (owner Q-1c0-3). Owner Q-1C0FIN2-1 (b), in repr's shape (pin R8): a
+    set renders as ``{`` + its items sorted by their rendered text + ``}`` (``set()`` when empty), a frozenset as
+    ``frozenset(`` + that + ``)`` (``frozenset()``), so the order does not depend on the hash seed. Bytes render
+    as ``b'`` + the bytes decoded as Latin-1 + ``'`` (owner Q-F80W-3 (a)), so safe_text escapes each byte once."""
     if isinstance(x, str):
-        return x
+        return _exact(x)
+    if isinstance(x, bytes):
+        return "b'" + bytes.decode(x, "latin-1") + "'"
+    if isinstance(x, (set, frozenset)):
+        if id(x) in path:
+            return "{...}"
+        inner = path + (id(x),)
+        items = sorted(_raw_on(i, inner) for i in x)
+        body = "{" + ", ".join(items) + "}" if items else ""
+        if isinstance(x, frozenset):
+            return "frozenset(" + body + ")"
+        return body or "set()"
     if isinstance(x, dict):
         if id(x) in path:
             return "{...}"
@@ -141,10 +169,21 @@ def _leaf_text(x: object) -> str:
     falls back to it (V1r-1, owner Q-1C0V1R-1 (a): a reason is always produced)."""
     for text in (str, repr):
         try:
-            return text(x)
+            return _exact(text(x))
         except Exception:
             pass
-    return type(x).__name__
+    return _type_name(x)
+
+
+def _line_text(x: object) -> str:
+    """A reason or id of a Result a check returns, as an exact ``str``: a ``str`` by its characters, any other
+    value through ``_leaf_text`` (``str()`` as X5 pins, then ``repr``, then the type name; owner Q-1C0FIN2-R2 (a))."""
+    return _exact(x) if isinstance(x, str) else _leaf_text(x)
+
+
+def _s(x: object) -> str:
+    """``str(x)`` by its characters, as CPython's own ``%S`` formatting takes it."""
+    return _exact(str(x))
 
 
 def _args_text(e: BaseException) -> str:
@@ -160,23 +199,24 @@ def _exc_text(e: BaseException) -> str:
         return _args_text(e)
     if isinstance(e, OSError) and e.filename is not None:
         head = "[Errno %s] " % _raw(e.errno) if e.errno is not None else ""
-        out = head + _raw(e.strerror or type(e).__name__) + ": " + _raw(e.filename)
+        out = head + _raw(e.strerror or _type_name(e)) + ": " + _raw(e.filename)
         if e.filename2 is not None:
             out += " -> " + _raw(e.filename2)
         return out
     if type(e).__str__ is BaseException.__str__:
         return _args_text(e)
     try:
-        text = str(e)
+        text = _s(e)
     except Exception:  # the own __str__ cannot render an argument: render the arguments themselves
         return _args_text(e)
     return _own_str_text(e, text)
 
 
 def _text_of(make) -> Optional[str]:
-    """``make()``, or None if it raises: a form whose text cannot be computed is not the form of ``str(e)``."""
+    """``make()`` as an exact ``str``, or None if it raises: a form whose text cannot be computed is not the form
+    of ``str(e)``."""
     try:
-        return make()
+        return _exact(make())
     except Exception:
         return None
 
@@ -187,29 +227,30 @@ def _own_str_text(e: BaseException, text: str) -> str:
     (owner Q-1C0V1R-3 (b)(i)); a text that does not show them stands."""
     if text == _text_of(lambda: BaseException.__str__(e)):  # an own __str__ that fell back to the default
         return _args_text(e)
-    if isinstance(e, OSError) and text == _text_of(lambda: "[Errno %s] %s" % (e.errno, e.strerror)):
+    if isinstance(e, OSError) and text == _text_of(lambda: "[Errno %s] %s" % (_s(e.errno), _s(e.strerror))):
         return "[Errno %s] %s" % (_raw(e.errno), _raw(e.strerror))
-    msg = _text_of(lambda: str(e.msg)) if isinstance(e, SyntaxError) and e.msg is not None else None
+    msg = _text_of(lambda: _s(e.msg)) if isinstance(e, SyntaxError) and e.msg is not None else None
     if msg is not None and text.startswith(msg):
         return _raw(e.msg) + text[len(msg):]
     return text
 
 
 def _exit_text(e: SystemExit) -> str:
-    return "'%s'" % e.code if isinstance(e.code, str) else _raw(e.code)
+    return "'%s'" % _exact(e.code) if isinstance(e.code, str) else _raw(e.code)
 
 
 def _reason_text(e: BaseException, text) -> str:
-    """``text(e)``; if the exception itself cannot be read (its ``args`` raise), its type name, the
-    ``_leaf_text`` fallback, so run_check always returns a reason (owner Q-1C0V1R-1 (a))."""
+    """``text(e)`` as an exact ``str``; if the exception itself cannot be read (its ``args`` raise), its type name,
+    the ``_leaf_text`` fallback, so run_check always returns a reason (owner Q-1C0V1R-1 (a))."""
     try:
-        return text(e)
+        return _exact(text(e))
     except Exception:
-        return type(e).__name__
+        return _type_name(e)
 
 
 def run_check(name: str, check, args: list) -> Result:
-    """Run ``check(args)``; anything but a non-empty Result becomes a FAIL line."""
+    """Run ``check(args)``; anything but a non-empty Result becomes a FAIL line. Every reason and id that leaves
+    is an exact ``str`` (F-1c0fin2-1, owner Q-1C0FIN2-R2 (a))."""
     try:
         result = check(args)
     except GateError as e:
@@ -217,13 +258,16 @@ def run_check(name: str, check, args: list) -> Result:
     except SystemExit as e:
         return _input_fail(name, "exit requested (%s)" % _reason_text(e, _exit_text))
     except Exception as e:
-        return _input_fail(name, "%s: %s" % (type(e).__name__, _reason_text(e, _exc_text)))
+        return _input_fail(name, "%s: %s" % (_type_name(e), _reason_text(e, _exc_text)))
     if not isinstance(result, Result):
-        return _input_fail(name, "the check returned %s, not a Result" % type(result).__name__)
+        return _input_fail(name, "the check returned %s, not a Result" % _type_name(result))
     if not result.lines:
         out = Result(name, [])
         out.fail(name + ".empty", "the gate produced no lines")
         return out
+    for ln in result.lines:
+        if isinstance(ln, Line):
+            ln.id, ln.reason = _line_text(ln.id), _line_text(ln.reason)
     return result
 
 
