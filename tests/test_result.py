@@ -36,9 +36,9 @@ def one_pass(args):
     return r
 
 
-def result_with(reason, id="x.bad"):
+def result_with(reason, id="x.bad", gate="x"):
     def check(args):
-        r = Result("x", [])
+        r = Result(gate, [])
         r.fail(id, reason)
         return r
     return check
@@ -1008,19 +1008,19 @@ class ExactReasonTest(unittest.TestCase):
 
     def test_own_result_reasons_and_ids(self):  # owner Q-1C0FIN2-R2 (a); X5: a non-str value goes through str()
         reasons = [(C, C), (SOk(C), C), (SBad(C), C), (SOdd(C), C), (IOdd(7), "7"), (FSub(1.5), "F"),
-                   ([C], "['a\\\\b']"), ({"k": "v"}, "{'k': 'v'}"), (BothRaise(), "BothRaise"),
+                   ([C], "[a\\b]"), ({"k": "v"}, "{k: v}"), (BothRaise(), "BothRaise"),
                    (LeafSubNamed(), "Leaf\\Named"), (None, "None"), (1, "1")]
         for n, (value, want) in enumerate(reasons):
             with self.subTest(reason=n):
-                self.assertEqual(both_modes(result_with(value)),
+                self.assertEqual(both_modes(result_with(value, gate="g")),
                                  ("FAIL x.bad: %s\n" % safe_text(want), want, str, str))
         for n, (value, want) in enumerate(((SBad("x.\\id"), "x.\\id"), (SOk("x.id"), "x.id"), (5, "5"),
                                            (BothRaise(), "BothRaise"))):
             with self.subTest(id=n):
                 try:
-                    text = run("g", result_with("r", id=value), [])[1]
-                    out = json.loads(run("g", result_with("r", id=value), ["--json"])[1])["lines"][0]
-                    ln = run_check("g", result_with("r", id=value), []).lines[0]
+                    text = run("g", result_with("r", id=value, gate="g"), [])[1]
+                    out = json.loads(run("g", result_with("r", id=value, gate="g"), ["--json"])[1])["lines"][0]
+                    ln = run_check("g", result_with("r", id=value, gate="g"), []).lines[0]
                     got = (text, out["id"], type(ln.id))
                 except Exception as x:
                     got = "ESCAPED %s" % type(x).__name__
@@ -1234,6 +1234,250 @@ class ResultShapeTest(unittest.TestCase):
                           [{"status": "FAIL", "id": "g.empty", "reason": "the gate produced no lines"}], "g",
                           {(str, str, str, str)}, True))
         self.assertEqual(shape_of(lambda: None), refused("the check returned NoneType, not a Result"))
+
+
+class ClassRaises:
+    """An object whose ``__class__`` read raises (F-fin2r5r-1, -2): ``isinstance`` reads it, ``type()`` does not."""
+
+    @property
+    def __class__(self):
+        raise RuntimeError("no class")
+
+    def __iter__(self):
+        return iter([Line("PASS", "g.a")])
+
+    def __str__(self):
+        return "cr\\x"
+    __repr__ = __str__
+
+
+class SpoofList:
+    """Not a list, but its ``__class__`` says list (F-fin2r5r-1)."""
+    __class__ = property(lambda self: list)
+
+    def __iter__(self):
+        return iter([Line("PASS", "g.a")])
+
+
+class SpoofLine:
+    """Not a Line, but its ``__class__`` says Line (F-fin2r5r-3)."""
+    __class__ = property(lambda self: Line)
+    status, id, reason = "FAIL", "g.s", "spoof"
+
+
+class SpoofResult:
+    """Not a Result, but its ``__class__`` says Result (F-fin2r5r-3, U-fin2r5r-4)."""
+    __class__ = property(lambda self: Result)
+    gate, lines = "g", [Line("PASS", "g.a")]
+
+
+class SpoofStr:
+    """Not a str, but its ``__class__`` says str (U-fin2r5r-4: ``_line_text``, ``_raw``, ``_exit_text``)."""
+    __class__ = property(lambda self: str)
+
+    def __str__(self):
+        return "ss\\x"
+    __repr__ = __str__
+
+
+class ClassRaisesError(ValueError):
+    """An exception whose ``__class__`` read raises: its own type still decides how it renders."""
+
+    @property
+    def __class__(self):
+        raise RuntimeError("no class")
+
+
+class SpoofOSError(ValueError):
+    """A ValueError whose ``__class__`` says OSError, with OSError's fields: it renders as the ValueError it is."""
+    __class__ = property(lambda self: OSError)
+    errno, strerror, filename, filename2 = 2, "s", "f", None
+
+
+class KbdStr:
+    def __str__(self):
+        raise KeyboardInterrupt()
+    __repr__ = __str__
+
+
+class ExitStr:
+    def __str__(self):
+        raise SystemExit(0)
+    __repr__ = __str__
+
+
+class KbdList(list):
+    def __iter__(self):
+        raise KeyboardInterrupt()
+
+
+def deep_list(depth):
+    out = []
+    for _ in range(depth):
+        out = [out]
+    return out
+
+
+def returned_reason(value):
+    """(text, json reason, the reason's type) for a check returning ``Result("x", [Line("FAIL", "x.a", value)])``
+    through run_gate("x"); an escaping exception becomes ``ESCAPED <type>``."""
+    check = returning(lambda: Result("x", [Line("FAIL", "x.a", value)]))
+    try:
+        text = run("x", check, [])[1]
+        reason = json.loads(run("x", check, ["--json"])[1])["lines"][0]["reason"]
+        kind = type(run_check("x", check, []).lines[0].reason)
+    except Exception as x:
+        return "ESCAPED %s" % type(x).__name__
+    return text, reason, kind
+
+
+class NeverRaisesTest(unittest.TestCase):
+    """Owner Q-1C0R5-1 (a), Q-1C0R5-2 (a), Q-F80W-5 (b): type checks read ``type(x)``, never ``__class__``; one
+    ``except Exception`` guard covers run_check's work after the check returns; a Result for another gate fails
+    ``<gate>.input``; a non-str reason a check returns renders through ``_raw``, escaped once."""
+
+    def test_lying_or_raising_class_in_a_returned_result(self):  # F-fin2r5r-1, -2, -3, U-fin2r5r-4
+        cases = [
+            (lambda: Result("g", ClassRaises()), "the check returned a Result whose lines is ClassRaises, not a list"),
+            (lambda: Result("g", SpoofList()), "the check returned a Result whose lines is SpoofList, not a list"),
+            (lambda: Result("g", [ClassRaises()]), "line 1 of the Result is ClassRaises, not a Line"),
+            (lambda: Result("g", [Line("PASS", "g.a"), SpoofLine()]), "line 2 of the Result is SpoofLine, not a Line"),
+            (lambda: SpoofResult(), "the check returned SpoofResult, not a Result"),
+            (lambda: ClassRaises(), "the check returned ClassRaises, not a Result"),
+            (lambda: Result(SpoofStr(), [Line("PASS", "g.a")]),
+             "the check returned a Result whose gate is SpoofStr, not a str"),
+            (lambda: Result("g", [Line(SpoofStr(), "g.a")]),
+             "line 1 of the Result has a status of type SpoofStr, not str"),
+        ]
+        for n, (make, reason) in enumerate(cases):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(make), refused(reason))
+
+    def test_lying_or_raising_class_as_id_or_reason(self):  # U-fin2r5r-4: _line_text and _raw read type()
+        for n, value in enumerate((ClassRaises(), SpoofStr())):
+            want = "cr\\x" if n == 0 else "ss\\x"
+            with self.subTest(reason=n):
+                self.assertEqual(returned_reason(value), ("FAIL x.a: %s\n" % safe_text(want), want, str))
+            with self.subTest(id=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", value, "r")])),
+                                 ("FAIL %s: r\n" % safe_text(want), [{"status": "FAIL", "id": want, "reason": "r"}],
+                                  "g", {(str, str, str, str)}, True))
+
+    def test_lying_or_raising_class_in_a_raised_exception(self):  # U-fin2r5r-4: the exception's own type decides
+        cases = [
+            (lambda: ClassRaisesError(C), "ClassRaisesError: " + C),
+            (lambda: SpoofOSError(C), "SpoofOSError: " + C),
+            (lambda: SystemExit(SpoofStr()), "exit requested (ss\\x)"),
+            (lambda: GateError(SpoofStr()), "ss\\x"),
+            (lambda: ValueError([SpoofStr(), ClassRaises()]), "ValueError: [ss\\x, cr\\x]"),
+        ]
+        for n, (make, want) in enumerate(cases):
+            with self.subTest(n=n):
+                self.assertEqual(both_modes(raising(make)), ("FAIL g.input: %s\n" % safe_text(want), want, str, str))
+
+    def test_anything_still_raising_fails_input_with_the_type_name(self):  # Q-1C0R5-1 (a): the catch-all guard
+        too_deep = deep_list(sys.getrecursionlimit() + 100)
+        for n, (value, name) in enumerate(((OddList([C]), "RuntimeError"), (too_deep, "RecursionError"))):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", "g.a", value)])), refused(name))
+
+    def test_base_exception_still_propagates(self):  # owner Q-1C0V1R-2 (a)(i) under the guard
+        for n, (value, exc) in enumerate(((KbdStr(), KeyboardInterrupt), (KbdList([C]), KeyboardInterrupt),
+                                          (ExitStr(), SystemExit))):
+            with self.subTest(n=n):
+                with self.assertRaises(exc):
+                    run_check("g", returning(lambda: Result("g", [Line("FAIL", "g.a", value)])), [])
+
+    def test_result_for_another_gate(self):  # Q-1C0R5-2 (a)
+        for n, gate in enumerate(("other", "a\nb", "", "g ", "G")):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result(gate, [Line("PASS", "g.a")])),
+                                 refused("the check returned a Result for gate %s, not g" % gate))
+        self.assertEqual(shape_of(lambda: Result("other", [])),
+                         refused("the check returned a Result for gate other, not g"))
+
+    def test_non_str_reason_renders_through_raw(self):  # Q-F80W-5 (b): as an exception argument does
+        selfref = [C]
+        selfref.append(selfref)
+        cases = [([C], "[a\\b]"), ((C, 1), "[a\\b, 1]"), ({"k\\": [C]}, "{k\\: [a\\b]}"), ({"b\\", "a"}, "{a, b\\}"),
+                 (frozenset({"z"}), "frozenset({z})"), (set(), "set()"), (frozenset(), "frozenset()"),
+                 (b"x\\y", "b'x\\y'"), (selfref, "[a\\b, [...]]"), ({SBad("k"): SOk("v")}, "{k: v}"),
+                 (collections.OrderedDict([("b", C)]), "{b: a\\b}")]
+        for n, (value, want) in enumerate(cases):
+            with self.subTest(n=n):
+                self.assertEqual(returned_reason(value), ("FAIL x.a: %s\n" % safe_text(want), want, str))
+                self.assertEqual(returned_reason(value)[1], _raw(value))
+                self.assertEqual(returned_reason(value)[1],
+                                 json.loads(run("g", raising(lambda: GateError(value)), ["--json"])[1])
+                                 ["lines"][0]["reason"])
+
+    def test_returned_set_reason_does_not_depend_on_the_hash_seed(self):  # Q-F80W-5 (b)
+        code = ("import sys; from gates.lib.result import Line, Result, run_gate; "
+                "v = {'q%d\\\\' % i for i in range(40)} | {frozenset({'b', 'a', 'c'})}; "
+                "c = lambda a: Result('x', [Line('FAIL', 'x.a', v)]); run_gate('x', c, []); run_gate('x', c, ['--json'])")
+        outs = set()
+        for seed in ("0", "1", "12345"):
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+            outs.add(subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env, capture_output=True,
+                                    text=True, check=True).stdout)
+        self.assertEqual(len(outs), 1, outs)
+        self.assertIn("FAIL x.a: {frozenset({a, b, c}), q0\\\\, q10\\\\", outs.pop())
+
+    def test_non_str_id_renders_through_raw(self):  # owner Q-R6-2 (a): an id renders as a reason does
+        selfref = [C]
+        selfref.append(selfref)
+        cases = [([C], "[a\\b]"), ((C, 1), "[a\\b, 1]"), ({"k\\": [C]}, "{k\\: [a\\b]}"), ({"b\\", "a"}, "{a, b\\}"),
+                 (frozenset({"z", "a\nb"}), "frozenset({a\nb, z})"), (set(), "set()"), (b"x\\y", "b'x\\y'"),
+                 (selfref, "[a\\b, [...]]"), (collections.OrderedDict([("b", C)]), "{b: a\\b}"),
+                 (SBad(C), C), (5, "5"), (BothRaise(), "BothRaise")]
+        for n, (value, want) in enumerate(cases):
+            with self.subTest(n=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", value, "r")])),
+                                 ("FAIL %s: r\n" % safe_text(want), [{"status": "FAIL", "id": want, "reason": "r"}],
+                                  "g", {(str, str, str, str)}, True))
+        for n, (value, name) in enumerate(((deep_list(sys.getrecursionlimit() + 100), "RecursionError"),
+                                           (OddList([C]), "RuntimeError"))):
+            with self.subTest(refused=n):
+                self.assertEqual(shape_of(lambda: Result("g", [Line("FAIL", value, "r")])), refused(name))
+
+    def test_returned_set_id_does_not_depend_on_the_hash_seed(self):  # owner Q-R6-2 (a)
+        code = ("from gates.lib.result import Line, Result, run_gate; "
+                "v = {'q%d\\\\' % i for i in range(40)} | {frozenset({'b', 'a', 'c'})}; "
+                "c = lambda a: Result('x', [Line('FAIL', v, 'r')]); run_gate('x', c, []); run_gate('x', c, ['--json'])")
+        outs = set()
+        for seed in ("0", "1", "12345"):
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+            outs.add(subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env, capture_output=True,
+                                    text=True, check=True).stdout)
+        self.assertEqual(len(outs), 1, outs)
+        self.assertIn("FAIL {frozenset({a, b, c}), q0\\\\, q10\\\\", outs.pop())
+
+    def test_mro_rewritten_by_a_metaclass_is_a_subclass(self):  # owner Q-R6-3 (a): Python's own subclass relation
+        class ResultMro(type):
+            def mro(cls):
+                return (cls, Result, object)
+
+        class LineMro(type):
+            def mro(cls):
+                return (cls, Line, object)
+
+        class MroResult(metaclass=ResultMro):
+            gate, lines = "g", [Line("PASS", "g.m")]
+
+            def __init__(self):
+                pass
+
+        class MroLine(metaclass=LineMro):
+            status, id, reason = "FAIL", "g.n", ["m\\"]
+
+            def __init__(self):
+                pass
+        self.assertIn(Result, type(MroResult()).__mro__)
+        self.assertEqual(shape_of(MroResult), ("PASS g.m\n", [{"status": "PASS", "id": "g.m", "reason": ""}], "g",
+                                               {(str, str, str, str)}, True))
+        self.assertEqual(shape_of(lambda: Result("g", [MroLine()])),
+                         ("FAIL g.n: [m\\\\]\n", [{"status": "FAIL", "id": "g.n", "reason": "[m\\]"}], "g",
+                          {(str, str, str, str)}, True))
 
 
 if __name__ == "__main__":

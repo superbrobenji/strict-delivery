@@ -27,7 +27,7 @@ class Line:
 def safe_text(s: object) -> str:
     """``s`` as one line: a backslash becomes ``\\\\`` and every non-printable character is escaped
     (``\\n``, ``\\xNN``, ``\\uNNNN``, ``\\UNNNNNNNN``), so the output is unambiguous."""
-    text = s if isinstance(s, str) else str(s)
+    text = _exact(s) if issubclass(type(s), str) else _exact(str(s))  # type(), never __class__ (Q-1C0R5-1 (a))
     out = []
     for c in text:
         if c == "\\":
@@ -137,26 +137,28 @@ def _raw_on(x: object, path: tuple) -> str:
     ``{...}`` or ``[...]``, as ``repr`` does (owner Q-1c0-3). Owner Q-1C0FIN2-1 (b), in repr's shape (pin R8): a
     set renders as ``{`` + its items sorted by their rendered text + ``}`` (``set()`` when empty), a frozenset as
     ``frozenset(`` + that + ``)`` (``frozenset()``), so the order does not depend on the hash seed. Bytes render
-    as ``b'`` + the bytes decoded as Latin-1 + ``'`` (owner Q-F80W-3 (a)), so safe_text escapes each byte once."""
-    if isinstance(x, str):
+    as ``b'`` + the bytes decoded as Latin-1 + ``'`` (owner Q-F80W-3 (a)), so safe_text escapes each byte once.
+    Every kind is read from ``type(x)``, never from ``x.__class__``, so an object cannot claim a kind (Q-1C0R5-1 (a))."""
+    t = type(x)
+    if issubclass(t, str):
         return _exact(x)
-    if isinstance(x, bytes):
+    if issubclass(t, bytes):
         return "b'" + bytes.decode(x, "latin-1") + "'"
-    if isinstance(x, (set, frozenset)):
+    if issubclass(t, (set, frozenset)):
         if id(x) in path:
             return "{...}"
         inner = path + (id(x),)
         items = sorted(_raw_on(i, inner) for i in x)
         body = "{" + ", ".join(items) + "}" if items else ""
-        if isinstance(x, frozenset):
+        if issubclass(t, frozenset):
             return "frozenset(" + body + ")"
         return body or "set()"
-    if isinstance(x, dict):
+    if issubclass(t, dict):
         if id(x) in path:
             return "{...}"
         inner = path + (id(x),)
         return "{" + ", ".join(_raw_on(k, inner) + ": " + _raw_on(v, inner) for k, v in x.items()) + "}"
-    if isinstance(x, (list, tuple)):
+    if issubclass(t, (list, tuple)):
         if id(x) in path:
             return "[...]"
         inner = path + (id(x),)
@@ -175,12 +177,6 @@ def _leaf_text(x: object) -> str:
     return _type_name(x)
 
 
-def _line_text(x: object) -> str:
-    """A reason or id of a Result a check returns, as an exact ``str``: a ``str`` by its characters, any other
-    value through ``_leaf_text`` (``str()`` as X5 pins, then ``repr``, then the type name; owner Q-1C0FIN2-R2 (a))."""
-    return _exact(x) if isinstance(x, str) else _leaf_text(x)
-
-
 def _s(x: object) -> str:
     """``str(x)`` by its characters, as CPython's own ``%S`` formatting takes it."""
     return _exact(str(x))
@@ -195,9 +191,9 @@ def _exc_text(e: BaseException) -> str:
     """``str(e)`` with the repr that the exception's ``__str__`` applies to its arguments undone (verifier V-1):
     KeyError; OSError with a filename, or in its ``[Errno <errno>] <strerror>`` form; SyntaxError's message;
     and every ``__str__`` whose text is the default one, the repr of the arguments."""
-    if isinstance(e, KeyError) and e.args:
+    if issubclass(type(e), KeyError) and e.args:
         return _args_text(e)
-    if isinstance(e, OSError) and e.filename is not None:
+    if issubclass(type(e), OSError) and e.filename is not None:
         head = "[Errno %s] " % _raw(e.errno) if e.errno is not None else ""
         out = head + _raw(e.strerror or _type_name(e)) + ": " + _raw(e.filename)
         if e.filename2 is not None:
@@ -227,16 +223,17 @@ def _own_str_text(e: BaseException, text: str) -> str:
     (owner Q-1C0V1R-3 (b)(i)); a text that does not show them stands."""
     if text == _text_of(lambda: BaseException.__str__(e)):  # an own __str__ that fell back to the default
         return _args_text(e)
-    if isinstance(e, OSError) and text == _text_of(lambda: "[Errno %s] %s" % (_s(e.errno), _s(e.strerror))):
+    if issubclass(type(e), OSError) and text == _text_of(lambda: "[Errno %s] %s" % (_s(e.errno), _s(e.strerror))):
         return "[Errno %s] %s" % (_raw(e.errno), _raw(e.strerror))
-    msg = _text_of(lambda: _s(e.msg)) if isinstance(e, SyntaxError) and e.msg is not None else None
+    msg = _text_of(lambda: _s(e.msg)) if issubclass(type(e), SyntaxError) and e.msg is not None else None
     if msg is not None and text.startswith(msg):
         return _raw(e.msg) + text[len(msg):]
     return text
 
 
 def _exit_text(e: SystemExit) -> str:
-    return "'%s'" % _exact(e.code) if isinstance(e.code, str) else _raw(e.code)
+    code = e.code
+    return "'%s'" % _exact(code) if issubclass(type(code), str) else _raw(code)
 
 
 def _reason_text(e: BaseException, text) -> str:
@@ -259,9 +256,12 @@ def run_check(name: str, check, args: list) -> Result:
         return _input_fail(name, "exit requested (%s)" % _reason_text(e, _exit_text))
     except Exception as e:
         return _input_fail(name, "%s: %s" % (_type_name(e), _reason_text(e, _exc_text)))
-    if not isinstance(result, Result):
-        return _input_fail(name, "the check returned %s, not a Result" % _type_name(result))
-    return _own_result(name, result)
+    try:  # one guard over all the work after the check returns (owner Q-1C0R5-1 (a)); a BaseException propagates
+        if not issubclass(type(result), Result):
+            return _input_fail(name, "the check returned %s, not a Result" % _type_name(result))
+        return _own_result(name, result)
+    except Exception as e:  # the type-name fallback, as _reason_text gives for an exception it cannot render
+        return _input_fail(name, _type_name(e))
 
 
 _STATUSES = ("PASS", "FAIL")  # spec §13: a gate prints PASS id or FAIL id: reason lines
@@ -271,18 +271,24 @@ def _own_result(name: str, result: Result) -> Result:
     """A new Result built from the one the check returned, which is never changed (F-fin2r-1). Its shape is checked
     first (owner Q-1C0FIN2-U2 (a)): the gate an exact ``str``, ``lines`` a list (plan: ``Result(gate: str, lines:
     list)``), each entry a Line whose status is the exact ``str`` PASS or FAIL. Any other shape fails
-    ``<name>.input`` with a named reason, as a value that is not a Result does; an empty list fails ``<name>.empty``."""
+    ``<name>.input`` with a named reason, as a value that is not a Result does; an empty list fails ``<name>.empty``.
+    The gate must be ``name`` (owner Q-1C0R5-2 (a)). Kinds are read from ``type()``, never ``__class__``, so an
+    object that claims to be a list, a Line or a str is refused (owner Q-1C0R5-1 (a)); a class whose real ``__mro__``
+    holds Result or Line is a subclass (owner Q-R6-3 (a)). An id and a reason render through ``_raw``, item by item
+    as an exception argument does (owner Q-F80W-5 (b), Q-R6-2 (a))."""
     try:
         gate, lines = result.gate, result.lines
     except Exception:
         return _input_fail(name, "the check returned a Result that cannot be read")
     if type(gate) is not str:
         return _input_fail(name, "the check returned a Result whose gate is %s, not a str" % _type_name(gate))
-    if not isinstance(lines, list):
+    if gate != _exact(name):
+        return _input_fail(name, "the check returned a Result for gate %s, not %s" % (gate, _exact(name)))
+    if not issubclass(type(lines), list):
         return _input_fail(name, "the check returned a Result whose lines is %s, not a list" % _type_name(lines))
     out = []
     for n, ln in enumerate(list.copy(lines), 1):
-        if not isinstance(ln, Line):
+        if not issubclass(type(ln), Line):
             return _input_fail(name, "line %d of the Result is %s, not a Line" % (n, _type_name(ln)))
         try:
             status, id_, reason = ln.status, ln.id, ln.reason
@@ -292,7 +298,7 @@ def _own_result(name: str, result: Result) -> Result:
             return _input_fail(name, "line %d of the Result has a status of type %s, not str" % (n, _type_name(status)))
         if status not in _STATUSES:
             return _input_fail(name, "line %d of the Result has status %s, not PASS or FAIL" % (n, status))
-        out.append(Line(status, _line_text(id_), _line_text(reason)))
+        out.append(Line(status, _raw(id_), _raw(reason)))
     if not out:
         empty = Result(name, [])
         empty.fail(name + ".empty", "the gate produced no lines")
