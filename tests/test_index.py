@@ -3,8 +3,10 @@ input-domain table: rows A, G, F, T, D, W, I). Expected file texts are written o
 rows with its own splitter that honours ``\\|``; ``parse`` is ``yamlsub.parse``."""
 import contextlib
 import copy
+import html.entities
 import io
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -124,7 +126,8 @@ EMPTY_FILES = {
     F_INDEX: "schema: finding-index/1\nfindings: []\n",
     IN_FORCE: INFORCE_HEAD,
     INDEX_MD: ("<!-- schema: overview/1 -->\n\n## Architecture\nnone\n\n## Open findings\n" + SEV_ZERO
-               + "\n## In-force decisions\n0 in force: [in-force.md](<../../.strict-delivery/state/decisions/in-force.md>)\n"),
+               + "\n## In-force decisions\n0 in force: "
+               "[in\\-force\\.md](<\\.\\.\\/\\.\\.\\/\\.strict\\-delivery\\/state\\/decisions\\/in\\-force\\.md>)\n"),
 }
 
 
@@ -291,8 +294,8 @@ class RootArgvConfig(Base):
         self.assertEqual(list(files), ["reg/d/index.yml", "reg/f/index.yml", "reg/d/in-force.md", "out/deep/IDX.md"])
         self.assertEqual(entries(files["reg/d/index.yml"], "decisions")[DA]["file"], "reg/d/%s.yml" % DA)
         self.assertEqual(entries(files["reg/f/index.yml"], "findings")[FA]["file"], "reg/f/%s.yml" % FA)
-        self.assertIn("[A.md](<../../arch/A.md>)\n- One\n", files["out/deep/IDX.md"])
-        self.assertIn("1 in force: [in-force.md](<../../reg/d/in-force.md>)\n", files["out/deep/IDX.md"])
+        self.assertIn(mdlink("A.md", "../../arch/A.md") + "\n- One\n", files["out/deep/IDX.md"])
+        self.assertIn("1 in force: %s\n" % mdlink("in-force.md", "../../reg/d/in-force.md"), files["out/deep/IDX.md"])
 
     def test_A4_colliding_output_paths_refused(self):
         cfg = {**minimal_config(), "paths": {"index": DEC + "/in-force.md"}}
@@ -506,18 +509,21 @@ class Shapes(Base):
                                                           fnd(FA, "planned"), fnd(FC, "closed")],
                    files={ARCH: "# Title\n\n## Layers\ntext\n### Deep\n## Data flow\n"})
         self.assertEqual(self.render()[INDEX_MD], (
-            "<!-- schema: overview/1 -->\n\n## Architecture\n[architecture.md](<architecture.md>)\n- Layers\n"
+            "<!-- schema: overview/1 -->\n\n## Architecture\n[architecture\\.md](<architecture\\.md>)\n- Layers\n"
             "- Data flow\n\n## Open findings\n- CRITICAL: 0\n- HIGH: 1\n- MEDIUM: 0\n- LOW: 1\n- INFO: 0\n"
             "- %s (HIGH, planned): bug\n- %s (LOW, open): leak\n\n## In-force decisions\n"
-            "2 in force: [in-force.md](<../../.strict-delivery/state/decisions/in-force.md>)\n") % (FA, FB))
+            "2 in force: [in\\-force\\.md](<\\.\\.\\/\\.\\.\\/\\.strict\\-delivery\\/state\\/decisions\\/in\\-force\\.md>)\n")
+            % (FA, FB))
 
     def test_F9_architecture_forms(self):
         self.build()
         self.assertIn("## Architecture\nnone\n", self.render()[INDEX_MD])
         self.put(ARCH, "# T\n```\n## In fence\n```\nno headings\n")
-        self.assertIn("## Architecture\n[architecture.md](<architecture.md>)\n- In fence\n\n", self.render()[INDEX_MD])
+        self.assertIn("## Architecture\n%s\n- In fence\n\n" % mdlink("architecture.md", "architecture.md"),
+                      self.render()[INDEX_MD])
         self.put(ARCH, "# T\nno headings\n### three\n##two\n")
-        self.assertIn("## Architecture\n[architecture.md](<architecture.md>)\n\n## Open", self.render()[INDEX_MD])
+        self.assertIn("## Architecture\n%s\n\n## Open" % mdlink("architecture.md", "architecture.md"),
+                      self.render()[INDEX_MD])
         self.put(ARCH, "## Architecture\n## Open findings\n")
         md = self.render()[INDEX_MD]
         self.assertIn("- Architecture\n- Open findings\n", md)
@@ -547,10 +553,10 @@ class Shapes(Base):
                                                       "index": "docs/out dir/INDEX.md"}},
                    files={"docs/my arch.md": "## H\n"})
         md = self.render()["docs/out dir/INDEX.md"]
-        self.assertIn("\n[my arch.md](<../my arch.md>)\n- H\n", md)
-        self.assertIn("\n0 in force: [in-force.md](<../../%s/in-force.md>)\n" % DEC, md)
+        self.assertIn("\n[my arch\\.md](<\\.\\.\\/my arch\\.md>)\n- H\n", md)  # a space is copied as it is
+        self.assertIn("\n0 in force: %s\n" % mdlink("in-force.md", "../../%s/in-force.md" % DEC), md)
 
-    def test_F10_link_destinations_escaped(self):  # owner Q-1c3-F1-1 (a): \, < and > backslash-escaped
+    def test_F10_link_destinations_escaped(self):  # owner Q-1c3-F1-1 (a): \, < and >
         arch = "a\\/x<y>.md"       # a directory named 'a\' holding 'x<y>.md'
         dec_dir = "r\\/d<1>"       # the in-force link goes through 'r\' and 'd<1>'
         self.build(cfg={**minimal_config(), "paths": {"architecture": arch, "decisions": dec_dir,
@@ -558,13 +564,45 @@ class Shapes(Base):
                    files={arch: "## H\n"})
         md = self.render()["docs/IN\\<DEX>.md"]
         lines = md.split("\n")
-        arch_line = next(ln for ln in lines if ln.startswith("[x<y>.md]("))
+        arch_line = lines[lines.index("## Architecture") + 1]
         force_line = next(ln for ln in lines if ln.startswith("0 in force: "))
-        self.assertEqual(arch_line, "[x<y>.md](<../a\\\\/x\\<y\\>.md>)")
-        self.assertEqual(force_line, "0 in force: [in-force.md](<../r\\\\/d\\<1\\>/in-force.md>)")
-        self.assertEqual(commonmark_dest(arch_line), "../" + arch)
-        self.assertEqual(commonmark_dest(force_line), "../" + dec_dir + "/in-force.md")
-        self.assertTrue(os.path.isfile(os.path.normpath(os.path.join(self.work, "docs", commonmark_dest(arch_line)))))
+        self.assertEqual(arch_line, "[x\\<y\\>\\.md](<\\.\\.\\/a\\\\\\/x\\<y\\>\\.md>)")
+        self.assertEqual(force_line, "0 in force: [in\\-force\\.md](<\\.\\.\\/r\\\\\\/d\\<1\\>\\/in\\-force\\.md>)")
+        self.assertEqual(commonmark_link(arch_line), ("x<y>.md", "../" + arch))
+        self.assertEqual(commonmark_link(force_line), ("in-force.md", "../" + dec_dir + "/in-force.md"))
+        self.assertTrue(os.path.isfile(os.path.normpath(os.path.join(self.work, "docs", commonmark_link(arch_line)[1]))))
+
+    def test_F10_all_punctuation_in_text_and_destination(self):  # Q-1c3-RR2-1 (a), Q-1c3-F2-1 (a), spec D30
+        name = "n" + P31 + REFS + "e.md"         # a file name: 31 punctuation characters, references, ], spaces
+        arch = "a b/" + name                     # its destination also crosses a '/': all 32
+        dec_dir = "d" + P31 + REFS + "/x"
+        here = "docs/i" + P31 + " &amp;"
+        self.build(cfg={**minimal_config(), "paths": {"architecture": arch, "decisions": dec_dir,
+                                                      "index": here + "/INDEX.md"}},
+                   files={arch: "## H\n"})
+        lines = self.render()[here + "/INDEX.md"].split("\n")
+        arch_line = lines[lines.index("## Architecture") + 1]
+        force_line = next(ln for ln in lines if ln.startswith("0 in force: "))
+        self.assertTrue(set(PUNCT) <= set("../../" + arch) and set(P31) <= set(name))
+        self.assertEqual(commonmark_link(arch_line), (name, "../../" + arch))
+        self.assertEqual(commonmark_link(force_line), ("in-force.md", "../../" + dec_dir + "/in-force.md"))
+        self.assertEqual(arch_line, mdlink(name, "../../" + arch))
+        self.assertTrue(os.path.isfile(os.path.normpath(os.path.join(self.work, here, commonmark_link(arch_line)[1]))))
+
+    def test_F10_character_reference_in_path(self):  # F-1c3-RR2-1's reproducer
+        for arch in ("docs/a&#60;b.md", "docs/a&amp;b.md", "docs/a&#x3C;b.md"):
+            self.build(cfg={**minimal_config(), "paths": {"architecture": arch, "index": "docs/INDEX.md"}},
+                       files={arch: "## H\n"})
+            lines = self.render()["docs/INDEX.md"].split("\n")
+            line = lines[lines.index("## Architecture") + 1]
+            self.assertEqual(commonmark_link(line), (posix_base(arch), posix_base(arch)), arch)
+            old = "[%s](<%s>)" % (md_esc(posix_base(arch)), posix_base(arch))  # a round-2 destination: & unescaped
+            self.assertNotEqual(commonmark_link(old)[1], posix_base(arch), arch)  # the reader sees section 2.5
+
+    def test_F10_md_link_all_32_in_the_text(self):  # '/' cannot be in a file name; the text rule is the same
+        line = index._md_link(PUNCT + REFS, PUNCT + REFS)
+        self.assertEqual(line, mdlink(PUNCT + REFS, PUNCT + REFS))
+        self.assertEqual(commonmark_link(line), (PUNCT + REFS, PUNCT + REFS))
 
     def test_F10_links_relative_to_index(self):
         for idx, arch, want_arch, want_inf in (
@@ -578,8 +616,8 @@ class Shapes(Base):
             self.build(cfg={**minimal_config(), "paths": {"index": idx, "architecture": arch}},
                        files={arch: "## H\n"})
             md = self.render()[idx]
-            self.assertIn("[%s](<%s>)\n- H\n" % (posix_base(arch), want_arch), md)
-            self.assertIn("0 in force: [in-force.md](<%s>)\n" % want_inf, md)
+            self.assertIn(mdlink(posix_base(arch), want_arch) + "\n- H\n", md)
+            self.assertIn("0 in force: %s\n" % mdlink("in-force.md", want_inf), md)
 
     def test_F11_open_findings_counts_and_lines(self):
         self.build(fins=[fnd(FA, "closed"), fnd(FB, "closed", severity="CRITICAL")])
@@ -598,7 +636,7 @@ class Shapes(Base):
 
     def test_F12_in_force_count(self):
         self.build(decs=[lasting(DA), lasting(DB), lasting(DC, supersedes=DB), dec(DD)])
-        self.assertIn("## In-force decisions\n2 in force: [in-force.md](<../../%s/in-force.md>)\n" % DEC,
+        self.assertIn("## In-force decisions\n2 in force: %s\n" % mdlink("in-force.md", "../../%s/in-force.md" % DEC),
                       self.render()[INDEX_MD])
 
     def test_F13_schema_files(self):
@@ -656,42 +694,103 @@ def posix_base(p):
     return p.rsplit("/", 1)[-1]
 
 
-_ASCII_PUNCT = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+PUNCT = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"  # CommonMark 0.31 section 2.1: the 32 ASCII punctuation characters
+P31 = PUNCT.replace("/", "")                    # those a file name can hold
+REFS = " &#60; &amp; &#x3C; ] "                 # character references, an unmatched ] and spaces
+_DEC_REF = re.compile(r"&#([0-9]{1,7});")
+_HEX_REF = re.compile(r"&#[xX]([0-9a-fA-F]{1,6});")
+_NAMED_REF = re.compile(r"&([A-Za-z][A-Za-z0-9]*);")
 
 
-def commonmark_dest(line):
-    """The link destination of the one inline link ``[text](<dest>)`` in ``line``, read as CommonMark 0.31 does:
-    section 6.3 (a ``<...>`` destination holds no line ending and no unescaped ``<`` or ``>``) and section 2.4 (a
-    backslash before an ASCII punctuation character is that character; any other backslash is literal). Written
-    from the spec text, independent of index.py."""
-    start = line.index("](<") + 3
-    out, i = [], start
+def md_esc(s):
+    """The expected escaped form: a backslash before each of the 32 (owner Q-1c3-RR2-1 (a), Q-1c3-F2-1 (a))."""
+    return "".join("\\" + c if c in PUNCT else c for c in s)
+
+
+def mdlink(text, dest):
+    return "[%s](<%s>)" % (md_esc(text), md_esc(dest))
+
+
+def _reference(s, i):
+    """CommonMark 0.31 section 2.5 at ``s[i] == "&"``: ``(decoded, length)`` of an entity reference (an HTML5 entity
+    name, from ``html.entities.html5``) or a decimal or hexadecimal numeric character reference, else None. A
+    numeric reference to 0, a surrogate or a value past U+10FFFF decodes to U+FFFD."""
+    for pat, base in ((_DEC_REF, 10), (_HEX_REF, 16)):
+        m = pat.match(s, i)
+        if m:
+            n = int(m.group(1), base)
+            ok = 0 < n <= 0x10FFFF and not 0xD800 <= n <= 0xDFFF
+            return (chr(n) if ok else "�"), m.end() - i
+    m = _NAMED_REF.match(s, i)
+    if m and m.group(1) + ";" in html.entities.html5:
+        return html.entities.html5[m.group(1) + ";"], m.end() - i
+    return None
+
+
+def _read_part(s, i, end, is_text):
+    out = []
     while True:
-        c = line[i]
-        if c == "\\" and line[i + 1:i + 2] and line[i + 1] in _ASCII_PUNCT:
-            out.append(line[i + 1])
+        if i >= len(s):
+            raise ValueError("unterminated link: %r" % s)
+        c = s[i]
+        if c == "\\" and s[i + 1:i + 2] and s[i + 1] in PUNCT:  # section 2.4: the escaped character, literally
+            out.append(s[i + 1])
             i += 2
             continue
-        if c == ">":
-            if line[i + 1:i + 2] != ")":
-                raise ValueError("not a link: %r" % line)
-            return "".join(out)
-        if c in "<\n\r":
-            raise ValueError("unescaped %r in a pointy-bracket destination: %r" % (c, line))
+        if c == "&":  # section 2.5
+            ref = _reference(s, i)
+            out.append(ref[0] if ref else c)
+            i += ref[1] if ref else 1
+            continue
+        if c == end:
+            return "".join(out), i
+        if c in "\n\r":
+            raise ValueError("a line ending inside a link: %r" % s)
+        if is_text and c in PUNCT:
+            raise ValueError("unescaped %r in link text could start other inline markup: %r" % (c, s))
+        if not is_text and c == "<":
+            raise ValueError("unescaped < in a pointy-bracket destination: %r" % s)
         out.append(c)
         i += 1
 
 
-class CommonMarkReader(unittest.TestCase):  # the oracle itself, on spec examples
-    def test_reader(self):
-        self.assertEqual(commonmark_dest("[a](<b c>)"), "b c")
-        self.assertEqual(commonmark_dest("[a](<b\\>c>)"), "b>c")
-        self.assertEqual(commonmark_dest("[a](<b\\\\c>)"), "b\\c")
-        self.assertEqual(commonmark_dest("[a](<b\\qc>)"), "b\\qc")  # not punctuation: the backslash stays
-        self.assertEqual(commonmark_dest("[a](<a\\/b>)"), "a/b")  # '/' is punctuation: the backslash goes
-        for bad in ("[a](<b<c>)", "[a](<b>c>)"):
-            with self.assertRaises(ValueError):
-                commonmark_dest(bad)
+def commonmark_link(line):
+    """``(text, destination)`` of the first inline link ``[text](<dest>)`` in ``line``, read by the CommonMark 0.31
+    rules for the subset index.py writes: section 2.4 (a backslash before one of the 32 ASCII punctuation
+    characters is that character, taken literally; any other backslash is literal), section 2.5 (entity and
+    numeric character references are decoded, in the text and in the destination) and section 6.3 (a ``<...>``
+    destination holds no line ending and no unescaped ``<`` or ``>``; the text ends at the first unescaped ``]``).
+    Unescaped ASCII punctuation other than ``&`` in the text could start brackets, emphasis, code spans or raw HTML,
+    which this reader does not model: it raises ValueError there instead of guessing. Written from the spec text,
+    independent of index.py."""
+    text, i = _read_part(line, line.index("[") + 1, "]", True)
+    if line[i:i + 3] != "](<":
+        raise ValueError("not an inline link with a <...> destination: %r" % line)
+    dest, i = _read_part(line, i + 3, ">", False)
+    if line[i:i + 2] != ">)":
+        raise ValueError("not an inline link: %r" % line)
+    return text, dest
+
+
+class CommonMarkReader(unittest.TestCase):  # the oracle itself, on spec-style examples
+    def test_escapes_and_destination(self):
+        self.assertEqual(commonmark_link("[a](<b c>)"), ("a", "b c"))
+        self.assertEqual(commonmark_link("[a](<b\\>c>)")[1], "b>c")
+        self.assertEqual(commonmark_link("[a](<b\\\\c>)")[1], "b\\c")
+        self.assertEqual(commonmark_link("[a](<b\\qc>)")[1], "b\\qc")  # not punctuation: the backslash stays
+        self.assertEqual(commonmark_link("[a](<a\\/b>)")[1], "a/b")  # '/' is punctuation: the backslash goes
+        self.assertEqual(commonmark_link("x: [\\]\\[\\*](<z>)"), ("][*", "z"))
+        for bad in ("[a](<b<c>)", "[a](<b>c>)", "[a*b](<c>)", "[a]b](<c>)", "[a](b)", "[a](<b"):
+            with self.assertRaises(ValueError, msg=bad):
+                commonmark_link(bad)
+
+    def test_character_references(self):  # section 2.5
+        for src, want in (("a&#60;b", "a<b"), ("a&amp;b", "a&b"), ("a&#x3C;b", "a<b"), ("a&#X3c;b", "a<b"),
+                          ("a&lt;b", "a<b"), ("&bogus;", "&bogus;"), ("&#0;", "�"), ("&#xD800;", "�"),
+                          ("&#12345678;", "&#12345678;"), ("a & b", "a & b"), ("\\&#60;", "&#60;"),
+                          ("\\&amp;", "&amp;")):
+            self.assertEqual(commonmark_link("[t](<%s>)" % src)[1], want, src)
+        self.assertEqual(commonmark_link("[x&#60;y&amp;](<z>)")[0], "x<y&")
 
 
 # ---------------------------------------------------------------- T: text in rendered values

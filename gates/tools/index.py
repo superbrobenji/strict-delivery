@@ -77,10 +77,21 @@ def _link(target: str, start_dir: str) -> str:
     return "/".join([".."] * (len(s) - n) + t[n:])
 
 
-def _dest(path: str) -> str:
-    """``path`` as a CommonMark ``<...>`` link destination that reads back as exactly ``path`` (owner Q-1c3-R1 (a),
-    Q-1c3-F1-1 (a)): ``\\`` first, then ``<`` and ``>``, are backslash-escaped."""
-    return "<" + path.replace("\\", "\\\\").replace("<", "\\<").replace(">", "\\>") + ">"
+_ASCII_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")  # CommonMark 0.31 section 2.1: the 32
+
+
+def _md_escape(s: str) -> str:
+    """``s`` with a backslash before every ASCII punctuation character (CommonMark section 2.4). Every escaped
+    character is literal, so no character reference (section 2.5), emphasis, code span, raw HTML or bracket can
+    form; every other character is copied as it is (owner Q-1c3-RR2-1 (a), Q-1c3-F2-1 (a))."""
+    return "".join("\\" + c if c in _ASCII_PUNCT else c for c in s)
+
+
+def _md_link(text: str, dest: str) -> str:
+    """The inline link ``[text](<dest>)`` (owner Q-1c3-R1 (a)) with both parts escaped by ``_md_escape``: a
+    CommonMark reader gets back exactly ``text`` as the link text and ``dest`` as the destination. ``dest`` holds no
+    line break (config paths are printable)."""
+    return "[%s](<%s>)" % (_md_escape(text), _md_escape(dest))
 
 
 def _architecture(root: str, rel: str) -> Optional[str]:
@@ -102,8 +113,7 @@ def _overview(root: str, cfg: dict, fins: list, n_in_force: int, in_force_rel: s
     if arch is None:
         lines.append("none")
     else:
-        lines.append("[%s](%s)" % (posixpath.basename(paths["architecture"]),
-                                   _dest(_link(paths["architecture"], here))))
+        lines.append(_md_link(posixpath.basename(paths["architecture"]), _link(paths["architecture"], here)))
         lines.extend("- " + _one_line(ln[3:], " ") for ln in arch.split("\n") if ln.startswith("## "))
     lines += ["", "## Open findings"]
     open_ = [r for r in fins if not findings.is_resolved(r.row)]
@@ -112,7 +122,7 @@ def _overview(root: str, cfg: dict, fins: list, n_in_force: int, in_force_rel: s
     for r in open_:
         lines.append("- %s (%s, %s): %s" % (r.id, r.row["severity"], r.row["status"], _one_line(r.row["class"], " ")))
     lines += ["", "## In-force decisions",
-              "%d in force: [in-force.md](%s)" % (n_in_force, _dest(_link(in_force_rel, here)))]
+              "%d in force: %s" % (n_in_force, _md_link("in-force.md", _link(in_force_rel, here)))]
     return "\n".join(lines) + "\n"
 
 
