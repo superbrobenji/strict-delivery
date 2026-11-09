@@ -70,8 +70,8 @@ class KnownKinds(unittest.TestCase):
 class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
-        self.assertEqual(sorted(got), ["config", "decision", "decision-index", "finding", "finding-index", "in-force",
-                                       "overview"])  # Task 1c.3 adds the four generated kinds
+        self.assertEqual(sorted(got), ["claim", "config", "decision", "decision-index", "finding", "finding-index",
+                                       "in-force", "overview"])  # Task 1c.3 adds the four generated kinds
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
 
     def test_K6_fixture_dir_and_bad_file_raises_naming_it(self):

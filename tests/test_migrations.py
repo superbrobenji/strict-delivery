@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from gates.lib import migrations, schema
+from gates.lib import migrations, schema, yamlsub
 from gates.lib.decisions import validate
 from gates.lib.config import DEFAULTS
 from gates.lib.migrations import MIGRATIONS, current_version, migrate
@@ -50,9 +50,16 @@ class RegistryTests(unittest.TestCase):
             with mock.patch.object(schema, "SCHEMAS_DIR", d):
                 self.assertEqual(current_version("decision"), 7)
 
+    def test_claim_version_is_read_from_claim_yml(self):  # V1 for claim (Task 2a.2 ships claim.yml)
+        data = yamlsub.load(os.path.join(schema.SCHEMAS_DIR, "claim.yml"), "claim.yml")
+        self.assertEqual(current_version("claim"), data["version"])
+
     def test_missing_or_broken_schema_file_raises(self):  # V2
+        # A known kind with no schema file: "request" (its schema ships with a later task).
+        self.assertIn("request", schema.KNOWN_KINDS)
+        self.assertFalse(os.path.lexists(os.path.join(schema.SCHEMAS_DIR, "request.yml")))
         with self.assertRaises(schema.SchemaError):
-            current_version("claim")  # no claim.yml before Task 2a.2
+            current_version("request")
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "decision.yml"), "w", encoding="utf-8") as fh:
                 fh.write("kind: decision\nversion: 0\nformat: yaml\n")

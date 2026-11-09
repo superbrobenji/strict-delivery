@@ -1,0 +1,41 @@
+kind: claim
+version: 1
+format: yaml
+files:
+  - dir: claims
+    glob: "*.yml"
+fields:
+  schema:
+    type: str
+  document:
+    type: str
+  claims:
+    type: list
+    min: 1
+    items:
+      type: map
+      fields:
+        id:
+          type: id
+          id_kind: claim
+        text:
+          type: str
+        cites:
+          type: list
+          min: 1
+          items:
+            type: map
+            fields:
+              path:
+                type: str
+              lines:
+                type: str
+                required: false
+              blob:
+                type: sha
+        direct:
+          type: str
+        contradiction:
+          type: str
+        by:
+          type: str

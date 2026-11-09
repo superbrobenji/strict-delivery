@@ -1291,10 +1291,10 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 
 **Files:**
 - Create: `gates/schemas/claim.yml`, `gates/lib/claims.py`
-- Modify: `gates/lib/gitinfo.py`, an additive change that leaves every existing signature as it is: `blob_id` (Q-B2plan-4 (a)).
+- Modify: `gates/lib/gitinfo.py`, an additive change that leaves every existing signature as it is: `blob_id` (Q-B2plan-4 (a)) and `blob_ids` (Q-2a2r1-2 (a)).
 - Test: `tests/test_claims_lib.py`
 
-**Owner answers applied:** OQ-4, OQ-16; controller ruling on claim execution and shape; Q-B2plan-2, Q-B2plan-4, Q-B2plan-5; Q-2a2-1 (a) (a claim `document` is a `.md` path with no `--`, so the slug inverts).
+**Owner answers applied:** OQ-4, OQ-16; controller ruling on claim execution and shape; Q-B2plan-2, Q-B2plan-4, Q-B2plan-5; Q-2a2-1 (a) and Q-2a2r1-1 (a) (a claim `document` is a `.md` path with no `--` and no path component that starts or ends with `-`, so no `-` stands next to a `/` and the slug inverts); Q-2a2r1-2 (a) (the blob id is what `git add` stores, read from a temporary copy of the index); Q-2a2r4-1 (a) (the index copy is made once per gate run: `stale_errors` takes an optional precomputed `blob_ids` map, and `blob_ids` splits its path lists so that no argument list goes over the length limit).
 
 **The freshness reference (F-B2p-1; owner answer Q-B2plan-4 (a), a blob id per cite).** The draft's first design is not adopted: it compared a commit sha with the working tree, so a commit could not change a cited file while its claim exists. Each cite records the blob id of the cited file, and freshness compares it with the file being committed.
 
@@ -1306,18 +1306,20 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - `claims` (`list`, `min: 1`), items `map`: `id` (`id`, `id_kind: claim`), `text` (`str`), `cites` (`list`, `min: 1`), `direct` (`str`, a command), `contradiction` (`str`, a command), `by` (`str`).
     - Spec §8: "No claim is trusted: verify directly and by contradiction, record both commands." Spec §7.2: "`gate_claims` [reads record fields] from the claim schema (appendix A), never from hand-coded field lists."
     - Each cite is a `map {path: str, lines: str (optional, <n> or <first>-<last>), blob: sha (40 hex)}`, and there is no claim-level sha (Q-B2plan-4 (a)).
-  - `gitinfo.blob_id(root: str, path: str) -> str`: `git hash-object -- <path>`, run with `-C root`. It applies the same clean filters as `git add`, so the id equals the blob the path would be committed as.
+  - `gitinfo.blob_ids(root: str, paths: list) -> dict` (owner Q-2a2r1-2 (a)): once per call, copy the index git reads (`GIT_INDEX_FILE` honoured) to a temporary file, set `GIT_INDEX_FILE` to it, run `git add -- <paths>` and read the ids with `git ls-files -z --stage -- <paths>`, all with `-C root`. The id is exactly the blob `git add` would store, including every index-dependent conversion (`core.autocrlf` true or input with CRLF already in the index, `text=auto`, `eol`). The real index never changes; the temporary file is removed on every exit, and any failure is a `GateError`. `git add` and `git ls-files` run once per chunk of the paths, every chunk into the same temporary copy, so that no argument list holds more than `gitinfo.ARGV_BYTES` (30000) bytes, each argument and its NUL counted, fixed arguments included; a path that alone goes over the bound runs alone (owner Q-2a2r4-1 (a), review 5 F1). `gitinfo.blob_id(root: str, path: str) -> str` is `blob_ids(root, [path])[path]`.
   - `@dataclass(frozen=True) ClaimFile(file: str, row: dict)`.
   - `load(root: str, cfg: dict) -> list` reads every `*.yml` directly under `cfg["paths"]["claims"]`. A missing directory is empty. A file that does not load, is not a regular file, or is not a top-level mapping raises `GateError` naming it.
   - `slug(document: str) -> str`, per Q-B2plan-2 (a): the path without its last `.md` suffix, each `/` replaced by `--`.
-  - `validate(row: object, cfg: dict) -> list` returns schema errors plus a document-path problem and per-cite form problems (lines positive, `first <= last`). A `document` that does not end in `.md` or holds `--` gives `document: must be a .md path with no '--'` (owner Q-2a2-1 (a)).
+  - `validate(row: object, cfg: dict) -> list` returns schema errors plus a document-path problem and per-cite form problems (lines positive, `first <= last`). A `document` that does not end in `.md` or holds `--` gives `document: must be a .md path with no '--'` (owner Q-2a2-1 (a)); one with a path component that starts or ends with `-` gives `document: no path component may start or end with '-'` (owner Q-2a2r1-1 (a)).
   - `file_errors(files: list, prefix: str) -> list` of `(suffix, reason)`:
     - `name.<file>`: the file stem differs from `slug(document)`;
     - `id.<file>`: an id fails `id_problem`;
     - `duplicate.<id>`: an id appears more than once; the reason lists every file.
   - `document_errors(cf: ClaimFile, tracked: frozenset) -> list` checks that `document` and each cited path are tracked.
-  - `stale_errors(cf: ClaimFile, root: str, base: Optional[str]) -> list` of `(id, reason)` (Q-B2plan-4 (a)):
-    - A claim is fresh when each cite's `blob` equals `gitinfo.blob_id(root, path)`. The working tree is the tree being committed under the pre-commit hook's unstaged refusal (F-3), so a commit can change a cited file and record the new blob in the same commit.
+  - `stale_errors(cf: ClaimFile, root: str, base: Optional[str], *, blob_ids: Optional[dict] = None) -> list` of `(id, reason)` (Q-B2plan-4 (a)):
+    - A claim is fresh when each cite's `blob` equals the id `gitinfo.blob_ids` gives for its path (Q-2a2r1-2 (a)). With `blob_ids=None`, `stale_errors` makes one `gitinfo.blob_ids` call per `stale_errors` call (one index copy per call; other consumers). With a map (owner Q-2a2r4-1 (a)), the ids are read from it and no index copy is made; a path the call needs that the map lacks is a `GateError` `stale: no blob id for <path> in the given map` (fail closed, Decision under the owner delegation 2026-11-09), a map that is not a `dict` is a `GateError` `stale: blob_ids must be a dict or None`, and extra keys are ignored.
+    - `stale_paths(files: list, root: str) -> list` gives the paths `stale_errors` looks up for `files` (cited, tracked, a regular file in the working tree), in first-seen order, each once; `gate_claims` passes them to one `gitinfo.blob_ids` call per gate run (Task 2a.3).
+    - The working tree is the tree being committed under the pre-commit hook's unstaged refusal (F-3), so a commit can change a cited file and record the new blob in the same commit.
     - A claim fails when the cited path is absent or untracked. A line cite compares the whole file.
   - `base_errors(root: str, cfg: dict, files: list, base: str) -> list` of `(suffix, reason)` (no-delete extended to claim files, spec §7.2; Q-B2plan-5 (a)):
     - against `mb = gitinfo.merge_base(root, base, "HEAD")`:
@@ -1331,7 +1333,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 - Every field against wrong types.
 - `claims` empty, missing, not a list.
 - Unknown key at the top level and in a claim or cite.
-- `document` forms: absolute, `..`, `./`, trailing `/`, untracked, a directory, not `.md`, holding `--` (Q-2a2-1 (a)).
+- `document` forms: absolute, `..`, `./`, trailing `/`, untracked, a directory, not `.md`, holding `--` (Q-2a2-1 (a)), a first, middle or last component that starts or ends with `-` or is `-` (Q-2a2r1-1 (a)).
 - `slug`: nested path, no `.md`, `.md` inside a directory name, unicode, a file name that is another document's slug.
 - Cite forms:
   - (a) `blob` short, uppercase, the blob of another file; `lines` `0`, `5-3`, `3-`.
@@ -1365,6 +1367,8 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       assert slug("docs/strict-delivery/plans/x.md") == "docs--strict-delivery--plans--x"
   def test_document_must_be_md_without_double_dash():   # Q-2a2-1 (a); subTest: "a/b.txt", "a--b.md", "a/b"
       assert "document: must be a .md path with no '--'" in validate(with_document(CLAIM_FILE, doc), cfg)
+  def test_document_component_dash_ends():              # Q-2a2r1-1 (a); subTest: "a-/b.md", "a/-b.md", "-/b.md"
+      assert validate(with_document(CLAIM_FILE, doc), cfg) == ["document: no path component may start or end with '-'"]
   def test_file_name_must_be_slug():
       assert ("name." + rel, ANY) in file_errors([ClaimFile(rel, CLAIM_FILE)], "C")
   def test_duplicate_id_across_files():
@@ -1379,6 +1383,14 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       assert stale_errors(cf_new, root, None) == []
   def test_blob_id_matches_git_add():          # (a); file with CRLF under core.autocrlf
       assert gitinfo.blob_id(root, p) == git(root, "rev-parse", ":" + p)   # after git add p
+  def test_conversion_cases_match_git_add():   # Q-2a2r1-2 (a); CRLF in the index, autocrlf, text=auto, eol
+      assert gitinfo.blob_id(root, p) == git(root, "rev-parse", ":" + p)   # after git add p
+  def test_full_map_makes_no_copy_and_is_used():       # Q-2a2r4-1 (a); shutil.copy2 and gitinfo.blob_ids never called
+      assert stale_errors(cf, root, None, blob_ids=gitinfo.blob_ids(root, stale_paths([cf], root))) == want
+  def test_map_missing_a_needed_path_is_a_gate_error():   # Q-2a2r4-1 (a); Decision (owner delegation 2026-11-09)
+      with self.assertRaises(GateError): stale_errors(cf, root, None, blob_ids={})
+  def test_large_claim_file_gives_verdicts():  # review 5 F1: 6000 tracked paths of 204 characters
+      assert stale_errors(cf_6000, root, None) == [(CID, "cites.17: ...")]   # every argv <= gitinfo.ARGV_BYTES
   def test_deleted_claim_file_fails():
       assert ("deleted." + rel, ANY) in base_errors(root, cfg, load(root, cfg), "HEAD")
   def test_claim_file_cleaned_with_document_passes():  # Q-B2plan-5 (a)
@@ -1391,7 +1403,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       with self.assertRaises(GateError): base_errors(root, cfg, files, "no-such-ref")
   ```
 - [ ] **Step 2: Run the test command; expect FAIL.**
-- [ ] **Step 3: Implement `schemas/claim.yml`, `claims.py`** (and `gitinfo.blob_id`: an argument list, `LC_ALL=C`, `--` before the path, as in Task 1a.2).
+- [ ] **Step 3: Implement `schemas/claim.yml`, `claims.py`** (and `gitinfo.blob_ids`/`blob_id`: an argument list, `LC_ALL=C`, `--` before the paths, as in Task 1a.2).
 - [ ] **Step 4: Run the test command on both interpreters and every enabled gate; expect PASS.** `claim` has no producer yet, so `check schema` does not check claim files (Appendix A).
 - [ ] **Step 5: Commit** `feat(lib): claim schema and rules; freshness of cited files`, then checkpoint.
 
