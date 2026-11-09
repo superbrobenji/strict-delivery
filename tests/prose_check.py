@@ -273,3 +273,178 @@ def dir_problems(dirpath, written):
 def prompts_dir():
     """Absolute prompts directory of this checkout, independent of the working directory."""
     return os.path.join(REPO_ROOT, *PROMPTS_DIR.split("/"))
+
+
+# playbook/rules.md (Task B2.1): line 1, one intro paragraph, one table, nothing after it.
+RULES_TITLE = "# Base playbook: rules"
+RULES_HEADER = "| id | rule | why | enforced by | profiles | fixed | source |"
+RULES_SEPARATOR = "|---|---|---|---|---|---|---|"
+RULES_COLUMNS = ("id", "rule", "why", "enforced by", "profiles", "fixed", "source")
+RULES_ENFORCERS = frozenset((
+    "gate_schema", "gate_register", "gate_claims", "gate_decisions", "gate_dispatch", "gate_streams", "gate_context",
+    "gate_cites", "gate_drift", "gate_index", "gate_checkpoint", "gate_cleanup", "gate_evidence", "run_all", "hook",
+    "judgment"))
+SD_R4_ENFORCER = "program create (programs); judgment"
+PROFILE_NAMES = ("light", "standard", "strict")
+_RULE_ID = re.compile(r"SD-R[1-9][0-9]*")
+_RULE_ID_TOKEN = re.compile(r"SD-R[0-9]")
+_SOURCE = re.compile(r"spec §[0-9]+[a-z]?")
+
+
+def _need_str(text, name):
+    if not isinstance(text, str):
+        raise TypeError("%s takes str, not %s" % (name, type(text).__name__))
+
+
+def _is_table_line(line):
+    return line.lstrip(" ").startswith("|")
+
+
+def _split_cells(line):
+    s = line.strip(" ")
+    if len(s) < 2 or not (s.startswith("|") and s.endswith("|")):
+        raise ValueError("not a table row: %r" % line)
+    return [c.strip(" ") for c in s[1:-1].split("|")]
+
+
+def first_table_header(text):
+    """The first line of the first table, as written, or None when the text holds no table line."""
+    _need_str(text, "first_table_header")
+    for line in text.split("\n"):
+        if _is_table_line(line):
+            return line
+    return None
+
+
+def table_rows(text):
+    """One dict per body row of the first table, keyed by that table's own header cells (padding stripped). The row
+    after the header is the separator; the table ends at the first line that is not a table line."""
+    _need_str(text, "table_rows")
+    lines = text.split("\n")
+    h = next((i for i, line in enumerate(lines) if _is_table_line(line)), None)
+    if h is None:
+        raise ValueError("the text holds no table")
+    header = _split_cells(lines[h])
+    rows = []
+    for line in lines[h + 2:]:
+        if not _is_table_line(line):
+            break
+        cells = _split_cells(line)
+        if len(cells) != len(header):
+            raise ValueError("%d cells, the header has %d: %r" % (len(cells), len(header), line))
+        rows.append(dict(zip(header, cells)))
+    return rows
+
+
+def rules_problems(text):
+    """Problem strings, each 'kind: detail', for the text of playbook/rules.md; [] when it is well formed."""
+    _need_str(text, "rules_problems")
+    problems = []
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as e:
+        problems.append("encoding: not valid UTF-8 at character %d" % e.start)
+    seen = set()
+    for n, line in enumerate(text.split("\n"), 1):
+        for ch in line:
+            if ch == "\r":
+                kind = "line-ending"
+            elif ch < " " or ch == "\x7f":
+                kind = "control"
+            else:
+                continue
+            if (kind, n) not in seen:
+                seen.add((kind, n))
+                problems.append("%s: character 0x%02x on line %d" % (kind, ord(ch), n))
+    if not text.endswith("\n"):
+        problems.append("final-newline: the file does not end with a newline")
+    elif text.endswith("\n\n"):
+        problems.append("final-newline: the file ends with more than one newline")
+    lines = text.replace("\r", "").split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    for n, line in enumerate(lines, 1):
+        if line.endswith((" ", "\t")):
+            problems.append("trailing-ws: line %d" % n)
+    if not lines or lines[0] != RULES_TITLE:
+        problems.append("first-line: expected %r" % RULES_TITLE)
+    h = next((i for i, line in enumerate(lines) if _is_table_line(line)), None)
+    if h is None:
+        problems.append("table: the file holds no table")
+        return problems
+    pre = lines[1:h]
+    if not pre or pre[0] != "":
+        problems.append("layout: line 2 must be empty")
+    if not pre or pre[-1] != "":
+        problems.append("layout: the table must follow one empty line")
+    start = 1 if pre and pre[0] == "" else 0
+    stop = len(pre) - 1 if len(pre) > start and pre[-1] == "" else len(pre)
+    inner = pre[start:stop]
+    if inner and (inner[0] == "" or inner[-1] == ""):
+        problems.append("layout: more than one empty line around the intro")
+    paragraphs = sum(1 for i, line in enumerate(inner) if line != "" and (i == 0 or inner[i - 1] == ""))
+    if paragraphs != 1:
+        problems.append("intro: %d paragraphs between line 1 and the table, expected 1" % paragraphs)
+    if lines[h] != RULES_HEADER:
+        problems.append("header: line %d, expected %r" % (h + 1, RULES_HEADER))
+    if h + 1 >= len(lines) or lines[h + 1] != RULES_SEPARATOR:
+        problems.append("separator: line %d, expected %r" % (h + 2, RULES_SEPARATOR))
+    end = h + 2
+    while end < len(lines) and _is_table_line(lines[end]):
+        end += 1
+    if end < len(lines):
+        problems.append("trailing: line %d follows the table" % (end + 1))
+    second = next((n for n in range(end, len(lines)) if _is_table_line(lines[n])), None)
+    if second is not None:
+        problems.append("tables: a second table at line %d" % (second + 1))
+    if end <= h + 2:
+        problems.append("rows: the table has no rows")
+    for n in list(range(0, h + 2)) + list(range(end, len(lines))):
+        if n < len(lines) and _RULE_ID_TOKEN.search(lines[n]):
+            problems.append("stray-id: line %d holds a rule id outside the id column" % (n + 1))
+    expected = 1
+    for i in range(h + 2, end):
+        line = lines[i]
+        n = i + 1
+        if line == RULES_HEADER:
+            problems.append("tables: a second header at line %d" % n)
+            continue
+        if len(line) < 2 or not (line.startswith("|") and line.endswith("|")):
+            problems.append("row: line %d is not a table row" % n)
+            expected += 1
+            continue
+        raw = line[1:-1].split("|")
+        if any(c.endswith("\\") for c in raw) or any(c.count("`") % 2 for c in raw):
+            problems.append("pipe: line %d has a pipe inside a cell" % n)
+        if len(raw) != len(RULES_COLUMNS):
+            problems.append("cells: line %d has %d cells, expected %d" % (n, len(raw), len(RULES_COLUMNS)))
+            expected += 1
+            continue
+        cells = dict(zip(RULES_COLUMNS, (c.strip(" ") for c in raw)))
+        for col in RULES_COLUMNS:
+            if cells[col] == "":
+                problems.append("empty: line %d, column %r" % (n, col))
+            elif col != "id" and _RULE_ID_TOKEN.search(cells[col]):
+                problems.append("stray-id: line %d, column %r holds a rule id" % (n, col))
+        rid = cells["id"]
+        if _RULE_ID.fullmatch(rid):
+            if int(rid[4:]) != expected:
+                problems.append("id-sequence: line %d, expected SD-R%d, got %s" % (n, expected, rid))
+            expected = int(rid[4:]) + 1
+        else:
+            problems.append("id: line %d, %r is not SD-R<n>" % (n, rid))
+            expected += 1
+        enf = cells["enforced by"]
+        if enf == SD_R4_ENFORCER:
+            if rid != "SD-R4":
+                problems.append("enforced-by: line %d, %r is SD-R4's only" % (n, enf))
+        elif enf not in RULES_ENFORCERS:
+            problems.append("enforced-by: line %d, %r" % (n, enf))
+        ps = cells["profiles"].split(", ")
+        if ps != [p for p in PROFILE_NAMES if p in ps]:
+            problems.append("profiles: line %d, %r" % (n, cells["profiles"]))
+        if cells["fixed"] not in ("yes", "no"):
+            problems.append("fixed: line %d, %r" % (n, cells["fixed"]))
+        if not _SOURCE.fullmatch(cells["source"]):
+            problems.append("source: line %d, %r" % (n, cells["source"]))
+    return problems
