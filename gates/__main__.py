@@ -3,7 +3,9 @@ import importlib
 import sys
 from typing import Callable, Dict, List
 
-GATES: Dict[str, str] = {"cites": "gates.gate_cites", "schema": "gates.gate_schema"}  # gate name -> module defining check(args)
+GATES: Dict[str, str] = {"cites": "gates.gate_cites", "decisions": "gates.gate_decisions",
+                         "register": "gates.gate_register",
+                         "schema": "gates.gate_schema"}  # gate name -> module defining check(args)
 _OWNER: Dict[str, str] = {"cites": " (stream C, Task C2.2)"}  # who delivers a gate module that may be absent
 
 
@@ -30,7 +32,12 @@ def _check(args: List[str]) -> int:
     return run_gate(name, run, args[1:])
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check}
+def _index(args: List[str]) -> int:
+    from gates.tools import index
+    return index.main(args)
+
+
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "index": _index}
 
 
 def main(argv: List[str]) -> int:

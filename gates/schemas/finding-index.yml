@@ -1,0 +1,40 @@
+kind: finding-index
+version: 1
+format: yaml
+files:
+  - dir: findings
+    glob: index.yml
+fields:
+  schema:
+    type: str
+  findings:
+    type: list
+    items:
+      type: map
+      fields:
+        id:
+          type: id
+          id_kind: finding
+        file:
+          type: str
+        status:
+          type: enum
+          values:
+            - open
+            - planned
+            - in-progress
+            - fixed-unpinned
+            - pinned
+            - deferred
+            - closed
+            - merged
+        severity:
+          type: enum
+          values:
+            - CRITICAL
+            - HIGH
+            - MEDIUM
+            - LOW
+            - INFO
+        owner:
+          type: str
