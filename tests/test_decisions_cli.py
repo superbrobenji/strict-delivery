@@ -824,6 +824,33 @@ class Find(Base):
         self.refused(["find", "--path", "a b"], "--path: U+0020 is not allowed")
 
 
+class GlobGrammar(Base):  # F-1, U-2 folded into F-1 (D-31): the schema glob grammar at every CLI glob
+    REV = "must be a supported glob: the bracket expression [z-a] holds the reversed range z-a"
+
+    def test_F1_ask_refuses_reversed_range_argv(self):
+        self.refused(ask_argv(extra=["--applies-to", "src/[z-a].py"]), "decisions ask: --applies-to: " + self.REV)
+        self.refused(ask_argv(extra=["--applies-to", "src/[^a].py"]), "--applies-to: must be a supported glob: "
+                                                                        "the bracket expression [^a] holds U+005E")
+
+    def test_F1_ask_and_find_refuse_a_hand_written_reversed_record(self):
+        self.put(dec(DA, applies_to=["src/[z-a].py"]))
+        needle = "applies_to.0: " + self.REV
+        self.refused(ask_argv(question="Second one?", extra=["--applies-to", "src/x.py"]), needle)
+        self.refused(["find", "--path", "src/x.py"], needle)
+        self.refused(["find", "--path", "src/[z-a].py"], needle)
+
+    def test_F1_supported_brackets_and_literal_brackets_in_path(self):
+        self.put(dec(DA, effect="lasting", landed_in=["CLAUDE.md"], applies_to=["src/*.py"], question="Q?", answer="A"),
+                 dec(DB, effect="lasting", landed_in=["CLAUDE.md"], applies_to=["src/[a-c].py"], question="R?",
+                     answer="B"))
+        new, out = self.ask(question="Zzz?", extra=["--applies-to", "src/[a-c].py"])
+        self.assertEqual(self.rec(new)["applies_to"], ["src/[a-c].py"])
+        self.assertEqual(self.rec(new)["checked_against"], [DA, DB])
+        # --path is a path: its brackets are literal characters, never compiled
+        self.assertEqual(self.cli("find", "--path", "src/[z-a].py"), (0, "%s [] Q? -> A\n" % DA, ""))
+        self.assertEqual(self.cli("find", "--path", "src/b.py"), (0, "%s [] Q? -> A\n%s [] R? -> B\n" % (DA, DB), ""))
+
+
 # ---------------------------------------------------------------- H: open grammars, I: produces and resources
 
 class Grammars(Base):

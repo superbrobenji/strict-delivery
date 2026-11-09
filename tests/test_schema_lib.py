@@ -1,6 +1,8 @@
 """Tests of gates/lib/schema.py; rows K1-K7, L1-L13, T1-T16, R1-R9, G1-G3, M1-M5, P1-P3, F1-F6 of the 1b.1 table."""
 import copy
+import fnmatch
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -10,6 +12,62 @@ from gates.lib.result import GateError
 from gates.lib.schema import KNOWN_KINDS, SchemaError, files_of, load_schema, produced_kinds, schemas, validate
 from gates.lib.schema import validate_markdown
 from tests.helpers import GitIsolatedTestCase, commit_all, make_repo
+
+NOT_ALLOWED = ("%s, which is not allowed: inside [ ] use an optional leading ! then characters or ranges x-y "
+               "(x <= y) of printable ASCII other than ! - [ \\ ] ^ & ~ |")
+
+
+def _words(atoms: str, top: int) -> list:
+    out, layer = [], [""]
+    for _ in range(top):
+        layer = [w + a for w in layer for a in atoms]
+        out += layer
+    return out
+
+
+def _ref_match(name: str, pat: str) -> bool:
+    """Pure-Python reference of fnmatchcase for a glob the schema accepts: * ? literals, an unclosed [ as a
+    literal, and [!? characters or ranges x-y]."""
+    toks, i, n = [], 0, len(pat)
+    while i < n:
+        c = pat[i]
+        i += 1
+        if c == "[":
+            j = i + (pat[i:i + 1] == "!")
+            j += pat[j:j + 1] == "]"
+            j = pat.find("]", j)
+            if j >= 0:
+                body = pat[i:j]
+                neg = body[:1] == "!"
+                items, ranges, k = body[neg:], [], 0
+                while k < len(items):
+                    if items[k + 1:k + 2] == "-" and k + 2 < len(items):
+                        ranges.append((items[k], items[k + 2]))
+                        k += 3
+                    else:
+                        ranges.append((items[k], items[k]))
+                        k += 1
+                toks.append(("C", neg, ranges))
+                i = j + 1
+                continue
+        toks.append(("*",) if c == "*" else ("?",) if c == "?" else ("L", c))
+
+    def m(t: int, s: int) -> bool:
+        if t == len(toks):
+            return s == len(name)
+        tok = toks[t]
+        if tok[0] == "*":
+            return any(m(t + 1, k) for k in range(s, len(name) + 1))
+        if s == len(name):
+            return False
+        ch = name[s]
+        if tok[0] == "C":
+            ok = any(lo <= ch <= hi for lo, hi in tok[2]) != tok[1]
+        else:
+            ok = tok[0] == "?" or ch == tok[1]
+        return ok and m(t + 1, s + 1)
+    return m(0, 0)
+
 
 CFG = copy.deepcopy(config.DEFAULTS)
 BASE = {"kind": "thing", "version": 1, "format": "yaml", "files": [{"path": "config"}],
@@ -213,6 +271,8 @@ class LoadSchema(Dirs):
                  ([{"dir": "decisions"}], "files.0.glob", "a dir item needs a non-empty string dir and glob"),
                  ([{"glob": "*"}], "files.0.dir", "a dir item needs a non-empty string dir and glob"),
                  ([{"dir": "d", "glob": ""}], "files.0.glob", "a dir item needs a non-empty string dir and glob"),
+                 ([{"dir": "d", "glob": "*[z-a]"}], "files.0.glob",
+                  "must be a supported glob: the bracket expression [z-a] holds the reversed range z-a"),
                  ([{"dir": "d", "glob": "*", "other": 1}], "files.0.other", "unknown key"),
                  ([{"dir": "d", "glob": "*", "exclude": "a"}], "files.0.exclude", "must be a list of strings"),
                  ([{"dir": "d", "glob": "*", "exclude": [1]}], "files.0.exclude", "must be a list of strings")]
@@ -415,6 +475,46 @@ class Types(Dirs):
     def test_T11_glob(self):
         m = "must be a non-empty glob"
         self.run_types({"type": "glob"}, [("docs/**", []), ("", [m]), (5, [m])])
+
+    def test_T11b_glob_bracket_grammar(self):  # F-1, U-2 folded into F-1 (D-31)
+        ok = ["src/[a-c].py", "[!a-c]x", "a[b]", "[", "a[", "[]", "[!]", "x]", "]", "[ab0-9_.*?/]", "[a-a]",
+              "[a-cx-z]", "[!a]", "a é \n[0-9]"]
+        bad = [("src/[z-a].py", "z-a", "the reversed range z-a"), ("[b-a]", "b-a", "the reversed range b-a"),
+               ("[!z-a]x", "!z-a", "the reversed range z-a"), ("[a-cz-b]", "a-cz-b", "the reversed range z-b"),
+               ("ok/[a]/[b-a]", "b-a", "the reversed range b-a")]
+        bad += [(g, body, NOT_ALLOWED % cp) for g, body, cp in (
+            ("[--!]", "--!", "U+002D"), ("[[-!]", "[-!", "U+005B"), ("![--!]", "--!", "U+002D"),
+            ("[a-]", "a-", "U+002D"), ("[-a]", "-a", "U+002D"), ("[^a]", "^a", "U+005E"), ("[a\\b]", "a\\b", "U+005C"),
+            ("[a&&b]", "a&&b", "U+0026"), ("[a~~b]", "a~~b", "U+007E"), ("[a||b]", "a||b", "U+007C"),
+            ("[]a]", "]a", "U+005D"), ("[!]a]", "!]a", "U+005D"), ("[a-c-e]", "a-c-e", "U+002D"),
+            ("[a!]", "a!", "U+0021"), ("[é]", "é", "U+00E9"), ("[ ]", " ", "U+0020"), ("[a-é]", "a-é", "U+00E9"),
+            ("[\x7f]", "\x7f", "U+007F"))]
+        cases = [(g, []) for g in ok] + [(g, ["must be a supported glob: the bracket expression [%s] holds %s"
+                                               % (body, tail)]) for g, body, tail in bad]
+        self.run_types({"type": "glob"}, cases)
+        for g, want in cases:
+            with self.subTest(g=g):
+                self.assertEqual(schema.bracket_problem(g), want[0] if want else "")
+
+    def test_T11c_glob_differential(self):
+        """For every pattern of the reviewer's space (lengths 1-5 over a z - [ ] !) and of lengths 1-4 over
+        a z * ? [ ] ! -, a glob the schema accepts never raises in fnmatch and matches exactly as the pure-Python
+        reference matcher of the grammar: so 3.9 and 3.13 agree on it. Every pattern fnmatch raises on is refused."""
+        names = ["", "a", "z", "m", "-", "!", "[", "]", "az", "za", "a-", "[a]", "a]", "!a", "zz", "a-z", "]]", "*",
+                 "?", "a*", "a?z"]
+        pats = [p for atoms, top in (("az-[]!", 5), ("az*?[]!-", 4)) for p in _words(atoms, top)]
+        accepted = 0
+        for p in pats:
+            problem = schema.bracket_problem(p)
+            try:
+                got = [fnmatch.fnmatchcase(n, p) for n in names]
+            except re.error:
+                self.assertNotEqual(problem, "", p)
+                continue
+            if problem == "":
+                accepted += 1
+                self.assertEqual(got, [_ref_match(n, p) for n in names], p)
+        self.assertGreater(accepted, 1000)
 
     def test_T12_cite(self):
         m = "must be a normalised repo-relative path with an optional non-empty #anchor"

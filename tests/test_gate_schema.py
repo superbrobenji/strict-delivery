@@ -244,6 +244,9 @@ class Config(GateCase):
         pre = "FAIL schema.config..strict-delivery/config.yml: "
         cases = [({"decisions": {"scan": []}}, []),
                  ({"decisions": {"scan": [""]}}, [pre + "decisions.scan.0: must be a non-empty glob"]),
+                 ({"decisions": {"scan": ["a", "d/[z-a]"]}},  # F-1, U-2 folded into F-1 (D-31)
+                  [pre + "decisions.scan.1: must be a supported glob: the bracket expression [z-a] holds the "
+                         "reversed range z-a"]),
                  ({"decision_classes": {"owner_only": []}}, [pre + "decision_classes.owner_only: must hold at least 1 items"]),
                  ({"decision_classes": {"owner_only": [""]}},
                   [pre + "decision_classes.owner_only.0: must be a non-empty string"]),

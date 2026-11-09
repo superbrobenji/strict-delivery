@@ -13,7 +13,7 @@ import re
 import sys
 from typing import List, Optional
 
-from gates.lib import config, decisions, gitinfo, ids
+from gates.lib import config, decisions, gitinfo, ids, schema
 from gates.lib.result import GateError, _Once, gate_args, safe_text
 from gates.lib.store import Store
 from gates.tools import index
@@ -62,6 +62,16 @@ def _glob(flag: str, value: str) -> str:
         raise GateError("%s: must be repo-relative (it starts with /)" % flag)
     if ".." in value.split("/"):
         raise GateError("%s: must not hold a .. segment" % flag)
+    return value
+
+
+def _pattern(flag: str, value: str) -> str:
+    """``_glob`` plus the schema glob grammar (F-1, U-2 folded into F-1, decision D-31). ``--applies-to`` is a
+    pattern; ``find --path`` is a path, read by ``_glob`` alone: its brackets are literal characters and never
+    compiled."""
+    _glob(flag, value)
+    if schema.bracket_problem(value):
+        raise GateError("%s: %s" % (flag, schema.bracket_problem(value)))
     return value
 
 
@@ -178,7 +188,7 @@ def _ask(ns) -> int:
     cls = _text("--class", ns.cls)
     by = _text("--by", ns.by)
     topics = _unique("--topic", [_slug("--topic", t, _TOPIC) for t in ns.topic or []])
-    globs = _unique("--applies-to", [_glob("--applies-to", g) for g in ns.applies_to or []])
+    globs = _unique("--applies-to", [_pattern("--applies-to", g) for g in ns.applies_to or []])
     if ns.effect not in _EFFECTS:
         raise GateError("--effect: must be lasting or one-off")
     if ns.plan is not None:
