@@ -13,7 +13,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Callable
 
-from gates.lib import gitinfo, ids, yamlsub
+from gates.lib import gitinfo, ids, migrations, yamlsub
 from gates.lib.result import GateError, _raw, safe_text
 
 _PATH_KEY = {"decision": "decisions", "finding": "findings"}
@@ -270,18 +270,22 @@ def _merge_base_rows(root: str, directory: str, base: str) -> dict:
     return dict(_records_at(root, mb, directory, base, " (at the merge base)"))
 
 
-def _row_changed(rec: Record, at_mb: dict) -> bool:
+def _row_changed(rec: Record, at_mb: dict, kind: str) -> bool:
     """True when no record file exists at the merge base under ``rec.file`` (a rename is new) or its row there
-    differs from ``rec.row`` as ``base_errors`` compares rows (``_same``). A missing file reads as ``None``, which
-    ``_same`` never equates with a row (a mapping)."""
-    return not _same(at_mb.get(rec.file), rec.row)
+    differs from ``rec.row`` as ``base_errors`` compares rows: both migrated to the current version of ``kind``,
+    then ``_same`` (Task 2a.1 store fix round 1 F1, Q-2a1s-1 (a)). A missing file reads as ``None``, which
+    ``migrate`` returns as it is and ``_same`` never equates with a row (a mapping)."""
+    return not _same(migrations.migrate(kind, at_mb.get(rec.file)), migrations.migrate(kind, rec.row))
 
 
 def base_errors(root: str, store: Store, base: str, is_resolved: Callable[[dict], bool],
                 may_delete: Callable[[dict], bool]) -> list:
     """``(suffix, reason)`` pairs from comparing the working tree with the base branch ``base``:
     ``deleted.<id>`` and ``immutable.<id>`` against the merge base with HEAD, ``collision.<id>`` against the
-    tip of ``base``. Records are compared as parsed values, not as bytes."""
+    tip of ``base``. Records are compared as parsed values, not as bytes, after ``migrations.migrate`` carries
+    the base row and the tree row to the current version (Task 2a.1, F-1): a tree row equal to its base row
+    before or after migration is unchanged (owner Q-2a1-2 (a)). ``may_delete`` gets the unmigrated base row;
+    ``is_resolved`` the migrated one. A SchemaError from ``migrate`` passes through."""
     gitinfo._require_toplevel(root)
     try:
         same = isinstance(store, Store) and os.path.samefile(store.root, root)
@@ -304,12 +308,13 @@ def base_errors(root: str, store: Store, base: str, is_resolved: Callable[[dict]
             mb_ids.add(rid)
         else:
             rid = posixpath.basename(file)[:-len(".yml")]
+        new = migrations.migrate(store.kind, row)
         cur = now_by_file.get(file)
         if cur is None:
             if not may_delete(row):
                 out.append(("deleted." + rid, "%s exists on %s; records on the base branch are never deleted"
                             % (file, base)))
-        elif is_resolved(row) and not _same(row, cur.row):
+        elif is_resolved(new) and not _same(new, migrations.migrate(store.kind, cur.row)):
             if store.kind == "decision":
                 remedy = "record the change as a new decision with supersedes: " + rid
             else:
@@ -317,12 +322,14 @@ def base_errors(root: str, store: Store, base: str, is_resolved: Callable[[dict]
             out.append(("immutable." + rid, "resolved records are immutable; " + remedy))
     tip: dict = {}
     for _, row in _records_at(root, base, store.directory, base, ""):
+        row = migrations.migrate(store.kind, row)
         if type(row.get("id")) is str:
             tip.setdefault(row["id"], []).append(row)
     seen = set()
     for rec in now:
         if type(rec.id) is str and rec.id not in mb_ids and rec.id not in seen and rec.id in tip:
-            if any(not _same(rec.row, other) for other in tip[rec.id]):
+            mine = migrations.migrate(store.kind, rec.row)
+            if any(not _same(mine, other) for other in tip[rec.id]):
                 seen.add(rec.id)
                 out.append(("collision." + rec.id, "id %s already exists on %s; mint a new id" % (rec.id, base)))
     return out

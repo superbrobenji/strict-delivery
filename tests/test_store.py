@@ -1,6 +1,7 @@
 """Tests for the one-file-per-record store (gates.lib.store) on real directories and real git repositories.
 Expected suffix lists and file contents are written out per scenario, not derived from the code under test."""
 import contextlib
+import inspect
 import io
 import os
 import stat
@@ -8,7 +9,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from gates.lib import config, decisions, store as store_mod, yamlsub
+from gates.lib import config, decisions, migrations, schema, store as store_mod, yamlsub
 from gates.lib.result import GateError, Result, repo_root, run_check, run_gate
 from gates.lib.store import Record, Store, base_errors, store_errors
 from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms,
@@ -1302,3 +1303,299 @@ class UnusableStoreRootTest(GitCase):
                 s.root = bad
                 out = run_check("x", lambda a: base_errors(self.root, s, "main", resolved, never), []).render(False)
                 self.assertEqual(out, "FAIL x.input: " + self.WANT % (shown, self.root) + "\n")
+
+
+OLD = "decision/1"  # exempt literal (Global Constraints "Test fixtures"): these tests are about an old version
+ANSWER = {"class": "scope", "answer": "Yes", "rule": "Keep X."}
+
+
+def v1(id_, status="answered", **more):
+    return {**row(id_, status, **ANSWER, **more), "schema": OLD}
+
+
+def v2(id_, status="answered", **more):
+    return row(id_, status, **ANSWER, **more)
+
+
+class BaseErrorsMigrateTest(GitCase):
+    """Task 2a.1: rows at the merge base and at the tip of base are migrated before comparing (F-1, spec 7.2);
+    a tree row equal to its base row before or after migration is unchanged (owner Q-2a1-2 (a))."""
+
+    def mb_errs(self, base_row, tree_row, is_resolved=decisions.is_resolved, may_delete=never):
+        """``base_row`` committed on main, ``tree_row`` in the working tree (None: deleted); base HEAD."""
+        self.put(A, base_row)
+        commit_all(self.root, "base")
+        if tree_row is None:
+            os.remove(os.path.join(self.root, DIR, A + ".yml"))
+        else:
+            self.put(A, tree_row)
+        return base_errors(self.root, self.store, "HEAD", is_resolved, may_delete)
+
+    def tip_errs(self, tip_row, branch_row):
+        """main and feature fork from the fixture commit; main adds ``tip_row`` as C, feature ``branch_row``."""
+        self.fork()
+        self.put(C, branch_row)
+        commit_all(self.root, "feature adds C")
+        git(self.root, "checkout", "-q", "main")
+        self.put(C, tip_row)
+        commit_all(self.root, "main adds C")
+        git(self.root, "checkout", "-q", "feature")
+        return base_errors(self.root, self.store, "main", decisions.is_resolved, never)
+
+    def test_fixture_tags(self):  # the fixtures are what the rows name: an old and the current version
+        self.assertEqual(migrations.migrate("decision", v1(A)), v2(A))
+        self.assertNotEqual(OLD, DTAG)
+
+    def test_migrated_answered_record_is_not_immutable(self):  # B1, F-1
+        errs = self.mb_errs(v1(A), v2(A))
+        self.assertFalse(any(s.startswith("immutable.") for s, _ in errs))
+        self.assertEqual(errs, [])
+        self.assertEqual(self.mb_errs(v1(A, "withdrawn"), v2(A, "withdrawn")), [])
+
+    def test_migrated_and_edited_record_is_immutable(self):  # B2
+        errs = self.mb_errs(v1(A), {**v2(A), "answer": "No"})
+        self.assertIn("immutable." + A, [s for s, _ in errs])
+        self.assertEqual(errs, [("immutable." + A, "resolved records are immutable; record the change as a new "
+                                 "decision with supersedes: " + A)])
+
+    def test_migrated_with_overrides_added_is_immutable(self):  # B3, spec 7.2
+        self.assertEqual([s for s, _ in self.mb_errs(v1(A), {**v2(A), "overrides": "SD-R2"})], ["immutable." + A])
+
+    def test_unmigrated_edited_record_is_immutable(self):  # B2: a change without migration is still a change
+        self.assertEqual([s for s, _ in self.mb_errs(v1(A), {**v1(A), "answer": "No"})], ["immutable." + A])
+
+    def test_open_record_changed_is_not_immutable(self):  # B4
+        self.assertEqual(self.mb_errs(v1(A, "open"), {**v2(A, "open"), "answer": "No"}), [])
+
+    def test_malformed_base_tag_compared_as_it_stands(self):  # B5: unmigratable, fail closed
+        bad = {**v1(A), "schema": "decision/01"}
+        cases = (("changed", {**bad, "answer": "No"}, ["immutable." + A]),
+                 ("tag only", {**bad, "schema": DTAG}, ["immutable." + A]),
+                 ("unchanged", bad, []))
+        for name, tree, want in cases:
+            with self.subTest(name):
+                self.assertEqual([s for s, _ in self.mb_errs(bad, tree)], want)
+
+    def test_unmigrated_tree_row_equal_to_base_is_unchanged(self):  # B6, B9; owner Q-2a1-2 (a)
+        with self.subTest("merge-base"):
+            errs_mb = self.mb_errs(v1(A), v1(A))
+            self.assertFalse(any(s.startswith("immutable.") for s, _ in errs_mb))
+            self.assertEqual(errs_mb, [])
+        with self.subTest("tip"):
+            errs_tip = self.tip_errs(v2(C), v1(C))
+            self.assertFalse(any(s.startswith("collision.") for s, _ in errs_tip))
+            self.assertEqual(errs_tip, [])
+
+    def test_migrated_tip_row_is_no_collision(self):  # B7
+        errs = self.tip_errs(v1(C), v2(C))
+        self.assertFalse(any(s.startswith("collision.") for s, _ in errs))
+        self.assertEqual(errs, [])
+
+    def test_collision_after_migration(self):  # B8: a real difference is a collision whatever the versions
+        for name, tip, branch in (("v1 tip", v1(C, note="main"), v2(C, note="branch")),
+                                  ("v2 tip", v2(C, note="main"), v1(C, note="branch")),
+                                  ("both v2", v2(C, note="main"), v2(C, note="branch"))):
+            with self.subTest(name):
+                errs = self.tip_errs(tip, branch)
+                self.assertEqual(errs, [("collision." + C, "id %s already exists on main; mint a new id" % C)])
+                git(self.root, "checkout", "-q", "main")
+                git(self.root, "reset", "-q", "--hard", "HEAD~1")
+                git(self.root, "branch", "-q", "-D", "feature")
+
+    def test_deleted_gets_unmigrated_base_row(self):  # B10
+        seen = []
+
+        def spy(r):
+            seen.append(r)
+            return False
+        errs = self.mb_errs(v1(A), None, may_delete=spy)
+        self.assertEqual(seen, [v1(A)])
+        self.assertEqual(errs, [("deleted." + A, "%s/%s.yml exists on HEAD; records on the base branch are never "
+                                 "deleted" % (DIR, A))])
+
+    def test_is_resolved_gets_migrated_base_row(self):  # B11
+        seen = []
+
+        def spy(r):
+            seen.append(r)
+            return decisions.is_resolved(r)
+        self.assertEqual(self.mb_errs(v1(A), {**v2(A), "answer": "No"}, is_resolved=spy),
+                         [("immutable." + A, "resolved records are immutable; record the change as a new decision "
+                           "with supersedes: " + A)])
+        self.assertEqual(seen, [v2(A)])
+
+    def test_finding_store_migrates_with_its_own_kind(self):  # B12
+        fstore = Store(self.root, "finding", self.cfg)
+        ftag = "finding/%d" % migrations.current_version("finding")
+        closed = {"schema": ftag, "id": FID, "status": "closed"}
+        self.put(FID, closed, rel=FDIR)
+        commit_all(self.root, "finding")
+        fres = lambda r: r["status"] in ("closed", "merged")
+        self.assertEqual(base_errors(self.root, fstore, "HEAD", fres, never), [])
+        self.put(FID, {**closed, "status": "merged"}, rel=FDIR)
+        self.assertEqual([s for s, _ in base_errors(self.root, fstore, "HEAD", fres, never)], ["immutable." + FID])
+        # a step registered for findings is applied to finding rows (the store's kind, not a fixed one)
+        cur = migrations.current_version("finding")
+
+        def step(r):
+            return {**r, "schema": "finding/%d" % (cur + 1)}
+        real = migrations.current_version
+        with mock.patch.dict(migrations.MIGRATIONS, {("finding", cur): step}), \
+                mock.patch.object(migrations, "current_version",
+                                  side_effect=lambda k: cur + 1 if k == "finding" else real(k)):
+            self.put(FID, {**closed, "schema": "finding/%d" % (cur + 1)}, rel=FDIR)
+            self.assertEqual(base_errors(self.root, fstore, "HEAD", fres, never), [])
+            self.put(FID, {**closed, "schema": "finding/%d" % (cur + 1), "status": "merged"}, rel=FDIR)
+            self.assertEqual([s for s, _ in base_errors(self.root, fstore, "HEAD", fres, never)],
+                             ["immutable." + FID])
+
+    def test_finding_kind_on_every_migrate_call(self):  # B12: tree rows and tip rows migrate with the store's kind
+        fstore = Store(self.root, "finding", self.cfg)
+        cur = migrations.current_version("finding")
+        old = {"schema": "finding/%d" % cur, "id": FID, "status": "closed"}
+        new = {**old, "schema": "finding/%d" % (cur + 1)}
+        fres = lambda r: r["status"] in ("closed", "merged")
+        real = migrations.current_version
+
+        def run(base):
+            with mock.patch.dict(migrations.MIGRATIONS, {("finding", cur): lambda r: {**r, "schema": new["schema"]}}), \
+                    mock.patch.object(migrations, "current_version",
+                                      side_effect=lambda k: cur + 1 if k == "finding" else real(k)):
+                return base_errors(self.root, fstore, base, fres, never)
+        self.put(FID, new, rel=FDIR)
+        commit_all(self.root, "finding at the new version")
+        self.put(FID, old, rel=FDIR)  # merge base: the tree row is older than the base row
+        self.assertEqual(run("HEAD"), [])
+        self.put(FID, new, rel=FDIR)
+        self.fork()
+        for name, tip, branch in (("tip old", old, new), ("tip new", new, old)):
+            with self.subTest(name):
+                self.put(FID2, {**branch, "id": FID2}, rel=FDIR)
+                commit_all(self.root, "feature adds FID2")
+                git(self.root, "checkout", "-q", "main")
+                self.put(FID2, {**tip, "id": FID2}, rel=FDIR)
+                commit_all(self.root, "main adds FID2")
+                git(self.root, "checkout", "-q", "feature")
+                self.assertEqual(run("main"), [])
+                git(self.root, "reset", "-q", "--hard", "HEAD~1")
+                git(self.root, "checkout", "-q", "main")
+                git(self.root, "reset", "-q", "--hard", "HEAD~1")
+                git(self.root, "checkout", "-q", "feature")
+
+    def test_code_point_whose_category_changed(self):  # PC1-U: U+1F6DC is Cn in Unicode 13 (3.9), So in 15.1 (3.13)
+        ch = "\U0001F6DC"
+        cases = (("migrated, same text", v2(A, note=ch), []),
+                 ("unmigrated, same text", v1(A, note=ch), []),
+                 ("migrated, other code point", v2(A, note="\U0001F6DD"), ["immutable." + A]))
+        for name, tree, want in cases:
+            with self.subTest(name):
+                self.assertEqual([s for s, _ in self.mb_errs(v1(A, note=ch), tree)], want)
+
+    def test_signature_and_order(self):  # B13, L1: signature unchanged; root and store-root checks first
+        self.assertEqual(list(inspect.signature(base_errors).parameters),
+                         ["root", "store", "base", "is_resolved", "may_delete"])
+        self.put(A, v1(A))
+        commit_all(self.root, "base")
+        sub = os.path.join(self.root, "pkg")
+        os.mkdir(sub)
+        foreign = Store(self.clone(), "decision", self.cfg)
+        with mock.patch.object(migrations, "migrate", side_effect=AssertionError("migrate called")):
+            with self.assertRaises(GateError) as e:
+                base_errors(sub, self.store, "HEAD", decisions.is_resolved, never)
+            self.assertEqual(str(e.exception), TOP)
+            with self.assertRaises(GateError) as e:
+                base_errors(self.root, foreign, "HEAD", decisions.is_resolved, never)
+            self.assertIn("is not the root given", str(e.exception))
+            with self.assertRaisesRegex(AssertionError, "migrate called"):  # reached once both checks pass
+                base_errors(self.root, self.store, "HEAD", decisions.is_resolved, never)
+
+    def clone(self):
+        dest = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", "--", self.root, dest)
+        return dest
+
+    def test_schema_error_from_migrate_passes_through(self):  # B14
+        self.put(A, v1(A))
+        commit_all(self.root, "base")
+        broken = os.path.join(self.tmp, "schemas")
+        os.mkdir(broken)
+        with open(os.path.join(broken, "decision.yml"), "w", encoding="utf-8") as fh:
+            fh.write("version: [\n")
+        with mock.patch.object(schema, "SCHEMAS_DIR", broken):
+            with self.assertRaises(schema.SchemaError):
+                base_errors(self.root, self.store, "HEAD", decisions.is_resolved, never)
+
+
+class RowChangedMigrateTest(GitIsolatedTestCase):
+    """Store fix round 1 F1 (Q-2a1s-1 (a)): ``_row_changed`` compares rows as ``base_errors`` does, after
+    migrating both sides with the store's kind; driven through ``gate_register.main`` with a finding step
+    patched in (no finding step exists yet)."""
+    LINE = "FAIL register.evidence.%s: evidence.0: src/x.py is not a tracked regular file"
+
+    def setUp(self):
+        super().setUp()
+        from tests import test_gate_register as tgr
+        self.tgr = tgr
+        self.cur = migrations.current_version("finding")
+        self.old = "finding/%d" % self.cur
+        self.new = "finding/%d" % (self.cur + 1)
+
+    def patched(self):
+        real = migrations.current_version
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.dict(migrations.MIGRATIONS,
+                                            {("finding", self.cur): lambda r: {**r, "schema": self.new}}))
+        stack.enter_context(mock.patch.object(migrations, "current_version",
+                                              side_effect=lambda k: self.cur + 1 if k == "finding" else real(k)))
+        return stack
+
+    def evidence(self, name, base_row, tree_row):
+        """``base_row`` (a closed finding citing src/x.py) on main; on the branch src/x.py is removed and the
+        row is ``tree_row``. The ``register.evidence`` lines of the gate, run with the finding step."""
+        tgr = self.tgr
+        work = os.path.join(self.tmp, name)
+        os.mkdir(work)
+        root = make_repo(work)
+        write_record(root, tgr.fpath(tgr.F), base_row)
+        write_record(root, "src/x.py", "x")
+        commit_all(root, "fixture")
+        git(root, "checkout", "-q", "-b", "feat")
+        git(root, "rm", "-q", "src/x.py")
+        write_record(root, tgr.fpath(tgr.F), tree_row)
+        commit_all(root, "branch")
+        with self.patched():
+            out, _ = tgr.run_argv(["--root", root])
+        return [ln for ln in out.splitlines() if ln.startswith("FAIL register.evidence.")]
+
+    def test_migrated_but_equal_finding_is_not_changed(self):  # F1 (a)
+        row = self.tgr.frow(self.tgr.F, "closed")
+        cases = (("migrated", self.old, {**row, "schema": self.new}),
+                 ("unmigrated-equal", self.old, {**row, "schema": self.old}),
+                 ("tree-older", self.new, {**row, "schema": self.old}))
+        for name, base_tag, tree in cases:
+            with self.subTest(name):
+                self.assertEqual(self.evidence(name, {**row, "schema": base_tag}, tree), [])
+
+    def test_migrated_and_edited_finding_is_changed(self):  # F1 (b)
+        row = self.tgr.frow(self.tgr.F, "closed")
+        for name, tree in (("migrated-edited", {**row, "schema": self.new, "class": "other"}),
+                           ("migrated-type-only", {**row, "schema": self.new, "review_round": True})):
+            with self.subTest(name):
+                base = {**row, "review_round": 1} if name == "migrated-type-only" else row
+                self.assertEqual(self.evidence(name, {**base, "schema": self.old}, tree),
+                                 [self.LINE % self.tgr.F])
+
+    def test_invariants_of_the_replaced_comparison(self):  # I1-I5, through the helper as gate_register calls it
+        r = {"schema": self.old, "id": FID, "status": "closed", "n": 1}
+        f = FDIR + "/%s.yml" % FID
+        at = {f: r}
+        with self.patched():
+            for name, rec, want in (
+                    ("I1 missing at the merge base", Record(FID, r, f), True),
+                    ("I2 identical", Record(FID, dict(r), f), False),
+                    ("I3 a field changed", Record(FID, {**r, "n": 2}, f), True),
+                    ("I4 renamed", Record(FID, r, FDIR + "/y.yml"), True),
+                    ("I5 type-strict", Record(FID, {**r, "n": True}, f), True)):
+                with self.subTest(name):
+                    got = store_mod._row_changed(rec, {} if name.startswith("I1") else at, "finding")
+                    self.assertIs(got, want)
