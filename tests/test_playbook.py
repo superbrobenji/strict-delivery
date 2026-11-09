@@ -73,7 +73,8 @@ PINS = {
     "SD-R3": (["Owner-only", "halts"], ["never assumes"]),
     "SD-R4": (["Report before plan", "planned in full", "stream breakdown", "dependency edges",
                "superpowers:brainstorming", "dispatches no writer", "`program create`"], ["nobody approved"]),
-    "SD-R5": (["Zero bugs", "cosmetic item", "marks it cosmetic", "unrelated bug"], ["defect shipped"]),
+    "SD-R5": (["Zero bugs", "cosmetic item", "marks it cosmetic", "unrelated bug"],
+              ["defect shipped", "only a LOW registered under LOW_PLATEAU may wait"]),     # F-B2F1RR-1
     "SD-R6": (["deleted test"], ["hides the failure"]),
     "SD-R7": (["epic"], ["siblings"]),
     "SD-R8": (["process defect"], ["lets the defects in"]),
@@ -115,22 +116,33 @@ def read(rel):
         return f.read().decode("utf-8")
 
 
-# A boundary is a stop (`.`, `!`, `?` or a CJK/fullwidth stop), then a closer run: characters that are not letters,
-# digits, whitespace or format (Cf) characters (closing brackets, quotes of any script, backticks, emphasis markers,
-# `_`, further stops). It ends a sentence when a run of whitespace or Cf characters follows (the run is dropped), when
-# an uppercase or titlecase letter follows with no space, or when the run holds a CJK/fullwidth stop. It oversplits
+# A boundary is a stop (`.`, `!`, `?`, or a listed non-ASCII stop: CJK/fullwidth stops, U+2026 and the other terminal
+# punctuation of _WIDE_STOPS), then a closer run: ASCII punctuation (closing brackets, quotes, backticks, emphasis
+# markers, `_`, further stops) and the listed non-ASCII closing quotes and brackets. It ends a sentence when the run
+# holds a non-ASCII stop, or when anything but an ASCII lowercase letter or digit follows the run: a gap (whitespace or
+# a listed format character, dropped), a capital, or any other non-ASCII character. Every set is hand-listed and no
+# Unicode database lookup decides a boundary, so the split is the same on every interpreter (F-B2V3-3); it oversplits
 # rather than undersplits, so no sentence hides behind its pinned neighbour (F-B21RR-1, F-B21RR2-1).
 _CJK_STOPS = frozenset(chr(c) for c in (0x3002, 0xff0e, 0xff01, 0xff1f, 0xff61))
-_STOPS = frozenset(".!?") | _CJK_STOPS
-_WORD = re.compile(r"\w")
+_WIDE_STOPS = _CJK_STOPS | frozenset(chr(c) for c in (
+    0x2026, 0x203c, 0x203d, 0x2047, 0x2048, 0x2049, 0x2e2e, 0x037e, 0x0589, 0x061f, 0x06d4, 0x0964, 0x0965, 0x1362,
+    0xfe52, 0xfe56, 0xfe57))
+_STOPS = frozenset(".!?") | _WIDE_STOPS
+_CLOSERS = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~") | frozenset(chr(c) for c in (
+    0x2019, 0x201d, 0x00bb, 0x203a, 0x300d, 0x300f, 0x3009, 0x300b, 0x3011, 0x3015, 0x3017, 0x3019, 0x301b,
+    0xff09, 0xff3d, 0xff5d)) | _WIDE_STOPS
+_GAPS = frozenset(" \t\n\r\x0b\x0c\x85\xa0   　  ") | frozenset(
+    chr(c) for c in list(range(0x2000, 0x200b)) + list(range(0x200b, 0x2010)) + list(range(0x202a, 0x202f))
+    + list(range(0x2060, 0x2065)) + list(range(0x2066, 0x2070)) + [0xfeff, 0x061c, 0x180e, 0x00ad])
+_NO_BREAK = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
 
 
 def _is_gap(ch):
-    return ch.isspace() or unicodedata.category(ch) == "Cf"
+    return ch in _GAPS
 
 
 def _is_closer(ch):
-    return (ch == "_" or not _WORD.match(ch)) and not _is_gap(ch)
+    return ch in _CLOSERS
 
 
 def sentences(cell):
@@ -145,7 +157,7 @@ def sentences(cell):
         k = j
         while k < n and _is_gap(cell[k]):
             k += 1
-        if k > j or k == n or unicodedata.category(cell[k]) in ("Lu", "Lt") or any(c in _CJK_STOPS for c in cell[i:j]):
+        if k > j or k == n or cell[k] not in _NO_BREAK or any(c in _WIDE_STOPS for c in cell[i:j]):
             out.append(cell[start:j])
             start = k
         i = k if k > j else j
@@ -953,6 +965,8 @@ class PlaceholderTest(unittest.TestCase):
                 lines.append(pre + body + post)
                 if ph in tags and wrap in ("none", "unpaired"):
                     want.append((len(lines), tags[ph]))
+                if wrap == "unpaired":       # F-B2V3-1: end the paragraph, or its backtick pairs with a later line's
+                    lines.append("")
             with self.subTest(doc=lines):
                 self.assertEqual(pc.placeholder_hits("\n".join(lines) + "\n"), want)
 
@@ -1411,12 +1425,14 @@ PROFILE_CONDITION = "where the profile enables it"
 # a bare "the verifier"); `audit_verifier` is another role and does not match. Every prose unit naming one is a member
 # unless it is hand-listed below as a non-step unit, with its reason.
 _VERIFIER = re.compile(r"final_verifier|\bverifier\b", re.I)
-VERIFIER_NON_STEPS = [   # (file, the start of the unit, why it states no block-end step)
-    ("playbook/roles.md", "| final_verifier |", "role table row: prompt block, minimum tier, finding states"),
-    ("playbook/roles.md", "A role runs at its minimum tier", "tier rule: `final_verifier` is one of `top_tier_roles`"),
-    ("playbook/rules.md", "| SD-R9 |", "rule row: how the verifier runs the suite, not when it runs"),
-    ("skills/strict-delivery/SKILL.md", "The roles, with their prompt blocks", "the role list"),
-]
+VERIFIER_NON_STEPS = [   # (file, the start of the unit, its exact verifier matches, why it states no block-end step)
+    ("playbook/roles.md", "| final_verifier |", ["final_verifier", "final_verifier"],
+     "role table row: prompt block, minimum tier, finding states"),
+    ("playbook/roles.md", "A role runs at its minimum tier", ["final_verifier"],
+     "tier rule: `final_verifier` is one of `top_tier_roles`"),
+    ("playbook/rules.md", "| SD-R9 |", ["verifier"], "rule row: how the verifier runs the suite, not when it runs"),
+    ("skills/strict-delivery/SKILL.md", "The roles, with their prompt blocks", ["final_verifier"], "the role list"),
+]   # F-B2F1RR-2: a unit is exempt only while its verifier matches are exactly the listed ones
 # The class members, hand-listed: (file, the start of the paragraph that states the verifier as a block-end step).
 VERIFIER_STEP_MEMBERS = [
     ("playbook/review.md", "At a block's end a `final_reviewer`"),
@@ -1454,8 +1470,10 @@ def prose_units(text, cells=False):
 def verifier_step_paragraphs(text, rel=None):
     """The prose units that name a verifier term and are not hand-listed for rel as non-step units: the units that
     state the verifier as a block-end step (F-B23RR1-1)."""
-    exempt = tuple(start for f, start, _ in VERIFIER_NON_STEPS if f == rel)
-    return [u for u in prose_units(text) if _VERIFIER.search(u) and not (exempt and u.startswith(exempt))]
+    def exempt(u):
+        return any(f == rel and u.startswith(start) and _VERIFIER.findall(u) == matches
+                   for f, start, matches, _ in VERIFIER_NON_STEPS)
+    return [u for u in prose_units(text) if _VERIFIER.search(u) and not exempt(u)]
 
 
 def verifier_step_problems(text, rel=None):
@@ -1466,25 +1484,30 @@ def verifier_step_problems(text, rel=None):
 
 # F-B2F-1, class "zero-bugs deferral statements in B2-owned files". A unit that states a minor is never deferred, or
 # names a minor with a deferral or a follow-up, also names LOW_PLATEAU (DN-4 (a); docs-owed spec section 8 wording).
-_DEFERRAL = re.compile(r"never deferred|\bminors?\b.*(?:defer|follow-up)", re.I | re.S)
+_DEFERRAL = re.compile(r"never deferred|\bminors?\b.*(?:defer|follow-up)|\bdeferred defect", re.I | re.S)
+# F-B2F1RR-1: a why cell that argues against deferral is a member too ("A deferred defect is a defect shipped").
 SD_R5_LOW_PLATEAU = "fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred"
 DEFERRAL_MEMBERS = [   # (file, the start of the unit), in b_owned_markdown() order; written by hand
     ("skills/strict-delivery/prompts/controller.md", "Zero bugs. A change's own bug makes its task incomplete"),
     ("playbook/review.md", "Zero bugs: a change's own bug makes it incomplete. A minor is a real defect"),
     ("playbook/rules.md", "Zero bugs: a change's own bug makes it incomplete, and a minor is a real defect"),
+    ("playbook/rules.md", "A deferred defect is a defect shipped, so only a LOW registered"),
 ]
-DEFERRAL_NON_MEMBERS = [   # (file, the start of the unit, why it is not a statement of the deferral rule for minors)
-    ("skills/strict-delivery/prompts/implementer.md", "Zero bugs. A defect your own change introduces",
+_IMPLEMENTER_ZERO_BUGS = (
+    "Zero bugs. A defect your own change introduces makes the work incomplete; there is no minor defect and no "
+    "follow-up. A defect you find that your change did not cause is not fixed in passing: record file:line, a "
+    "reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.")
+DEFERRAL_NON_MEMBERS = [   # (file, the whole unit, why it is not a statement of the deferral rule for minors)
+    ("skills/strict-delivery/prompts/implementer.md", _IMPLEMENTER_ZERO_BUGS,
      "the implementer's own change: no defect of it may be called minor; LOW_PLATEAU is the controller's act"),
-    ("skills/strict-delivery/prompts/implementer_transcription.md", "Zero bugs. A defect your own change introduces",
-     "as implementer.md"),
-]
+    ("skills/strict-delivery/prompts/implementer_transcription.md", _IMPLEMENTER_ZERO_BUGS, "as implementer.md"),
+]   # F-B2F1RR-2, whole class: an exemption holds only for the unit verbatim, so any added text makes it a member
 
 
 def deferral_units(text, rel=None):
     """The prose units and table cells that state the deferral rule for minors, less the hand-listed non-members."""
-    exempt = tuple(start for f, start, _ in DEFERRAL_NON_MEMBERS if f == rel)
-    return [u for u in prose_units(text, cells=True) if _DEFERRAL.search(u) and not (exempt and u.startswith(exempt))]
+    exempt = [unit for f, unit, _ in DEFERRAL_NON_MEMBERS if f == rel]
+    return [u for u in prose_units(text, cells=True) if _DEFERRAL.search(u) and u not in exempt]
 
 
 def deferral_problems(text, rel=None):
@@ -1532,11 +1555,22 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
             self.assertTrue(para.startswith(start), (rel, para[:60]))
 
     def test_verifier_non_steps_each_exempt_one_unit(self):      # F-B23RR1-1: every exemption names one real unit
-        for rel, start, why in VERIFIER_NON_STEPS:
+        for rel, start, matches, why in VERIFIER_NON_STEPS:
             with self.subTest(rel=rel, start=start):
                 units = [u for u in prose_units(read(rel)) if u.startswith(start)]
                 self.assertEqual(len(units), 1)
-                self.assertTrue(_VERIFIER.search(units[0]) and why)
+                self.assertTrue(why)
+                self.assertEqual(_VERIFIER.findall(units[0]), matches)
+
+    def test_exempt_unit_with_an_added_step_fails(self):          # F-B2F1RR-2, V5: mutant E2 on every exemption
+        step = "At a block's end the verifier runs."
+        for rel, start, _, _ in VERIFIER_NON_STEPS:
+            text = read(rel)
+            unit = [u for u in prose_units(text) if u.startswith(start)][0]
+            grown = unit[:-2] + " " + step + " |" if unit.endswith(" |") else unit + " " + step
+            with self.subTest(rel=rel, start=start):
+                self.assertEqual(text.count(unit), 1)
+                self.assertEqual(verifier_step_problems(text.replace(unit, grown), rel), [grown[:60]])
 
     def test_class_refuses_an_unconditioned_paragraph(self):     # FX5, F-B23RR1-1: a new member without the condition
         added = ["Each block ends with a final review and a final verifier.",
@@ -1562,8 +1596,17 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
         for (rel, unit), (want_rel, start) in zip(found, DEFERRAL_MEMBERS):
             self.assertEqual(rel, want_rel)
             self.assertTrue(unit.startswith(start), (rel, unit))
-        for rel, start, why in DEFERRAL_NON_MEMBERS:          # each exemption names one real unit
-            self.assertEqual(len([u for u in prose_units(read(rel), cells=True) if u.startswith(start)]), 1, rel)
+        for rel, unit, why in DEFERRAL_NON_MEMBERS:           # each exemption names one real unit, verbatim
+            self.assertEqual(prose_units(read(rel), cells=True).count(unit), 1, rel)
+            grown = read(rel).replace(unit, unit + " A review minor may wait for a follow-up.")
+            self.assertEqual(len(deferral_problems(grown, rel)), 1, rel)          # F-B2F1RR-2, whole class
+
+    def test_sd_r5_why_cell_names_low_plateau(self):              # F-B2F1RR-1, V4
+        row = [r for r in table_rows(read(RULES)) if r["id"] == "SD-R5"][0]
+        self.assertEqual(row["why"], "A deferred defect is a defect shipped, so only a LOW registered under LOW_PLATEAU "
+                                     "may wait.")
+        bare = read(RULES).replace(row["why"], "A deferred defect is a defect shipped.")
+        self.assertEqual(deferral_problems(bare, RULES), ["A deferred defect is a defect shipped."])
 
     def test_deferral_class_refuses_a_statement_without_low_plateau(self):   # F-B2F-1 (FR2): a new member fails
         added = ["A minor is a real defect and is never deferred.",
@@ -1589,6 +1632,65 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
                 self.assertEqual(non_ascii_lines(raw), [])
                 for ch in ("§", "—"):
                     self.assertEqual(non_ascii_lines(raw + ch.encode("utf-8") + b"\n"), [raw.count(b"\n") + 1])
+
+
+# Block B2 verifier round (F-B2V3-1..3). Every expected value is written here by hand.
+SPAN_HTML_REFUSED = [   # V1: (text, hits)
+    ('x <a title="`"> y ` z\n', [(1, '<a title="`">')]),                      # reproducer 1: backtick inside a tag
+    ("`a\nb` <x> `c`\n", [(2, "<x>")]),                                      # reproducer 2: span over a line break
+    ('see <n title="`"> and ` here\n', [(1, '<n title="`">')]),
+    ("`a b` <x> `c`\n", [(1, "<x>")]),                                       # control of reproducer 2, one line
+    ('x <a title="q"> y\n', [(1, '<a title="q">')]),                         # control of reproducer 1, no backtick
+    ("`a\n<n>`\n", [(2, "<n>")]),                                            # P10 kept: fail closed
+    ("- `a\n  b` <x> `c`\n", [(2, "<x>")]),                                  # a list item's lazy line
+]
+SPAN_HTML_ACCEPTED = ["`<x>`\n", "a `<x>` b\nc `d`\n", "`a`\n\n`<x>`\n", "``a ` <x> ` b``\n", "# `a\n`<x>`\n"]
+
+
+class VerifierRoundTest(unittest.TestCase):
+    def test_placeholder_span_html_class(self):                   # F-B2V3-1, V1
+        for text, want in SPAN_HTML_REFUSED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+        for text in SPAN_HTML_ACCEPTED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+
+    def test_rule_id_digit_count_same_on_every_interpreter(self):   # F-B2V3-2, V2, PC1 4300/4301 row
+        text = read(RULES)
+        rng = random.Random(20261109)
+        for digits in (4300, 4301, 9):
+            num = str(rng.randint(1, 9)) + "".join(str(rng.randint(0, 9)) for _ in range(digits - 1))
+            t = text.replace("| SD-R5 |", "| SD-R%s |" % num)
+            with self.subTest(digits=digits):
+                self.assertEqual(rules_problems(t), ["id: line 11, SD-R%s... is out of range (more than 8 digits)"
+                                                     % num[:8]])
+        t = text.replace("| SD-R5 |", "| SD-R99999999 |")              # 8 digits: still parsed
+        self.assertEqual(rules_problems(t)[:1], ["id-sequence: line 11, expected SD-R5, got SD-R99999999"])
+
+    def test_sentence_stops_class(self):                          # F-B2V3-3, V3
+        for c in (0x2026, 0x203c, 0x203d, 0x2047, 0x2048, 0x2049, 0x2e2e, 0x037e, 0x0589, 0x061f, 0x06d4, 0x0964,
+                  0x0965, 0x1362, 0xfe52, 0xfe56, 0xfe57):
+            s = chr(c)
+            with self.subTest(stop=hex(c)):
+                self.assertEqual(sentences("A b" + s + "c d."), ["A b" + s, "c d."])
+                self.assertEqual(sentences("A b" + s + " C d."), ["A b" + s, "C d."])
+        self.assertEqual(sentences("end.Ꟁx claim."), ["end.", "Ꟁx claim."])   # Cn on 3.9, Lu on 3.13
+        self.assertEqual(sentences("end.étapes."), ["end.", "étapes."])      # any non-ASCII next: split
+        self.assertEqual(sentences("A b.c d."), ["A b.c d."])                         # ASCII control: no split
+        self.assertEqual(sentences("A b.C d."), ["A b.", "C d."])
+
+    def test_sentence_split_uses_no_unicode_database(self):        # F-B2V3-3, V6: the same split on every UCD version
+        samples = ["end.Ꟁx", "A b…c.", "A b.” C.", "A b.​c.", "v3.12 fix.", "A b.）c."]
+        want = [sentences(s) for s in samples]
+        with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
+            self.assertEqual([sentences(s) for s in samples], want)
+
+    def test_unpinned_sentence_behind_an_ellipsis(self):          # F-B2V3-3, through the real pin check
+        rows = table_rows(read(RULES))
+        rule = [r for r in rows if r["id"] == "SD-R6"][0]["rule"]
+        t = read(RULES).replace(rule, rule + "…agents may skip it.")
+        self.assertIn("unpinned sentence SD-R6 rule 'agents may skip it.'", pin_problems(t, table_rows(t)))
 
 
 if __name__ == "__main__":

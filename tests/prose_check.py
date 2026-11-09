@@ -451,8 +451,11 @@ def rules_problems(text):
             elif col != "id" and _RULE_ID_TOKEN.search(cells[col]):
                 problems.append("stray-id: line %d, column %r holds a rule id" % (n, col))
         rid = cells["id"]
-        if _RULE_ID.fullmatch(rid):
-            if int(rid[4:]) != expected:
+        if _RULE_ID.fullmatch(rid) and len(rid) > 12:     # F-B2V3-2: no int() on an unbounded digit string
+            problems.append("id: line %d, %s... is out of range (more than 8 digits)" % (n, rid[:12]))
+            expected += 1
+        elif _RULE_ID.fullmatch(rid):
+            if rid != "SD-R%d" % expected:
                 problems.append("id-sequence: line %d, expected SD-R%d, got %s" % (n, expected, rid))
             expected = int(rid[4:]) + 1
         else:
@@ -501,66 +504,110 @@ _ASCII_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 _MASK = "\0"
 
 
-def _mask_spans(line):
-    """The line with each code span replaced by NULs. Spans are found within the line: a backtick run opens a span
-    only when a run of the same length follows on the line; a backslash escape outside a span is kept as text."""
+def _span_ranges(s):
+    """(start, end) of each code span in s. A backtick run opens a span only when a later run of the same length
+    follows in s; a backslash escape outside a span is kept as text. s may hold line breaks (a paragraph)."""
     out = []
-    i, n = 0, len(line)
+    i, n = 0, len(s)
     while i < n:
-        c = line[i]
-        if c == "\\" and i + 1 < n and line[i + 1] in _ASCII_PUNCT:
-            out.append(line[i:i + 2])
+        c = s[i]
+        if c == "\\" and i + 1 < n and s[i + 1] in _ASCII_PUNCT:
             i += 2
             continue
         if c != "`":
-            out.append(c)
             i += 1
             continue
         j = i
-        while j < n and line[j] == "`":
+        while j < n and s[j] == "`":
             j += 1
         k = j
         close = -1
         while k < n:
-            if line[k] != "`":
+            if s[k] != "`":
                 k += 1
                 continue
             m = k
-            while m < n and line[m] == "`":
+            while m < n and s[m] == "`":
                 m += 1
             if m - k == j - i:
                 close = m
                 break
             k = m
         if close < 0:
-            out.append(line[i:j])
             i = j
         else:
-            out.append(_MASK * (close - i))
+            out.append((i, close))
             i = close
-    return "".join(out)
+    return out
+
+
+def _masked(s, ranges):
+    """s with every character inside the ranges, line breaks excepted, replaced by a NUL."""
+    chars = list(s)
+    for a, b in ranges:
+        for p in range(a, b):
+            if chars[p] != "\n":
+                chars[p] = _MASK
+    return "".join(chars)
+
+
+def _mask_spans(line):
+    """The line with each code span replaced by NULs; spans are found within the line (_span_ranges)."""
+    return _masked(line, _span_ranges(line))
+
+
+_BLOCK_LINE = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|\|)")
 
 
 def placeholder_hits(text):
-    """(line_no, match) for each raw-HTML open tag, closing tag or comment outside code spans and fenced blocks."""
+    """(line_no, match) for each raw-HTML open tag, closing tag or comment outside code spans and fenced blocks.
+    Fail closed (F-B2V3-1): code spans are paired two ways, within each line and across the lines of a paragraph (as
+    CommonMark pairs a span over a line break; a blank line, a fence, a heading or a table row ends a paragraph). A
+    construct is a hit when either pairing leaves it visible, or when it overlaps a span without lying wholly inside
+    it (a backtick inside a tag)."""
     _need_str(text, "placeholder_hits")
-    masked = []
+    base = []
     fence = None
     for line in text.split("\n"):
         if fence is not None:
             m = re.match(r" {0,3}(`{3,}|~{3,})[ \t]*$", line)
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 fence = None
-            masked.append("")
+            base.append("")
             continue
         m = _FENCE_OPEN.match(line)
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             fence = m.group(1)
-            masked.append("")
+            base.append("")
             continue
-        masked.append(_mask_spans(line))
-    joined = "\n".join(masked)
-    return [(joined.count("\n", 0, m.start()) + 1, m.group(0)) for m in _HTML.finditer(joined)]
+        base.append(line)
+    joined = "\n".join(base)
+    per_line, per_block, block, off = [], [], [], 0
+    starts = []
+    for line in base:
+        starts.append(off)
+        per_line += [(off + a, off + b) for a, b in _span_ranges(line)]
+        off += len(line) + 1
+    for idx, line in enumerate(base + [""]):
+        breaks = not line.strip() or _BLOCK_LINE.match(line)
+        if block and (breaks or idx == len(base)):
+            s0 = starts[block[0]]
+            per_block += [(s0 + a, s0 + b) for a, b in _span_ranges("\n".join(base[p] for p in block))]
+            block = []
+        if idx < len(base) and line.strip():
+            if _BLOCK_LINE.match(line):
+                per_block += [(starts[idx] + a, starts[idx] + b) for a, b in _span_ranges(line)]
+            else:
+                block.append(idx)
+    hits = {}
+    for ranges in (per_line, per_block):
+        for m in _HTML.finditer(_masked(joined, ranges)):
+            hits.setdefault(m.start(), m.group(0))
+    for m in _HTML.finditer(joined):
+        for ranges in (per_line, per_block):
+            if not any(a <= m.start() and m.end() <= b for a, b in ranges):
+                hits.setdefault(m.start(), m.group(0))
+    return [(joined.count("\n", 0, p) + 1, hits[p]) for p in sorted(hits)]
 
 
 # Front matter (owner Q-B22v2-1 (a)): a fail-closed whitelist, standard library only.
