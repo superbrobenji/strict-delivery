@@ -8,7 +8,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from gates.lib import config, store as store_mod, yamlsub
+from gates.lib import config, decisions, store as store_mod, yamlsub
 from gates.lib.result import GateError, Result, repo_root, run_check, run_gate
 from gates.lib.store import Record, Store, base_errors, store_errors
 from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms,
@@ -21,10 +21,11 @@ B = "DEC-20261031-m4n5"
 C = "DEC-20261031-p6q7"
 FID = "F-20261031-k3f9"
 FID2 = "F-20261031-m4n5"
+DTAG = "decision/%d" % decisions._schema().version  # Global Constraints "Test fixtures"
 
 
 def row(id_, status="open", **more):
-    r = {"schema": "decision/1", "id": id_, "status": status}
+    r = {"schema": DTAG, "id": id_, "status": status}
     r.update(more)
     return r
 
@@ -276,7 +277,7 @@ class LoadTest(Base):
         root, s = self.newstore()
         path = os.path.join(self.mkdir(root), A + ".yml")
         with open(path, "wb") as fh:
-            fh.write(b"\xef\xbb\xbfschema: decision/1\r\nid: " + A.encode() + b"\r\nstatus: open\r\n")
+            fh.write(b"\xef\xbb\xbfschema: " + DTAG.encode() + b"\r\nid: " + A.encode() + b"\r\nstatus: open\r\n")
         self.assertEqual([r.row for r in s.load()], [row(A)])
 
     def test_load_does_not_validate_fields(self):  # brief: the store never validates fields
@@ -341,7 +342,7 @@ class PathCreateReplaceTest(Base):
         with open(os.path.join(root, rel), "rb") as fh:
             self.assertEqual(
                 fh.read(),
-                b"schema: decision/1\nid: " + A.encode() + b"\nstatus: open\nnote: |\n  two\n  lines\n"
+                b"schema: " + DTAG.encode() + b"\nid: " + A.encode() + b"\nstatus: open\nnote: |\n  two\n  lines\n"
                 b"items:\n  - a\n  - b\nn: 3\nflag: true\n")
         self.assertEqual([x.row for x in s.load()], [r])
 
@@ -768,7 +769,7 @@ class BaseErrorsChangeTest(GitCase):
             "note: 'x'\n"
             "status: \"resolved\"\n"
             "id: " + B + "\r\n"
-            "schema: decision/1\n"
+            "schema: " + DTAG + "\n"
         )
         with open(path, "w", encoding="utf-8", newline="") as fh:
             fh.write(text)
@@ -805,7 +806,7 @@ class BaseErrorsChangeTest(GitCase):
     def test_key_added_or_removed_is_a_change(self):  # B5
         self.put(B, row(B, "resolved", note="x", extra="y"))
         self.assertEqual(self.suffixes(), ["immutable." + B])
-        self.put(B, {"schema": "decision/1", "id": B, "status": "resolved"})
+        self.put(B, {"schema": DTAG, "id": B, "status": "resolved"})
         self.assertEqual(self.suffixes(), ["immutable." + B])
 
     def test_uncommitted_edit_of_resolved_record(self):  # B8
@@ -888,7 +889,7 @@ class BaseErrorsCollisionTest(GitCase):
     def test_same_parsed_content_different_bytes_is_no_collision(self):  # B7 (parsed comparison, as B5)
         self.diverge(row(C, note="same"), row(C, note="same"))
         with open(os.path.join(self.root, DIR, C + ".yml"), "w", encoding="utf-8", newline="") as fh:
-            fh.write("# c\nstatus: open\nnote: 'same'\nid: %s\nschema: decision/1\n" % C)
+            fh.write("# c\nstatus: open\nnote: 'same'\nid: %s\nschema: %s\n" % (C, DTAG))
         self.assertEqual(self.errs(), [])
 
     def test_collision_is_against_tip_not_merge_base(self):  # B7
@@ -1013,7 +1014,7 @@ class BaseErrorsContentTest(GitCase):
     def test_base_record_with_bom_and_crlf_is_read(self):  # B6: read like Store.load reads
         self.mkdir(self.root)
         with open(os.path.join(self.root, DIR, A + ".yml"), "wb") as fh:
-            fh.write(b"\xef\xbb\xbfschema: decision/1\r\nid: " + A.encode() + b"\r\nstatus: resolved\r\n")
+            fh.write(b"\xef\xbb\xbfschema: " + DTAG.encode() + b"\r\nid: " + A.encode() + b"\r\nstatus: resolved\r\n")
         commit_all(self.root, "bom")
         self.fork()
         self.assertEqual(self.errs(), [])

@@ -259,6 +259,24 @@ def _records_at(root: str, ref: str, directory: str, base: str, where: str) -> l
     return out
 
 
+def _merge_base_rows(root: str, directory: str, base: str) -> dict:
+    """``{file: row}`` for every record file directly in ``directory`` at the merge base of ``base`` with HEAD,
+    read as ``base_errors`` reads it (Task 1c.2, M2); an unreadable one is a GateError naming
+    ``<base>:<file> (at the merge base)``."""
+    gitinfo._require_toplevel(root)
+    if type(base) is not str:
+        raise GateError("the base ref must be a string")
+    mb = gitinfo.merge_base(root, base, "HEAD")
+    return dict(_records_at(root, mb, directory, base, " (at the merge base)"))
+
+
+def _row_changed(rec: Record, at_mb: dict) -> bool:
+    """True when no record file exists at the merge base under ``rec.file`` (a rename is new) or its row there
+    differs from ``rec.row`` as ``base_errors`` compares rows (``_same``). A missing file reads as ``None``, which
+    ``_same`` never equates with a row (a mapping)."""
+    return not _same(at_mb.get(rec.file), rec.row)
+
+
 def base_errors(root: str, store: Store, base: str, is_resolved: Callable[[dict], bool],
                 may_delete: Callable[[dict], bool]) -> list:
     """``(suffix, reason)`` pairs from comparing the working tree with the base branch ``base``:
