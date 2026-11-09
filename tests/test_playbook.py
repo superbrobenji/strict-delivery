@@ -1347,6 +1347,14 @@ class PlaybookFilesTest(unittest.TestCase):
                   "the loop ends", "registered", "always fixed"):
             self.assertIn(s.lower(), body.lower())
 
+    def test_review_rule_t_weighted_tally(self):                  # owner Q-CONV-1 (a): Rule T on the weighted tally
+        body = pc.section(read("playbook/review.md"), "Rules N and T")
+        for s in ("weighs 8 (CRITICAL), 4 (HIGH), 2 (MEDIUM) or 1 (LOW)", "`N = sum W_i`", "`S = sum (i-1) W_i`",
+                  "the LOW run", "is at least 2", "`E_next` and `N` are the weighted tally's"):
+            self.assertIn(s, body)
+        for s in ("`N = sum X_i`", "`S = sum (i-1) X_i`"):
+            self.assertNotIn(s, body)                                 # the plain-count text is refused
+
     def test_review_rules_n_t_and_methods(self):                  # R3, R4, R6
         t = read("playbook/review.md")
         self.assertIn("`class: <dimension>: <members>`", pc.section(t, "Input domains"))          # R3
