@@ -74,7 +74,7 @@ A controller that has not invoked the skill for the change in its current contex
 
 Every change, any size, is a register row before work starts.
 
-Each task runs an implementer, a task review and the fix loop until a clean pass; each block ends with a final review and a final verifier.
+Each task runs an implementer, a task review and the fix loop until a clean pass; each block ends with a final review and, where the profile enables it (strict), a top-tier final verifier.
 
 Before every commit, `python3 -m gates run_all` and the test command in config `commands.test` are green, with a clean tree.
 

@@ -1,0 +1,14 @@
+F-B23R-1: final verifier stated as unconditional (class: profile: light, standard; final verifier stated as unconditional)
+harness: mut.py (with fix.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill; reverted = one member's fix text replaced by the 44edc05 text
+present                                 rc=0 OK
+reverted SKILL.md:77                    rc=1 FAILED (failures=10) test_all_checks_pass test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph test_each_pin_absent test_every_sentence_pinned test_harmless_rewordings_pass test_read_from_another_cwd
+reverted review.md:11                   rc=1 FAILED (failures=5) test_block_end_order_kept_and_qualified test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph
+reverted review.md:15                   rc=1 FAILED (failures=5) test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph test_verifier_paragraph_conditioned
+reverted sessions.md:53                 rc=1 FAILED (failures=5) test_block_end_order_kept_and_qualified test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph
+restored                                rc=0 OK
+mutant review.md:11 spec sentence altered rc=1 FAILED (failures=1) test_block_end_order_kept_and_qualified
+mutant sessions.md:53 spec sentence altered rc=1 FAILED (failures=1) test_block_end_order_kept_and_qualified
+mutant new unconditioned paragraph in SKILL.md rc=1 FAILED (failures=10) test_all_checks_pass test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph test_every_sentence_pinned test_harmless_rewordings_pass test_read_from_another_cwd
+mutant section sign in review.md        rc=1 FAILED (failures=2) test_block_end_order_kept_and_qualified test_edited_playbook_files_ascii
+mutant em dash in sessions.md           rc=1 FAILED (failures=2) test_block_end_order_kept_and_qualified test_edited_playbook_files_ascii
+mutants 5 killed 5

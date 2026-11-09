@@ -8,11 +8,11 @@ A `task_reviewer` judges one task's diff. Reviewers execute every claim and re-r
 
 ## Final review
 
-At a block's end a `final_reviewer` reviews the whole branch against the base branch, not one task: every commit, the sum of the diff and the seams between tasks. It checks that each task's claims were true at the commit that made them and are still true at the tip, that no later commit undid an earlier fix, and that the branch matches the plan section it was built from. A block ends in this order: final review, top-tier verifier, the owner's approval, merge, post-merge gates, checkpoint.
+At a block's end a `final_reviewer` reviews the whole branch against the base branch, not one task: every commit, the sum of the diff and the seams between tasks. It checks that each task's claims were true at the commit that made them and are still true at the tip, that no later commit undid an earlier fix, and that the branch matches the plan section it was built from. A block ends in this order: final review, top-tier verifier, the owner's approval, merge, post-merge gates, checkpoint. The top-tier verifier runs only where the profile enables it, the strict profile (design spec section 12); the light and standard profiles skip that step.
 
 ## Verifier
 
-After a clean final review the `final_verifier` tries to break the finished branch. It runs at the top tier, `tier4`, which only the `top_tier_roles` use (or at the configured `top_tier_fallback` when the project sets no `tier4`). It assumes the reviewers missed something: it runs every gate and the test command itself on every interpreter the brief names, runs the suite with `GIT_*`, `TZ` and `LANG` polluted, and feeds each gate and check inputs from outside its whitelist, at the edges of every input-domain row, and in the combinations no single task covered. Its report is DONE only when it could not break the change.
+After a clean final review, where the profile enables it (strict), the `final_verifier` tries to break the finished branch. It runs at the top tier, `tier4`, which only the `top_tier_roles` use (or at the configured `top_tier_fallback` when the project sets no `tier4`). It assumes the reviewers missed something: it runs every gate and the test command itself on every interpreter the brief names, runs the suite with `GIT_*`, `TZ` and `LANG` polluted, and feeds each gate and check inputs from outside its whitelist, at the edges of every input-domain row, and in the combinations no single task covered. Its report is DONE only when it could not break the change.
 
 ## Fix loop
 
@@ -20,7 +20,7 @@ Zero bugs: a change's own bug makes it incomplete. A minor is a real defect: it 
 
 Each finding goes back to the implementer with its class quoted verbatim, and every fix is re-reviewed. Fix rounds 1-3 resume the implementer; rounds 4-5 go to a fresh agent one tier up; after round 5 the controller stops and raises an owner question. A small re-review may run below the reviewer's minimum tier ("Small re-review").
 
-LOW_PLATEAU: after two consecutive reviews whose change-caused findings are all LOW (a review with no change-caused finding counts as all-LOW), the loop ends and those LOWs are registered against a named follow-up task instead of being fixed, and the work moves to the final review. A review with no change-caused finding at all is clean, so LOW_PLATEAU ends the loop at a review that holds LOW findings, after a review that held only LOW findings or none. A change-caused CRITICAL or HIGH finding is always fixed, whatever any signal says. Until `python3 -m gates loopstats` exists, the controller applies LOW_PLATEAU by hand.
+LOW_PLATEAU: after two consecutive reviews whose change-caused findings are all LOW (a review with no change-caused finding counts as all-LOW), the loop ends and those LOWs are registered against a named follow-up task instead of being fixed, and the work moves to the final review. A review with no change-caused finding at all is clean, so LOW_PLATEAU ends the loop at a review that holds LOW findings, after a review that held only LOW findings or none. A change-caused CRITICAL or HIGH finding is always fixed, whatever any signal says. Until `python3 -m gates loopstats` exists, the controller applies LOW_PLATEAU and the weighted tally by hand.
 
 ## Input domains
 

@@ -1396,5 +1396,106 @@ class PlaybookFilesTest(unittest.TestCase):
             self.assertNotIn(s, t)                                    # not restated: they are rules.md rows
 
 
+# F-B23R-1, class "profile: light, standard; final verifier stated as unconditional". Every expected string is written
+# here by hand from design spec section 12 ("| top-tier final verifier | no | no | yes |"), the programs spec :140 and
+# the controller's decisions D1-D3; none is read back from the files.
+BLOCK_END_ORDER = ("A block ends in this order: final review, top-tier verifier, the owner's approval, merge, "
+                   "post-merge gates, checkpoint.")                     # programs spec :140, byte for byte (D2)
+VERIFIER_PROFILE = ("The top-tier verifier runs only where the profile enables it, the strict profile (design spec "
+                    "section 12); the light and standard profiles skip that step.")                            # D2
+VERIFIER_OPENING = ("After a clean final review, where the profile enables it (strict), the `final_verifier` tries "
+                    "to break the finished branch.")                                                           # D3
+PROFILE_CONDITION = "where the profile enables it"
+VERIFIER_TERMS = ("final verifier", "top-tier verifier", "final_verifier")
+_FINAL_REVIEW = re.compile(r"final review(?!er)")
+# The class members, hand-listed: (file, the start of the paragraph that states the verifier as a block-end step).
+VERIFIER_STEP_MEMBERS = [
+    ("playbook/review.md", "At a block's end a `final_reviewer`"),
+    ("playbook/review.md", "After a clean final review"),
+    ("playbook/sessions.md", "One block per agent context"),
+    ("skills/strict-delivery/SKILL.md", "Each task runs an implementer"),
+]
+LOW_PLATEAU_BY_HAND = "the controller applies LOW_PLATEAU and the weighted tally by hand."   # F-B22RR1-1, Q-CONV-1 (a)
+
+
+def verifier_class_files():
+    """The B2-owned SKILL.md and playbook files (the prompt blocks are outside the F-B23R-1 class)."""
+    return [p for p in b_owned_markdown() if not p.startswith(pc.PROMPTS_DIR + "/")]
+
+
+def verifier_step_paragraphs(text):
+    """Blank-line paragraphs that name the final or top-tier verifier together with the final review: the paragraphs
+    that state the verifier as a block-end step."""
+    out = []
+    for para in re.split(r"\n[ \t]*\n", text):
+        low = para.lower()
+        if any(t in low for t in VERIFIER_TERMS) and _FINAL_REVIEW.search(low):
+            out.append(para.strip("\n"))
+    return out
+
+
+def verifier_step_problems(text):
+    """F-B23R-1 class check: each block-end verifier paragraph states the profile condition and the strict profile."""
+    return [p[:60] for p in verifier_step_paragraphs(text)
+            if PROFILE_CONDITION not in p.lower() or "strict" not in p.lower()]
+
+
+def non_ascii_lines(raw):
+    """Line numbers (1-based) of the lines holding a byte above 0x7f."""
+    return [n for n, ln in enumerate(raw.split(b"\n"), 1) if any(b >= 0x80 for b in ln)]
+
+
+class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1-FX5, FX7), F-B22RR1-1 (FX6)
+    def test_block_end_order_kept_and_qualified(self):            # FX2, FX4: spec sentence verbatim, then the qualifier
+        for rel, heading in (("playbook/review.md", "Final review"), ("playbook/sessions.md", "Blocks and checkpoints")):
+            with self.subTest(rel=rel):
+                body = pc.section(read(rel), heading)
+                self.assertEqual(body.count(BLOCK_END_ORDER), 1)
+                self.assertIn(BLOCK_END_ORDER + " " + VERIFIER_PROFILE, body)
+
+    def test_verifier_paragraph_conditioned(self):                # FX3
+        self.assertIn(VERIFIER_OPENING, pc.section(read("playbook/review.md"), "Verifier"))
+
+    def test_fix_loop_low_plateau_and_tally_by_hand(self):        # FX6, F-B22RR1-1
+        body = pc.section(read("playbook/review.md"), "Fix loop")
+        self.assertIn(LOW_PLATEAU_BY_HAND, body)
+        self.assertNotIn("applies LOW_PLATEAU by hand", body)
+
+    def test_class_every_block_end_verifier_paragraph_conditioned(self):   # FX5, whole class, through the real files
+        files = verifier_class_files()
+        for rel in ("skills/strict-delivery/SKILL.md", "playbook/review.md", "playbook/sessions.md", "playbook/roles.md",
+                    "playbook/rules.md", "playbook/decisions.md", "playbook/streams.md"):
+            self.assertIn(rel, files)
+        found = []
+        for rel in files:
+            text = read(rel)
+            with self.subTest(rel=rel):
+                self.assertEqual(verifier_step_problems(text), [])
+            found += [(rel, p) for p in verifier_step_paragraphs(text)]
+        self.assertEqual(len(found), len(VERIFIER_STEP_MEMBERS))
+        for (rel, para), (want_rel, start) in zip(found, VERIFIER_STEP_MEMBERS):
+            self.assertEqual(rel, want_rel)
+            self.assertTrue(para.startswith(start), (rel, para[:60]))
+
+    def test_class_refuses_an_unconditioned_paragraph(self):     # FX5: a new member without the condition fails
+        added = ["Each block ends with a final review and a final verifier.",
+                 "After the final review the top-tier verifier runs.",
+                 "After a clean final review the `final_verifier` tries to break the branch; strict reviewers agree."]
+        for rel in verifier_class_files():
+            for s in added:
+                with self.subTest(rel=rel, s=s):
+                    self.assertEqual(verifier_step_problems(read(rel) + "\n" + s + "\n"), [s[:60]])
+        self.assertEqual(verifier_step_problems("The final review checks `final_reviewer` output.\n"), [])
+
+    def test_edited_playbook_files_ascii(self):                   # FX7 (D2): review.md and sessions.md stay ASCII
+        for rel in ("playbook/review.md", "playbook/sessions.md"):
+            with open(os.path.join(pc.REPO_ROOT, rel), "rb") as f:
+                raw = f.read()
+            with self.subTest(rel=rel):
+                self.assertEqual(non_ascii_lines(raw), [])
+                for ch in ("§", "—"):
+                    self.assertEqual(non_ascii_lines(raw + ch.encode("utf-8") + b"\n"), [raw.count(b"\n") + 1])
+
+
 if __name__ == "__main__":
     unittest.main()

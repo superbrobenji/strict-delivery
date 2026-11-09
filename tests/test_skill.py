@@ -55,7 +55,8 @@ PINS = {
     "Verification method": ["by contradiction", "no executable check", "input-domain table", "`playbook/review.md`",
                             "Input domains"],
     "Change kinds": ["superpowers:brainstorming", "dispatches no writer"],
-    "Pipeline and gates": ["register row", "final verifier", "`python3 -m gates run_all`", "owner's approval"],
+    "Pipeline and gates": ["register row", "final verifier", "`python3 -m gates run_all`", "owner's approval",
+                           "where the profile enables it (strict), a top-tier final verifier"],   # F-B23R-1; spec 12
     "Session resume": ["no memory of the work", "`playbook/sessions.md`", "`skills`", "`required_reads`",
                        "investigator", "Resume check", "before any edit or dispatch", "take over at once",
                        "no hook holds the session", "continued worker never dispatches"],
