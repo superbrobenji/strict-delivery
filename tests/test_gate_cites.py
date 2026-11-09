@@ -459,7 +459,7 @@ class TestRecords(CitesCase):
         out, code = self.run_root()
         self.assertIn("FAIL cites.landed.%s: landed_in: must be a list of cites\n" % DEC_ID, out)
         self.assertIn("FAIL cites.landed.%s: 1: is not a string\n" % DEC_ID2, out)
-        self.assertIn("FAIL cites.landed.%s: {'a': 'b'}: is not a string\n" % DEC_ID2, out)
+        self.assertIn("FAIL cites.landed.%s: {a: b}: is not a string\n" % DEC_ID2, out)
         self.assertIn("FAIL cites.landed.%s: p.md#: p.md: not a tracked file\n" % DEC_ID2, out)
         self.assertIn("FAIL cites.landed.%s: ./p.md#a: ./p.md: not a tracked file\n" % DEC_ID2, out)
 
