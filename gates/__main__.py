@@ -37,7 +37,12 @@ def _index(args: List[str]) -> int:
     return index.main(args)
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "index": _index}
+def _decisions(args: List[str]) -> int:
+    from gates.tools import decisions_cli
+    return decisions_cli.main(args)
+
+
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "index": _index}
 
 
 def main(argv: List[str]) -> int:
