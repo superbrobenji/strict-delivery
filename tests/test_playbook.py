@@ -82,7 +82,7 @@ PINS = {
                 "conflicts"], ["lost machine"]),
     "SD-R13": (["cleanup"], ["pile up"]),
     "SD-R14": (["background jobs", "completion record", "waiting on its own background work"], ["orphaned job"]),
-    "SD-R15": (["`set -eu`", "`mktemp -d`", "heredoc", "discloses a slip"], ["another agent's work"]),
+    "SD-R15": (["`set -eu`", "`mktemp -d`", "heredoc", "around `mktemp`", "discloses a slip"], ["another agent's work"]),
     "SD-R16": (["agent memory"], ["decision log"]),
     "SD-R17": (["role/model map"], ["quality or cost", "whatever the profile"]),
     "SD-R18": (["bypass block"], ["can skip"]),
@@ -94,9 +94,15 @@ PINS = {
 # every row against its bullet; each must stay in its rule cell, case-sensitive.
 RESTORED = {
     "SD-R4": ["dependency edges", "unblock condition", "parallel groups", "`breakdown/1`", "`max_concurrent`",
-              "`streams.yml`", "a pointer to a section that does not exist or holds none"],
+              "`streams.yml`", "a pointer to a section that does not exist or holds none",
+              "(kind `breakdown/1`, spec appendix A)", "Claude Code limits, spec §10)", "(programs and streams design §5)"],
     "SD-R5": ["the reviewer marks it cosmetic", "folded into the next real edit"],
-    "SD-R11": ["the handoff fields of spec §9", "`Task <block>.<n>` headings", "`<block>.<n>` task tokens", "`/clear`"],
+    "SD-R11": ["the handoff fields of spec §9", "`Task <block>.<n>` headings", "`<block>.<n>` task tokens", "`/clear`",
+               "background-job check below"],
+    # F-B21RR-2: cross-references and gate attributions of spec section 8, written as plain references
+    "SD-R8": ["process changes"],
+    "SD-R12": ["`gate_checkpoint`'s `checkpoint.pushed`"],
+    "SD-R13": ["(spec §5)"],
 }
 
 
@@ -106,9 +112,16 @@ def read(rel):
         return f.read().decode("utf-8")
 
 
+# A boundary is `.`, `!` or `?`, then any run of characters that are not letters, digits or whitespace (closing
+# brackets, quotes of any script, backticks, emphasis markers, `_`), then any run of Unicode whitespace. It oversplits
+# rather than undersplits, so no sentence hides behind its pinned neighbour (F-B21RR-1).
+_BOUNDARY = re.compile(r"([.!?](?:[^\w\s]|_)*)\s+")
+
+
 def sentences(cell):
-    """Sentences of a cell: split at spaces after `.`, `!` or `?`, or after one of them and a closing bracket or quote."""
-    return [s for s in re.split(r"(?<=[.!?]) +|(?<=[.!?][)\]\"']) +", cell) if s]
+    parts = _BOUNDARY.split(cell)
+    joined = [parts[i] + (parts[i + 1] if i + 1 < len(parts) else "") for i in range(0, len(parts), 2)]
+    return [s for s in joined if s]
 
 
 def intro(text):
@@ -649,6 +662,27 @@ class ContentChecksRefuseTest(unittest.TestCase):
         self.assertEqual(sentences("A b. (C d.) e f? G! 2 h.  `i` j."),
                          ["A b.", "(C d.)", "e f?", "G!", "2 h.", "`i` j."])
         self.assertEqual(sentences("Use `a.b` and 80 % of it."), ["Use `a.b` and 80 % of it."])
+
+    def test_sentences_split_after_closers_and_any_space(self):     # F-B21RR-1: the whole boundary dimension
+        closers = ["`", "*", "_", ")", "]", "\"", "'", "**", "`)", chr(0x201d), chr(0x2019), chr(0xbb), chr(0x300d)]
+        spaces = [" ", "  ", "\t", chr(0xa0), chr(0x2003), chr(0x3000), " " + chr(0xa0)]
+        for stop in ".!?":
+            for c in [""] + closers:
+                for sp in spaces:
+                    with self.subTest(stop=stop, closer=c, space=sp):
+                        self.assertEqual(sentences("A b" + stop + c + sp + "C d."), ["A b" + stop + c, "C d."])
+        self.assertEqual(sentences("A b.cd e."), ["A b.cd e."])               # no space: no boundary
+        self.assertEqual(sentences("A b. "), ["A b."])                        # no empty sentence after the last
+        self.assertEqual(sentences(""), [])
+        self.assertEqual(sentences("Use `$(...)` here."), ["Use `$(...)`", "here."])   # fail closed: oversplit
+
+    def test_unpinned_sentence_behind_closers(self):          # F-B21RR-1, on the real file
+        rule = self.cell("SD-R6", 1)
+        for tail in (" `x.` ", "* ", "_ ", chr(0x201d) + " ", chr(0x2019) + " ", chr(0xbb) + " ", chr(0xa0),
+                     chr(0x2003), "\t", "!" + chr(0x201d) + " "):
+            with self.subTest(tail=tail):
+                t = self.with_cell("SD-R6", 1, rule + tail + "Agents may skip it.")
+                self.assertIn("unpinned sentence SD-R6 rule 'Agents may skip it.'", pin_problems(t, table_rows(t)))
 
     def test_restored_spec_clauses(self):                      # F-B21R-4: clauses of spec section 8 kept
         rule = {r["id"]: r["rule"] for r in table_rows(self.text)}
