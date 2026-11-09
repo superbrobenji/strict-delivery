@@ -232,6 +232,22 @@ class ExtractLinkTest(unittest.TestCase):
                      '[t](b.md#c\x01)\n', ')[t](<b.md#c)\n', '[t](<a.md#c>"T")\n', '[t](<a.md#c>(T))\n','[t](b.md#c "T" x)\n'):
             self.assertEqual(extract("d/a.md", text), [], repr(text))
 
+    def test_non_ascii_space_stays_in_bare_destination(self):      # owner Q-C2VR2-2 (a): only ASCII ends the run
+        hand = [0x85, 0xA0, 0x1680] + list(range(0x2000, 0x200B)) + [0x2028, 0x2029, 0x202F, 0x205F, 0x3000]
+        self.assertEqual(len(hand), 19)
+        table = [cp for cp in range(0x80, sys.maxunicode + 1) if chr(cp).isspace()]
+        for cps in (hand, table):
+            for cp in cps:
+                tok = "b.md#x" + chr(cp) + "y"
+                cs = extract("a.md", "[t](" + tok + ")\n")
+                self.assertEqual([(c.token, c.path, c.anchor) for c in cs], [(tok, "b.md", "x" + chr(cp) + "y")], hex(cp))
+        cs = extract("a.md", "[t](a.md#b 'T')\n")
+        self.assertEqual([(c.token, c.anchor) for c in cs], [("a.md#b 'T'", "b 'T'")])
+
+    def test_ascii_whitespace_and_controls_end_bare_destination(self):     # 0x00-0x20, 0x7f: then "y" is no title
+        for cp in list(range(0x00, 0x21)) + [0x7F]:
+            self.assertEqual(extract("a.md", "[t](b.md#x" + chr(cp) + "y)\n"), [], hex(cp))
+
     def test_backslash_forms_are_read_literally(self):     # owner Q-C21r-1 (b)
         for text in ('\\![t](b.md#c)\n', '[t](b.md#c "a\\"b")\n', "[t](b.md#c 'a\\'b')\n", '[t](b.md#c (a\\)b))\n'):
             cs = extract("d/a.md", text)
@@ -446,6 +462,12 @@ class AnchorsTest(unittest.TestCase):
         for text, slug in (("# a #\n", "a"), ("# a ##  \n", "a"), ("#   a\n", "a"), ("# a#\n", "a"), ("# #\n", ""), ("# \n", ""), ("# a # b\n", "a--b"), ("# a #b\n", "a-b"),
                            ("#  a b  \n", "a-b"), ("# `Code` and, Punct!\n", "code-and-punct"), ("# \u00dcn\u00ef\n", "\u00fcn\u00ef")):
             self.assertEqual(anchors(text), frozenset({slug}), repr(text))
+
+    def test_tab_before_closing_sequence(self):            # F-VR2-2: [ \t]+#+\Z with a tab in the run before the #s
+        for text in ("# a \t#\n", "# a \t##\n", "# a\t #\n", "# a\t#\n", "# a \t \t#\n", "# a\t\t###\n"):
+            self.assertEqual(anchors(text), frozenset({"a"}), repr(text))
+        for text in ("# a#\n", "# a #\n", "# a\v#\n"):   # controls: no blank before the #s, a space, a \v (not a blank)
+            self.assertEqual(anchors(text), frozenset({"a"}), repr(text))
 
     def test_fences_and_setext(self):
         self.assertEqual(anchors("```\n# a\n```\nb\n===\nc\n---\n"), frozenset())
