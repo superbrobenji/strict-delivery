@@ -1,6 +1,6 @@
 # Base playbook: review
 
-How work is reviewed and verified, how the fix loop runs and when it stops. The mutation review and the clean-copy review are rules, not text here: `playbook/rules.md` rows `SD-R9` and `SD-R10`.
+How work is reviewed and verified, how the fix loop runs and when it stops. The mutation review (row `SD-R10`) and the clean-copy review (row `SD-R9`) are rules of `playbook/rules.md`, not text here.
 
 ## Task review
 
@@ -55,7 +55,7 @@ Findings that keep arriving round after round are a process defect. The controll
 
 ## Rules N and T
 
-After each review the controller may run `python3 -m gates loopstats`, which prints the advisory signals Rule N (novelty) and Rule T (trend) and, when `escape_cost` is set, an expected-value verdict, and ledgers its `Loopstats:` line (`Loopstats: <task> r<k>: X=<...> p=<p> q=<q> nu=<nu> -> <VERDICT>`). The signals never block a fix and never decide whether a found defect is fixed; they decide whether a re-review may run below the reviewer's minimum tier, and LOW_PLATEAU ends the fix loop ("Fix loop").
+After each review the controller may run `python3 -m gates loopstats`, which prints the advisory signals Rule N (novelty) and Rule T (trend) and, when `escape_cost` is set, an expected-value verdict, and ledgers its `Loopstats:` line (`Loopstats: <task> r<k>: X=<...> p=<p> q=<q> nu=<nu> -> <VERDICT>`). The signals never block a fix and, apart from the LOW_PLATEAU verdict, which ends the fix loop ("Fix loop"), never decide whether a found defect is fixed; the other signals only decide whether a re-review may run below the reviewer's minimum tier.
 
 A finding carries `review_round`, `caused_by_change` and `dimension`. For one task after `k` reviews, the counted findings are those the task's change caused (`caused_by_change: true`) with severity CRITICAL, HIGH, MEDIUM or LOW; `X_i` is the number from review `i`. Rule T counts a severity-weighted tally: a counted finding weighs 8 (CRITICAL), 4 (HIGH), 2 (MEDIUM) or 1 (LOW), `W_i` is the sum of the weights of review `i`'s counted findings, `N = sum W_i` and `S = sum (i-1) W_i`, so each finding counts as that many draws in the exact test and in the fit.
 
@@ -69,7 +69,7 @@ The verdict, in order: `X_k = 0` CLEAN; LOW_PLATEAU when the LOW run, the consec
 - Test first: a new test is watched red for its stated reason, re-established with a behaviour stub, not only a missing import. When tests came after the code, the red check overlays the new tests on a clone of the pre-change commit.
 - Evidence: an input outside a whitelist fails closed with a named check; a divergence is reported with both quotes and no side taken; a pasted result is re-run before it is relied on.
 - No claim is trusted: each is verified directly and by contradiction, and both commands are recorded.
-- Pinned means a production-path test plus a mutation transcript; the mutation review and the clean-copy review run as `playbook/rules.md` rows `SD-R10` and `SD-R9` state them.
+- Pinned means a production-path test plus a mutation transcript; the mutation review (row `SD-R10`) and the clean-copy review (row `SD-R9`) run as `playbook/rules.md` states them.
 
 ## Plan review
 

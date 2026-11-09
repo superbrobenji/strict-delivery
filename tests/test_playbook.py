@@ -1355,6 +1355,36 @@ class PlaybookFilesTest(unittest.TestCase):
         for s in ("`N = sum X_i`", "`S = sum (i-1) X_i`"):
             self.assertNotIn(s, body)                                 # the plain-count text is refused
 
+    def test_rule_row_references_pair_each_method_with_its_row(self):   # F-B22R2-1, whole class: every SD-R ref
+        rows = table_rows(read(RULES))
+        clean = [r["id"] for r in rows if "clean copy" in r["rule"]]
+        mut = [r["id"] for r in rows if "mutation review" in r["rule"]]
+        self.assertEqual((len(clean), len(mut)), (1, 1))
+        contexts = {"the mutation review": mut[0], "the clean-copy review": clean[0],
+                    "a clean copy of the reviewed head": clean[0]}       # method named just before its row
+        found = 0
+        for stem in NEW_PLAYBOOKS:
+            t = read("playbook/%s.md" % stem)
+            refs = re.findall(r"SD-R\d+", t)
+            pinned = list(re.finditer(r"(?i)(the mutation review|the clean-copy review|a clean copy of the reviewed head)"
+                                      r" \(row `(SD-R\d+)`\)", t))
+            self.assertEqual(len(refs), len(pinned), stem)               # no reference outside a pinned pairing
+            for m in pinned:
+                self.assertEqual(m.group(2), contexts[m.group(1).lower()], (stem, m.group(0)))
+            found += len(pinned)
+        self.assertGreaterEqual(found, 4)                                # review.md: intro, Task review, methods (2)
+
+    def test_signals_keep_the_low_plateau_exception(self):       # F-B22R2-2, whole class: what the signals decide
+        hits = []
+        for stem in NEW_PLAYBOOKS:
+            for line in read("playbook/%s.md" % stem).split("\n"):
+                if "decide whether a found defect is fixed" in line:
+                    hits.append(stem)
+                    self.assertIn("apart from the LOW_PLATEAU verdict", line, stem)
+        self.assertEqual(hits, ["review"])
+        body = pc.section(read("playbook/review.md"), "Rules N and T")
+        self.assertIn("never block a fix and, apart from the LOW_PLATEAU verdict", body)   # invariant: never blocks
+
     def test_review_rules_n_t_and_methods(self):                  # R3, R4, R6
         t = read("playbook/review.md")
         self.assertIn("`class: <dimension>: <members>`", pc.section(t, "Input domains"))          # R3

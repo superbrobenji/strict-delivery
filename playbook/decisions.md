@@ -1,6 +1,6 @@
 # Base playbook: decisions
 
-The decision log is the only home of the owner's rulings. A decision is an owner question with at least two options and their cost, one of them recommended (none in class `model-policy`); the owner is the human driving the effort. Records live one file per id under `paths.decisions` and are written by `python3 -m gates decisions ask|decide|find|withdraw|batch`.
+The decision log is the only home of the owner's rulings. A decision is an owner question with at least two options and their cost, one of them recommended (none in class `model-policy`); the owner is the human driving the effort. Records live one file per id under `paths.decisions`; `python3 -m gates decisions ask|decide|withdraw` writes them, and `decisions find` and `decisions batch` only read them.
 
 ## Asking
 
