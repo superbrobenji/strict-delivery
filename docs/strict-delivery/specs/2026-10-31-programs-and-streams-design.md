@@ -53,8 +53,8 @@ Anti-goals (failure even if it works):
   human's effort: they exist so that agents do not collide. Another human's effort has its own
   owner and its own ownership map, and may own the same file for its own agents. There is no
   global owner setting. Answers and withdrawals come only from the human: the PreToolUse hook
-  refuses `decisions decide` and `decisions withdraw` from any agent, and the human runs them
-  (`!` prefix) or the program session records the owner's exact words. Each answer records the
+  refuses `decisions decide` and `decisions withdraw` from any subagent, and the human runs them
+  (`!` prefix) or the main session (the program session) records the owner's exact words. Each answer records the
   git identity (`git config user.email`) as `answered_at.by`.
 - **Interface:** anything one stream needs from another (API, shared module, data format). Agreed
   in the program's spec before streams start; the owner rules on any later conflict.
@@ -63,16 +63,15 @@ Anti-goals (failure even if it works):
 
 | Level | Role | Runs as | Does | Never |
 |---|---|---|---|---|
-| 1 | program session | the owner's Claude Code session (thin shell) | talks to the owner; shows the overview; relays owner questions in one batch; relaunches the program controller; merges on the owner's grant | implements, reviews, or holds detail |
-| 1a | program_controller | agent dispatched by the program session | reads the status page, handoffs, requests; dispatches and re-dispatches stream controllers; mints ids and writes request records for its program; runs syncs; returns owner questions and reports to the session | implements, reviews; merges, except main into the integration branch at a sync (section 10) |
-| 2 | stream_controller | agent dispatched by the program controller | runs one stream's plan block by block in its own worktree: dispatches sub-controllers, implementers, reviewers, verifiers as main spec §10; raises cross-stream requests; returns owner questions (stopping NEEDS_DECISION) and checkpoint or completion reports; merges its group branches into its stream branch (section 4.1) | edits another stream's files or status row; merges into the integration branch or main; rebases another stream; works around an owner question |
-| 3+ | controller (sub-controller), implementer, task/final reviewer, final verifier, exception reviewer, audit roles, investigator | as main spec §10 | unchanged | unchanged |
+| 1 | program session | the owner's Claude Code session (thin shell) | talks to the owner; shows the overview; relays owner questions in one batch; by default acts as the program controller itself (row 1a; owner answer Q-H5 (a)); in `controller` mode merges a pull request on the owner's chat approval (section 5) | implements, reviews, or holds detail |
+| 1a | program_controller (a separate agent only when the configured depth allows; otherwise the program session does these duties) | agent dispatched by the program session | reads the status page, handoffs, requests; dispatches and re-dispatches stream controllers; mints ids and writes request records for its program; runs syncs; returns owner questions and reports to the session | implements, reviews; merges, except the sync's merges (section 10) and, in `controller` mode, a pull request on the owner's chat approval |
+| 1 (2 under a separate program_controller) | stream_controller | agent dispatched by the program session or a program_controller | runs one stream's plan block by block in its own worktree: dispatches sub-controllers, implementers, reviewers, verifiers as main spec §10; raises cross-stream requests; returns owner questions (stopping NEEDS_DECISION) and checkpoint or completion reports; merges its group branches into its stream branch (section 4.1); opens the stream's pull request to the base branch when the stream is finished | edits another stream's files or status row; merges any pull request, pushes to the base branch or merges the integration branch into its own; rebases another stream; works around an owner question |
+| 2+ | controller (sub-controller; may dispatch a sub-controller, owner answer Q-H3), implementer, task/final reviewer, final verifier, exception reviewer, audit roles, investigator | as main spec §10 | unchanged | unchanged |
 
 - Models: program_controller and stream_controller at the reviewer tier (tier3); the top tier stays
-  only for final verifier and exception reviewer (main spec §10).
-- Dispatch: only the program session dispatches a program_controller; only a program_controller
-  dispatches a stream_controller (`gate_dispatch`). Each new role has a prompt block in
-  `skills/strict-delivery/prompts/`.
+  only for the roles in `top_tier_roles`, by default the final verifier and the exception reviewer (main spec §10).
+- Dispatch: only the program session dispatches a program_controller; the program session or a program_controller dispatches a stream_controller; stream controllers and sub-controllers dispatch sub-controllers and workers; `gate_dispatch` refuses any dispatch from a worker role and any dispatch that leaves too few levels below it for the depth limit (owner answers Q-H1..Q-H5, 2026-11-01). Each new role has a prompt block in `skills/strict-delivery/prompts/`.
+- Depth-aware tree (owner answer Q-H5 (a)): by default the program session itself acts as program controller (status page, ids, requests, syncs, one question batch); stream_controller runs at level 1, sub-controllers at level 2, workers at level 3. A separate program_controller agent, and nested sub-controllers, are used only when the configured depth allows them.
 - Both new roles are core to the framework, not an add-on.
 
 ### 4.1 Parallel work inside a stream
@@ -92,35 +91,32 @@ A stream is not one agent at a time. It runs as a tree of worktrees:
   `<stream>/main`, beside its groups, not above them: a group worktree nested inside the stream
   worktree shows there as an untracked folder and leaves it unclean. Ids match `[a-z0-9][a-z0-9-]*`, so dashes
   are allowed and `/` is not.
-- Each sub-controller runs its group's tasks (implement, review, fix loop as main spec §6-§10).
+- Each sub-controller runs its group's tasks (implement, review, fix loop as main spec §6-§10). A sub-controller may dispatch a sub-controller when the stream controller judges it better, within the depth limit (owner answer Q-H3).
   The stream controller merges each group branch into the stream branch, one group at a time,
   after a clean review and green gates; this merge needs no owner grant. It re-runs the gates at
-  the stream head after each merge. The owner grants only merges into the integration branch and
-  into main.
+  the stream head after each merge. The owner approves only pull-request merges into the base branch (section 5; owner answers Q-M4 (a), Q-15 (a)).
 - Owner questions raised at any depth travel upward as messages (section 4.3). Only the asking
   branch of the tree waits; its siblings continue.
 
 ### 4.2 How agents run in Claude Code (verified 2026-10-31)
 
-- An agent can dispatch its own agents, which run in the background (two levels probed; every
-  level carries the dispatch tool).
+- An agent can dispatch its own agents, which run in the background. Measured 2026-11-01: with `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` unset, subagents at levels 1-2 carry the dispatch tool and level 3 is a leaf; set to N, levels 1-N carry it. With `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` unset, a launch beyond 20 concurrent subagents is refused, not queued; the variable raises the limit (30 let 25 run at once). `init` writes both into the project's `.claude/settings.json` (main spec section 4).
 - An agent stays alive while any of its children run. So a controller never returns to its
   parent while its children work. Questions and progress go up as messages (`SendMessage` to the
   parent, or to the main session), not as returns.
 - The program controller refreshes itself (budget or lifetime) only at a sync, when every stream
-  is at a checkpoint. It never hands off while children are mid-block, so nothing is orphaned.
+  is at a checkpoint. It never hands off while children are mid-block, so nothing is orphaned. A program session acting as program controller does not refresh; it stays lean as section 4.4 says.
 
 ### 4.3 Questions and reports flow up
 
 A blocked agent writes its question (options and cost) into its handoff, then messages its
-parent: sub-controller to stream controller, stream controller to program controller, program
-controller to the program session. The session batches the questions for the owner. Answers go
+parent: sub-controller to stream controller, stream controller to program controller, program controller to the program session (directly to the program session when it acts as program controller). The session batches the questions for the owner. Answers go
 down as decision records, and the waiting agent is told to continue. Completion and checkpoint
 reports travel the same path.
 
 ### 4.4 Automatic continuation (replaces "stop for the owner's `/clear`")
 
-At every level from 1a down, an agent that reaches a checkpoint, 80 % of its token or time
+At every agent level (a separate program_controller included), an agent that reaches a checkpoint, 80 % of its token or time
 budget, or a usage-limit stop writes its handoff and returns `status: DONE` with `next:` (or
 `BLOCKED: budget`). Its dispatcher immediately dispatches a fresh agent of the same role with a
 continue prompt built from the handoff, ledger and status page. Nothing continues from inherited
@@ -137,16 +133,12 @@ checkpoint" is removed; one block per agent context stays.
    cross-stream interface) and its program plan. The plan defines each stream: id, purpose,
    stream plan, owned paths, shared files and their rules, estimate, dependencies, merge order,
    and a `## Deferred` table. Approving it is an owner decision of class `program-create`.
-2. The program session dispatches the program controller. It creates the integration branch
-   `<program>/integration` from main and the program folder on it (section 7), then dispatches
-   one stream controller per ready stream. Each stream branch starts from the integration branch.
+   Everything in the program's spec and plan is planned in full before any code; no block that is only an outline may start implementation. The last planning step is the stream breakdown plan, `.strict-delivery/state/plans/<plan>/breakdown.yml` (kind `breakdown/1`, main spec section 8 and appendix A): streams with owned paths, tasks per stream, dependency edges from task to task, unblock conditions, and parallel groups within the concurrency limit, with the concurrency and depth limits it assumes, the tasks already done, and stream periods and path windows for ownership that moves during the program (owner answers Q-BD-7 (a), Q-BDr2-1 (a)). `program create` refuses a plan with an outline-only block or without a valid breakdown (a breakdown is valid only within the effective concurrency and depth limits and with the same streams and owned paths as `streams.yml`), and streams start as their unblock conditions hold (owner answer Q-PL-1 (a), 2026-11-02).
+2. The program controller (the program session itself by default, section 4; a separate program_controller only when the configured depth allows) creates the integration branch `<program>/integration` from main, with its own worktree, and the program folder on it (section 7), then dispatches one stream controller per ready stream. Each stream branch starts from main (owner answer Q-M4 (a)).
 3. Streams run. Owner questions flow up and are asked as one batch; answers flow down as decision
    records. Cross-stream needs flow as requests (section 6). Progress, estimate use and blockers
    show on the status page.
-4. Each completed block merges into the integration branch on the owner's grant (a merge grant
-   names program, stream and plan). After every merge a sync runs (section 10). The integration
-   branch merges to main at milestones the program plan names, and at close, each on the owner's
-   grant. Only the program controller commits on the integration branch, apart from these merges.
+4. Blocks accumulate on the stream branch. A finished stream opens its own pull request to the base branch, merged by merge commit on the owner's approval (main spec section 8; owner answers Q-M4 (a), Q-15 (a)): in `controller` mode the owner approves in chat naming the PR and its head sha and the controller runs `gh pr merge --merge --match-head-commit`; in `host` mode the owner merges on the host. The stream plan's ledger records the merge as a `MERGED` line; the approval is not a decision record. After every merge a sync runs (section 10). The integration branch holds only program records and combined testing; it never merges into the base branch, and the program's global records reach the base branch by one records pull request at close (owner answer Q-Pplan-12 (a)). Only the program controller commits on the integration branch, apart from the sync's merges.
 5. When every stream is done, the program closes: an owner decision of class `program-close`.
    Lasting rulings are already in the decision register and rolled into playbooks, CLAUDE.md or
    `architecture.md` (section 8). Then the cleanup step removes the program folder, the program's
@@ -161,10 +153,10 @@ program controller writes it as a record; B implements it in its own file.
 - Fields: `id, from_stream, to_stream, files, interface (spec section cite), need (what and why),
   status (open | accepted | done | disputed | withdrawn), raised_at {sha, by}, resolution
   {commits, at, by}`, and `decision` (a decision id, required when `disputed` was ruled).
-- Writer: only the program controller creates or changes a request file, on the integration
-  branch. A stream asks it to, and reads requests from `<program>/integration`.
+- Writer: only the program controller (the program session by default, section 4) creates or changes a request file, on the integration branch. A stream asks it to, and reads requests from `<program>/integration`.
 - B may dispute a request (it conflicts with the spec or with B's work): the dispute becomes an
   owner question; the owner's ruling is a decision record the request cites.
+- Transitions: `open -> accepted | disputed | withdrawn`; `accepted -> done | withdrawn`; `disputed -> accepted | withdrawn`, with the `request-dispute` decision; `done` and `withdrawn` are final; a request file is never deleted while the program is live (owner answer Q-Pplan-4 (a)).
 - A's work that waits on a request shows the request id in its status row's `blockers`.
 - `gate_streams` checks the schema, that `to_stream` owns every listed file, that `done` cites
   commits on B's branch that touch those files, and that no stream changed a file it does not own.
@@ -189,8 +181,8 @@ program controller writes it as a record; B implements it in its own file.
 |---|---|---|
 | `docs/strict-delivery/specs/<spec>.md` | an effort's spec; marks where decisions were made by citing their ids | the spec's effort is done |
 | `docs/strict-delivery/plans/<plan>.md` | a plan (stream plan, plain plan, or program plan) | the plan is done |
-| `.strict-delivery/state/programs/<program>/` | `status.md`, `streams.yml` (the local ownership map), `requests/`, `sync-log.md`; lives on the integration branch, committed only by the program controller | the program closes |
-| `.strict-delivery/state/plans/<plan>/` | ledger, handoff, mutation transcripts | the plan merges |
+| `.strict-delivery/state/programs/<program>/` | `status.md`, `streams.yml` (the local ownership map; an `owns` item may be a path window `{path, from, until}`, and at most one `residual` stream owns every path no other stream owns in the same window, owner answers Q-BDr2-1 (a), Q-BD-4 (a)), `requests/`, `sync-log.md`; lives on the integration branch, committed only by the program controller, never merged into the base branch | the program closes |
+| `.strict-delivery/state/plans/<plan>/` | ledger, handoff, stream breakdown (`breakdown.yml`), mutation transcripts | the plan merges |
 | `docs/strict-delivery/reviews/<plan>/` | review reports | the plan merges |
 | `.strict-delivery/state/claims/<doc-slug>.yml` | claims about one document | with that document |
 | resolved findings in `.strict-delivery/state/findings/` | closed and merged findings | with the effort that resolved them |
@@ -216,14 +208,13 @@ from the lowercase base32 alphabet without `0`, `1`, `l`, `o`, drawn at random. 
 `DEC-20261031-k3f9`. No person's name or handle appears in any id.
 
 - Deletion proof: a resolved finding names the plan that resolved it (`resolved_by: <plan>`).
-  The cleanup may delete it only when that plan's merge grant is answered and its merge commit
-  exists on the target branch.
+  The cleanup may delete it only when the plan's ledger records its final pull-request merge (`MERGED ... final=yes`) and that merge commit is on the target branch's first-parent history with the recorded head as its second parent; the cleanup is its own pull request (owner answers Q-15 (a), Q-Pplan-9 (a)).
 - Uniqueness: `gate_decisions` / `gate_register` fail any id present twice across the tree; a PR's
   ids are checked against the base branch too.
 - No gap rule. Its job (spotting a deleted record) moves to the no-delete rule: a decision, open
   finding or claim file present on the base branch may not be deleted by a branch; the only
   deletions allowed are the cleanup step's (resolved findings and per-effort files, section 7.2).
-- Within one program, only the program controller mints ids, so two of its agents never race.
+- Within one program, only the program controller (the program session by default) mints ids, so two of its agents never race.
   A plain plan's controller mints its own.
 
 ### 8.2 Decisions
@@ -257,33 +248,24 @@ States are derived from git, plan ledgers and status pages; nothing in the index
 
 - `program`: the owner's session. Start order: CLAUDE.md block, `in-force.md`, `INDEX.md`, the
   live programs' status pages, then `python3 -m gates context program`.
-- `program-controller`, `stream-<id>-block`: agents; each reads its handoff and its context list.
+- `program-controller` (only when a separate program_controller runs), `stream-<id>-block`: agents; each reads its handoff and its context list.
   A stream's blocks run one after another in the stream worktree
   (`<worktrees>/<program>/<stream>/main`), on the stream branch `<program>/<stream>/main`.
-- `sync`: run by the program controller after every merge into the integration branch or into
-  main, and at the start of each working day: run `gate_drift`; rebase each stream branch that is
-  behind `<program>/integration` onto it; when main is ahead of `<program>/integration`, merge
-  main into the integration branch, with no owner grant (if that merge conflicts, stop and ask
-  the owner); collect every
-  pending owner question for one batch; update status rows and the sync log.
+- `sync`: run by the program controller after every merge into the base branch, and at the start of each working day: fetch and fast-forward the local base branch from the remote; run `gate_drift`; merge main into each stream branch that is behind it, as its own command, never a rebase (owner answer Q-Pplan-5 (a)); when main is ahead of `<program>/integration`, merge main into the integration branch, with no owner approval (if a merge conflicts, stop and ask the owner); merge the stream heads into the integration branch for combined testing and run the gates and the suite there (owner answer Q-M4 (a)); collect every pending owner question for one batch; update status rows; run `gate_drift` again and expect it to pass before the sync log line; update the sync log; push the integration branch.
 
 ## 11. Status page
 
 `programs/<program>/status.md`: a table with header exactly `stream | block | branch | worktree |
-next task | estimate | used | status | blockers | pending decisions | delivers`; `status` is one
-of `ready | running | blocked | checkpoint | merged | closed`. The page lives on the integration
-branch and only the program controller edits it, from the streams' messages and handoffs. Stream
+next task | estimate | used | status | blockers | pending decisions | delivers`; `status` is one of `ready | running | blocked | checkpoint | merged | closed`; `merged` means the stream's pull request has merged into the base branch. The page lives on the integration
+branch and only the program controller (the program session by default, section 4) edits it, from the streams' messages and handoffs. Stream
 branches never carry a copy, so rows never conflict at a merge.
 
 ## 12. Gates
 
 - `gate_streams` (on every commit in a program; in CI per commit `base..HEAD`): `streams.yml`
-  schema; owned paths disjoint within the program; every changed path owned by the committing
-  stream or a shared file used under its rule; status rows one per stream and edited only as
+  schema; owned paths disjoint within the program; every changed path owned by the committing stream, judged by the owner in the window at the commit (a window event `merged:<stream>/<sub-block>` holds once that sub-block's `MERGED` line passes the merge checks; `merged:<stream>` once the stream's last sub-block has), or a shared file used under its rule; status rows one per stream and edited only as
   section 11 allows; request records as section 6. The committing stream is read from the branch
-  (`<program>/<stream>/...`); commits on `<program>/integration` are program commits. The base for
-  `base..HEAD` is the integration branch, or the stream branch named as `stacked_on` in
-  `streams.yml`. A changed path that no stream owns and that is not a shared file fails; the
+  (`<program>/<stream>/...`); commits on `<program>/integration` are program commits. The base for `base..HEAD` is the base branch, or the stream branch named as `stacked_on` in `streams.yml`; a merge of the integration branch into a stream branch fails (owner answer Q-M4 (a)). A changed path that no stream owns and that is not a shared file fails; the
   program controller assigns it (class `stream-ownership`). Shared files have one of two rules:
   `append-rows` (whole rows added at the end) or `own-row` (only the committing stream's row).
   Each stream owns its own plan workspace; the program controller owns the program folder and is
@@ -295,9 +277,8 @@ branches never carry a copy, so rows never conflict at a merge.
 - `gate_checkpoint`: clean means the block's own worktree; other streams' worktrees are allowed;
   continuation handoff present.
 - `gate_drift`: status-row branches and heads match git; pending decisions match open records;
-  a stream branch behind `<program>/integration`, or an integration branch behind main, fails
-  until a sync; a block past
-  `drift.estimate_factor_pct` percent (default 150) of its estimate is reported to the owner.
+  a stream branch behind the base branch, or an integration branch behind it, fails until a sync; a stream whose status row's `used` is past
+  `drift.estimate_factor_pct` percent (default 150) of its `estimate` is reported to the owner by `drift report` at each sync; it is not a failing line.
 - `gate_index`: INDEX.md and indexes regenerate without error and none is tracked.
 - `gate_cleanup` (post-merge and at program close): the merged plan's or closed program's
   per-effort files are gone from the tree, and every lasting decision they produced has a

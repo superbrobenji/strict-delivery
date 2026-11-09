@@ -11,7 +11,8 @@ from gates.lib.findings import (RESOLVED, SEVERITIES, STATUSES, TRANSITIONS, epi
                                 is_resolved, may_delete, transition_errors, validate)
 from gates.lib.result import GateError
 from gates.lib.store import Record
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, write_record
+from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms,
+                           write_record)
 
 F1 = "F-20261031-k3f9"
 F2 = "F-20261031-m4n5"
@@ -128,6 +129,7 @@ class SchemaTests(Base):
         self.assertEqual(self.v({**FINDING, "extra": 1}), ["extra: unknown key"])
 
     def test_non_mapping_row(self):  # V24
+        make_repo(self.work)  # the root check runs first (Q-1bfin-2)
         for v in (None, [], "x", 1):
             with self.subTest(repr(v)):
                 self.assertEqual(validate(v, self.cfg), ["top level: must be a mapping"])
@@ -700,23 +702,60 @@ class ResolutionTests(Base):
             self.assertIs(is_resolved(bad), False, repr(bad))
 
     def test_may_delete(self):  # OQ-5, D2-D5
-        self.assertIs(may_delete(CLOSED, "/x", self.cfg, [grant(DA)]), True)
-        self.assertIs(may_delete(mk("merged"), "/x", self.cfg, [grant(DA)]), True)
+        make_repo(self.work)  # the root check runs first (Q-1bfin-2)
+        self.assertIs(may_delete(CLOSED, self.work, self.cfg, [grant(DA)]), True)
+        self.assertIs(may_delete(mk("merged"), self.work, self.cfg, [grant(DA)]), True)
         for name, decs in (("none", []), ("open", [grant(DA, "open")]), ("withdrawn", [grant(DA, "withdrawn")]),
                            ("other plan", [grant(DA, plan="other")]),
                            ("not a grant", [rec(dec(DA, "answered", plan="p"))]),
                            ("invalid grant", [rec(dec(DA, "answered", **{"class": "merge-grant", "plan": "p",
                                                                          "answer": None}))])):
             with self.subTest(name):
-                self.assertIs(may_delete(CLOSED, "/x", self.cfg, decs), False)
-        self.assertIs(may_delete(FINDING, "/x", self.cfg, [grant(DA)]), False)  # unresolved
+                self.assertIs(may_delete(CLOSED, self.work, self.cfg, decs), False)
+        self.assertIs(may_delete(FINDING, self.work, self.cfg, [grant(DA)]), False)  # unresolved
         for st in STATUSES:  # F-1b3r-1: an unresolved row that carries resolved_by must still be refused
             if st not in RESOLVED:
                 with self.subTest("unresolved " + st):
-                    self.assertIs(may_delete({**mk(st), "resolved_by": "p"}, "/x", self.cfg, [grant(DA)]), False)
-        self.assertIs(may_delete(drop(CLOSED, "resolved_by"), "/x", self.cfg, [grant(DA)]), False)
-        self.assertIs(may_delete({**CLOSED, "resolved_by": 5}, "/x", self.cfg, [grant(DA)]), False)
-        self.assertIs(may_delete(CLOSED, "/x", self.cfg, [Record(DA, "x", "a.yml")]), False)
+                    self.assertIs(may_delete({**mk(st), "resolved_by": "p"}, self.work, self.cfg, [grant(DA)]), False)
+        self.assertIs(may_delete(drop(CLOSED, "resolved_by"), self.work, self.cfg, [grant(DA)]), False)
+        self.assertIs(may_delete({**CLOSED, "resolved_by": 5}, self.work, self.cfg, [grant(DA)]), False)
+        self.assertIs(may_delete(CLOSED, self.work, self.cfg, [Record(DA, "x", "a.yml")]), False)
+
+
+
+class RootGuardTests(Base):
+    """Q-1bfin-2 (a): evidence_errors and may_delete refuse a root that is not the top level, before the row is
+    looked at (T1-T12, O5)."""
+
+    def setUp(self):
+        super().setUp()
+        self.top = make_repo(self.work)
+
+    def test_subdirectory_root_refused_everywhere(self):
+        forms = root_forms(self.tmp, self.top)
+        check_root_forms(self, forms, {
+            "evidence_errors": lambda r: evidence_errors(CLOSED, r, self.cfg, [], frozenset()),
+            "may_delete": lambda r: may_delete(CLOSED, r, self.cfg, [grant(DA)]),
+        })
+
+    def test_accepted_forms_give_the_same_answers(self):  # T3, T5, T9
+        want = evidence_errors(CLOSED, self.top, self.cfg, [], frozenset())
+        for name, path, verdict in root_forms(self.tmp, self.top):
+            if verdict == "ok":
+                with self.subTest(form=name):
+                    self.assertEqual(evidence_errors(CLOSED, path, self.cfg, [], frozenset()), want)
+                    self.assertIs(may_delete(CLOSED, path, self.cfg, [grant(DA)]), True)
+
+    def test_root_check_comes_before_rows_that_return_early(self):  # O5
+        sub = os.path.join(self.top, "sub")
+        os.mkdir(sub)
+        for row in (None, [], "x", 1, FINDING, {**CLOSED, "resolved_by": 5}):
+            with self.subTest(row=repr(row)):
+                for fn in (lambda: evidence_errors(row, sub, self.cfg, [], frozenset()),
+                           lambda: may_delete(row, sub, self.cfg, [])):
+                    with self.assertRaises(GateError) as e:
+                        fn()
+                    self.assertEqual(str(e.exception), TOP)
 
 
 if __name__ == "__main__":

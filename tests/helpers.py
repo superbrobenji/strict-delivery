@@ -18,6 +18,11 @@ _IDENTITY = {
 }
 
 
+# The two texts a library function raises for a root that is not a top level (measured 2026-11-02).
+TOP = "git rev-parse --show-toplevel: root must be the repository top level"
+E128 = "git rev-parse --show-toplevel failed (exit 128)"
+
+
 def minimal_config() -> dict:
     return {"schema": "config/1", "framework_version": "0.0.0", "profile": "strict"}
 
@@ -91,3 +96,54 @@ class GitIsolatedTestCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
         for name in CLEARED_ENV:
             os.environ.pop(name, None)
+
+
+def root_forms(tmp: str, top: str) -> list:
+    """Every spelling of a root the domain table (T1-T12) names, built with real git and symlinks around the
+    repository ``top`` (a ``make_repo`` tree with at least one commit). Returns ``(name, path, verdict)`` where the
+    verdict is ``"ok"`` (the root check accepts it), ``TOP`` or ``E128`` (the text the check raises)."""
+    base = os.path.join(tmp, "forms")
+    os.mkdir(base)
+    sub = os.path.join(top, "sub")
+    os.makedirs(sub)
+    with open(os.path.join(top, "file.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    link = os.path.join(base, "link")
+    os.symlink(top, link)
+    linksub = os.path.join(base, "linksub")
+    os.symlink(sub, linksub)
+    plain = os.path.join(base, "plain")
+    os.mkdir(plain)
+    wt = os.path.join(base, "wt")
+    git(top, "worktree", "add", "-q", "--detach", wt)
+    bare = os.path.join(base, "bare.git")
+    git(base, "init", "-q", "--bare", bare)
+    nested = os.path.join(sub, "nested")
+    os.mkdir(nested)
+    git(nested, "init", "-q", "-b", "main")
+    return [
+        ("top", top, "ok"), ("top/", top + "/", "ok"), ("sub", sub, TOP), ("sub/", sub + "/", TOP),
+        ("link", link, "ok"), ("link/", link + "/", "ok"), ("link-to-sub", linksub, TOP),
+        ("missing", os.path.join(top, "missing"), E128), ("file", os.path.join(top, "file.txt"), E128),
+        ("plain", plain, E128), ("worktree", wt, "ok"), ("bare", bare, E128),
+        ("dot-git", os.path.join(top, ".git"), E128), ("nested", nested, "ok"),
+    ]
+
+
+def check_root_forms(tc: unittest.TestCase, forms: list, calls: dict) -> None:
+    """For every call and every form: a refused form raises exactly its text (never naming the path); an accepted
+    form never raises the root-check text."""
+    from gates.lib.result import GateError
+    for fname, fn in calls.items():
+        for name, path, verdict in forms:
+            with tc.subTest(fn=fname, form=name):
+                msg = None
+                try:
+                    fn(path)
+                except GateError as e:
+                    msg = str(e)
+                if verdict == "ok":
+                    tc.assertNotIn(msg, (TOP, E128))
+                else:
+                    tc.assertEqual(msg, verdict)
+                    tc.assertNotIn(path, msg)

@@ -11,6 +11,7 @@ import os
 from typing import List
 
 from gates.lib import decisions, gitinfo, schema
+from gates.lib.result import _raw
 
 STATUSES = ["open", "planned", "in-progress", "fixed-unpinned", "pinned", "deferred", "closed", "merged"]
 RESOLVED = {"closed", "merged"}
@@ -91,7 +92,7 @@ def transition_errors(row: object) -> list:
         if b not in TRANSITIONS.get(a, []):
             errs.append("history.%d.status: %s -> %s is not a legal transition" % (i, a, b))
     if row.get("status") != seq[-1]:
-        errs.append("status: %s differs from the last history entry (%s)" % (row.get("status"), seq[-1]))
+        errs.append("status: %s differs from the last history entry (%s)" % (_raw(row.get("status")), seq[-1]))
     return errs
 
 
@@ -190,6 +191,7 @@ def evidence_errors(row: object, root: str, cfg: dict, decision_records: list, t
     fails closed). A plain-path entry of a resolved row is checked for existence in ``tracked`` only when
     ``changed`` (owner Q-1b3-3): renaming a cited file must not turn an immutable row red. Sha-pinned entries and
     the shape and location rules are checked always."""
+    gitinfo._require_toplevel(root)
     if type(row) is not dict:
         return []
     errs: list = []
@@ -274,6 +276,7 @@ def epic_errors(records: list) -> list:
 def may_delete(row: object, root: str, cfg: dict, decision_records: list) -> bool:
     """True only when the row is resolved and an answered ``merge-grant`` decision names the plan in its
     ``resolved_by`` (OQ-5). ``root`` is for the merge-commit check that arrives with ``gate_cleanup``."""
+    gitinfo._require_toplevel(root)
     if not is_resolved(row):
         return False
     plan = row.get("resolved_by")
