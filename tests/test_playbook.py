@@ -68,16 +68,16 @@ PINS = {
     "SD-R1": (["register row", "before work starts"], ["no owner"]),
     "SD-R2": (["by contradiction", "both commands"], ["checked one way"]),
     "SD-R3": (["Owner-only", "halts"], ["never assumes"]),
-    "SD-R4": (["Report before plan", "planned in full", "stream breakdown", "superpowers:brainstorming",
-               "dispatches no writer", "`program create`"], ["nobody approved"]),
-    "SD-R5": (["Zero bugs", "cosmetic item", "unrelated bug"], ["defect shipped"]),
+    "SD-R4": (["Report before plan", "planned in full", "stream breakdown", "dependency edges",
+               "superpowers:brainstorming", "dispatches no writer", "`program create`"], ["nobody approved"]),
+    "SD-R5": (["Zero bugs", "cosmetic item", "marks it cosmetic", "unrelated bug"], ["defect shipped"]),
     "SD-R6": (["deleted test"], ["hides the failure"]),
     "SD-R7": (["epic"], ["siblings"]),
     "SD-R8": (["process defect"], ["lets the defects in"]),
     "SD-R9": (["re-run every gate", "`git merge-tree`", "polluted"], ["author's checkout"]),
     "SD-R10": (["mutation transcript", "one mutant per changed condition", "surviving mutant"], ["no mutant fails"]),
-    "SD-R11": (["One block per agent context", "Continuation is automatic", "inherited memory", "rewrites the handoff",
-                "handoff is complete", "safe to clear"], ["written handoff"]),
+    "SD-R11": (["One block per agent context", "`gate_checkpoint` counts", "Continuation is automatic",
+                "inherited memory", "rewrites the handoff", "handoff is complete", "safe to clear"], ["written handoff"]),
     "SD-R12": (["base branch is protected", "owner's approval", "`MERGED`", "`checkpoint.pushed`", "need no approval",
                 "conflicts"], ["lost machine"]),
     "SD-R13": (["cleanup"], ["pile up"]),
@@ -90,6 +90,16 @@ PINS = {
 }
 
 
+# Clauses of spec section 8 that the review found dropped or blurred (F-B21R-4), and those found by the re-check of
+# every row against its bullet; each must stay in its rule cell, case-sensitive.
+RESTORED = {
+    "SD-R4": ["dependency edges", "unblock condition", "parallel groups", "`breakdown/1`", "`max_concurrent`",
+              "`streams.yml`", "a pointer to a section that does not exist or holds none"],
+    "SD-R5": ["the reviewer marks it cosmetic", "folded into the next real edit"],
+    "SD-R11": ["the handoff fields of spec §9", "`Task <block>.<n>` headings", "`<block>.<n>` task tokens", "`/clear`"],
+}
+
+
 def read(rel):
     """UTF-8 text of a repository file, from the repository root whatever the working directory (Q-B21-6 (a))."""
     with open(os.path.join(pc.REPO_ROOT, rel), "rb") as f:
@@ -97,7 +107,8 @@ def read(rel):
 
 
 def sentences(cell):
-    return [s for s in re.split(r"(?<=\.) (?=[A-Z`\"])", cell) if s]
+    """Sentences of a cell: split at spaces after `.`, `!` or `?`, or after one of them and a closing bracket or quote."""
+    return [s for s in re.split(r"(?<=[.!?]) +|(?<=[.!?][)\]\"']) +", cell) if s]
 
 
 def intro(text):
@@ -161,10 +172,15 @@ def why17_problems(rows):
     return [] if SD_R17_WHY in why and "gate_dispatch" in why and "program is live" in why else ["why SD-R17"]
 
 
+def restored_problems(rows):
+    rule = {r["id"]: r["rule"] for r in rows}
+    return ["restored %s %r" % (rid, p) for rid, ps in RESTORED.items() for p in ps if p not in rule.get(rid, "")]
+
+
 def all_content_problems(text):
     rows = table_rows(text)
     return (key_problems(rows) + phrase_problems(rows) + column_problems(rows) + intro_problems(text)
-            + pin_problems(text, rows) + why17_problems(rows))
+            + pin_problems(text, rows) + why17_problems(rows) + restored_problems(rows))
 
 
 class RealFileTest(unittest.TestCase):
@@ -343,6 +359,14 @@ BAD = [   # (name, text, exact problem kinds); each differs from GOOD_TEXT in on
     ("nul", with_line(2, "Rules\x00follow."), {"control"}),
     ("esc", with_line(2, "Rules\x1bfollow."), {"control"}),
     ("del", with_line(2, "Rules\x7ffollow."), {"control"}),
+    # F-B21R-2: every Unicode Cc, Zl and Zp character but the newline
+    ("c1 first", with_line(2, "Rules" + chr(0x80) + "follow."), {"control"}),
+    ("c1 nel", with_line(2, "Rules" + chr(0x85) + "follow."), {"control"}),
+    ("c1 csi", with_line(2, "Rules" + chr(0x9b) + "follow."), {"control"}),
+    ("c1 last", with_line(2, "Rules" + chr(0x9f) + "follow."), {"control"}),
+    ("line separator", with_line(2, "Rules" + chr(0x2028) + "follow."), {"control"}),
+    ("paragraph separator", with_cell(1, 2, "Rows" + chr(0x2029) + "give owners."), {"control"}),
+    ("vertical tab", with_line(2, "Rules\x0bfollow."), {"control"}),
     ("trailing space", with_line(2, GOOD_LINES[2] + " "), {"trailing-ws"}),
     ("trailing tab", with_line(2, GOOD_LINES[2] + "\t"), {"trailing-ws", "control"}),
     ("no final newline", GOOD_TEXT[:-1], {"final-newline"}),
@@ -464,10 +488,41 @@ class TableHelpersTest(unittest.TestCase):
                                             {"role": "reviewer", "tier": "tier3"}])
         self.assertEqual(first_table_header(text), "| role | tier |")
 
-    def test_table_rows_stops_at_the_first_non_table_line(self):
-        rows = table_rows(GOOD_TEXT + "\nAfter.\n| SD-R9 | x | y | hook | strict | no | spec §8 |\n")
+    def test_table_rows_stops_at_the_first_non_table_line(self):     # invariant: prose after the table is ignored
+        rows = table_rows(GOOD_TEXT + "\nAfter.\n")
         self.assertEqual([r["id"] for r in rows], ["SD-R1", "SD-R2", "SD-R3", "SD-R4"])
         self.assertEqual(rows[0]["source"], "spec §8")
+
+    def test_table_line_after_the_table_raises(self):          # F-B21R-1: rows after a non-table line
+        for text in (GOOD_TEXT + "\nAfter.\n| SD-R9 | x | y | hook | strict | no | spec §8 |\n",
+                     "| a |\n|---|\n| 1 |\n\n| b |\n|---|\n", "| a |\n|---|\nfoo\n| x |\n"):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "after the table"):
+                    table_rows(text)
+
+    def test_separator_shape_raises(self):                     # F-B21R-1: separator missing, count, cells
+        for text in ("| a |\n", "| a |\nfoo\n| x |\n", "| a | b |\n| 1 | 2 |\n| 3 | 4 |\n",
+                     "| a | b |\n|---|\n| 1 | 2 |\n", "| a | b |\n|---|---|---|\n| 1 | 2 |\n",
+                     "| a | b |\n|---|-x-|\n| 1 | 2 |\n", "| a | b |\n|---||\n| 1 | 2 |\n",
+                     "| a | b |\n|---|:-:-|\n| 1 | 2 |\n", "| a | b |\n|---|::|\n| 1 | 2 |\n",
+                     "| a |\n|---\n| 1 |\n", "| a |"):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "separator"):
+                    table_rows(text)
+
+    def test_separator_forms_accepted(self):                   # alignment colons and padding
+        self.assertEqual(table_rows("| a | b |\n|:---|---:|\n| 1 | 2 |\n"), [{"a": "1", "b": "2"}])
+        self.assertEqual(table_rows("| a |\n| :-: |\n| 1 |\n"), [{"a": "1"}])
+        self.assertEqual(table_rows("| a |\n|-|\n"), [])         # invariant: a header with no rows gives []
+
+    def test_duplicate_header_raises(self):                    # F-B21R-1: duplicate header names
+        for text in ("| a | a |\n|---|---|\n| 1 | 2 |\n", "| a | b | a |\n|---|---|---|\n"):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "duplicate"):
+                    table_rows(text)
+
+    def test_indented_table_lines(self):                       # invariant: an indented table line is a table line
+        self.assertEqual(table_rows("Intro.\n\n  | a |\n  |---|\n  | 1 |\n"), [{"a": "1"}])
 
     def test_no_table(self):
         self.assertIsNone(first_table_header("# T\n\nNo table.\n"))
@@ -574,6 +629,35 @@ class ContentChecksRefuseTest(unittest.TestCase):
         self.assertIn("pin missing SD-R13 why 'pile up'", pin_problems(t, table_rows(t)))
         t = changed(self.text, "lists the active overrides", "shows them")
         self.assertIn("pin missing intro 'lists the active overrides'", pin_problems(t, table_rows(t)))
+
+    def test_unpinned_sentence_any_start_or_end(self):         # F-B21R-3: sentence boundaries
+        rule = self.cell("SD-R6", 1)
+        for added, sentence in ((rule + " (Also do something else.)", "(Also do something else.)"),
+                                (rule + " also do something else.", "also do something else."),
+                                (rule + " 2 agents may skip it.", "2 agents may skip it."),
+                                (rule + " `x` is skipped.", "`x` is skipped."),
+                                (rule[:-1] + "? And skip it.", "And skip it."),
+                                (rule[:-1] + "! and skip it.", "and skip it."),
+                                (rule + "  Two spaces before.", "Two spaces before.")):
+            with self.subTest(sentence=sentence):
+                t = self.with_cell("SD-R6", 1, added)
+                self.assertEqual(rules_problems(t), [])
+                self.assertEqual(pin_problems(t, table_rows(t)),
+                                 ["unpinned sentence SD-R6 rule %r" % sentence[:40]])
+
+    def test_sentences_split(self):                            # F-B21R-3: the splitter itself
+        self.assertEqual(sentences("A b. (C d.) e f? G! 2 h.  `i` j."),
+                         ["A b.", "(C d.)", "e f?", "G!", "2 h.", "`i` j."])
+        self.assertEqual(sentences("Use `a.b` and 80 % of it."), ["Use `a.b` and 80 % of it."])
+
+    def test_restored_spec_clauses(self):                      # F-B21R-4: clauses of spec section 8 kept
+        rule = {r["id"]: r["rule"] for r in table_rows(self.text)}
+        for rid, phrases in RESTORED.items():
+            for p in phrases:
+                with self.subTest(rid=rid, phrase=p):
+                    self.assertIn(p, rule[rid])
+                    t = self.with_cell(rid, 1, erase(rule[rid], p))
+                    self.assertTrue(restored_problems(table_rows(t)))
 
     def test_harmless_rewording_passes(self):                  # K20: verbatim spec bullet, unpinned rewording
         t = self.with_cell("SD-R6", 1, "A deleted test is restored and fixed; dropping a test is never offered as a fix.")

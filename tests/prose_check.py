@@ -4,6 +4,7 @@ files and on bad samples. Python 3.9+, standard library only."""
 import os
 import re
 import stat
+import unicodedata
 
 SPEC_ROLES = (
     "program_controller", "stream_controller", "controller", "implementer", "implementer_transcription",
@@ -316,23 +317,42 @@ def first_table_header(text):
     return None
 
 
+_SEPARATOR_CELL = re.compile(r":?-+:?")
+
+
 def table_rows(text):
-    """One dict per body row of the first table, keyed by that table's own header cells (padding stripped). The row
-    after the header is the separator; the table ends at the first line that is not a table line."""
+    """One dict per body row of the one table, keyed by that table's own header cells (padding stripped). The line
+    after the header is a separator with one `:?-+:?` cell per header cell; the table ends at the first line that is
+    not a table line, and no table line may follow it. Header names are unique."""
     _need_str(text, "table_rows")
     lines = text.split("\n")
     h = next((i for i, line in enumerate(lines) if _is_table_line(line)), None)
     if h is None:
         raise ValueError("the text holds no table")
     header = _split_cells(lines[h])
+    if len(set(header)) != len(header):
+        raise ValueError("duplicate header cell names: %r" % lines[h])
+    if h + 1 >= len(lines):
+        raise ValueError("separator: no separator line after the header %r" % lines[h])
+    try:
+        sep = _split_cells(lines[h + 1])
+    except ValueError:
+        raise ValueError("separator: not a table row: %r" % lines[h + 1])
+    if len(sep) != len(header) or not all(_SEPARATOR_CELL.fullmatch(c) for c in sep):
+        raise ValueError("separator: %r does not match the header's %d cells" % (lines[h + 1], len(header)))
     rows = []
-    for line in lines[h + 2:]:
-        if not _is_table_line(line):
+    end = len(lines)
+    for i in range(h + 2, len(lines)):
+        if not _is_table_line(lines[i]):
+            end = i
             break
-        cells = _split_cells(line)
+        cells = _split_cells(lines[i])
         if len(cells) != len(header):
-            raise ValueError("%d cells, the header has %d: %r" % (len(cells), len(header), line))
+            raise ValueError("%d cells, the header has %d: %r" % (len(cells), len(header), lines[i]))
         rows.append(dict(zip(header, cells)))
+    later = next((i for i in range(end, len(lines)) if _is_table_line(lines[i])), None)
+    if later is not None:
+        raise ValueError("a table line after the table, line %d: %r" % (later + 1, lines[later]))
     return rows
 
 
@@ -349,7 +369,7 @@ def rules_problems(text):
         for ch in line:
             if ch == "\r":
                 kind = "line-ending"
-            elif ch < " " or ch == "\x7f":
+            elif unicodedata.category(ch) in ("Cc", "Zl", "Zp"):
                 kind = "control"
             else:
                 continue
