@@ -25,6 +25,8 @@ FIND = ".strict-delivery/state/findings"
 DEC = ".strict-delivery/state/decisions"
 REV = "docs/strict-delivery/reviews"
 REPORT = REV + "/p/r.md"
+# review-report has no schema file yet: Task 6E.1 ships gates/schemas/review-report.yml (Global Constraints
+# "Test fixtures": one named constant per kind with no schema file, its comment naming the shipping task).
 TAGLINE = "<!-- schema: review-report/1 -->"
 CATS = ["schema", "store", "base", "transition", "evidence", "epic", "report"]
 F = "F-20261031-k3f9"
@@ -535,10 +537,83 @@ class BaseTests(Base):  # C3-C7
         write_record(root, fpath(F), frow(F))
         self.input_fail(*self.run_(), "main:" + fpath(F))
 
-    def test_c7_non_record_entries_at_base_ignored(self):  # C7 (1c.1 C8)
+    def test_c7_non_record_entries_at_base_ignored(self):  # C7 (1c.1 C7: non-record names)
         root = self.build(files={FIND + "/notes.txt": "x", FIND + "/x.yaml": "x"})
         git(root, "rm", "-q", FIND + "/notes.txt", FIND + "/x.yaml")
         self.assertEqual(self.run_("--base", "HEAD"), (passes(*CATS), 0))
+
+    def commit_entry(self, kind, rel):
+        """Commit ``rel`` as a ``kind`` entry: a symlink (mode 120000) to the closed finding record ``src/real.yml``,
+        or a gitlink (mode 160000) to HEAD. Staged by name: ``commit_all`` would stage the absent gitlink's
+        deletion."""
+        if kind == "symlink":
+            os.makedirs(os.path.join(self.work, FIND), exist_ok=True)
+            os.symlink("../../../src/real.yml", os.path.join(self.work, rel))
+            git(self.work, "add", "--", rel)
+        else:
+            sha = git(self.work, "rev-parse", "HEAD")
+            git(self.work, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % (sha, rel))
+        git(self.work, "commit", "-q", "-m", kind)
+        self.assertIn({"symlink": "120000 blob ", "gitlink": "160000 commit "}[kind],
+                      git(self.work, "ls-tree", "HEAD", "--", rel))
+
+    def drop_entry(self, rel):
+        git(self.work, "rm", "-q", "--cached", "--", rel)
+        if os.path.lexists(os.path.join(self.work, rel)):
+            os.unlink(os.path.join(self.work, rel))
+
+    def test_c7_symlink_and_gitlink_record_entries_at_base_ignored(self):  # C7 (1c.1 C7), F-1c2-r1
+        real = {"src/real.yml": emit(frow(F, "closed"))}
+        for kind in ("symlink", "gitlink"):
+            with self.subTest(kind=kind, at="merge base, deleted on the branch"):
+                self.fresh(kind + "_deleted")
+                self.build(files=real)
+                self.commit_entry(kind, fpath(F))
+                self.other_branch()
+                self.drop_entry(fpath(F))
+                git(self.work, "commit", "-q", "-m", "drop")
+                self.assertEqual(self.run_(), (passes(*CATS), 0))
+            with self.subTest(kind=kind, at="merge base, a regular record in its place on the branch"):
+                self.fresh(kind + "_replaced")
+                self.build(files=real)
+                self.commit_entry(kind, fpath(F))
+                self.other_branch()
+                self.drop_entry(fpath(F))
+                write_record(self.work, fpath(F), frow(F))
+                git(self.work, "add", "--", fpath(F))
+                git(self.work, "commit", "-q", "-m", "regular")
+                self.assertEqual(self.run_(), (passes(*CATS), 0))
+            with self.subTest(kind=kind, at="base tip only, the same id added on the branch"):
+                self.fresh(kind + "_tip")
+                self.build(files=real)
+                self.other_branch()
+                write_record(self.work, fpath(F), frow(F))
+                commit_all(self.work, "feat")
+                git(self.work, "checkout", "-q", "main")
+                self.commit_entry(kind, fpath(F))
+                git(self.work, "checkout", "-q", "feat")
+                self.assertEqual(self.run_(), (passes(*CATS), 0))
+
+    def test_c7_unparsable_record_only_at_base_tip_is_input_fail(self):  # C7 (1c.1 C7: the tip)
+        root = self.build()
+        self.other_branch()
+        write_record(root, fpath(F), frow(F))
+        commit_all(root, "feat")
+        git(root, "checkout", "-q", "main")
+        self.put(fpath(F2), "a: [\n")
+        commit_all(root, "bad at tip")
+        git(root, "checkout", "-q", "feat")
+        out, code = self.run_()
+        self.input_fail(out, code, "main:" + fpath(F2) + ": ")
+        self.assertNotIn("(at the merge base)", out)
+
+    def test_c7_schema_version_only_change_is_immutable(self):  # C7 (1c.1 C8): no migration is registered
+        root = self.build([frow(F, "closed")], files=SRC)
+        write_record(root, fpath(F), frow(F, "closed", schema="%s/%d" % (_FS.kind, _FS.version + 1)))
+        out, code = self.run_()
+        self.assertIn("FAIL register.base.immutable.%s: resolved records are immutable; record the change as a new "
+                      "finding\n" % F, out)
+        self.assertEqual(code, 1)
 
 
 class TransitionTests(Base):  # C8
