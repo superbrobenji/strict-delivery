@@ -37,7 +37,12 @@ def _index(args: List[str]) -> int:
     return index.main(args)
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "index": _index}
+def _findings(args: List[str]) -> int:
+    from gates.tools import findings_cli
+    return findings_cli.main(args)
+
+
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "findings": _findings, "index": _index}
 
 
 def main(argv: List[str]) -> int:

@@ -346,7 +346,7 @@ class MainTest(unittest.TestCase):
         self.assertIn(b"usage: python3 -m gates", p.stderr)
 
     def test_producers_registry(self):
-        self.assertEqual(producers.PRODUCER_MODULES, ("gates.tools.index",))  # Task 1c.3
+        self.assertEqual(producers.PRODUCER_MODULES, ("gates.tools.index", "gates.tools.findings_cli"))  # 1c.3, 1d.2
 
 
 class RepoRootTest(GitIsolatedTestCase):
