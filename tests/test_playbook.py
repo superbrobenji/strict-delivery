@@ -5,8 +5,10 @@ derivation table of `profiles` and `enforced by`, `source`, the fixed set) is a 
 read back from the file or the helpers. Bad samples are built from GOOD, a well-formed sample written here, by one
 change each, and assert their exact problem kinds."""
 import os
+import random
 import re
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -112,16 +114,42 @@ def read(rel):
         return f.read().decode("utf-8")
 
 
-# A boundary is `.`, `!` or `?`, then any run of characters that are not letters, digits or whitespace (closing
-# brackets, quotes of any script, backticks, emphasis markers, `_`), then any run of Unicode whitespace. It oversplits
-# rather than undersplits, so no sentence hides behind its pinned neighbour (F-B21RR-1).
-_BOUNDARY = re.compile(r"([.!?](?:[^\w\s]|_)*)\s+")
+# A boundary is a stop (`.`, `!`, `?` or a CJK/fullwidth stop), then a closer run: characters that are not letters,
+# digits, whitespace or format (Cf) characters (closing brackets, quotes of any script, backticks, emphasis markers,
+# `_`, further stops). It ends a sentence when a run of whitespace or Cf characters follows (the run is dropped), when
+# an uppercase or titlecase letter follows with no space, or when the run holds a CJK/fullwidth stop. It oversplits
+# rather than undersplits, so no sentence hides behind its pinned neighbour (F-B21RR-1, F-B21RR2-1).
+_CJK_STOPS = frozenset(chr(c) for c in (0x3002, 0xff0e, 0xff01, 0xff1f, 0xff61))
+_STOPS = frozenset(".!?") | _CJK_STOPS
+_WORD = re.compile(r"\w")
+
+
+def _is_gap(ch):
+    return ch.isspace() or unicodedata.category(ch) == "Cf"
+
+
+def _is_closer(ch):
+    return (ch == "_" or not _WORD.match(ch)) and not _is_gap(ch)
 
 
 def sentences(cell):
-    parts = _BOUNDARY.split(cell)
-    joined = [parts[i] + (parts[i + 1] if i + 1 < len(parts) else "") for i in range(0, len(parts), 2)]
-    return [s for s in joined if s]
+    out, start, i, n = [], 0, 0, len(cell)
+    while i < n:
+        if cell[i] not in _STOPS:
+            i += 1
+            continue
+        j = i + 1
+        while j < n and _is_closer(cell[j]):
+            j += 1
+        k = j
+        while k < n and _is_gap(cell[k]):
+            k += 1
+        if k > j or k == n or unicodedata.category(cell[k]) in ("Lu", "Lt") or any(c in _CJK_STOPS for c in cell[i:j]):
+            out.append(cell[start:j])
+            start = k
+        i = k if k > j else j
+    out.append(cell[start:])
+    return [s for s in out if s]
 
 
 def intro(text):
@@ -705,6 +733,370 @@ class ContentChecksRefuseTest(unittest.TestCase):
 
     def test_real_file_has_no_content_problems(self):
         self.assertEqual(all_content_problems(self.text), [])
+
+    def test_unpinned_sentence_with_no_space(self):          # F-B21RR2-1: every member, through the real pin check
+        rule = self.cell("SD-R6", 1)
+        self.assertTrue(rule.endswith("fix."))
+        for stop in ".!?" + CJK_STOPS:
+            for closer in NO_SPACE_CLOSERS:
+                for sep, nxt in NO_SPACE_JOINS:
+                    added = rule[:-1] + stop + closer + sep + nxt
+                    with self.subTest(stop=stop, closer=closer, sep=sep, nxt=nxt[:2]):
+                        t = self.with_cell("SD-R6", 1, added)
+                        self.assertEqual(rules_problems(t), [])
+                        self.assertEqual(pin_problems(t, table_rows(t)), ["unpinned sentence SD-R6 rule %r" % nxt[:40]])
+
+    def test_cjk_stop_splits_before_lowercase(self):          # F-B21RR2-1: a CJK/fullwidth stop needs no space or capital
+        rule = self.cell("SD-R6", 1)
+        for stop in CJK_STOPS:
+            with self.subTest(stop=stop):
+                t = self.with_cell("SD-R6", 1, rule[:-1] + "." + stop + "agents may skip it.")
+                self.assertEqual(pin_problems(t, table_rows(t)), ["unpinned sentence SD-R6 rule 'agents may skip it.'"])
+                t = self.with_cell("SD-R6", 1, rule[:-1] + stop + "agents may skip it.")
+                self.assertEqual(pin_problems(t, table_rows(t)), ["unpinned sentence SD-R6 rule 'agents may skip it.'"])
+
+    def test_no_false_split_without_space(self):              # F-B21RR2-1: lowercase, digits and code stay one sentence
+        rule = self.cell("SD-R6", 1)
+        for tail in ("e.g.the fix", "v3.12 fix", "spec §8.x", "`gates.lib.config` fix", "a.b fix"):
+            with self.subTest(tail=tail):
+                t = self.with_cell("SD-R6", 1, rule[:-1] + " via " + tail + ".")
+                self.assertEqual(pin_problems(t, table_rows(t)), [])
+
+
+# F-B21RR2-1 members: stops, closer runs and what follows the run with no whitespace (expected sentence = the text after
+# the separator, built here, never read from the splitter).
+CJK_STOPS = chr(0x3002) + chr(0xff0e) + chr(0xff01) + chr(0xff1f) + chr(0xff61)
+NO_SPACE_CLOSERS = ["", ")", "``", "**", "\"", chr(0x201d), "``)", "_", chr(0x300d)]  # backticks paired: one cell
+NO_SPACE_JOINS = [("", "Agents may skip it."), ("", chr(0xc9) + "tapes may skip it."), ("", chr(0x1c5) + "x may skip it.")]
+NO_SPACE_JOINS += [(sep, nxt) for sep in (chr(0x200b), chr(0x200d), chr(0x2060), chr(0xfeff), chr(0x200b) * 2)
+                   for nxt in ("Agents may skip it.", "agents may skip it.")]
+NO_SPACE_JOINS += [(stop, nxt) for stop in CJK_STOPS for nxt in ("Agents may skip it.", "agents may skip it.")]
+
+
+class SentenceSplitTest(unittest.TestCase):
+    def test_no_space_boundaries(self):                       # F-B21RR2-1: the splitter on each member
+        self.assertEqual(sentences("A fix.Agents b."), ["A fix.", "Agents b."])
+        self.assertEqual(sentences("A fix.)Agents b."), ["A fix.)", "Agents b."])
+        self.assertEqual(sentences("A fix." + chr(0x200b) + "agents b."), ["A fix.", "agents b."])
+        self.assertEqual(sentences("A fix." + chr(0x3002) + "agents b."), ["A fix." + chr(0x3002), "agents b."])
+        self.assertEqual(sentences("A fix" + chr(0x3002) + "agents b."), ["A fix" + chr(0x3002), "agents b."])
+        self.assertEqual(sentences("A fix." + chr(0x200b)), ["A fix."])
+        self.assertEqual(sentences("A fix." + chr(0x3002)), ["A fix." + chr(0x3002)])
+        self.assertEqual(sentences("e.g.the v3.12 a.b `x.Y` end."), ["e.g.the v3.12 a.b `x.", "Y` end."])
+
+
+# ---- Task B2.2 part 1: section, forbidden additions, placeholders, front matter ----
+
+class SectionHelperTest(unittest.TestCase):
+    def raises_naming(self, text, heading):
+        with self.assertRaises(AssertionError) as cm:
+            pc.section(text, heading)
+        self.assertIn(repr(heading), str(cm.exception))
+
+    def test_section_helper_edges(self):              # plan; H1, H2: absent and repeated fail; the last runs to the end
+        t = "# x\n\n## A\na1\n## B\nb1\n"
+        self.assertEqual(pc.section(t, "A"), "a1\n")
+        self.assertEqual(pc.section(t, "B"), "b1\n")
+        for text, heading in ((t, "C"), (t + "## A\n", "A")):
+            with self.subTest(heading=heading):
+                self.raises_naming(text, heading)
+
+    def test_section_multiline_bodies(self):          # H1
+        t = "# x\n\n## A\na1\n\na2\n## B\nb1\nb2\n"
+        self.assertEqual(pc.section(t, "A"), "a1\n\na2\n")
+        self.assertEqual(pc.section(t, "B"), "b1\nb2\n")
+        self.assertEqual(pc.section("## A\n## B\n", "A"), "\n")
+
+    def test_section_near_misses_are_absent(self):    # H3: only the exact line `## <heading>` counts
+        for near in ("## A ", "##A", "### A", "## a", " ## A", "##  A"):
+            with self.subTest(near=near):
+                self.raises_naming("# x\n" + near + "\nbody\n", "A")
+        self.assertEqual(pc.section("## A \nx\n## A\ny\n### A\nz\n", "A"), "y\n### A\nz\n")
+
+    def test_section_subheading_in_body(self):        # H4
+        self.assertEqual(pc.section("## A\na\n### Sub\ns\n## B\n", "A"), "a\n### Sub\ns\n")
+
+    def test_section_heading_inside_fence(self):      # H5: a fenced `## ` line is a heading line
+        t = "## A\n```\n## X\n```\n## B\nb\n"
+        self.assertEqual(pc.section(t, "A"), "```\n")
+        self.assertEqual(pc.section(t, "X"), "```\n")
+
+    def test_section_crlf_and_no_final_newline(self):     # H6
+        self.raises_naming("## A\r\nx\r\n", "A")
+        self.assertEqual(pc.section("## A\nx", "A"), "x")
+        self.assertEqual(pc.section("## A", "A"), "")
+
+
+NEW_FORBIDDEN = [("absolute-path", "/Users/alice/repo/x.md"), ("absolute-path", "see /home/alice/x"),
+                 ("test-filename", "test_*.py"), ("test-filename", "*_test.go"), ("test-filename", "*.spec.ts")]
+# Row F6 edges, owner Q-B22v2-4 (a): (sample, expected names in order)
+F6_EDGES = [
+    ("/Users/<name>/", []), ("/home/<name>/x", []), ("/home/alice", []), ("~/x", []), ("$HOME/x", []),
+    ("/Users/Shared/x", ["absolute-path"]), ("/users/alice/x", []), ("/HOME/alice/x", []), ("C:\\Users\\alice\\", []),
+    ("test_*.c", ["test-filename"]), ("*.test.js", ["test-filename"]), ("tests/test_playbook.py", []),
+    ("https://x.org/home/alice/y", []), ("~/Users/alice/x", []), ("./home/alice/x", []), ("a-/home/alice/x", []),
+    ("x/home/alice/y", []), ("_/home/alice/y", []), ("(/home/alice/x)", ["absolute-path"]),
+    ("`/Users/alice/x`", ["absolute-path"]), ("\"/home/alice/x\"", ["absolute-path"]), ("/home/a b/x", []),
+    ("/home/\"a\"/x", []), ("/home/'a'/x", []), ("/home/a>/x", []), ("/home//x", []), ("/home/alice/", ["absolute-path"]),
+    ("*_test.<ext>", []), ("test_*.<ext>", []), ("src/**/*.spec.ts", ["test-filename"]), ("test_x.py", []),
+    ("*.test", []), ("the test_* files", []),
+]
+
+
+class ForbiddenAdditionsTest(unittest.TestCase):
+    def test_new_forbidden_patterns_seeded(self):          # F2, F3 (plan); Q-RB-1 (a)
+        for name, sample in NEW_FORBIDDEN:
+            with self.subTest(sample=sample):
+                self.assertEqual([h[0] for h in forbidden_hits(sample)], [name])
+        for clean in ("/strict-delivery:init", "/usr/bin/python3", "/bin/sh", "test filename patterns"):
+            with self.subTest(clean=clean):
+                self.assertEqual(forbidden_hits(clean), [])
+
+    def test_new_forbidden_names_follow_old_steps(self):   # F1 (plan); Q-RB-1 (a)
+        names = [n for n, _ in pc.FORBIDDEN]
+        i = names.index("old-steps")
+        self.assertEqual(names[i + 1:i + 3], ["absolute-path", "test-filename"])
+        self.assertEqual(len(names), 11)
+
+    def test_f6_edges(self):                                # F6, owner Q-B22v2-4 (a)
+        for sample, names in F6_EDGES:
+            with self.subTest(sample=sample):
+                self.assertEqual([h[0] for h in forbidden_hits(sample)], names)
+                self.assertEqual([h[0] for h in forbidden_hits("prose " + sample + " prose")], names)
+
+    def test_overlap_with_owner_handle(self):               # F4
+        self.assertEqual(forbidden_hits("/Users/benji/x"),
+                         [("absolute-path", 1, "/Users/benji/"), ("owner-handle", 1, "benji")])
+
+    def test_joined_scan_adds_no_second_hit(self):          # F5
+        self.assertEqual(forbidden_hits("see /Users/alice/\nmore text"), [("absolute-path", 1, "/Users/alice/")])
+        self.assertEqual(forbidden_hits("a\nrun test_*.py\nb"), [("test-filename", 2, "test_*.py")])
+        self.assertEqual(forbidden_hits("see /home/\nalice/x"), [])
+
+    def test_b_owned_markdown_clean(self):                  # F7, A3 for the files that exist; F9 reads the same list
+        files = b_owned_markdown()
+        self.assertIn(RULES, files)
+        for rel in files:
+            with self.subTest(rel=rel):
+                self.assertEqual(forbidden_hits(read(rel)), [])
+
+
+def b_owned_markdown():
+    """Every B-owned markdown file present: the ten prompt blocks, playbook/*.md (glob), the skill once it lands."""
+    out = ["%s/%s.md" % (pc.PROMPTS_DIR, r) for r in pc.B_ROLES]
+    pb = os.path.join(pc.REPO_ROOT, "playbook")
+    out += sorted("playbook/" + n for n in os.listdir(pb) if n.endswith(".md"))
+    if os.path.exists(os.path.join(pc.REPO_ROOT, "skills", "strict-delivery", "SKILL.md")):
+        out.append("skills/strict-delivery/SKILL.md")
+    return out
+
+
+# Row P1-P10 samples: (text, expected [(line, match)]); every expected value is written here by hand.
+PLACEHOLDER_REFUSED = [
+    ("G<n> the same", [(1, "<n>")]), ("Owner answers (<date>), binding", [(1, "<date>")]),
+    ("<program>/integration", [(1, "<program>")]), ("class: <dimension>: <members>", [(1, "<dimension>"), (1, "<members>")]),
+    ("<role>.md", [(1, "<role>")]), ("<Rq-n>", [(1, "<Rq-n>")]),                                         # P1
+    ("<the slugs in order>", [(1, "<the slugs in order>")]), ("<a href=\"x\">", [(1, "<a href=\"x\">")]),
+    ("<a b='x y' c=d e>", [(1, "<a b='x y' c=d e>")]), ("<br/>", [(1, "<br/>")]), ("<n />", [(1, "<n />")]),
+    ("<the slugs\nin order>", [(1, "<the slugs\nin order>")]),                                           # P5
+    ("</n>", [(1, "</n>")]), ("</n >", [(1, "</n >")]), ("<!-- x -->", [(1, "<!-- x -->")]),
+    ("a <!-- open", [(1, "<!--")]), ("<!--\nx -->", [(1, "<!--\nx -->")]),                               # P7
+    ("\\<n>", [(1, "<n>")]),                                                                             # P8
+    ("a ` b <n>", [(1, "<n>")]), ("`a`` <n>", [(1, "<n>")]), ("\\`a <n> `", [(1, "<n>")]),             # P9
+    ("` <n> ``", [(1, "<n>")]), ("`` <n> `", [(1, "<n>")]),                     # P9: runs of unequal length pair not
+    ("`a\n<n>`", [(2, "<n>")]),                                                                          # P10
+    ("x\n```\ny\n```\n<n>", [(5, "<n>")]), ("~~~\n```\n<n>\n~~~\n<m>", [(5, "<m>")]),
+    ("    ```\n<n>\n    ```", [(2, "<n>")]), ("``` a`b\n<n>", [(2, "<n>")]),                          # P3 edges
+]
+PLACEHOLDER_ACCEPTED = [
+    "`G<n>`", "`<date>`", "``a `<n>` b``", "`` <n> ``", "``x` <n> `y``",                                # P2
+    "```\n<n>\n```", "~~~\n<n>\n~~~", "````\n```\n<n>\n````", "  ```py\n<n>\n  ```", "```\n<n>\n",
+    "~~~~\n<n>\n~~~~~", "```\n<n>\n```  ",                                                               # P3
+    "a < b", "x<y", "<1-4>", "< n>", "a <", "<>", "<-n>", "<_n>",                                          # P4
+    "<https://example.org/x>", "<mailto:a@b.c>", "<a@b.c>",                                              # P6
+    "<a `x`>", "<`n`>",                                                    # spans break a tag: masked by NUL, not space
+]
+
+
+class PlaceholderTest(unittest.TestCase):
+    def test_refused_samples(self):                    # P1, P5, P7, P8, P9, P10, P3 edges
+        for text, want in PLACEHOLDER_REFUSED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_accepted_samples(self):                   # P2, P3, P4, P6
+        for text in PLACEHOLDER_ACCEPTED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+
+    def test_generated_inputs(self):                   # PC2 oracle: the verdict comes from the construction
+        tags = {"<n>": "<n>", "<date>": "<date>", "<program>/integration": "<program>",
+                "<the slugs in order>": "<the slugs in order>"}
+        plain = ["a < b", "<1-4>", "<https://x.org>"]
+        rng = random.Random(20261109)
+        words = ["alpha", "beta", "x", "run", "(see)", "1", "e.g."]
+        for _ in range(300):
+            lines, want = [], []
+            for _ in range(rng.randint(1, 6)):
+                ph = rng.choice(list(tags) + plain)
+                wrap = rng.choice(["none", "span1", "span2", "fence", "unpaired"])
+                pre = " ".join(rng.choice(words) for _ in range(rng.randint(0, 3)))
+                post = " ".join(rng.choice(words) for _ in range(rng.randint(0, 3)))
+                pre = pre + " " if pre else ""
+                post = " " + post if post else ""
+                if wrap == "fence":
+                    fence = rng.choice(["```", "~~~", "````"])
+                    lines += [fence, pre + ph + post, fence]
+                    continue
+                body = {"none": ph, "span1": "`" + ph + "`", "span2": "`` " + ph + " ``", "unpaired": "` " + ph}[wrap]
+                lines.append(pre + body + post)
+                if ph in tags and wrap in ("none", "unpaired"):
+                    want.append((len(lines), tags[ph]))
+            with self.subTest(doc=lines):
+                self.assertEqual(pc.placeholder_hits("\n".join(lines) + "\n"), want)
+
+    def test_b_owned_markdown_has_no_placeholder(self):     # A6, Q-B22v2-3 (a): every B-owned markdown file
+        files = b_owned_markdown()
+        self.assertEqual(files[:10], ["%s/%s.md" % (pc.PROMPTS_DIR, r) for r in pc.B_ROLES])
+        self.assertIn(RULES, files)
+        for rel in files:
+            with self.subTest(rel=rel):
+                self.assertEqual(pc.placeholder_hits(read(rel)), [])
+
+    def test_seeded_hit_in_a_real_file_is_found(self):      # A6: the file check is not vacuous
+        text = read(RULES)
+        t = changed(text, "the active overrides", "the <n> active overrides")
+        self.assertEqual(pc.placeholder_hits(t), [(text[:text.index("the active overrides")].count("\n") + 1, "<n>")])
+
+    def test_takes_str(self):
+        with self.assertRaises(TypeError):
+            pc.placeholder_hits(b"<n>")
+
+
+# Row Y samples. GOOD_FM's expected dict is written here, not parsed back.
+GOOD_FM = "---\nname: strict-delivery\ndescription: \"Use at the start: paths \\\"q\\\" and \\\\ b\"\n---\n# Body\n"
+GOOD_FM_DICT = {"name": "strict-delivery", "description": "Use at the start: paths \"q\" and \\ b"}
+FM_ACCEPTED = [   # (front matter lines between the --- lines, expected dict)
+    (["name: strict-delivery"], {"name": "strict-delivery"}),                                            # Y3
+    (["description: \"Use at the start: paths\""], {"description": "Use at the start: paths"}),          # Y2
+    (["a-b_1: x"], {"a-b_1": "x"}), (["a: a#b"], {"a": "a#b"}), (["a: a:b"], {"a": "a:b"}),            # Y9, Y5
+    (["a: \"\""], {"a": ""}), (["a: \"'x' #y: z\""], {"a": "'x' #y: z"}), (["a: x", "b: y"], {"a": "x", "b": "y"}),
+    (["a: caf" + chr(0xe9)], {"a": "caf" + chr(0xe9)}), ([], {}),
+]
+FM_REFUSED = [   # (front matter lines, line number named): line 1 is the opening ---
+    (["description: Use at the start: paths"], 2),                                                       # Y1
+    (["a: a #b"], 2), (["a: x:"], 2),                                                                     # Y5
+    (["a:"], 2), (["a: "], 2), (["a: x", "a: y"], 3), (["a:\tx"], 2), (["a: x\ty"], 2), ([" a: x"], 2),
+    (["a: |", "  more"], 2), (["- x"], 2), (["a:", "  - x"], 2), ([""], 2), (["# c"], 2), (["a: x "], 2),
+    (["a:  x"], 2), (["a: x\r"], 2),                                                                      # Y6
+    (["a: 'x: y'"], 2), (["a: 'x'"], 2),                                                                  # Y7
+    (["Name: x"], 2), (["1a: x"], 2), (["a.b: x"], 2), (["a b: x"], 2), ([": x"], 2), (["-a: x"], 2),     # Y9
+    (["a: \"\\n\""], 2), (["a: \"\\t\""], 2), (["a: \"\\x41\""], 2), (["a: \"\\" + chr(0xe9) + "\""], 2),
+    (["a: \"x\\\""], 2),                                                                                  # Y10
+    (["a: \"abc"], 2), (["a: \"a\" b"], 2), (["a: \"a\" # c"], 2), (["a: \"a\"b\""], 2),                  # Y11
+]
+YAML_INDICATORS = "-?:,[]{}#&*!|>'\"%@`"
+
+
+class FrontMatterTest(unittest.TestCase):
+    def refused_at(self, text, line):
+        with self.assertRaises(AssertionError) as cm:
+            pc.front_matter(text)
+        self.assertIn("line %d:" % line, str(cm.exception))
+
+    def test_good_sample(self):                       # Y2, Y3, Y13
+        got = pc.front_matter(GOOD_FM)
+        self.assertEqual(got, GOOD_FM_DICT)
+        self.assertEqual(list(got), ["name", "description"])
+
+    def test_accepted(self):                          # Y2, Y3, Y5, Y9
+        for lines, want in FM_ACCEPTED:
+            with self.subTest(lines=lines):
+                self.assertEqual(pc.front_matter("\n".join(["---"] + lines + ["---", "body"]) + "\n"), want)
+
+    def test_refused(self):                           # Y1, Y5-Y7, Y9-Y11, Y15
+        for lines, line in FM_REFUSED:
+            with self.subTest(lines=lines):
+                self.refused_at("\n".join(["---"] + lines + ["---", "body"]) + "\n", line)
+
+    def test_indicator_first(self):                   # Y4
+        for ch in YAML_INDICATORS:
+            with self.subTest(ch=ch):
+                self.refused_at("---\nname: ok\nv: " + ch + "x\n---\n", 3)
+
+    def test_opening_and_closing_lines(self):         # Y12, Y6 no closer, Y15 short inputs
+        for text, line in (("--- \na: x\n---\n", 1), ("----\na: x\n---\n", 1), ("x\n---\na: x\n---\n", 1),
+                           ("---\na: x\n--- \n", 1), ("---\na: x\n...\n", 1), ("---\na: x\n", 1), ("---", 1),
+                           ("---\n", 1), ("", 1), ("\n---\na: x\n---\n", 1), ("---\r\na: x\r\n---\r\n", 1)):
+            with self.subTest(text=text):
+                self.refused_at(text, line)
+        self.assertEqual(pc.front_matter("---\na: x\n---"), {"a": "x"})
+        self.assertEqual(pc.front_matter("---\na: x\n---\n---\nb: y\n"), {"a": "x"})
+
+    def test_takes_str(self):
+        with self.assertRaises(TypeError):
+            pc.front_matter(b"---\n---\n")
+
+    def test_messages_name_the_rule(self):            # Y15: the message names the line and the broken rule
+        for line, part in (("abc", "not 'key: value'"), ("a:x", "not 'key: value'"), ("a: ", "empty value"),
+                           ("a: -x", "starts with '-'"), ("a: \"\\n\"", "double-quoted"), ("a: x y:", "trailing ':'")):
+            with self.subTest(line=line):
+                with self.assertRaises(AssertionError) as cm:
+                    pc.front_matter("---\n%s\n---\n" % line)
+                self.assertIn("line 2: ", str(cm.exception))
+                self.assertIn(part, str(cm.exception))
+
+    def test_generated_inputs(self):                  # Y14: fixed seed; expected dict and verdict from the construction
+        rng = random.Random(20261109)
+        low = "abcdefghijklmnopqrstuvwxyz"
+        for _ in range(400):
+            keys, entries = [], []
+            for _ in range(rng.randint(1, 5)):
+                key = rng.choice(low) + "".join(rng.choice(low + "0123456789_-") for _ in range(rng.randint(0, 6)))
+                if key in keys:
+                    continue
+                keys.append(key)
+                if rng.random() < 0.5:
+                    words = []
+                    for _ in range(rng.randint(1, 4)):
+                        w = "".join(rng.choice(low + "ABC019") for _ in range(rng.randint(1, 5)))
+                        if rng.random() < 0.3:
+                            w = w + rng.choice("#:./") + rng.choice(low)
+                        words.append(w)
+                    value = rng.choice(low) + " ".join(words)
+                    entries.append((key, value, value))
+                else:
+                    raw, dec = "", ""
+                    for _ in range(rng.randint(0, 6)):
+                        piece = rng.choice([("ab", "ab"), (": ", ": "), (" #", " #"), ("\\\"", "\""), ("\\\\", "\\"),
+                                            ("'", "'"), ("- ", "- "), (chr(0xe9), chr(0xe9))])
+                        raw, dec = raw + piece[0], dec + piece[1]
+                    entries.append((key, "\"" + raw + "\"", dec))
+            lines = ["%s: %s" % (k, v) for k, v, _ in entries]
+            want = {k: d for k, _, d in entries}
+            with self.subTest(lines=lines):
+                self.assertEqual(pc.front_matter("\n".join(["---"] + lines + ["---", "# x"]) + "\n"), want)
+            bad = rng.choice(["indicator", "colon", "hash", "trailing", "empty", "single", "escape", "unterminated",
+                              "after", "key", "duplicate", "tab", "indent", "noclose"])
+            i = rng.randrange(len(lines))
+            k = entries[i][0]
+            mutated = list(lines)
+            mutated[i] = {"indicator": "%s: %sv" % (k, rng.choice(YAML_INDICATORS)), "colon": "%s: a: b" % k,
+                          "hash": "%s: a #b" % k, "trailing": "%s: ab:" % k, "empty": "%s: " % k,
+                          "single": "%s: 'a'" % k, "escape": "%s: \"a\\%s\"" % (k, rng.choice("ntx0/u")),
+                          "unterminated": "%s: \"ab" % k, "after": "%s: \"a\" b" % k, "key": "%s%s: x" % (
+                              rng.choice("A1._ "), k), "duplicate": "%s: x\n%s: y" % (k, k), "tab": "%s: a\tb" % k,
+                          "indent": " %s: x" % k, "noclose": lines[i]}[bad]
+            text = "\n".join(["---"] + mutated + ([] if bad == "noclose" else ["---"]) + ["# x"]) + "\n"
+            line = 1 if bad == "noclose" else i + 2 + (1 if bad == "duplicate" else 0)
+            with self.subTest(bad=bad, mutated=mutated):
+                self.refused_at(text, line)
+
+    def test_b_owned_front_matter_files(self):        # Y8: the files the check runs on; not vacuous
+        with_fm = [rel for rel in b_owned_markdown() if read(rel).split("\n", 1)[0] == "---"]
+        self.assertEqual(with_fm, [])   # Task B2.3 adds skills/strict-delivery/SKILL.md
+        for rel in with_fm:
+            pc.front_matter(read(rel))
 
 
 if __name__ == "__main__":

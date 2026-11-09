@@ -33,6 +33,10 @@ FORBIDDEN = (
     ("hardware", re.compile(r"\b(esp-idf|esp32\w*|firmware|flash\w*|serial port|ota|power of 10|p10|unity)\b", re.I)),
     ("model-name", re.compile(r"\b(haiku|sonnet|opus|fable)(?=\d|\b)", re.I)),
     ("old-steps", re.compile(r"\bS\d+ block b\d+\b", re.I)),
+    # owner Q-RB-1 (a), Q-B22v2-4 (a): /Users/ or /home/, a name segment with no <, >, whitespace or quote, then /,
+    # not preceded by a word character, '.', '~' or '-'; and the four test-file globs with a concrete extension
+    ("absolute-path", re.compile(r"(?<![\w.~-])/(?:Users|home)/[^\s<>\"'`/]+/")),
+    ("test-filename", re.compile(r"(?:test_\*|\*_test|\*\.spec|\*\.test)\.\w+")),
 )
 
 _TAIL = ("Zero bugs.", "No subagents.", "Owner-only decisions.", "Budget.", "Background work.", "Report contract.")
@@ -468,3 +472,130 @@ def rules_problems(text):
         if not _SOURCE.fullmatch(cells["source"]):
             problems.append("source: line %d, %r" % (n, cells["source"]))
     return problems
+
+
+def _require(cond, message):
+    """AssertionError(message) unless cond; an explicit raise, so `python -O` keeps the check."""
+    if not cond:
+        raise AssertionError(message)
+
+
+def section(text, heading):
+    """The lines after the one line equal to '## <heading>', up to the next line starting with '## ' or the end
+    (Task B2.2). Lines split on LF only. AssertionError naming the heading when that line is absent or repeated."""
+    _need_str(text, "section")
+    lines = text.split("\n")
+    at = [i for i, line in enumerate(lines) if line == "## " + heading]
+    _require(len(at) == 1, "section %r: the heading line occurs %d times" % (heading, len(at)))
+    end = next((j for j in range(at[0] + 1, len(lines)) if lines[j].startswith("## ")), len(lines))
+    return "\n".join(lines[at[0] + 1:end]) + ("\n" if end < len(lines) else "")
+
+
+# Angle-bracket placeholders (finding F-RDV2-1; owner Q-B22v2-3 (a)). CommonMark raw HTML a rendered view hides: an
+# open tag (with attributes, optionally self-closing), a closing tag, a comment (refused from its '<!--' even when
+# unterminated). A tag may span a line break, so the scan runs over the whole text with code spans and fences masked.
+_ATTR = r"(?:\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:[^\s\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)"
+_HTML = re.compile(r"<[A-Za-z][A-Za-z0-9-]*%s*\s*/?>|</[A-Za-z][A-Za-z0-9-]*\s*>|<!--(?:.*?-->)?" % _ATTR, re.S)
+_FENCE_OPEN = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+_ASCII_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+_MASK = "\0"
+
+
+def _mask_spans(line):
+    """The line with each code span replaced by NULs. Spans are found within the line: a backtick run opens a span
+    only when a run of the same length follows on the line; a backslash escape outside a span is kept as text."""
+    out = []
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n and line[i + 1] in _ASCII_PUNCT:
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if c != "`":
+            out.append(c)
+            i += 1
+            continue
+        j = i
+        while j < n and line[j] == "`":
+            j += 1
+        k = j
+        close = -1
+        while k < n:
+            if line[k] != "`":
+                k += 1
+                continue
+            m = k
+            while m < n and line[m] == "`":
+                m += 1
+            if m - k == j - i:
+                close = m
+                break
+            k = m
+        if close < 0:
+            out.append(line[i:j])
+            i = j
+        else:
+            out.append(_MASK * (close - i))
+            i = close
+    return "".join(out)
+
+
+def placeholder_hits(text):
+    """(line_no, match) for each raw-HTML open tag, closing tag or comment outside code spans and fenced blocks."""
+    _need_str(text, "placeholder_hits")
+    masked = []
+    fence = None
+    for line in text.split("\n"):
+        if fence is not None:
+            m = re.match(r" {0,3}(`{3,}|~{3,})[ \t]*$", line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            masked.append("")
+            continue
+        m = _FENCE_OPEN.match(line)
+        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            fence = m.group(1)
+            masked.append("")
+            continue
+        masked.append(_mask_spans(line))
+    joined = "\n".join(masked)
+    return [(joined.count("\n", 0, m.start()) + 1, m.group(0)) for m in _HTML.finditer(joined)]
+
+
+# Front matter (owner Q-B22v2-1 (a)): a fail-closed whitelist, standard library only.
+_FM_KEY = re.compile(r"[a-z][a-z0-9_-]*")
+_FM_QUOTED = re.compile(r"\"((?:[^\"\\]|\\[\"\\])*)\"")
+_YAML_INDICATORS = frozenset("-?:,[]{}#&*!|>'\"%@`")
+
+
+def front_matter(text):
+    """The key: value lines between an exact '---' line 1 and the next exact '---' line, as a dict in file order. A
+    value is plain (no YAML indicator first, no ': ', no ' #', no trailing ':', not empty, no surrounding whitespace)
+    or double-quoted with only the escapes \\" and \\\\. Anything else raises AssertionError naming the line."""
+    _need_str(text, "front_matter")
+    lines = text.split("\n")
+    _require(lines[0] == "---", "front matter: line 1: expected exactly '---', got %r" % lines[0])
+    end = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+    _require(end is not None, "front matter: line 1: no exact '---' line closes it")
+    out = {}
+    for i in range(1, end):
+        n, line = i + 1, lines[i]
+        bad = next((c for c in line if unicodedata.category(c) in ("Cc", "Zl", "Zp")), None)
+        _require(bad is None, "front matter: line %d: control character %r" % (n, bad))
+        key, sep, value = line.partition(": ")
+        _require(sep and _FM_KEY.fullmatch(key),
+                 "front matter: line %d: not 'key: value' with a key [a-z][a-z0-9_-]*" % n)
+        _require(key not in out, "front matter: line %d: duplicate key %r" % (n, key))
+        if value.startswith("\""):
+            m = _FM_QUOTED.fullmatch(value)
+            _require(m, "front matter: line %d: a double-quoted value takes only the escapes \\\" and \\\\" % n)
+            out[key] = re.sub(r"\\([\"\\])", r"\1", m.group(1))
+            continue
+        _require(value != "", "front matter: line %d: empty value" % n)
+        _require(value[0] not in _YAML_INDICATORS, "front matter: line %d: plain value starts with %r" % (n, value[0]))
+        _require(value == value.strip(), "front matter: line %d: whitespace around the value" % n)
+        _require(": " not in value and " #" not in value and not value.endswith(":"), (
+            "front matter: line %d: a plain value holds ': ', ' #' or a trailing ':'" % n))
+        out[key] = value
+    return out

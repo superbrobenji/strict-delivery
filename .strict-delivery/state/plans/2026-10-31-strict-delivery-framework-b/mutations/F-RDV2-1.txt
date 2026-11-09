@@ -1,0 +1,25 @@
+F-RDV2-1: markdown placeholder: angle-bracket placeholders outside code spans in rendered docs (open tag, closing tag, comment, escaped \<n>, attribute-shaped tag, unpaired backtick, span across a line break; accepted: code span, fence, non-tag <, autolink)
+harness: mut.py; each run in a fresh copy of tests/__init__.py, tests/prose_check.py, tests/test_playbook.py, tests/test_prompt_blocks.py, tests/helpers.py, playbook/rules.md and the ten prompt blocks under a private mktemp -d; command: /usr/bin/python3 -m unittest tests.test_playbook; base: 4028845 plus the B2.2 part 1 change
+check present PASS; check reverted (placeholder_hits returns []) FAIL; a seeded hit in a real B file undetected would FAIL (seeded runs below); restored PASS; then one mutant per changed condition or call, each killed
+present                                          rc=0 OK
+reverted: placeholder_hits returns []            rc=1 FAILED (failures=187) killed-by=test_generated_inputs,test_refused_samples,test_seeded_hit_in_a_real_file_is_found
+seeded hit in a prompt file                      rc=1 FAILED (failures=1) killed-by=test_b_owned_markdown_has_no_placeholder
+seeded hit in rules.md                           rc=1 FAILED (failures=1680) killed-by=test_b_owned_markdown_has_no_placeholder,test_cjk_stop_splits_before_lowercase,test_every_sentence_pinned,test_harmless_rewording_passes,test_no_angle_placeholder_outside_code,test_no_false_split_without_space,test_real_file_has_no_content_problems,test_seeded_hit_in_a_real_file_is_found,test_unpinned_sentence_and_missing_pin,test_unpinned_sentence_any_start_or_end,test_unpinned_sentence_with_no_space
+restored                                         rc=0 OK
+mutant: no span masking                          rc=1 FAILED (failures=188) killed-by=test_accepted_samples,test_b_owned_markdown_has_no_placeholder,test_generated_inputs,test_seeded_hit_in_a_real_file_is_found
+mutant: no backslash-escape handling             rc=1 FAILED (failures=1) killed-by=test_refused_samples
+mutant: closing run of any length >= opener      rc=1 FAILED (failures=1) killed-by=test_refused_samples
+mutant: unpaired run opens a span to line end    rc=1 FAILED (failures=99) killed-by=test_generated_inputs,test_refused_samples
+mutant: mask with spaces                         rc=1 FAILED (failures=1) killed-by=test_accepted_samples
+mutant: shorter closing fence closes             rc=1 FAILED (failures=1) killed-by=test_accepted_samples
+mutant: other fence char closes                  rc=1 FAILED (failures=1) killed-by=test_refused_samples
+mutant: backtick info string ignored             rc=1 FAILED (failures=1) killed-by=test_refused_samples
+mutant: any indent opens a fence                 rc=1 FAILED (failures=1) killed-by=test_refused_samples
+mutant: no fences                                rc=1 FAILED (failures=108) killed-by=test_accepted_samples,test_generated_inputs,test_refused_samples
+mutant: no closing tags                          rc=1 FAILED (failures=2) killed-by=test_refused_samples
+mutant: no comments                              rc=1 FAILED (failures=3) killed-by=test_refused_samples
+mutant: no self-closing slash                    rc=1 FAILED (failures=2) killed-by=test_refused_samples
+mutant: no re.S                                  rc=1 FAILED (failures=1) killed-by=test_refused_samples
+mutant: line number off by one                   rc=1 FAILED (failures=187) killed-by=test_generated_inputs,test_refused_samples,test_seeded_hit_in_a_real_file_is_found
+mutant: no attributes                            rc=1 FAILED (failures=51) killed-by=test_generated_inputs,test_refused_samples
+mutants 16 killed 16
