@@ -122,6 +122,7 @@ def toplevel(root: str) -> str:
 
 
 def head_sha(root: str) -> str:
+    _require_toplevel(root)
     p = _run(root, "rev-parse HEAD", ["rev-parse", "HEAD"])
     return _text(p.stdout, "rev-parse").strip()
 
@@ -133,7 +134,7 @@ def commit_exists(root: str, sha: str) -> bool:
     with no type hint and ``core.disambiguate=none``, so git refuses it exactly when no ref rule matches
     and it is a prefix of more than one object (owner Q-1a2r-2). Any other value is git's own verdict
     (owner Q-1a2r-7). More than 40 hex digits in a row is refused (F-1a2r-5)."""
-    _ensure_repo(root)
+    _require_toplevel(root)
     if sha.startswith(REFUSED_LEAD) or LONG_HEX.search(sha):
         return False
     bare_hex = all(c in _HEX for c in sha)
@@ -196,6 +197,7 @@ def ls_tree(root: str, ref: str, directory: str) -> list:
 
 
 def merge_base(root: str, a: str, b: str) -> str:
+    _require_toplevel(root)
     _check_rev(a)
     _check_rev(b)
     p = _run(root, "merge-base", ["merge-base", a, b])
@@ -203,6 +205,7 @@ def merge_base(root: str, a: str, b: str) -> str:
 
 
 def user_email(root: str) -> Optional[str]:
+    _require_toplevel(root)
     p = _run(root, "config user.email", ["config", "user.email"], ok=(0, 1))
     value = _text(p.stdout, "config").strip()
     return value or None

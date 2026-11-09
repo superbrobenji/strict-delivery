@@ -12,7 +12,7 @@ import stat
 from typing import List, Optional
 
 from gates.lib import config, gitinfo, ids, yamlsub
-from gates.lib.result import GateError
+from gates.lib.result import GateError, _raw
 
 KNOWN_KINDS = ("config", "decision", "finding", "claim", "request", "streams", "context", "handoff", "ledger",
                "status", "sync-log", "overview", "in-force", "decision-index", "finding-index",
@@ -249,10 +249,6 @@ def _in(v: object, values: list) -> bool:
     return any(type(x) is type(v) and x == v for x in values)
 
 
-def _text(x: object) -> str:
-    return x if type(x) is str else str(x)
-
-
 def _check_value(spec: dict, v: object, path: str, cfg: dict, errs: list) -> None:
     if v is None:
         if not spec.get("nullable", False):
@@ -347,7 +343,7 @@ def validate(schema: Schema, value: object, cfg: dict) -> list:
     if type(got) is not str or got != expected:
         m = _TAG.fullmatch(got) if type(got) is str else None
         hint = "; run /strict-delivery:upgrade" if m and m.group(1) == schema.kind else ""
-        return ["schema: expected %s, got %s%s" % (expected, _text(got), hint)]
+        return ["schema: expected %s, got %s%s" % (expected, _raw(got), hint)]
     errs: list = []
     _check_map(schema.fields, value, "", cfg, errs)
     return errs
