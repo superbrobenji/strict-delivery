@@ -5,7 +5,7 @@ import copy
 import os
 import unittest
 
-from gates.lib import config, gitinfo, schema, yamlsub
+from gates.lib import config, decisions, gitinfo, schema, yamlsub
 from gates.lib.decisions import (current, find, in_force, is_resolved, landed_errors, ref_errors, superseded_ids,
                                  validate)
 from gates.lib.result import GateError, Result, run_check
@@ -22,7 +22,8 @@ W = {"at": "a1b2c3d", "by": "who@example.invalid", "reason": "asked twice"}
 AT = {"at": "b2c3d4e", "by": "who@example.invalid"}
 SPEC_ERR = ("landed_in: docs/strict-delivery/specs/x.md is a spec; specs are cleaned, land the rule in a "
             "playbook, CLAUDE.md or architecture.md")
-OPEN = {"schema": "decision/1", "id": A, "status": "open", "class": "scope", "question": "Keep X?",
+DTAG = "decision/%d" % decisions._schema().version  # Global Constraints "Test fixtures"
+OPEN = {"schema": DTAG, "id": A, "status": "open", "class": "scope", "question": "Keep X?",
         "options": [OPT, OPT2], "asked_at": "a1b2c3d", "asked_by": "agent", "topics": ["ids"],
         "applies_to": ["src/*"], "checked_against": [], "effect": "lasting"}
 ANSWERED = {**OPEN, "status": "answered", "answer": "Yes", "answered_at": AT, "rule": "Keep X.",
