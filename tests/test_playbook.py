@@ -937,6 +937,7 @@ def b_owned_markdown():
 R1, R3 = "refused: multi-line code span", "refused: pipe in table-row code span"   # owner Q-B2FX2-1 (a), D1
 RA, RB, RL, RI, RQ = ("refused: angle bracket outside code span", "refused: backslash outside code span",
                       "refused: link syntax", "refused: indented line", "refused: block quote")   # W1 (fix round 4)
+RC, RX = "refused: character outside whitelist", "refused: extended autolink"           # fix round 5 (D1, D6)
 PLACEHOLDER_REFUSED = [   # fix round 4 (W1): every '<' outside a code span is also refused (RA), after the line's hits
     ("G<n> the same", [(1, "<n>"), (1, RA)]), ("Owner answers (<date>), binding", [(1, "<date>"), (1, RA)]),
     ("<program>/integration", [(1, "<program>"), (1, RA)]),
@@ -963,7 +964,7 @@ PLACEHOLDER_REFUSED = [   # fix round 4 (W1): every '<' outside a code span is a
     ("  ```py\n<n>\n  ```", [(1, RI), (3, RI)]),               # was accepted (indented fence): RI from round 4
     ("a < b", [(1, RA)]), ("x<y", [(1, RA)]), ("<1-4>", [(1, RA)]), ("< n>", [(1, RA)]), ("a <", [(1, RA)]),
     ("<>", [(1, RA)]), ("<-n>", [(1, RA)]), ("<_n>", [(1, RA)]),          # P4: were accepted; RA from round 4
-    ("<https://example.org/x>", [(1, RA)]), ("<mailto:a@b.c>", [(1, RA)]), ("<a@b.c>", [(1, RA)]),   # P6: were too
+    ("<https://example.org/x>", [(1, RA), (1, RX)]), ("<mailto:a@b.c>", [(1, RA)]), ("<a@b.c>", [(1, RA)]),   # P6
     ("<`n`>", [(1, RA)]),                                      # was accepted (no R2 opener); RA from round 4
 ]
 PLACEHOLDER_ACCEPTED = [
@@ -1011,6 +1012,8 @@ class PlaceholderTest(unittest.TestCase):
                     want.append((len(lines), "refused: multi-line code span"))
                 if wrap in ("none", "unpaired"):     # W1 (round 4): every '<' outside a span is refused, after R1
                     want.append((len(lines), "refused: angle bracket outside code span"))
+                if wrap in ("none", "unpaired") and "://" in ph:      # round 5 (D6): '://' outside a span
+                    want.append((len(lines), "refused: extended autolink"))
                 if wrap == "unpaired":
                     lines.append("")
             with self.subTest(doc=lines):
@@ -1043,7 +1046,7 @@ FM_ACCEPTED = [   # (front matter lines between the --- lines, expected dict)
     (["description: \"Use at the start: paths\""], {"description": "Use at the start: paths"}),          # Y2
     (["a-b_1: x"], {"a-b_1": "x"}), (["a: a#b"], {"a": "a#b"}), (["a: a:b"], {"a": "a:b"}),            # Y9, Y5
     (["a: \"\""], {"a": ""}), (["a: \"'x' #y: z\""], {"a": "'x' #y: z"}), (["a: x", "b: y"], {"a": "x", "b": "y"}),
-    (["a: caf" + chr(0xe9)], {"a": "caf" + chr(0xe9)}), ([], {}),
+    (["a: caf§"], {"a": "caf§"}), ([], {}),                     # round 5: the café row moved to FM_REFUSED (D8)
 ]
 FM_REFUSED = [   # (front matter lines, line number named): line 1 is the opening ---
     (["description: Use at the start: paths"], 2),                                                       # Y1
@@ -1056,6 +1059,7 @@ FM_REFUSED = [   # (front matter lines, line number named): line 1 is the openin
     (["a: \"\\n\""], 2), (["a: \"\\t\""], 2), (["a: \"\\x41\""], 2), (["a: \"\\" + chr(0xe9) + "\""], 2),
     (["a: \"x\\\""], 2),                                                                                  # Y10
     (["a: \"abc"], 2), (["a: \"a\" b"], 2), (["a: \"a\" # c"], 2), (["a: \"a\"b\""], 2),                  # Y11
+    (["a: caf" + chr(0xe9)], 2),                       # round 5 (D8): was FM_ACCEPTED; outside the character whitelist
 ]
 YAML_INDICATORS = "-?:,[]{}#&*!|>'\"%@`"
 
@@ -1131,7 +1135,7 @@ class FrontMatterTest(unittest.TestCase):
                     raw, dec = "", ""
                     for _ in range(rng.randint(0, 6)):
                         piece = rng.choice([("ab", "ab"), (": ", ": "), (" #", " #"), ("\\\"", "\""), ("\\\\", "\\"),
-                                            ("'", "'"), ("- ", "- "), (chr(0xe9), chr(0xe9))])
+                                            ("'", "'"), ("- ", "- "), ("§", "§")])  # fix round 5: § in the set
                         raw, dec = raw + piece[0], dec + piece[1]
                     entries.append((key, "\"" + raw + "\"", dec))
             lines = ["%s: %s" % (k, v) for k, v, _ in entries]
@@ -1726,7 +1730,7 @@ RESTRICT_SAMPLES = [
     ("e `\n***\na `b\nc` <x> `d\n", [(1, R1), (3, R1)]),                    # thematic break
     ("a `b\n| c` <x> `d\n", [(1, R1)]),                                     # a `|` line inside a paragraph
     ("| `a | <x> | b` |\n|---|---|---|\n", [(1, R3)]),                       # GFM cell split on pipes in a span
-    ("<http://a`b> <x> `c\n", [(1, RA)]), ("<a`b@c.de> <x> `c\n", [(1, RA)]),   # autolinks holding a backtick
+    ("<http://a`b> <x> `c\n", [(1, RA), (1, RX)]), ("<a`b@c.de> <x> `c\n", [(1, RA)]),   # autolinks holding a backtick
     ("x \\` y\n", [(1, RB)]), ("```\n` a\n```\n", []),                       # M1: escaped run (RB, round 4); fence
     ("- ` a\n", [(1, R1)]), ("> ` a\n", [(1, R1), (1, RQ)]), ("# ` a\n", [(1, R1)]), ("| ` a |\n", [(1, R1)]),
     ("<a href=`x`>\n", [(1, "<a href=\0\0\0>"), (1, RA)]), ("<a\ntitle=`x`>\n", [(1, "<a\ntitle=\0\0\0>"), (1, RA)]),
@@ -1743,7 +1747,7 @@ RESTRICT_SAMPLES = [
 # sequences and three line starts outside every per-line code span and fenced block, with R1 and R3.
 W_CHARS = [("<", RA), ("\\", RB), ("](", RL), ("]:", RL)]
 W_POSITIONS = ["%s x", "x %s y", "x y %s", "`a`%s b", "b %s`a`", "# x %s y", "- x %s y", "1. x %s y", "| x %s y |"]
-W_STARTS = [(" x", RI), ("\tx", RI), ("  x", RI), ("    x", RI), ("> x", RQ), (">x", RQ)]
+W_STARTS = [(" x", RI), ("\tx", RC), ("  x", RI), ("    x", RI), ("> x", RQ), (">x", RQ)]
 W_REPRODUCERS = [   # F-B2FX2RR5-1, F-B2FX2RR5-2: each refused by name (they were [] at 66b494c)
     ('<a t=">" u="`"> <x> `\n', [(1, RA)]), ("y <a t='>' u='`'> <x> `\n", [(1, RA)]),          # F-B2FX2RR5-1
     ("see [a](`) <x> ` here\n", [(1, RL)]), ("see [a](<`>) <x> ` here\n", [(1, RA), (1, RL)]),    # RR5-2 member 1
@@ -1762,9 +1766,14 @@ W_ADMITTED = [   # W-h: the block forms the whitelist leaves, each with a code s
     "a `<x>` b\n", "# h `<x>`\n", "## h\n", "a\n---\n", "a\n===\n", "***\n", "---\n", "- a `<x>`\n", "1. a `<x>`\n",
     "| a | `<x>` |\n|---|---|\n| b | c |\n", "```\n<x>\n```\n", "~~~\n<x>\n~~~\n",
     "---\nname: x\ndescription: y `<z>`\n---\n# Body\n", "a > b\n", "a ] (b)\n", "a ]x( b\n", "[a] (b)\n",
-    "a\tb\n", "a\n   \nb\n", "a\n\t\nb\n", "a\n \t \nb\n",
+    "a\n   \nb\n",
 ]
-W_BLANK_AND_FENCED = ["```\n x\n```\n", "```\n\tx\n```\n", "```\n> x\n```\n", "~~~\n    <x> \\ ](a) ]: b\n~~~\n"]
+W_BLANK_AND_FENCED = ["```\n x\n```\n", "```\n> x\n```\n", "~~~\n    <x> \\ ](a) ]: b\n~~~\n"]
+W_TAB_CONVERTED = [   # fix round 5 (D8): tab rows of W_ADMITTED, W_BLANK_AND_FENCED and test_line_starts, converted
+    ("a\tb\n", [(1, RC)]), ("a\n\t\nb\n", [(2, RC)]), ("a\n \t \nb\n", [(2, RC)]),           # were W_ADMITTED
+    ("```\n\tx\n```\n", [(2, RC)]),                                                       # was W_BLANK_AND_FENCED
+    ("a\n   \t\nb\n", [(2, RC)]),                                                         # was in test_line_starts
+]
 STERM_26 = [0x0701, 0x0702, 0x07F9, 0x1367, 0x166E, 0x1803, 0x1809, 0x1944, 0x1945, 0x2E3C, 0x2E53, 0x2E54, 0xA4FF,
             0xA60E, 0xA60F, 0xA6F3, 0xA6F7, 0xFE12, 0xFE15, 0xFE16, 0x11143, 0x16AF5, 0x16E98, 0x1BC9F, 0x1DA88,
             0x1E95E]                                                    # F-B2FX2RR-2, named by the re-review
@@ -1782,7 +1791,8 @@ class VerifierRoundTest(unittest.TestCase):
     def test_input_restriction_samples(self):                     # F-B2FX2RR-1, -4; M1-M5
         self.assertEqual(pc.REFUSED_KINDS, ("multi-line code span", "angle bracket outside code span",
                                             "backslash outside code span", "link syntax", "indented line",
-                                            "block quote", "pipe in table-row code span"))
+                                            "block quote", "pipe in table-row code span",
+                                            "character outside whitelist", "extended autolink"))   # round 5: 8th, 9th
         for text, want in RESTRICT_SAMPLES:
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), want)
@@ -1869,7 +1879,9 @@ class VerifierRoundTest(unittest.TestCase):
 
     def test_changed_helpers_use_no_exception_group(self):        # PC1-c: the changed helpers run on 3.9 as on 3.13
         import inspect
-        for fn in (pc.placeholder_hits, pc._unpaired_runs, pc._table_row_lines, pc.rules_problems, sentences):
+        for fn in (pc.placeholder_hits, pc._unpaired_runs, pc._table_row_lines, pc.rules_problems, sentences,
+                   pc.char_refusals, pc._refuse_chars, pc.forbidden_hits, pc.labels, pc.paragraph, pc.section,
+                   pc.first_table_header, pc.table_rows, pc.front_matter, pc.block_problems):   # + round 5's helpers
             self.assertNotIn("ExceptionGroup", inspect.getsource(fn))
             self.assertNotIn("except*", inspect.getsource(fn))
 
@@ -1915,11 +1927,14 @@ class WhitelistTest(unittest.TestCase):                             # W1-W5, fix
                                ("- a\n" + start + " `b`\n", 2)):
                 with self.subTest(text=text):
                     self.assertEqual(pc.placeholder_hits(text), [(line, kind)])
-            with self.subTest(fenced=start):
-                self.assertEqual(pc.placeholder_hits("```\n" + start + "\n```\n"), [])
-        for text in W_BLANK_AND_FENCED + ["a\n \nb\n", "a\n\t\nb\n", "a\n   \t\nb\n", "a > b\n", "a\n- > b\n"]:
+            with self.subTest(fenced=start):        # round 5: a tab is refused inside a fence too (before the parse)
+                self.assertEqual(pc.placeholder_hits("```\n" + start + "\n```\n"), [(2, RC)] if kind == RC else [])
+        for text in W_BLANK_AND_FENCED + ["a\n \nb\n", "a > b\n", "a\n- > b\n"]:
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), [])
+        for text, want in W_TAB_CONVERTED:           # round 5 (D8): were accepted blank or fenced tab lines
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
 
     def test_indented_fence_lines(self):                           # W-c: an indented opener or closer is refused
         for text, want in (("  ```\nx\n```\n", [(1, RI)]), ("```\nx\n  ```\n", [(3, RI)]),
@@ -1938,16 +1953,17 @@ class WhitelistTest(unittest.TestCase):                             # W1-W5, fix
                 self.assertEqual(pc.placeholder_hits(text), want)
 
     def test_output_shape(self):                                   # W-f: kinds, order, several on a line, with hits
-        text = "<x> ` \\ ](a\n  b\n> c\n| `d|e` |\n  | `f|g` |\n> <y> `\n"
+        text = "<x> ` \\ ](a\n  b\n> c\n| `d|e` |\n  | `f|g` |\n> <y> `\nwww.a\n"
         want = [(1, "<x>"), (1, R1), (1, RA), (1, RB), (1, RL), (2, RI), (3, RQ), (4, R3), (5, RI), (5, R3),
-                (6, "<y>"), (6, R1), (6, RA), (6, RQ)]
+                (6, "<y>"), (6, R1), (6, RA), (6, RQ), (7, RX)]
         got = pc.placeholder_hits(text)
         self.assertEqual(got, want)
         kinds = [k[len("refused: "):] for _, k in got if k.startswith("refused: ")]
-        self.assertEqual(sorted(set(kinds), key=kinds.index), list(pc.REFUSED_KINDS))
-        self.assertEqual(len(pc.REFUSED_KINDS), 7)
+        self.assertEqual(sorted(set(kinds), key=kinds.index), [k for k in pc.REFUSED_KINDS if k != pc.CHAR_KIND])
+        self.assertEqual(len(pc.REFUSED_KINDS), 9)                 # round 5: the char kind 8th (D1), autolink 9th
+        self.assertEqual(pc.placeholder_hits(text + "\t" + text), [(8, RC)])       # D1: only the char kind, no hit
         for n, kind in enumerate(pc.REFUSED_KINDS):                # each kind alone, once
-            sample = ["a `\n", "a < b\n", "a \\ b\n", "a ](b\n", " a\n", "> a\n", "| `a|b` |\n"][n]
+            sample = ["a `\n", "a < b\n", "a \\ b\n", "a ](b\n", " a\n", "> a\n", "| `a|b` |\n", "a\tb\n", "www.a\n"][n]
             with self.subTest(kind=kind):
                 self.assertEqual(pc.placeholder_hits(sample), [(1, "refused: " + kind)])
 
@@ -1963,15 +1979,195 @@ class WhitelistTest(unittest.TestCase):                             # W1-W5, fix
         for text in W_ADMITTED:
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), [])
+        for text, want in W_TAB_CONVERTED[:3]:       # round 5 (D8): the converted W_ADMITTED rows
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
 
     def test_unicode_version_independent(self):                    # PC1-b: U+A7C0 (category differs 13.0/15.1)
         c = chr(0xA7C0)
-        rows = [("x %s y\n" % c, []), ("`%s<x>`\n" % c, []), ("%s <x>\n" % c, [(1, "<x>"), (1, RA)]),
-                (" %s\n" % c, [(1, RI)]), ("%s\n%s\n" % (c, c), [])]
+        rows = [("x %s y\n" % c, [(1, RC)]), ("`%s<x>`\n" % c, [(1, RC)]), ("%s <x>\n" % c, [(1, RC)]),   # round 5:
+                (" %s\n" % c, [(1, RC)]), ("%s\n%s\n" % (c, c), [(1, RC), (2, RC)])]       # converted to the char kind
         with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
             for text, want in rows:
                 with self.subTest(text=text):
                     self.assertEqual(pc.placeholder_hits(text), want)
+
+
+# ---- Fix round 5 (owner Q-B2FX2-1 (a); F-B2FX2RR5v6-1, F-B2FX2RR5v6-2; rows X-a..X-h, PC1) ----
+X_CR = [   # X-a: (text, LF-counted lines refused); every expected value written here by hand
+    ("\rx\n", [1]), ("a\rb\n", [1]), ("a\r\n", [1]), ("`a\rb`\n", [1]), ("```\na\r\n```\n", [2]),
+    ("```py\r\nx\n```\n", [1]), ("~~~ <x>\r\n<y>\n~~~\n", [1]), ("a\nb\r", [2]), ("a\rb\rc\r", [1]),
+    ("a\r\nb\r\nc\r\n", [1, 2, 3]), ("a\r", [1]), ("\r", [1]), ("\r\n", [1]),
+    ("```\r\ncode\r\n```\r\n<name>\r\n", [1, 2, 3, 4]),          # F-B2FX2RR5v6-1 reproducers ([] at 9be350a)
+    ("`\r\r<name>\r\r`\n", [1]), ("a `x\r# <name>\r` y\n", [1]),
+]
+X_OUTSIDE = (list(range(0x00, 0x0a)) + list(range(0x0b, 0x20)) + [0x7f] + list(range(0x80, 0xa0))
+             + [0xa0, 0xa6, 0xa8, 0x2028, 0x2029, 0x3000, 0xfeff, 0x1f600, 0xa7c0])           # X-b, PC1-b
+X_EDGES = [0x20, 0x7e, 0xa7, 0x0a]                                                          # X-c
+X_BLANK_CLASS = ["\f", "\v", "\r", "\t", chr(0xa0), chr(0x3000)]                            # X-e (D5)
+X_AUTOLINK_REFUSED = [   # X-f (D6): (text, lines refused "extended autolink"); a placeholder after, inside, beside
+    "www.example.com/`<name>`\n", "http://example.com/`<name>`\n", "https://e.com/`<n>`\n", "WWW.E.COM/`<n>`\n",
+    "ftp://x/`<n>`\n", "x www.a.b `<n>`\n", "(www.a.b/`<n>`)\n", "*www.a.b/`<n>`*\n", "www.a.b/` x <n>`\n",
+    "a `<n>` www.a.b\n", "- www.a.b/`<n>`\n", "# http://a.b/`<n>`\n", "| www.a.b/`<n>` |\n|---|\n",
+]
+X_AUTOLINK_ACCEPTED = [   # inside a span or a fence, or an email form (its characters exclude the backtick)
+    "`www.a.b/<n>`\n", "`http://a/<n>`\n", "```\nwww.a.b/`<n>`\n```\n", "a@b.co`<n>`\n", "mailto:a@b.co `<n>`\n",
+    "xmpp:a@b.co `<n>`\n", "a.b@c.de `<n>`\n", "www `<n>`\n", "http:/ `<n>`\n",
+]
+CHECKERS = [   # X-d: (name, call on str, exception or None when the checker returns its refusal)
+    ("forbidden_hits", lambda t: pc.forbidden_hits(t), None),
+    ("labels", lambda t: pc.labels(t), ValueError),
+    ("paragraph", lambda t: pc.paragraph(t, "Build."), ValueError),
+    ("section", lambda t: pc.section(t, "A"), AssertionError),
+    ("first_table_header", lambda t: pc.first_table_header(t), ValueError),
+    ("table_rows", lambda t: pc.table_rows(t), ValueError),
+    ("front_matter", lambda t: pc.front_matter(t), AssertionError),
+]
+X_GOOD = "---\na: x\n---\n# t\n\nintro\n\nBuild. a\n\n## A\nb\n\n| h |\n|---|\n| c |\n"    # every checker accepts it
+
+
+class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h, PC1-a..c (fix round 5)
+    def test_cr_and_crlf_refused(self):                              # X-a, F-B2FX2RR5v6-1
+        for text, lines in X_CR:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [(n, RC) for n in lines])
+                self.assertEqual([n for n, _ in pc.char_refusals(text)], lines)
+
+    def test_every_class_outside_refused_before_parse(self):         # X-b: one per line, no hit, LF-counted
+        for cp in X_OUTSIDE:
+            c = chr(cp)
+            for text, want in (("a%s<n>\n" % c, [(1, RC)]), ("<n>\n`%s`\n<m>\n" % c, [(2, RC)]),
+                               ("%s\n<n>\n%s%s\n" % (c, c, c), [(1, RC), (3, RC)]), ("```\n%s\n" % c, [(2, RC)])):
+                with self.subTest(cp="U+%04X" % cp, text=text):
+                    self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_exhaustive_code_points(self):                           # X-b, X-c: U+0000-U+10FFFF vs the hand set
+        cps = [c for c in range(0x110000) if c != 0x0a]                # one code point per line; LF separates
+        got = pc.char_refusals("\n".join(chr(c) for c in cps))
+        want = [(i + 1, c) for i, c in enumerate(cps) if not in_charset(c)]
+        self.assertEqual(got[:3], [(1, 0), (2, 1), (3, 2)])
+        self.assertEqual(len(got), len(want))
+        diff = [(g, w) for g, w in zip(got, want) if g != w][:1]
+        self.assertEqual(diff, [])
+        self.assertEqual(len(got), 0x110000 - 1 - 96)                  # 96 code points in the set besides LF
+
+    def test_set_edges_accepted(self):                               # X-c
+        text = "a" + "".join(chr(c) for c in X_EDGES) + "a b ~ §\n"
+        self.assertEqual(pc.char_refusals(text), [])
+        self.assertEqual(pc.placeholder_hits(text), [])
+        self.assertEqual(pc.forbidden_hits(text), [])
+        for c in X_EDGES:
+            with self.subTest(cp="U+%04X" % c):
+                self.assertTrue(in_charset(c))
+                self.assertIn(chr(c), pc.RULES_CHARS)
+
+    def test_other_checkers_refuse_by_name_before_the_split(self):   # X-d (D3)
+        for name, call, exc in CHECKERS:
+            with self.subTest(name=name, good=True):
+                call(X_GOOD)                                          # in-set input: the checker runs as before
+            for cp in X_OUTSIDE + [0x0d]:
+                bad = X_GOOD.replace("Build. a", "Build. a" + chr(cp))           # line 8
+                with self.subTest(name=name, cp="U+%04X" % cp):
+                    if exc is None:
+                        self.assertEqual(call(bad), [(pc.CHAR_KIND, 8, "U+%04X" % cp)])
+                    else:
+                        with self.assertRaises(exc) as cm:
+                            call(bad)
+                        self.assertIn("line 8: U+%04X, character outside whitelist" % cp, str(cm.exception))
+        # before the split: each input below gave a result through the split at 9be350a
+        self.assertEqual(pc.forbidden_hits("lap\rtimer\nOpus\n"), [(pc.CHAR_KIND, 1, "U+000D")])
+        self.assertEqual(pc.forbidden_hits("a lap timer\n"), [(pc.CHAR_KIND, 1, "U+2028")])
+        for text, call in (("## A\r\nx\r\n", lambda t: pc.section(t, "A")),
+                           ("## A\nx\rb\n", lambda t: pc.section(t, "A")),
+                           ("| h |\n|---|\n| a\x0bb |\n", pc.table_rows), ("| h\t|\n", pc.first_table_header),
+                           ("---\na: x\n---\r\n", pc.front_matter), ("a\nb\nc\nd\nBuild. x\x85\n", pc.labels)):
+            with self.subTest(text=text):
+                with self.assertRaises((ValueError, AssertionError)) as cm:
+                    call(text)
+                self.assertIn(pc.CHAR_KIND, str(cm.exception))
+
+    def test_kept_forms(self):                                       # X-d: the checkers that already refused
+        self.assertIn("char: line 1, U+000D outside the rules.md character set", rules_problems("a\r\n"))
+        with self.assertRaisesRegex(ValueError, "U\\+000D"):
+            sentences("a.\rB.")
+        for raw, kind in ((b"a\rb\n", "line-ending"), (b"a\tb\n", "control"), (b"a\xc2\xa7\n", "encoding"),
+                          (b"a\x7f\n", "control"), (b"a\xe2\x80\xa8\n", "encoding")):
+            with self.subTest(raw=raw):
+                self.assertIn(kind, {p.split(":")[0] for p in pc.block_problems(raw, "implementer")})
+
+    def test_blank_line_rule_equivalence_and_class(self):            # X-e (D5 (ii)), F-B2FX2RR5v6-2
+        self.assertEqual(sorted(c for c in pc.RULES_CHARS if c.isspace()), ["\n", " "])   # so strip() == strip(" ")
+        for c in X_BLANK_CLASS:
+            for text in (" %s\n" % c, "a\n %s\nb\n" % c, " %s %s\n" % (c, c)):
+                with self.subTest(cp="U+%04X" % ord(c), text=text):
+                    want = [(1, RC)] if text.startswith(" ") else [(2, RC)]
+                    self.assertEqual(pc.placeholder_hits(text), want)
+        for text in ("a\n \nb\n", "a\n    \nb\n", " \n"):               # a line of only spaces is blank
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+        for text, line in ((" x\n", 1), ("a\n  §\n", 2), ("a\n   ~\n", 2)):    # a space and anything else
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [(line, RI)])
+
+    def test_extended_autolinks(self):                               # X-f (D6)
+        for text in X_AUTOLINK_REFUSED:
+            with self.subTest(text=text):
+                got = pc.placeholder_hits(text)
+                self.assertIn((1, RX), got)
+                self.assertEqual([k for k in got if k[1] == RX], [(1, RX)])
+        for text in X_AUTOLINK_ACCEPTED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+        self.assertEqual(pc.placeholder_hits("www.example.com/`<name>`\n"), [(1, RX)])   # the lead, exact
+        self.assertEqual(pc.placeholder_hits("---\nd: www.x\n---\n"), [(2, RX)])          # front matter counts
+
+    def test_real_inputs_unchanged(self):                            # X-g, D4: every real checker input
+        rels = sorted("%s/%s" % (pc.PROMPTS_DIR, n) for n in os.listdir(pc.prompts_dir()))
+        rels += sorted("playbook/" + n for n in os.listdir(os.path.join(pc.REPO_ROOT, "playbook")))
+        rels.append("skills/strict-delivery/SKILL.md")
+        self.assertEqual(len(rels), 17)
+        for rel in rels:
+            with self.subTest(rel=rel):
+                t = read(rel)
+                self.assertEqual(pc.char_refusals(t), [])
+                self.assertEqual(pc.placeholder_hits(t), [])
+                self.assertEqual(pc.forbidden_hits(t), [])
+                self.assertNotIn(pc.CHAR_KIND, repr(pc.placeholder_hits(t)))
+        self.assertEqual(pc.front_matter(read("skills/strict-delivery/SKILL.md"))["name"], "strict-delivery")
+        self.assertEqual(rules_problems(read(RULES)), [])
+
+    def test_plan_sentence(self):                                    # X-h (D7)
+        plan = read("docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md")
+        para = [ln for ln in plan.split("\n") if ln.startswith("**Input restriction (owner answer Q-B2FX2-1 (a), "
+                                                                "2026-11-09; it narrows Q-B22v2-3 (a)):**")]
+        self.assertEqual(len(para), 1)
+        p = para[0]
+        self.assertIn("before any line split or markdown parse, the whole text is held to the character whitelist "
+                      "LF, U+0020-U+007E and U+00A7", p)
+        self.assertLess(p.index("character whitelist LF"), p.index("Then the markdown whitelist"))
+        self.assertNotIn("whatever CommonMark or GFM would do", p)        # the round 4 claim the re-review refuted
+        self.assertNotIn("a space or a tab", p)
+        self.assertIn(", ".join("`%s`" % k for k in pc.REFUSED_KINDS), p)
+
+    def test_numeric_text_same_on_every_interpreter(self):           # PC1-a: a placeholder_hits row
+        for digits in (4300, 4301):
+            with self.subTest(digits=digits):
+                self.assertEqual(pc.placeholder_hits("1" * digits + "\n"), [])
+                self.assertEqual(pc.placeholder_hits("<" + "1" * digits + ">\n"), [(1, RA)])
+                self.assertEqual(pc.char_refusals("\t" + "1" * digits), [(1, 9)])
+
+    def test_no_unicode_database_read(self):                         # PC1-b: the char refusal and the in-set path
+        c = chr(0xA7C0)
+        with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
+            self.assertEqual(pc.placeholder_hits("a %s <x>\n" % c), [(1, RC)])
+            self.assertEqual(pc.forbidden_hits("a %s\n" % c), [(pc.CHAR_KIND, 1, "U+A7C0")])
+            self.assertEqual(pc.front_matter(GOOD_FM), GOOD_FM_DICT)          # no lookup left in front_matter
+            for name, call, exc in CHECKERS:
+                with self.subTest(name=name):
+                    call(X_GOOD)
+                    if exc is not None:
+                        with self.assertRaisesRegex(exc, "U\\+A7C0, character outside whitelist"):
+                            call(X_GOOD.replace("Build. a", "Build. a" + c))
 
 
 if __name__ == "__main__":

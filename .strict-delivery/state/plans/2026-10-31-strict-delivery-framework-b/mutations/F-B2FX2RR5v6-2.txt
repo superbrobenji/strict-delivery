@@ -1,0 +1,20 @@
+interpreter 3.9.6 finding F-B2FX2RR5v6-2
+fix present: PASS (ran=186 failures=0)
+mutant [equivalent: raw.strip(" ") -> raw.strip() (the re-review's mutant)]: fix reverted: SURVIVED (ran=186 failures=0) killed by -
+  fix restored: PASS (ran=186 failures=0)
+mutant [fix reverted to round 4 form (equivalent under the whitelist)]: fix reverted: SURVIVED (ran=186 failures=0) killed by -
+  fix restored: PASS (ran=186 failures=0)
+mutant [blank exemption dropped]: fix reverted: FAIL (ran=186 failures=5) killed by test_admitted_forms (text='a\n   \nb\n'), test_blank_line_rule_equivalence_and_class (text=' \n'), test_blank_line_rule_equivalence_and_class (text='a\n    \nb\n'), test_blank_line_rule_equivalence_and_class (text='a\n \nb\n'), test_line_starts (text='a\n \nb\n')
+  fix restored: PASS (ran=186 failures=0)
+mutant [space start off]: fix reverted: FAIL (ran=186 failures=27) killed by  a\n   ~~~\n<x>\n~~~\n'), test_blank_line_rule_equivalence_and_class (text=' x\n'), test_blank_line_rule_equivalence_and_class (text='a\n   ~\n'), test_blank_line_rule_equivalence_and_class (text='a\n  §\n'), test_indented_fence_lines (text='  ```\nx\n```\n'), test_indented_fence_lines (text=' ~~~\n<x>\n ~~~\n')
+  fix restored: PASS (ran=186 failures=0)
+interpreter 3.13.18 finding F-B2FX2RR5v6-2
+fix present: PASS (ran=186 failures=0)
+mutant [equivalent: raw.strip(" ") -> raw.strip() (the re-review's mutant)]: fix reverted: SURVIVED (ran=186 failures=0) killed by -
+  fix restored: PASS (ran=186 failures=0)
+mutant [fix reverted to round 4 form (equivalent under the whitelist)]: fix reverted: SURVIVED (ran=186 failures=0) killed by -
+  fix restored: PASS (ran=186 failures=0)
+mutant [blank exemption dropped]: fix reverted: FAIL (ran=186 failures=5) killed by test_admitted_forms (text='a\n   \nb\n'), test_blank_line_rule_equivalence_and_class (text=' \n'), test_blank_line_rule_equivalence_and_class (text='a\n    \nb\n'), test_blank_line_rule_equivalence_and_class (text='a\n \nb\n'), test_line_starts (text='a\n \nb\n')
+  fix restored: PASS (ran=186 failures=0)
+mutant [space start off]: fix reverted: FAIL (ran=186 failures=27) killed by  a\n   ~~~\n<x>\n~~~\n'), test_blank_line_rule_equivalence_and_class (text=' x\n'), test_blank_line_rule_equivalence_and_class (text='a\n   ~\n'), test_blank_line_rule_equivalence_and_class (text='a\n  §\n'), test_indented_fence_lines (text='  ```\nx\n```\n'), test_indented_fence_lines (text=' ~~~\n<x>\n ~~~\n')
+  fix restored: PASS (ran=186 failures=0)

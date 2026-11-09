@@ -118,12 +118,15 @@ def _label(first_line):
 
 
 def labels(text):
-    """Label of each paragraph after the intro; "" for a paragraph whose first line holds no '. '."""
+    """Label of each paragraph after the intro; "" for a paragraph whose first line holds no '. '. ValueError naming
+    the line and code point when the text holds a character outside the whitelist (Q-B2FX2-1 (a))."""
+    _refuse_chars(text, "labels", ValueError)
     return [_label(ls[0]) for ls in _paragraphs(text)]
 
 
 def paragraph(text, label):
-    found = ["\n".join(ls) for ls in _paragraphs(text) if _label(ls[0]) == label]
+    _refuse_chars(text, "paragraph", ValueError)
+    found =["\n".join(ls) for ls in _paragraphs(text) if _label(ls[0]) == label]
     if len(found) != 1:
         raise ValueError("label %r found %d times" % (label, len(found)))
     return found[0]
@@ -131,7 +134,12 @@ def paragraph(text, label):
 
 def forbidden_hits(text):
     """(name, line_no, match) for each forbidden match, ordered by line then column. Each line is scanned, and each
-    paragraph with line breaks read as spaces, so a phrase split by a wrap is found at the line where it starts."""
+    paragraph with line breaks read as spaces, so a phrase split by a wrap is found at the line where it starts.
+    Fail closed (Q-B2FX2-1 (a)): when the text holds a character outside the whitelist, only
+    (CHAR_KIND, line_no, "U+XXXX") for each line holding one, in line order, and no scan."""
+    bad = char_refusals(text)
+    if bad:
+        return [(CHAR_KIND, n, "U+%04X" % cp) for n, cp in bad]
     lines = text.split("\n")
     hits = []
     for n, line in enumerate(lines, 1):
@@ -227,8 +235,9 @@ def block_problems(raw, role):
         run = 0
     if role not in LABELS:
         problems.append("labels: role %s has no LABELS row" % role)
-    elif labels(text) != list(LABELS[role]):
-        problems.append("labels: expected %r, got %r" % (list(LABELS[role]), labels(text)))
+    elif [_label(ls[0]) for ls in _paragraphs(text)] != list(LABELS[role]):    # not labels(): the byte check above
+        got = [_label(ls[0]) for ls in _paragraphs(text)]                       # already refuses each such byte
+        problems.append("labels: expected %r, got %r" % (list(LABELS[role]), got))
     paras = {}
     for ls in _paragraphs(text):
         paras.setdefault(_label(ls[0]), []).append("\n".join(ls))
@@ -294,6 +303,27 @@ PROFILE_NAMES = ("light", "standard", "strict")
 # The rules.md and sentence-splitter character set (owner Q-B2FX2-1 (a), narrowing Q-B21-2 (a)): LF, U+0020-U+007E
 # and U+00A7, nothing else (no tab).
 RULES_CHARS = frozenset("\n" + "".join(chr(c) for c in range(0x20, 0x7f)) + "§")
+CHAR_KIND = "character outside whitelist"
+
+
+def char_refusals(text):
+    """(line_no, code point) of the first character outside RULES_CHARS on each LF-counted line, in line order (owner
+    Q-B2FX2-1 (a), fix round 5). One pass over the text, counting LF, before any split or parse; RULES_CHARS is
+    written by hand, so no Unicode database decides it. [] when every character is in the set."""
+    out, line = [], 1
+    for ch in text:
+        if ch == "\n":
+            line += 1
+        elif ch not in RULES_CHARS and (not out or out[-1][0] != line):
+            out.append((line, ord(ch)))
+    return out
+
+
+def _refuse_chars(text, name, exc):
+    """exc naming the first line and code point outside the character whitelist, before the caller splits text."""
+    bad = char_refusals(text)
+    if bad:
+        raise exc("%s: line %d: U+%04X, %s" % (name, bad[0][0], bad[0][1], CHAR_KIND))
 _RULE_ID = re.compile(r"SD-R[1-9][0-9]*")
 _RULE_ID_TOKEN = re.compile(r"SD-R[0-9]")
 _SOURCE = re.compile(r"spec §[0-9]+[a-z]?")
@@ -318,6 +348,7 @@ def _split_cells(line):
 def first_table_header(text):
     """The first line of the first table, as written, or None when the text holds no table line."""
     _need_str(text, "first_table_header")
+    _refuse_chars(text, "first_table_header", ValueError)
     for line in text.split("\n"):
         if _is_table_line(line):
             return line
@@ -332,6 +363,7 @@ def table_rows(text):
     after the header is a separator with one `:?-+:?` cell per header cell; the table ends at the first line that is
     not a table line, and no table line may follow it. Header names are unique."""
     _need_str(text, "table_rows")
+    _refuse_chars(text, "table_rows", ValueError)
     lines = text.split("\n")
     h = next((i for i, line in enumerate(lines) if _is_table_line(line)), None)
     if h is None:
@@ -492,8 +524,10 @@ def _require(cond, message):
 
 def section(text, heading):
     """The lines after the one line equal to '## <heading>', up to the next line starting with '## ' or the end
-    (Task B2.2). Lines split on LF only. AssertionError naming the heading when that line is absent or repeated."""
+    (Task B2.2). Lines split on LF only. AssertionError naming the heading when that line is absent or repeated, and
+    naming the heading, line and code point when the text holds a character outside the whitelist (Q-B2FX2-1 (a))."""
     _need_str(text, "section")
+    _refuse_chars(text, "section %r" % (heading,), AssertionError)
     lines = text.split("\n")
     at = [i for i, line in enumerate(lines) if line == "## " + heading]
     _require(len(at) == 1, "section %r: the heading line occurs %d times" % (heading, len(at)))
@@ -564,7 +598,8 @@ def _mask_spans(line):
 
 
 REFUSED_KINDS = ("multi-line code span", "angle bracket outside code span", "backslash outside code span",
-                 "link syntax", "indented line", "block quote", "pipe in table-row code span")
+                 "link syntax", "indented line", "block quote", "pipe in table-row code span", CHAR_KIND,
+                 "extended autolink")
 _DELIMITER_ROW = re.compile(r"[ \t|:-]*")
 _TABLE_START = re.compile(r" {0,3}\|")
 
@@ -613,17 +648,25 @@ def placeholder_hits(text):
     """(line_no, match) for each raw-HTML open tag, closing tag or comment outside code spans and fenced blocks, and
     (line_no, "refused: <kind>") for each input the check refuses instead of parsing (owner Q-B2FX2-1 (a), which
     narrows Q-B22v2-3 (a)), merged in line order (on one line: hits, then refusals in REFUSED_KINDS order).
-    The rule is a whitelist (Q-B2FX2-1 (a), fix round 4). Every line outside a fenced block (front matter included)
-    is refused when it holds, outside every per-line code span, a '<' ("angle bracket outside code span"), a '\\'
-    ("backslash outside code span") or the sequence '](' or ']:' ("link syntax"); a line outside a fenced block or
-    opening or closing one is refused when it is non-blank and starts with a space or a tab ("indented line") or
-    starts with '>' ("block quote"); R1 "multi-line code span", a backtick run its own line leaves unpaired; R3 "pipe in table-row code
-    span", a code span holding '|' on a table-row line (_table_row_lines). With these refused, a line holds only
-    text, code spans, emphasis, entities and inert brackets, and the block forms left are column-0 paragraphs,
-    headings, thematic breaks, column-0 list items, tables and column-0 fences, so no construct can take a backtick
-    from a per-line span or hide text the per-line masking keeps. A hit is an _HTML match on the masked text, so its
-    line always carries an "angle bracket outside code span" refusal too."""
+    The rule is a whitelist (Q-B2FX2-1 (a), fix rounds 4 and 5). First, before any split or parse, the text is held to
+    the character whitelist (RULES_CHARS: LF, U+0020-U+007E, U+00A7): when any character is outside it, the result is
+    only (line_no, "refused: character outside whitelist") for each LF-counted line holding one, in line order, and
+    no hit. So LF is the one line ending and space the one whitespace character inside a line. Then every line
+    outside a fenced block (front matter included) is refused when it holds, outside every per-line code span, a '<'
+    ("angle bracket outside code span"), a '\\' ("backslash outside code span"), the sequence '](' or ']:' ("link
+    syntax"), or 'www.' (any case) or '://' ("extended autolink": a GFM www or URL autolink runs on to the next space
+    or '<' and can take a span's backtick); a line outside a fenced block or opening or closing one is refused when
+    it is non-blank and starts with a space ("indented line") or starts with '>' ("block quote"); R1 "multi-line code
+    span", a backtick run its own line leaves unpaired; R3 "pipe in table-row code span", a code span holding '|' on
+    a table-row line (_table_row_lines). With these refused, a line holds only text, code spans, emphasis, entities,
+    email autolinks (no backtick can be part of one) and inert brackets, and the block forms left are column-0
+    paragraphs, headings, thematic breaks, column-0 list items, tables and column-0 fences, so no construct can take
+    a backtick from a per-line span or hide text the per-line masking keeps. A hit is an _HTML match on the masked
+    text, so its line always carries an "angle bracket outside code span" refusal too."""
     _need_str(text, "placeholder_hits")
+    bad = char_refusals(text)
+    if bad:
+        return [(n, "refused: " + CHAR_KIND) for n, _ in bad]
     base, outside = [], []
     fence = None
     for line in text.split("\n"):
@@ -656,10 +699,12 @@ def placeholder_hits(text):
             refused.append((n, 2))
         if "](" in low or "]:" in low:
             refused.append((n, 3))
-        if raw[:1] in (" ", "\t") and raw.strip(" \t"):
+        if raw[:1] == " " and raw.strip(" "):       # in the whitelist, space is the one whitespace character
             refused.append((n, 4))
         if raw[:1] == ">":
             refused.append((n, 5))
+        if "www." in low.lower() or "://" in low:
+            refused.append((n, 8))
     for i in sorted(_table_row_lines(base)):
         if any("|" in base[i][a:b] for a, b in _span_ranges(base[i])):
             refused.append((i + 1, 6))
@@ -677,8 +722,11 @@ _YAML_INDICATORS = frozenset("-?:,[]{}#&*!|>'\"%@`")
 def front_matter(text):
     """The key: value lines between an exact '---' line 1 and the next exact '---' line, as a dict in file order. A
     value is plain (no YAML indicator first, no ': ', no ' #', no trailing ':', not empty, no surrounding whitespace)
-    or double-quoted with only the escapes \\" and \\\\. Anything else raises AssertionError naming the line."""
+    or double-quoted with only the escapes \\" and \\\\. Anything else raises AssertionError naming the line. The
+    whole text is held to the character whitelist first (Q-B2FX2-1 (a)), which refuses every control character, so
+    no Unicode database lookup is left."""
     _need_str(text, "front_matter")
+    _refuse_chars(text, "front matter", AssertionError)
     lines = text.split("\n")
     _require(lines[0] == "---", "front matter: line 1: expected exactly '---', got %r" % lines[0])
     end = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
@@ -686,8 +734,6 @@ def front_matter(text):
     out = {}
     for i in range(1, end):
         n, line = i + 1, lines[i]
-        bad = next((c for c in line if unicodedata.category(c) in ("Cc", "Zl", "Zp")), None)
-        _require(bad is None, "front matter: line %d: control character %r" % (n, bad))
         key, sep, value = line.partition(": ")
         _require(sep and _FM_KEY.fullmatch(key),
                  "front matter: line %d: not 'key: value' with a key [a-z][a-z0-9_-]*" % n)

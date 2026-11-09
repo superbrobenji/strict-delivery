@@ -654,7 +654,9 @@ class ForbiddenTest(unittest.TestCase):
     def test_line_splitting_is_lf_only(self):                 # F8
         for sep in ["\x0b", "\x0c", "\x1c", "\x85", "\u2028", "\r"]:
             with self.subTest(repr(sep)):
-                self.assertEqual(forbidden_hits("a" + sep + "b\nlap timer"), [("lap-timer", 2, "lap timer")])
+                self.assertEqual(forbidden_hits("a" + sep + "b\nlap timer"),     # round 5 (Q-B2FX2-1 (a)): refused
+                                 [("character outside whitelist", 1, "U+%04X" % ord(sep))])   # by name, no scan
+                self.assertEqual(forbidden_hits("a b\nlap timer"), [("lap-timer", 2, "lap timer")])
 
     def test_scope_covers_every_present_block(self):          # F7
         with tempfile.TemporaryDirectory() as td:
