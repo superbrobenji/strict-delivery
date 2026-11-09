@@ -5,6 +5,7 @@ import ast
 import dataclasses
 import hashlib
 import pathlib
+import sys
 import unicodedata
 import unittest
 
@@ -533,6 +534,78 @@ class ProblemTest(unittest.TestCase):
 
     def test_returns_cite_type(self):
         self.assertIsInstance(one("`a/b.py:1`"), Cite)
+
+
+class LineNumberDigitCountTest(unittest.TestCase):
+    """F-C2fin2-1: a line number of any digit count gives one verdict on every Python 3.9+; CPython 3.11+ limits int()
+    of a decimal string to 4300 digits by default, so no int() of a cite's whole digit run may happen past that.
+    Expected values are built from the digit text and powers of ten, never by converting the digit run."""
+
+    PAST = "a/b.py: line %s is past the end (3 lines)"
+
+    def test_start_digit_count(self):  # ND1
+        for n in (1, 4300, 4301, 10000):
+            digits = "9" * n
+            c = one("`a/b.py:%s`" % digits)
+            self.assertEqual((c.start, c.end), (10 ** n - 1, None), n)
+            self.assertEqual(problem(c, TRACKED, READ), self.PAST % digits, n)
+        self.assertEqual(prob("`a/b.py:3`"), "")
+        self.assertEqual(prob("`a/b.py:%s`" % ("1" + "0" * 4300)), self.PAST % ("1" + "0" * 4300))
+
+    def test_range_end_digit_count(self):  # ND2
+        big, bigger = "9" * 4301, "9" * 4302
+        c = one("`a/b.py:1-%s`" % big)
+        self.assertEqual((c.start, c.end), (1, 10 ** 4301 - 1))
+        self.assertEqual(problem(c, TRACKED, READ), self.PAST % big)
+        c = one("`a/b.py:%s-%s`" % (big, bigger))
+        self.assertEqual((c.start, c.end), (10 ** 4301 - 1, 10 ** 4302 - 1))
+        self.assertEqual(problem(c, TRACKED, READ), self.PAST % big)
+        self.assertEqual(prob("`a/b.py:%s-%s`" % (bigger, big)), "a/b.py: range end %s is before start %s" % (big, bigger))
+        self.assertEqual(prob("`a/b.py:%s-1`" % big), "a/b.py: range end 1 is before start %s" % big)
+        self.assertEqual(prob("`a/b.py:%s-%s`" % (big, big)), self.PAST % big)
+        self.assertEqual(prob("`a/b.py:%s-%s`" % ("1" + "0" * 4301, "9" * 4301)),
+                         "a/b.py: range end %s is before start %s" % ("9" * 4301, "1" + "0" * 4301))
+
+    def test_leading_zeros(self):  # ND3
+        msg = "a/b.py: line numbers start at 1 and have no leading zero"
+        padded = "0" * 4400 + "2"
+        self.assertEqual(one("`a/b.py:0003`").start, 3)
+        self.assertEqual(one("`a/b.py:%s`" % padded).start, 2)
+        self.assertEqual(one("`a/b.py:1-%s`" % padded).end, 2)
+        for tok in ("0003", padded, "1-" + padded, padded + "-3", "0" + "9" * 4301):
+            self.assertEqual(prob("`a/b.py:%s`" % tok), msg, tok[:8])
+
+    def test_zero_and_end_before_start(self):  # ND4
+        msg = "a/b.py: line numbers start at 1 and have no leading zero"
+        for tok in ("0", "0" * 4301, "0-3", "5-0", "5-" + "0" * 4301):
+            self.assertEqual(prob("`a/b.py:%s`" % tok), msg, tok[:8])
+        self.assertEqual(one("`a/b.py:%s`" % ("0" * 4301)).start, 0)
+        self.assertEqual(prob("`a/b.py:5-3`"), "a/b.py: range end 3 is before start 5")
+        self.assertEqual(prob("`a/b.py:05-3`"), msg)
+        self.assertEqual(prob("`a/b.py:%s-3`" % ("5" * 4301)), "a/b.py: range end 3 is before start %s" % ("5" * 4301))
+
+    def test_percent_escape_is_two_hex_digits(self):  # ND5: cites.py _PERCENT bounds the int(.., 16) argument
+        self.assertEqual(cites._PERCENT.pattern, r"%([0-9A-Fa-f]{2})")
+        self.assertEqual([len(m.group(1)) for m in cites._PERCENT.finditer("%" + "f" * 5000 + "%41")], [2, 2])
+        long_hex = "a" * 5000
+        c = one("[t](%%41%s.md#x)" % long_hex)
+        self.assertEqual(c.path, "d/A%s.md" % long_hex)
+
+    @unittest.skipUnless(hasattr(sys, "set_int_max_str_digits"), "no int string-conversion limit on this interpreter")
+    def test_lowest_conversion_limit(self):  # ND1/ND7 under PYTHONINTMAXSTRDIGITS=640, the lowest limit CPython accepts
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(640)
+        for n in (641, 4300, 5000):
+            self.assertTrue(one("`a/b.py:%s`" % ("9" * n)).start == 10 ** n - 1, n)
+            self.assertTrue(prob("`a/b.py:1-%s`" % ("9" * n)) == self.PAST % ("9" * n), n)
+
+    def test_verdict_text_never_converts_the_digit_run(self):  # ND7: %d of a 4301-digit int raises on 3.11+
+        c = Cite("d/a.md", 1, "`a/b.py:%s`" % ("9" * 4301), "a/b.py", 10 ** 4301 - 1, None, None)
+        self.assertEqual(problem(c, TRACKED, READ), self.PAST % ("9" * 4301))
+        # a Cite built by hand whose token is not a line cite still prints its own numbers
+        self.assertEqual(problem(Cite("d/a.md", 1, "x", "a/b.py", 9, None, None), TRACKED, READ), self.PAST % "9")
+        self.assertEqual(problem(Cite("d/a.md", 1, "x", "a/b.py", 2, 8, None), TRACKED, READ), self.PAST % "8")
+        self.assertEqual(problem(Cite("d/a.md", 1, "x", "a/b.py", 3, 1, None), TRACKED, READ), "a/b.py: range end 1 is before start 3")
 
 
 class ExtractLoopControlTest(unittest.TestCase):

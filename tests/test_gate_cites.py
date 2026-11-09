@@ -256,6 +256,21 @@ class TestDocsAndCategories(CitesCase):
         self.assertTrue(out.startswith("FAIL cites.input: gates/x.py: cannot read ("), out)
         self.assertEqual(len(self.lines(out)), 1)
 
+    def test_huge_line_number_is_a_line_failure(self):  # ND6, F-C2fin2-1: 4301+ digits must not end the run
+        big = "9" * 4301
+        self.add("gates/x.py", "a\nb\nc\n")
+        self.add("docs/b.md", "# b\n")
+        self.add("docs/a.md", "ok\n`gates/x.py:%s`\n`gates/x.py:1-%s`\n`gates/x.py:7`\n[s](b.md#nope)\n" % (big, "0" * 4400 + "2"))
+        out, code = self.run_root()
+        self.assertEqual(out, "PASS cites.doc\n"
+                              "FAIL cites.line.docs/a.md:2: `gates/x.py:%s`: gates/x.py: line %s is past the end (3 lines)\n"
+                              "FAIL cites.line.docs/a.md:3: `gates/x.py:1-%s`: gates/x.py: line numbers start at 1 and have no leading zero\n"
+                              "FAIL cites.line.docs/a.md:4: `gates/x.py:7`: gates/x.py: line 7 is past the end (3 lines)\n"
+                              "FAIL cites.anchor.docs/a.md:5: b.md#nope: docs/b.md: no heading with anchor #nope\n"
+                              "PASS cites.landed\n" % (big, big, "0" * 4400 + "2"))
+        self.assertNotIn("cites.input", out)
+        self.assertEqual(code, 1)
+
 
 class TestTreeRead(CitesCase):
     def test_doc_and_target_added_together_pass(self):  # T1

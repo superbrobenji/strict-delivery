@@ -225,6 +225,18 @@ def _resolve(doc: str, dest: str) -> Optional[Tuple[str, str]]:
     return posixpath.normpath(posixpath.join(base, part) if base else part), anchor
 
 
+_SHORT_DIGITS = 640
+
+
+def _number(digits: str) -> int:
+    """The value of a decimal digit run of any length. int() is called only on runs of at most 640 digits, the lowest
+    int string-conversion limit CPython 3.11+ accepts, so no length and no PYTHONINTMAXSTRDIGITS setting raises."""
+    if len(digits) <= _SHORT_DIGITS:
+        return int(digits)
+    low = len(digits) // 2
+    return _number(digits[:-low]) * 10 ** low + _number(digits[-low:])
+
+
 def extract(doc: str, text: str) -> list:
     """Every cite in text outside fenced code, in source order (line, then column)."""
     cites: List[Cite] = []
@@ -251,7 +263,7 @@ def extract(doc: str, text: str) -> list:
                 c = Cite(doc, number, tok, path, None, None, m.group("anchor"))
             else:
                 end = m.group("end")
-                c = Cite(doc, number, tok, path, int(m.group("start")), None if end is None else int(end), None)
+                c = Cite(doc, number, tok, path, _number(m.group("start")), None if end is None else _number(end), None)
             found.append((s, c))
         masked_line = "".join(masked)
         for m in re.finditer(r"\]\(", masked_line):
@@ -320,11 +332,14 @@ def problem(cite: Cite, tracked: frozenset, read: Callable[[str], Optional[str]]
     texts = [m.group("start")] + ([m.group("end")] if m.group("end") is not None else []) if m else []
     if any(t.startswith("0") for t in texts):
         return "%s: line numbers start at 1 and have no leading zero" % p
+    # Print the token's own digits (no leading zero here, so equal to str(int)); %d of a number over 4300 digits
+    # raises on CPython 3.11+.
+    start_text, end_text = (texts + [None])[:2] if texts else ("%d" % cite.start, None if cite.end is None else "%d" % cite.end)
     if cite.end is not None and cite.end < cite.start:
-        return "%s: range end %d is before start %d" % (p, cite.end, cite.start)
+        return "%s: range end %s is before start %s" % (p, end_text, start_text)
     count = _line_count(text)
     if cite.start > count:
-        return "%s: line %d is past the end (%d lines)" % (p, cite.start, count)
+        return "%s: line %s is past the end (%d lines)" % (p, start_text, count)
     if cite.end is not None and cite.end > count:
-        return "%s: line %d is past the end (%d lines)" % (p, cite.end, count)
+        return "%s: line %s is past the end (%d lines)" % (p, end_text, count)
     return ""
