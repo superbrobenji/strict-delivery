@@ -6,7 +6,7 @@ import hashlib
 import os
 import unittest
 
-from gates.lib import config, gitinfo, schema, yamlsub
+from gates.lib import config, decisions, gitinfo, schema, yamlsub
 from gates.lib.findings import (RESOLVED, SEVERITIES, STATUSES, TRANSITIONS, epic_errors, evidence_errors,
                                 is_resolved, may_delete, transition_errors, validate)
 from gates.lib.result import GateError
@@ -22,6 +22,7 @@ DA = "DEC-20261031-k3f9"
 DB = "DEC-20261031-m4n5"
 DC = "DEC-20261031-p6q7"
 SHA = "a1b2c3d"
+DTAG = "decision/%d" % decisions._schema().version  # Global Constraints "Test fixtures"
 OWNER = {"kind": "plan", "plan": "p", "task": "1a.2"}
 FINDING = {"schema": "finding/1", "id": F1, "status": "open", "source": "review", "severity": "HIGH",
            "class": "bug", "siblings": [], "cites": [{"file": "src/x.py", "lines": "1-2", "sha": SHA}],
@@ -60,7 +61,7 @@ def rec(row):
 
 
 def dec(id_, status="answered", **over):
-    base = {"schema": "decision/1", "id": id_, "status": status, "class": "scope", "question": "Keep X?",
+    base = {"schema": DTAG, "id": id_, "status": status, "class": "scope", "question": "Keep X?",
             "options": [{"label": "yes", "cost": "none"}, {"label": "no", "cost": "some"}],
             "asked_at": SHA, "asked_by": "agent", "topics": [], "applies_to": [], "checked_against": [],
             "effect": "one-off"}

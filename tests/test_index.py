@@ -51,7 +51,7 @@ def _tag(kind):  # Q-2a1-3: a tag comes from its schema file
 
 
 def dec(id_, status="answered", **over):
-    r = {"schema": "decision/1", "id": id_, "status": status, "class": "scope", "question": "Keep X?",
+    r = {"schema": _tag("decision"), "id": id_, "status": status, "class": "scope", "question": "Keep X?",
          "options": OPTS, "asked_at": SHA, "asked_by": "agent", "topics": ["ids"], "applies_to": [],
          "checked_against": [], "effect": "one-off"}
     if status == "answered":
