@@ -4,6 +4,7 @@ import sys
 from typing import Callable, Dict, List
 
 GATES: Dict[str, str] = {"cites": "gates.gate_cites", "decisions": "gates.gate_decisions",
+                         "register": "gates.gate_register",
                          "schema": "gates.gate_schema"}  # gate name -> module defining check(args)
 _OWNER: Dict[str, str] = {"cites": " (stream C, Task C2.2)"}  # who delivers a gate module that may be absent
 
