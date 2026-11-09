@@ -116,24 +116,15 @@ def read(rel):
         return f.read().decode("utf-8")
 
 
-# A boundary is a stop (`.`, `!`, `?`, or a listed non-ASCII stop: CJK/fullwidth stops, U+2026 and the other terminal
-# punctuation of _WIDE_STOPS), then a closer run: ASCII punctuation (closing brackets, quotes, backticks, emphasis
-# markers, `_`, further stops) and the listed non-ASCII closing quotes and brackets. It ends a sentence when the run
-# holds a non-ASCII stop, or when anything but an ASCII lowercase letter or digit follows the run: a gap (whitespace or
-# a listed format character, dropped), a capital, or any other non-ASCII character. Every set is hand-listed and no
-# Unicode database lookup decides a boundary, so the split is the same on every interpreter (F-B2V3-3); it oversplits
-# rather than undersplits, so no sentence hides behind its pinned neighbour (F-B21RR-1, F-B21RR2-1).
-_CJK_STOPS = frozenset(chr(c) for c in (0x3002, 0xff0e, 0xff01, 0xff1f, 0xff61))
-_WIDE_STOPS = _CJK_STOPS | frozenset(chr(c) for c in (
-    0x2026, 0x203c, 0x203d, 0x2047, 0x2048, 0x2049, 0x2e2e, 0x037e, 0x0589, 0x061f, 0x06d4, 0x0964, 0x0965, 0x1362,
-    0xfe52, 0xfe56, 0xfe57))
-_STOPS = frozenset(".!?") | _WIDE_STOPS
-_CLOSERS = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~") | frozenset(chr(c) for c in (
-    0x2019, 0x201d, 0x00bb, 0x203a, 0x300d, 0x300f, 0x3009, 0x300b, 0x3011, 0x3015, 0x3017, 0x3019, 0x301b,
-    0xff09, 0xff3d, 0xff5d)) | _WIDE_STOPS
-_GAPS = frozenset(" \t\n\r\x0b\x0c\x85\xa0   　  ") | frozenset(
-    chr(c) for c in list(range(0x2000, 0x200b)) + list(range(0x200b, 0x2010)) + list(range(0x202a, 0x202f))
-    + list(range(0x2060, 0x2065)) + list(range(0x2066, 0x2070)) + [0xfeff, 0x061c, 0x180e, 0x00ad])
+# A boundary is a stop (`.`, `!` or `?`), then a closer run of ASCII punctuation (closing brackets, quotes, backticks,
+# emphasis markers, `_`, further stops). It ends a sentence when anything but an ASCII lowercase letter or digit
+# follows the run: a gap (space or LF, dropped), a capital, other text, or the end. The input is restricted to the
+# rules.md character set (prose_check.RULES_CHARS: LF, U+0020-U+007E, U+00A7; owner Q-B2FX2-1 (a)), and any other
+# character raises ValueError naming its code point, so no Unicode database decides a boundary. It oversplits
+# rather than undersplits, so no sentence hides behind its pinned neighbour (F-B21RR-1, F-B21RR2-1, F-B2FX2RR-2).
+_STOPS = frozenset(".!?")
+_CLOSERS = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+_GAPS = frozenset(" \n")
 _NO_BREAK = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
 
 
@@ -146,6 +137,9 @@ def _is_closer(ch):
 
 
 def sentences(cell):
+    bad = next((ch for ch in cell if ch not in pc.RULES_CHARS), None)
+    if bad is not None:
+        raise ValueError("sentences: U+%04X is outside the rules.md character set" % ord(bad))
     out, start, i, n = [], 0, 0, len(cell)
     while i < n:
         if cell[i] not in _STOPS:
@@ -157,7 +151,7 @@ def sentences(cell):
         k = j
         while k < n and _is_gap(cell[k]):
             k += 1
-        if k > j or k == n or cell[k] not in _NO_BREAK or any(c in _WIDE_STOPS for c in cell[i:j]):
+        if k > j or k == n or cell[k] not in _NO_BREAK:
             out.append(cell[start:j])
             start = k
         i = k if k > j else j
@@ -347,7 +341,7 @@ class ReadTest(unittest.TestCase):
                     read(RULES)
                 with open(p, "wb") as f:
                     f.write(GOOD_TEXT.replace("\n", "\r\n").encode("utf-8"))
-                self.assertEqual(kinds(read(RULES)), {"line-ending"})
+                self.assertEqual(kinds(read(RULES)), {"line-ending", "char"})       # CR: outside the set too
 
 
 GOOD_LINES = [
@@ -405,27 +399,27 @@ BAD = [   # (name, text, exact problem kinds); each differs from GOOD_TEXT in on
     ("title case", with_line(0, "# Base Playbook: rules"), {"first-line"}),
     ("title spaces", with_line(0, "#  Base playbook: rules"), {"first-line"}),
     ("title missing", without_line(0), {"first-line", "layout"}),
-    ("title bom", "\ufeff" + GOOD_TEXT, {"first-line"}),
+    ("title bom", "\ufeff" + GOOD_TEXT, {"first-line", "char"}),
     # F2 bytes
-    ("cr in a line", with_line(2, "Rules\rfollow."), {"line-ending"}),
-    ("crlf", GOOD_TEXT.replace("\n", "\r\n"), {"line-ending"}),
-    ("tab", with_line(2, "Rules\tfollow."), {"control"}),
-    ("nul", with_line(2, "Rules\x00follow."), {"control"}),
-    ("esc", with_line(2, "Rules\x1bfollow."), {"control"}),
-    ("del", with_line(2, "Rules\x7ffollow."), {"control"}),
+    ("cr in a line", with_line(2, "Rules\rfollow."), {"line-ending", "char"}),
+    ("crlf", GOOD_TEXT.replace("\n", "\r\n"), {"line-ending", "char"}),
+    ("tab", with_line(2, "Rules\tfollow."), {"control", "char"}),
+    ("nul", with_line(2, "Rules\x00follow."), {"control", "char"}),
+    ("esc", with_line(2, "Rules\x1bfollow."), {"control", "char"}),
+    ("del", with_line(2, "Rules\x7ffollow."), {"control", "char"}),
     # F-B21R-2: every Unicode Cc, Zl and Zp character but the newline
-    ("c1 first", with_line(2, "Rules" + chr(0x80) + "follow."), {"control"}),
-    ("c1 nel", with_line(2, "Rules" + chr(0x85) + "follow."), {"control"}),
-    ("c1 csi", with_line(2, "Rules" + chr(0x9b) + "follow."), {"control"}),
-    ("c1 last", with_line(2, "Rules" + chr(0x9f) + "follow."), {"control"}),
-    ("line separator", with_line(2, "Rules" + chr(0x2028) + "follow."), {"control"}),
-    ("paragraph separator", with_cell(1, 2, "Rows" + chr(0x2029) + "give owners."), {"control"}),
-    ("vertical tab", with_line(2, "Rules\x0bfollow."), {"control"}),
+    ("c1 first", with_line(2, "Rules" + chr(0x80) + "follow."), {"control", "char"}),
+    ("c1 nel", with_line(2, "Rules" + chr(0x85) + "follow."), {"control", "char"}),
+    ("c1 csi", with_line(2, "Rules" + chr(0x9b) + "follow."), {"control", "char"}),
+    ("c1 last", with_line(2, "Rules" + chr(0x9f) + "follow."), {"control", "char"}),
+    ("line separator", with_line(2, "Rules" + chr(0x2028) + "follow."), {"control", "char"}),
+    ("paragraph separator", with_cell(1, 2, "Rows" + chr(0x2029) + "give owners."), {"control", "char"}),
+    ("vertical tab", with_line(2, "Rules\x0bfollow."), {"control", "char"}),
     ("trailing space", with_line(2, GOOD_LINES[2] + " "), {"trailing-ws"}),
-    ("trailing tab", with_line(2, GOOD_LINES[2] + "\t"), {"trailing-ws", "control"}),
+    ("trailing tab", with_line(2, GOOD_LINES[2] + "\t"), {"trailing-ws", "control", "char"}),
     ("no final newline", GOOD_TEXT[:-1], {"final-newline"}),
     ("two final newlines", GOOD_TEXT + "\n", {"final-newline", "trailing"}),
-    ("lone surrogate", with_cell(1, 1, "Every \ud800 change."), {"encoding"}),
+    ("lone surrogate", with_cell(1, 1, "Every \ud800 change."), {"encoding", "char"}),
     # F3 intro paragraph
     ("no intro", without_line(2), {"intro"}),
     ("two intro paragraphs", "\n".join(GOOD_LINES[:3] + ["", "Another paragraph."] + GOOD_LINES[3:]) + "\n",
@@ -476,8 +470,8 @@ BAD = [   # (name, text, exact problem kinds); each differs from GOOD_TEXT in on
     ("lower r", with_cell(1, 0, "SD-r1"), {"id"}),
     ("no dash", with_cell(1, 0, "SDR1"), {"id"}),
     ("suffix", with_cell(1, 0, "SD-R1a"), {"id"}),
-    ("arabic digit", with_cell(1, 0, "SD-R\u0661"), {"id"}),
-    ("arabic second digit", with_cell(1, 0, "SD-R1\u0661"), {"id"}),
+    ("arabic digit", with_cell(1, 0, "SD-R\u0661"), {"id", "char"}),
+    ("arabic second digit", with_cell(1, 0, "SD-R1\u0661"), {"id", "char"}),
     # W1 and empty cells
     ("empty why", with_cell(1, 2, ""), {"empty"}),
     ("empty rule", with_cell(1, 1, ""), {"empty"}),
@@ -501,7 +495,7 @@ BAD = [   # (name, text, exact problem kinds); each differs from GOOD_TEXT in on
     ("source anchor", with_cell(1, 6, "spec §8#x"), {"source"}),
     ("source path", with_cell(1, 6, "docs/spec.md"), {"source"}),
     ("source empty", with_cell(1, 6, ""), {"empty", "source"}),
-    ("source arabic digit", with_cell(1, 6, "spec §\u0668"), {"source"}),
+    ("source arabic digit", with_cell(1, 6, "spec §\u0668"), {"source", "char"}),
     # table presence
     ("no table", "\n".join(GOOD_LINES[:3]) + "\n", {"table"}),
     ("no rows", "\n".join(GOOD_LINES[:6]) + "\n", {"rows"}),
@@ -704,6 +698,22 @@ class ContentChecksRefuseTest(unittest.TestCase):
                          ["A b.", "(C d.)", "e f?", "G!", "2 h.", "`i` j."])
         self.assertEqual(sentences("Use `a.b` and 80 % of it."), ["Use `a.b` and 80 % of it."])
 
+    def assert_split_or_refused(self, text, want):
+        """Q-B2FX2-1 (a): an all-whitelist text splits as want; any other raises ValueError naming its first code point
+        outside the set."""
+        bad = first_refused(text)
+        if bad is None:
+            self.assertEqual(sentences(text), want)
+        else:
+            with self.assertRaisesRegex(ValueError, re.escape(bad)):
+                sentences(text)
+
+    def assert_char_refused(self, t):
+        """Through the real file: a cell holding a character outside the set gives a 'char' problem naming it."""
+        bad = first_refused(t)
+        self.assertIsNotNone(bad)
+        self.assertTrue(any(p.startswith("char: ") and bad in p for p in rules_problems(t)), bad)
+
     def test_sentences_split_after_closers_and_any_space(self):     # F-B21RR-1: the whole boundary dimension
         closers = ["`", "*", "_", ")", "]", "\"", "'", "**", "`)", chr(0x201d), chr(0x2019), chr(0xbb), chr(0x300d)]
         spaces = [" ", "  ", "\t", chr(0xa0), chr(0x2003), chr(0x3000), " " + chr(0xa0)]
@@ -711,7 +721,7 @@ class ContentChecksRefuseTest(unittest.TestCase):
             for c in [""] + closers:
                 for sp in spaces:
                     with self.subTest(stop=stop, closer=c, space=sp):
-                        self.assertEqual(sentences("A b" + stop + c + sp + "C d."), ["A b" + stop + c, "C d."])
+                        self.assert_split_or_refused("A b" + stop + c + sp + "C d.", ["A b" + stop + c, "C d."])
         self.assertEqual(sentences("A b.cd e."), ["A b.cd e."])               # no space: no boundary
         self.assertEqual(sentences("A b. "), ["A b."])                        # no empty sentence after the last
         self.assertEqual(sentences(""), [])
@@ -723,7 +733,10 @@ class ContentChecksRefuseTest(unittest.TestCase):
                      chr(0x2003), "\t", "!" + chr(0x201d) + " "):
             with self.subTest(tail=tail):
                 t = self.with_cell("SD-R6", 1, rule + tail + "Agents may skip it.")
-                self.assertIn("unpinned sentence SD-R6 rule 'Agents may skip it.'", pin_problems(t, table_rows(t)))
+                if first_refused(tail) is None:
+                    self.assertIn("unpinned sentence SD-R6 rule 'Agents may skip it.'", pin_problems(t, table_rows(t)))
+                else:
+                    self.assert_char_refused(t)
 
     def test_restored_spec_clauses(self):                      # F-B21R-4: clauses of spec section 8 kept
         rule = {r["id"]: r["rule"] for r in table_rows(self.text)}
@@ -756,17 +769,21 @@ class ContentChecksRefuseTest(unittest.TestCase):
                     added = rule[:-1] + stop + closer + sep + nxt
                     with self.subTest(stop=stop, closer=closer, sep=sep, nxt=nxt[:2]):
                         t = self.with_cell("SD-R6", 1, added)
-                        self.assertEqual(rules_problems(t), [])
-                        self.assertEqual(pin_problems(t, table_rows(t)), ["unpinned sentence SD-R6 rule %r" % nxt[:40]])
+                        if first_refused(added) is None:
+                            self.assertEqual(rules_problems(t), [])
+                            self.assertEqual(pin_problems(t, table_rows(t)),
+                                             ["unpinned sentence SD-R6 rule %r" % nxt[:40]])
+                        else:                                   # Q-B2FX2-1 (a): non-ASCII members refused
+                            self.assert_char_refused(t)
 
-    def test_cjk_stop_splits_before_lowercase(self):          # F-B21RR2-1: a CJK/fullwidth stop needs no space or capital
+    def test_cjk_stop_splits_before_lowercase(self):          # F-B21RR2-1; Q-B2FX2-1 (a): every CJK stop now refused
         rule = self.cell("SD-R6", 1)
         for stop in CJK_STOPS:
             with self.subTest(stop=stop):
-                t = self.with_cell("SD-R6", 1, rule[:-1] + "." + stop + "agents may skip it.")
-                self.assertEqual(pin_problems(t, table_rows(t)), ["unpinned sentence SD-R6 rule 'agents may skip it.'"])
-                t = self.with_cell("SD-R6", 1, rule[:-1] + stop + "agents may skip it.")
-                self.assertEqual(pin_problems(t, table_rows(t)), ["unpinned sentence SD-R6 rule 'agents may skip it.'"])
+                for added in (rule[:-1] + "." + stop + "agents may skip it.", rule[:-1] + stop + "agents may skip it."):
+                    self.assert_char_refused(self.with_cell("SD-R6", 1, added))
+                    with self.assertRaisesRegex(ValueError, re.escape("U+%04X" % ord(stop))):
+                        sentences(added)
 
     def test_no_false_split_without_space(self):              # F-B21RR2-1: lowercase, digits and code stay one sentence
         rule = self.cell("SD-R6", 1)
@@ -779,6 +796,17 @@ class ContentChecksRefuseTest(unittest.TestCase):
 # F-B21RR2-1 members: stops, closer runs and what follows the run with no whitespace (expected sentence = the text after
 # the separator, built here, never read from the splitter).
 CJK_STOPS = chr(0x3002) + chr(0xff0e) + chr(0xff01) + chr(0xff1f) + chr(0xff61)
+
+
+def in_charset(cp):
+    """The rules.md character set, written by hand from controller D4: LF, U+0020-U+007E, U+00A7."""
+    return cp == 0x0a or 0x20 <= cp <= 0x7e or cp == 0xa7
+
+
+def first_refused(text):
+    """'U+XXXX' of the first character of text outside the rules.md character set, or None."""
+    bad = next((ch for ch in text if not in_charset(ord(ch))), None)
+    return None if bad is None else "U+%04X" % ord(bad)
 NO_SPACE_CLOSERS = ["", ")", "``", "**", "\"", chr(0x201d), "``)", "_", chr(0x300d)]  # backticks paired: one cell
 NO_SPACE_JOINS = [("", "Agents may skip it."), ("", chr(0xc9) + "tapes may skip it."), ("", chr(0x1c5) + "x may skip it.")]
 NO_SPACE_JOINS += [(sep, nxt) for sep in (chr(0x200b), chr(0x200d), chr(0x2060), chr(0xfeff), chr(0x200b) * 2)
@@ -790,11 +818,12 @@ class SentenceSplitTest(unittest.TestCase):
     def test_no_space_boundaries(self):                       # F-B21RR2-1: the splitter on each member
         self.assertEqual(sentences("A fix.Agents b."), ["A fix.", "Agents b."])
         self.assertEqual(sentences("A fix.)Agents b."), ["A fix.)", "Agents b."])
-        self.assertEqual(sentences("A fix." + chr(0x200b) + "agents b."), ["A fix.", "agents b."])
-        self.assertEqual(sentences("A fix." + chr(0x3002) + "agents b."), ["A fix." + chr(0x3002), "agents b."])
-        self.assertEqual(sentences("A fix" + chr(0x3002) + "agents b."), ["A fix" + chr(0x3002), "agents b."])
-        self.assertEqual(sentences("A fix." + chr(0x200b)), ["A fix."])
-        self.assertEqual(sentences("A fix." + chr(0x3002)), ["A fix." + chr(0x3002)])
+        for text, cp in (("A fix." + chr(0x200b) + "agents b.", "U+200B"), ("A fix." + chr(0x3002) + "agents b.", "U+3002"),
+                         ("A fix" + chr(0x3002) + "agents b.", "U+3002"), ("A fix." + chr(0x200b), "U+200B"),
+                         ("A fix." + chr(0x3002), "U+3002")):    # Q-B2FX2-1 (a): non-ASCII members now refused
+            with self.subTest(cp=cp):
+                with self.assertRaisesRegex(ValueError, re.escape(cp)):
+                    sentences(text)
         self.assertEqual(sentences("e.g.the v3.12 a.b `x.Y` end."), ["e.g.the v3.12 a.b `x.", "Y` end."])
 
 
@@ -905,6 +934,8 @@ def b_owned_markdown():
 
 
 # Row P1-P10 samples: (text, expected [(line, match)]); every expected value is written here by hand.
+R1, R2, R3 = ("refused: multi-line code span", "refused: backtick in angle construct",
+              "refused: pipe in table-row code span")      # owner Q-B2FX2-1 (a), controller D1 (names exactly)
 PLACEHOLDER_REFUSED = [
     ("G<n> the same", [(1, "<n>")]), ("Owner answers (<date>), binding", [(1, "<date>")]),
     ("<program>/integration", [(1, "<program>")]), ("class: <dimension>: <members>", [(1, "<dimension>"), (1, "<members>")]),
@@ -915,11 +946,14 @@ PLACEHOLDER_REFUSED = [
     ("</n>", [(1, "</n>")]), ("</n >", [(1, "</n >")]), ("<!-- x -->", [(1, "<!-- x -->")]),
     ("a <!-- open", [(1, "<!--")]), ("<!--\nx -->", [(1, "<!--\nx -->")]),                               # P7
     ("\\<n>", [(1, "<n>")]),                                                                             # P8
-    ("a ` b <n>", [(1, "<n>")]), ("`a`` <n>", [(1, "<n>")]), ("\\`a <n> `", [(1, "<n>")]),             # P9
-    ("` <n> ``", [(1, "<n>")]), ("`` <n> `", [(1, "<n>")]),                     # P9: runs of unequal length pair not
-    ("`a\n<n>`", [(2, "<n>")]),                                                                          # P10
+    ("a ` b <n>", [(1, "<n>"), (1, R1)]), ("`a`` <n>", [(1, "<n>"), (1, R1)]),                         # P9 + R1
+    ("\\`a <n> `", [(1, "<n>"), (1, R1)]),
+    ("` <n> ``", [(1, "<n>"), (1, R1)]), ("`` <n> `", [(1, "<n>"), (1, R1)]),    # P9: runs of unequal length pair not
+    ("`a\n<n>`", [(1, R1), (2, "<n>"), (2, R1)]),                                                      # P10 + R1
     ("x\n```\ny\n```\n<n>", [(5, "<n>")]), ("~~~\n```\n<n>\n~~~\n<m>", [(5, "<m>")]),
-    ("    ```\n<n>\n    ```", [(2, "<n>")]), ("``` a`b\n<n>", [(2, "<n>")]),                          # P3 edges
+    ("    ```\n<n>\n    ```", [(1, R1), (2, "<n>"), (3, R1)]), ("``` a`b\n<n>", [(1, R1), (2, "<n>")]),   # P3 edges
+    ("<a `x`>", [(1, R2)]),                                    # was accepted (spans break a tag): now refused, R2
+    ("# `a\n`<x>`\n", [(1, R1)]),                              # was accepted (heading ends a paragraph): R1
 ]
 PLACEHOLDER_ACCEPTED = [
     "`G<n>`", "`<date>`", "``a `<n>` b``", "`` <n> ``", "``x` <n> `y``",                                # P2
@@ -927,7 +961,7 @@ PLACEHOLDER_ACCEPTED = [
     "~~~~\n<n>\n~~~~~", "```\n<n>\n```  ",                                                               # P3
     "a < b", "x<y", "<1-4>", "< n>", "a <", "<>", "<-n>", "<_n>",                                          # P4
     "<https://example.org/x>", "<mailto:a@b.c>", "<a@b.c>",                                              # P6
-    "<a `x`>", "<`n`>",                                                    # spans break a tag: masked by NUL, not space
+    "<`n`>",                                                    # '<' then a backtick: not an angle opener, no R2
 ]
 
 
@@ -965,7 +999,8 @@ class PlaceholderTest(unittest.TestCase):
                 lines.append(pre + body + post)
                 if ph in tags and wrap in ("none", "unpaired"):
                     want.append((len(lines), tags[ph]))
-                if wrap == "unpaired":       # F-B2V3-1: end the paragraph, or its backtick pairs with a later line's
+                if wrap == "unpaired":       # Q-B2FX2-1 (a): an unpaired run is refused (R1), after the line's hit
+                    want.append((len(lines), "refused: multi-line code span"))
                     lines.append("")
             with self.subTest(doc=lines):
                 self.assertEqual(pc.placeholder_hits("\n".join(lines) + "\n"), want)
@@ -1425,14 +1460,34 @@ PROFILE_CONDITION = "where the profile enables it"
 # a bare "the verifier"); `audit_verifier` is another role and does not match. Every prose unit naming one is a member
 # unless it is hand-listed below as a non-step unit, with its reason.
 _VERIFIER = re.compile(r"final_verifier|\bverifier\b", re.I)
-VERIFIER_NON_STEPS = [   # (file, the start of the unit, its exact verifier matches, why it states no block-end step)
-    ("playbook/roles.md", "| final_verifier |", ["final_verifier", "final_verifier"],
+VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no block-end step); D6, F-B2FX2RR-3
+    ("playbook/roles.md",
+     "| final_verifier | skills/strict-delivery/prompts/final_verifier.md | tier4 | yes | open |",
      "role table row: prompt block, minimum tier, finding states"),
-    ("playbook/roles.md", "A role runs at its minimum tier", ["final_verifier"],
+    ("playbook/roles.md",
+     "A role runs at its minimum tier or above, and a dispatch names a tier, never a model: config `models.tiers` maps "
+     "each tier to the model the project uses. The top tier, `tier4`, is allowed only for the roles in "
+     "`top_tier_roles`, by default `final_verifier` and `exception_reviewer`. `tier4` has no default model; while it "
+     "is unset, the `top_tier_roles` run at the tier `top_tier_fallback` names, default `tier3`. A small re-review "
+     "that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, \"Small "
+     "re-review\").",
      "tier rule: `final_verifier` is one of `top_tier_roles`"),
-    ("playbook/rules.md", "| SD-R9 |", ["verifier"], "rule row: how the verifier runs the suite, not when it runs"),
-    ("skills/strict-delivery/SKILL.md", "The roles, with their prompt blocks", ["final_verifier"], "the role list"),
-]   # F-B2F1RR-2: a unit is exempt only while its verifier matches are exactly the listed ones
+    ("playbook/rules.md",
+     "| SD-R9 | Reviewers execute every claim and re-run every gate themselves, on a clean copy of the reviewed head: a "
+     "`git archive` export or a detached worktree, with `pwd -P` and `git rev-parse --show-toplevel` checked inside "
+     "it and no tracked file flagged assume-unchanged or skip-worktree (`git ls-files -v`). Before a review the "
+     "controller trial-merges the branch with the base (`git merge-tree`) and runs the full suite on the merged "
+     "tree. The verifier runs the suite with `GIT_*`, `TZ` and `LANG` polluted. | A result seen only in the "
+     "author's checkout can depend on that checkout's state. | judgment | light, standard, strict | no | "
+     "spec §8 |",
+     "rule row: how the verifier runs the suite, not when it runs"),
+    ("skills/strict-delivery/SKILL.md",
+     "The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: "
+     "`program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, "
+     "`task_reviewer`, `final_reviewer`, `final_verifier`, `exception_reviewer`, `audit_reviewer`, `audit_verifier` "
+     "and `investigator`.",
+     "the role list"),
+]   # a unit is exempt only verbatim: any edit in place or any added text makes it a member
 # The class members, hand-listed: (file, the start of the paragraph that states the verifier as a block-end step).
 VERIFIER_STEP_MEMBERS = [
     ("playbook/review.md", "At a block's end a `final_reviewer`"),
@@ -1470,10 +1525,8 @@ def prose_units(text, cells=False):
 def verifier_step_paragraphs(text, rel=None):
     """The prose units that name a verifier term and are not hand-listed for rel as non-step units: the units that
     state the verifier as a block-end step (F-B23RR1-1)."""
-    def exempt(u):
-        return any(f == rel and u.startswith(start) and _VERIFIER.findall(u) == matches
-                   for f, start, matches, _ in VERIFIER_NON_STEPS)
-    return [u for u in prose_units(text) if _VERIFIER.search(u) and not exempt(u)]
+    exempt = [unit for f, unit, _ in VERIFIER_NON_STEPS if f == rel]
+    return [u for u in prose_units(text) if _VERIFIER.search(u) and u not in exempt]
 
 
 def verifier_step_problems(text, rel=None):
@@ -1555,22 +1608,27 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
             self.assertTrue(para.startswith(start), (rel, para[:60]))
 
     def test_verifier_non_steps_each_exempt_one_unit(self):      # F-B23RR1-1: every exemption names one real unit
-        for rel, start, matches, why in VERIFIER_NON_STEPS:
-            with self.subTest(rel=rel, start=start):
-                units = [u for u in prose_units(read(rel)) if u.startswith(start)]
-                self.assertEqual(len(units), 1)
-                self.assertTrue(why)
-                self.assertEqual(_VERIFIER.findall(units[0]), matches)
+        for rel, unit, why in VERIFIER_NON_STEPS:
+            with self.subTest(rel=rel, unit=unit[:30]):
+                self.assertEqual(prose_units(read(rel)).count(unit), 1)
+                self.assertTrue(why and _VERIFIER.search(unit))
 
-    def test_exempt_unit_with_an_added_step_fails(self):          # F-B2F1RR-2, V5: mutant E2 on every exemption
+    def test_exempt_unit_with_an_added_step_fails(self):          # F-B2F1RR-2, V5, M8: E2, a word changed, row text
         step = "At a block's end the verifier runs."
-        for rel, start, _, _ in VERIFIER_NON_STEPS:
+        for rel, unit, _ in VERIFIER_NON_STEPS:
             text = read(rel)
-            unit = [u for u in prose_units(text) if u.startswith(start)][0]
+            words = unit.split(" ")
+            mid = len(words) // 2
+            changed = " ".join(words[:mid] + [words[mid] + "x"] + words[mid + 1:])      # one word changed in place
             grown = unit[:-2] + " " + step + " |" if unit.endswith(" |") else unit + " " + step
-            with self.subTest(rel=rel, start=start):
-                self.assertEqual(text.count(unit), 1)
-                self.assertEqual(verifier_step_problems(text.replace(unit, grown), rel), [grown[:60]])
+            variants = [grown, changed]
+            if unit.startswith("| "):
+                first = unit.index(" | ", 2)
+                variants.append(unit[:first] + " x" + unit[first:])                   # text after a table row start
+            for v in variants:
+                with self.subTest(rel=rel, v=v[:40]):
+                    self.assertEqual(text.count(unit), 1)
+                    self.assertEqual(verifier_step_problems(text.replace(unit, v), rel), [v[:60]])
 
     def test_class_refuses_an_unconditioned_paragraph(self):     # FX5, F-B23RR1-1: a new member without the condition
         added = ["Each block ends with a final review and a final verifier.",
@@ -1600,6 +1658,8 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
             self.assertEqual(prose_units(read(rel), cells=True).count(unit), 1, rel)
             grown = read(rel).replace(unit, unit + " A review minor may wait for a follow-up.")
             self.assertEqual(len(deferral_problems(grown, rel)), 1, rel)          # F-B2F1RR-2, whole class
+            changed = read(rel).replace(unit, unit.replace("no follow-up", "a follow-up"))   # M8: edited in place
+            self.assertEqual(len(deferral_problems(changed, rel)), 1, rel)
 
     def test_sd_r5_why_cell_names_low_plateau(self):              # F-B2F1RR-1, V4
         row = [r for r in table_rows(read(RULES)) if r["id"] == "SD-R5"][0]
@@ -1634,21 +1694,46 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
                     self.assertEqual(non_ascii_lines(raw + ch.encode("utf-8") + b"\n"), [raw.count(b"\n") + 1])
 
 
-# Block B2 verifier round (F-B2V3-1..3). Every expected value is written here by hand.
-SPAN_HTML_REFUSED = [   # V1: (text, hits)
-    ('x <a title="`"> y ` z\n', [(1, '<a title="`">')]),                      # reproducer 1: backtick inside a tag
-    ("`a\nb` <x> `c`\n", [(2, "<x>")]),                                      # reproducer 2: span over a line break
-    ('see <n title="`"> and ` here\n', [(1, '<n title="`">')]),
+# Block B2 verifier round (F-B2V3-1..3), converted in fix round 3 to the input restriction (owner Q-B2FX2-1 (a),
+# controller D1-D5). Every expected value is written here by hand.
+SPAN_HTML_REFUSED = [   # V1: (text, result)
+    ('x <a title="`"> y ` z\n', [(1, R2)]),                                 # reproducer 1: backtick inside a tag
+    ("`a\nb` <x> `c`\n", [(1, R1), (2, R1)]),                               # reproducer 2: span over a line break
+    ('see <n title="`"> and ` here\n', [(1, R2)]),
     ("`a b` <x> `c`\n", [(1, "<x>")]),                                       # control of reproducer 2, one line
     ('x <a title="q"> y\n', [(1, '<a title="q">')]),                         # control of reproducer 1, no backtick
-    ("`a\n<n>`\n", [(2, "<n>")]),                                            # P10 kept: fail closed
-    ("- `a\n  b` <x> `c`\n", [(2, "<x>")]),                                  # a list item's lazy line
+    ("`a\n<n>`\n", [(1, R1), (2, "<n>"), (2, R1)]),                          # P10: fail closed
+    ("- `a\n  b` <x> `c`\n", [(1, R1), (2, R1)]),                            # a list item's lazy line
+    ("# `a\n`<x>`\n", [(1, R1)]),                                            # was accepted: a heading's unpaired run
 ]
-SPAN_HTML_ACCEPTED = ["`<x>`\n", "a `<x>` b\nc `d`\n", "`a`\n\n`<x>`\n", "``a ` <x> ` b``\n", "# `a\n`<x>`\n"]
+SPAN_HTML_ACCEPTED = ["`<x>`\n", "a `<x>` b\nc `d`\n", "`a`\n\n`<x>`\n", "``a ` <x> ` b``\n"]
+# M1-M5 (fix round 3). F-B2FX2RR-1 reproducers, the class members and controls.
+RESTRICT_SAMPLES = [
+    ("e `\n- a `b\nc` <x> `d\n", [(1, R1), (2, R1)]),                       # F-B2FX2RR-1: bullet list item
+    ("e `\n> a `b\nc` <x> `d\n", [(1, R1), (2, R1)]),                       # block quote, then a lazy line
+    ("e `\n***\na `b\nc` <x> `d\n", [(1, R1), (3, R1)]),                    # thematic break
+    ("a `b\n| c` <x> `d\n", [(1, R1)]),                                     # a `|` line inside a paragraph
+    ("| `a | <x> | b` |\n|---|---|---|\n", [(1, R3)]),                       # GFM cell split on pipes in a span
+    ("<http://a`b> <x> `c\n", [(1, R2)]), ("<a`b@c.de> <x> `c\n", [(1, R2)]),   # autolinks holding a backtick
+    ("x \\` y\n", []), ("```\n` a\n```\n", []),                              # M1: escaped run; inside a fence
+    ("- ` a\n", [(1, R1)]), ("> ` a\n", [(1, R1)]), ("# ` a\n", [(1, R1)]), ("| ` a |\n", [(1, R1)]),
+    ("<a href=`x`>\n", [(1, "<a href=\0\0\0>"), (1, R2)]), ("<a\ntitle=`x`>\n", [(1, "<a\ntitle=\0\0\0>"), (1, R2)]),
+    ("</a`>\n", [(1, R1), (1, R2)]),            # M2; a hit is matched on the masked text (NUL per span char)
+    ("<!-- ` -->\n", [(1, "<!-- ` -->"), (1, R1), (1, R2)]), ("<?x `?>\n", [(1, R1), (1, R2)]),
+    ("`<a>` `b`\n", []), ("<1 `x` >\n", []), ("< a `x` >\n", []), ("<a `x`\n", []),
+    ("| `a|b` |\n", [(1, R3)]), ("a | `b|c`\n--|--\n", [(1, R3)]), ("a | `b|c`\n:-|-:\n", [(1, R3)]),   # M3
+    ("see `a|b` here\n", []), ("| `a\\|b` |\n", [(1, R3)]), ("x\n\na | `b|c`\n", []),
+    ("a `<!-- ` b\n", []), ("(`<!-- ` or `# `)\n", []), ("`a` <x> `b`\n", [(1, "<x>")]),          # M4, F-B2FX2RR-4
+    ("a `\n<b `x`>\n| `c|d` |\n", [(1, R1), (2, R2), (3, R3)]),                                  # M5: each kind
+    ("| `a|b` ` |\n", [(1, R1), (1, R3)]), ("<x> `\n", [(1, "<x>"), (1, R1)]),                   # two; mixed
+]
+STERM_26 = [0x0701, 0x0702, 0x07F9, 0x1367, 0x166E, 0x1803, 0x1809, 0x1944, 0x1945, 0x2E3C, 0x2E53, 0x2E54, 0xA4FF,
+            0xA60E, 0xA60F, 0xA6F3, 0xA6F7, 0xFE12, 0xFE15, 0xFE16, 0x11143, 0x16AF5, 0x16E98, 0x1BC9F, 0x1DA88,
+            0x1E95E]                                                    # F-B2FX2RR-2, named by the re-review
 
 
 class VerifierRoundTest(unittest.TestCase):
-    def test_placeholder_span_html_class(self):                   # F-B2V3-1, V1
+    def test_placeholder_span_html_class(self):                   # F-B2V3-1, V1 (converted, D5)
         for text, want in SPAN_HTML_REFUSED:
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), want)
@@ -1656,7 +1741,22 @@ class VerifierRoundTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), [])
 
-    def test_rule_id_digit_count_same_on_every_interpreter(self):   # F-B2V3-2, V2, PC1 4300/4301 row
+    def test_input_restriction_samples(self):                     # F-B2FX2RR-1, -4; M1-M5
+        self.assertEqual(pc.REFUSED_KINDS, ("multi-line code span", "backtick in angle construct",
+                                            "pipe in table-row code span"))
+        for text, want in RESTRICT_SAMPLES:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_backtick_runs_one_to_four(self):                     # M1: every run length, paired and unpaired
+        for n in range(1, 5):
+            run = "`" * n
+            with self.subTest(n=n):
+                self.assertEqual(pc.placeholder_hits("x %sa%s y\n" % (run, run)), [])
+                self.assertEqual(pc.placeholder_hits("x %sa y\n" % run), [(1, R1)])
+                self.assertEqual(pc.placeholder_hits("x %sa%s y\n" % (run, "`" * (n + 1))), [(1, R1)])
+
+    def test_rule_id_digit_count_same_on_every_interpreter(self):   # F-B2V3-2, V2, PC1-a 4300/4301 row
         text = read(RULES)
         rng = random.Random(20261109)
         for digits in (4300, 4301, 9):
@@ -1668,29 +1768,71 @@ class VerifierRoundTest(unittest.TestCase):
         t = text.replace("| SD-R5 |", "| SD-R99999999 |")              # 8 digits: still parsed
         self.assertEqual(rules_problems(t)[:1], ["id-sequence: line 11, expected SD-R5, got SD-R99999999"])
 
-    def test_sentence_stops_class(self):                          # F-B2V3-3, V3
+    def test_sentence_stops_class(self):                          # F-B2V3-3, V3 (converted, D5): non-ASCII refused
         for c in (0x2026, 0x203c, 0x203d, 0x2047, 0x2048, 0x2049, 0x2e2e, 0x037e, 0x0589, 0x061f, 0x06d4, 0x0964,
-                  0x0965, 0x1362, 0xfe52, 0xfe56, 0xfe57):
-            s = chr(c)
-            with self.subTest(stop=hex(c)):
-                self.assertEqual(sentences("A b" + s + "c d."), ["A b" + s, "c d."])
-                self.assertEqual(sentences("A b" + s + " C d."), ["A b" + s, "C d."])
-        self.assertEqual(sentences("end.Ꟁx claim."), ["end.", "Ꟁx claim."])   # Cn on 3.9, Lu on 3.13
-        self.assertEqual(sentences("end.étapes."), ["end.", "étapes."])      # any non-ASCII next: split
-        self.assertEqual(sentences("A b.c d."), ["A b.c d."])                         # ASCII control: no split
+                  0x0965, 0x1362, 0xfe52, 0xfe56, 0xfe57, 0xa7c0, 0xe9):
+            with self.subTest(cp=hex(c)):
+                for text in ("A b" + chr(c) + "c d.", "end." + chr(c) + "x claim."):
+                    with self.assertRaisesRegex(ValueError, re.escape("U+%04X" % c)):
+                        sentences(text)
+        self.assertEqual(sentences("A b.c d."), ["A b.c d."])                         # ASCII members: unchanged
         self.assertEqual(sentences("A b.C d."), ["A b.", "C d."])
+        self.assertEqual(sentences("A b!c d? E."), ["A b!c d?", "E."])
 
-    def test_sentence_split_uses_no_unicode_database(self):        # F-B2V3-3, V6: the same split on every UCD version
-        samples = ["end.Ꟁx", "A b…c.", "A b.” C.", "A b.​c.", "v3.12 fix.", "A b.）c."]
-        want = [sentences(s) for s in samples]
+    def test_sentence_split_uses_no_unicode_database(self):        # V6, PC1-b (converted, D5)
+        samples = ["end.Ax", "A b.c.", "A b.) C.", "v3.12 fix.", "spec §8. Next."]
+        want = [["end.", "Ax"], ["A b.c."], ["A b.)", "C."], ["v3.12 fix."], ["spec §8.", "Next."]]
         with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
             self.assertEqual([sentences(s) for s in samples], want)
+            for c in (0xa7c0, 0x2e53):                          # categories differ between UCD 13.0 and 15.1
+                with self.assertRaisesRegex(ValueError, re.escape("U+%04X" % c)):
+                    sentences("end." + chr(c) + "x")
 
-    def test_unpinned_sentence_behind_an_ellipsis(self):          # F-B2V3-3, through the real pin check
+    def test_unpinned_sentence_behind_an_ellipsis(self):          # F-B2V3-3 (converted, D5): refused as "char"
         rows = table_rows(read(RULES))
         rule = [r for r in rows if r["id"] == "SD-R6"][0]["rule"]
         t = read(RULES).replace(rule, rule + "…agents may skip it.")
-        self.assertIn("unpinned sentence SD-R6 rule 'agents may skip it.'", pin_problems(t, table_rows(t)))
+        self.assertIn("char: line 12, U+2026 outside the rules.md character set", rules_problems(t))
+
+    def test_every_code_point_through_sentences(self):            # M6, F-B2FX2RR-2: the whole space, not sampled
+        accepted = 0
+        for cp in range(0x110000):
+            try:
+                sentences("a" + chr(cp))
+            except ValueError as e:
+                self.assertFalse(in_charset(cp), hex(cp))
+                self.assertIn("U+%04X" % cp, str(e))
+            else:
+                self.assertTrue(in_charset(cp), hex(cp))
+                accepted += 1
+        self.assertEqual(accepted, 1 + 95 + 1)                       # LF, U+0020-U+007E, U+00A7
+        for cp in STERM_26 + [0x09, 0x0d]:
+            with self.assertRaisesRegex(ValueError, re.escape("U+%04X" % cp)):
+                sentences("A b" + chr(cp) + "agents may skip it.")
+
+    def test_every_code_point_through_rules_problems(self):       # M6: the "char" kind over the whole space
+        text = read(RULES)
+        refused = "".join(chr(cp) for cp in range(0x110000) if not in_charset(cp))
+        got = [p for p in rules_problems(text.replace("| SD-R5 |", "| SD-R5 " + refused + " |")) if p.startswith("char")]
+        self.assertEqual(got, ["char: line 11, U+%04X outside the rules.md character set" % cp
+                               for cp in range(0x110000) if not in_charset(cp)])
+        allowed = "".join(chr(cp) for cp in range(0x110000) if in_charset(cp) and cp != 0x0a)
+        t = text.replace("| SD-R5 |", "| SD-R5 " + allowed + " |")
+        self.assertEqual([p for p in rules_problems(t) if p.startswith("char")], [])
+        self.assertEqual([p for p in rules_problems(text) if p.startswith("char")], [])     # M9: the real file
+
+    def test_real_b_owned_files_pass_the_restriction(self):       # M9: all 17 files, no refusal, no hit
+        files = b_owned_markdown()
+        self.assertEqual(len(files), 17)
+        for rel in files:
+            with self.subTest(rel=rel):
+                self.assertEqual(pc.placeholder_hits(read(rel)), [])
+
+    def test_changed_helpers_use_no_exception_group(self):        # PC1-c: the changed helpers run on 3.9 as on 3.13
+        import inspect
+        for fn in (pc.placeholder_hits, pc._unpaired_runs, pc._table_row_lines, pc.rules_problems, sentences):
+            self.assertNotIn("ExceptionGroup", inspect.getsource(fn))
+            self.assertNotIn("except*", inspect.getsource(fn))
 
 
 if __name__ == "__main__":

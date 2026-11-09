@@ -291,6 +291,9 @@ RULES_ENFORCERS = frozenset((
     "judgment"))
 SD_R4_ENFORCER = "program create (programs); judgment"
 PROFILE_NAMES = ("light", "standard", "strict")
+# The rules.md and sentence-splitter character set (owner Q-B2FX2-1 (a), narrowing Q-B21-2 (a)): LF, U+0020-U+007E
+# and U+00A7, nothing else (no tab).
+RULES_CHARS = frozenset("\n" + "".join(chr(c) for c in range(0x20, 0x7f)) + "§")
 _RULE_ID = re.compile(r"SD-R[1-9][0-9]*")
 _RULE_ID_TOKEN = re.compile(r"SD-R[0-9]")
 _SOURCE = re.compile(r"spec §[0-9]+[a-z]?")
@@ -380,6 +383,10 @@ def rules_problems(text):
             if (kind, n) not in seen:
                 seen.add((kind, n))
                 problems.append("%s: character 0x%02x on line %d" % (kind, ord(ch), n))
+    for n, line in enumerate(text.split("\n"), 1):      # owner Q-B2FX2-1 (a): the rules.md character set
+        for ch in line:
+            if ch not in RULES_CHARS:
+                problems.append("char: line %d, U+%04X outside the rules.md character set" % (n, ord(ch)))
     if not text.endswith("\n"):
         problems.append("final-newline: the file does not end with a newline")
     elif text.endswith("\n\n"):
@@ -556,15 +563,62 @@ def _mask_spans(line):
     return _masked(line, _span_ranges(line))
 
 
-_BLOCK_LINE = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|\|)")
+REFUSED_KINDS = ("multi-line code span", "backtick in angle construct", "pipe in table-row code span")
+_DELIMITER_ROW = re.compile(r"[ \t|:-]*")
+_TABLE_START = re.compile(r" {0,3}\|")
+_ANGLE_OPEN = re.compile(r"<[A-Za-z/!?]")
+
+
+def _unpaired_runs(line):
+    """Start offsets of the backtick runs the per-line pairing leaves unpaired (an escaped backtick outside a span
+    is text, as in _span_ranges)."""
+    spans = _span_ranges(line)
+    out, i, n = [], 0, len(line)
+    while i < n:
+        inside = next((b for a, b in spans if a <= i < b), None)
+        if inside is not None:
+            i = inside
+            continue
+        if line[i] == "\\" and i + 1 < n and line[i + 1] in _ASCII_PUNCT:
+            i += 2
+            continue
+        if line[i] == "`":
+            j = i
+            while j < n and line[j] == "`":
+                j += 1
+            out.append(i)
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def _table_row_lines(base):
+    """Indexes of the lines read as table rows, fail closed: a line starting (after at most 3 spaces) with '|', and
+    every line of a blank-line-delimited run that holds a delimiter-shaped line (only '|', '-', ':', space and tab,
+    with at least one '-' and one '|')."""
+    rows = {i for i, line in enumerate(base) if _TABLE_START.match(line)}
+    run = []
+    for i, line in enumerate(base + [""]):
+        if line.strip():
+            run.append(i)
+            continue
+        if any(_DELIMITER_ROW.fullmatch(base[p]) and "-" in base[p] and "|" in base[p] for p in run):
+            rows.update(run)
+        run = []
+    return rows
 
 
 def placeholder_hits(text):
-    """(line_no, match) for each raw-HTML open tag, closing tag or comment outside code spans and fenced blocks.
-    Fail closed (F-B2V3-1): code spans are paired two ways, within each line and across the lines of a paragraph (as
-    CommonMark pairs a span over a line break; a blank line, a fence, a heading or a table row ends a paragraph). A
-    construct is a hit when either pairing leaves it visible, or when it overlaps a span without lying wholly inside
-    it (a backtick inside a tag)."""
+    """(line_no, match) for each raw-HTML open tag, closing tag or comment outside code spans and fenced blocks, and
+    (line_no, "refused: <kind>") for each input the check refuses instead of parsing (owner Q-B2FX2-1 (a), which
+    narrows Q-B22v2-3 (a)), merged in line order (on one line: hits, then refusals in REFUSED_KINDS order).
+    Outside fences, three inputs are refused: R1 "multi-line code span", a line holding a backtick run its own line
+    leaves unpaired; R2 "backtick in angle construct", a '<' outside every code span followed by an ASCII letter,
+    '/', '!' or '?', with a backtick before the next '>' (searched across lines); R3 "pipe in table-row code span",
+    a code span holding '|' on a table-row line (_table_row_lines). With R1-R3 absent, code spans paired per line are
+    exact: no span crosses a line (R1), no construct that starts before a span can swallow its backtick (R2), and
+    the table cell split cannot reach into a span (R3). A '<' inside a span is code: the span starts first."""
     _need_str(text, "placeholder_hits")
     base = []
     fence = None
@@ -582,32 +636,22 @@ def placeholder_hits(text):
             continue
         base.append(line)
     joined = "\n".join(base)
-    per_line, per_block, block, off = [], [], [], 0
-    starts = []
-    for line in base:
-        starts.append(off)
-        per_line += [(off + a, off + b) for a, b in _span_ranges(line)]
-        off += len(line) + 1
-    for idx, line in enumerate(base + [""]):
-        breaks = not line.strip() or _BLOCK_LINE.match(line)
-        if block and (breaks or idx == len(base)):
-            s0 = starts[block[0]]
-            per_block += [(s0 + a, s0 + b) for a, b in _span_ranges("\n".join(base[p] for p in block))]
-            block = []
-        if idx < len(base) and line.strip():
-            if _BLOCK_LINE.match(line):
-                per_block += [(starts[idx] + a, starts[idx] + b) for a, b in _span_ranges(line)]
-            else:
-                block.append(idx)
-    hits = {}
-    for ranges in (per_line, per_block):
-        for m in _HTML.finditer(_masked(joined, ranges)):
-            hits.setdefault(m.start(), m.group(0))
-    for m in _HTML.finditer(joined):
-        for ranges in (per_line, per_block):
-            if not any(a <= m.start() and m.end() <= b for a, b in ranges):
-                hits.setdefault(m.start(), m.group(0))
-    return [(joined.count("\n", 0, p) + 1, hits[p]) for p in sorted(hits)]
+    masked = "\n".join(_mask_spans(line) for line in base)
+    out = [(masked.count("\n", 0, m.start()) + 1, m.group(0)) for m in _HTML.finditer(masked)]
+    refused = []
+    for n, line in enumerate(base, 1):
+        if _unpaired_runs(line):
+            refused.append((n, 0))
+    for m in _ANGLE_OPEN.finditer(masked):
+        close = joined.find(">", m.start())
+        if close >= 0 and "`" in joined[m.start():close]:
+            refused.append((masked.count("\n", 0, m.start()) + 1, 1))
+    for i in sorted(_table_row_lines(base)):
+        if any("|" in base[i][a:b] for a, b in _span_ranges(base[i])):
+            refused.append((i + 1, 2))
+    out += sorted(set((n, "refused: " + REFUSED_KINDS[k]) for n, k in refused),
+                  key=lambda r: (r[0], REFUSED_KINDS.index(r[1][len("refused: "):])))
+    return sorted(out, key=lambda r: (r[0], r[1].startswith("refused: ")))
 
 
 # Front matter (owner Q-B22v2-1 (a)): a fail-closed whitelist, standard library only.
