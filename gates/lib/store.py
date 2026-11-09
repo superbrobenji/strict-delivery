@@ -267,7 +267,7 @@ def base_errors(root: str, store: Store, base: str, is_resolved: Callable[[dict]
     gitinfo._require_toplevel(root)
     try:
         same = isinstance(store, Store) and os.path.samefile(store.root, root)
-    except (OSError, TypeError, ValueError):  # a root samefile cannot stat is not the same (F-v2-2, Q-VER2-2 (a))
+    except (OSError, TypeError, ValueError, OverflowError):  # not the same root (F-v2-2, Q-VER2-2 (a), Q-R16R-1 (a))
         same = False
     if not same:
         raise GateError("base_errors: the store's root %s is not the root given %s"

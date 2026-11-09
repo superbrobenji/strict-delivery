@@ -1275,3 +1275,29 @@ class UnusableStoreRootTest(GitCase):
         s.root = None
         out = run_check("x", lambda a: base_errors(self.root, s, "main", resolved, never), []).render(False)
         self.assertEqual(out, "FAIL x.input: " + self.WANT % ("None", self.root) + "\n")
+
+    # Owner Q-R16R-1 (a): an int too large for a file descriptor makes samefile raise OverflowError
+    HUGE = ((2 ** 100, str(2 ** 100)), (-(2 ** 100), str(-(2 ** 100))))
+
+    def test_a_huge_int_is_one_samefile_rejects_with_overflow(self):  # Q-R16R-1 (a)
+        for bad, _ in self.HUGE:
+            with self.subTest(root=repr(bad)), self.assertRaises(OverflowError):
+                os.path.samefile(bad, self.root)
+
+    def test_a_huge_int_store_root_is_a_gate_error(self):  # Q-R16R-1 (a)
+        self.seed()
+        for bad, shown in self.HUGE:
+            with self.subTest(root=repr(bad)):
+                s = Store(self.root, "decision", self.cfg)
+                s.root = bad
+                with self.no_history_reads(), self.assertRaises(GateError) as e:
+                    base_errors(self.root, s, "main", resolved, never)
+                self.assertEqual(str(e.exception), self.WANT % (shown, self.root))
+
+    def test_a_huge_int_store_root_through_run_check(self):  # Q-R16R-1 (a)
+        for bad, shown in self.HUGE:
+            with self.subTest(root=repr(bad)):
+                s = Store(self.root, "decision", self.cfg)
+                s.root = bad
+                out = run_check("x", lambda a: base_errors(self.root, s, "main", resolved, never), []).render(False)
+                self.assertEqual(out, "FAIL x.input: " + self.WANT % (shown, self.root) + "\n")
