@@ -7,7 +7,9 @@ time, so other load on the machine does not change the outcome (F-R1):
   21ad52d's P1a, P1b, P1d "(", P2 and P4 scans run past CPU_CAP, where RLIMIT_CPU kills the child (SIGXCPU).
 - work: one call at size n // WORK_DIV, run under sys.settrace and sys.setprofile, executes at most LINES_PER_CHAR
   Python lines and passes at most SCAN_PER_CHAR characters of str receivers to C str methods (len(s) for each call
-  s.m(...)), per character of input. Both counts are deterministic. The fixed code stays under 21 lines and 5
+  s.m(...)), per character of input. Both counts are deterministic and bounded from below too: the same child runs
+  _work on a hand-counted calibration function (exact counts), and each case has hand-derived floors (_floors), so
+  a tracer that records nothing fails (F-3R-1). The fixed code stays under 21 lines and 5
   characters; 21ad52d's P1c angle scan (str.find from every "<": quadratic inside C, which the time check cannot
   separate at a usable size) passes about n characters per character, its P3 span scan (O(n^1.5)) runs about 77 lines
   per character at the work size.
@@ -115,6 +117,47 @@ def _work(f):
     return count
 
 
+_CAL_A = "a" * 1000
+_CAL_B = "b" * 37
+
+
+def _calibrate():
+    """Three statements, so three line events, each one str method call: 1000 + 37 + 1000 receiver characters."""
+    _CAL_A.find("z")
+    _CAL_B.count("z")
+    _CAL_A.startswith("q")
+
+
+CALIBRATION = [3, 2037]   # hand-counted from _calibrate: [line events, str receiver characters] (F-3R-1)
+
+
+def _floors(case, m):
+    """(lines, scan) lower bounds for one case at work size m, from the input's construction in _lib_case (F-3R-1).
+
+    lines: the case lambda runs its own line, and each production call (extract, anchors, problem) runs at least the
+    first statement of its body, so lines >= 1 + calls. p4 makes one problem call per cite (m // 2 anchor cites,
+    m // 10 line cites); every other case makes one call.
+    scan: the call must read every character of its input text, and the module measures reading as str method
+    receivers (the time check cannot see a C scan, see the docstring). A one-pass read of the text is one receiver
+    of the text's length, so scan >= len(text): s + "\\n" for extract, s for anchors, the one target text for p4
+    (read once per target)."""
+    if case == "p4_anchor":
+        return 1 + m // 2, sum(len("# h%d\n" % i) for i in range(m))
+    if case == "p4_line":
+        return 1 + m // 10, len("x\n") * m * 100
+    if case.startswith("p2_"):
+        k = {"p2_spaces": m + 1, "p2_tabs": 2 * m + 1, "p2_hash": m + 2}[case]
+        return 2, len("# a") + k + len("\n")
+    width = {"p1a_close_only": 2 * m, "p1a_link": 3 * m, "p1a_deep": 1 + 4 * m, "p1a_unbalanced": 3 * m,
+             "p1b_open": 4 * m, "p1b_tail": 4 * m, "p1c_angle": 4 * m, "p1c_angle_far": 4 * m + 1,
+             "p1d_paren": 6 * m, "p1d_double": 6 * m, "p1d_single": 6 * m, "p1b_gap": 4 * m + 1,
+             "p1b_no_hash": 5 * m}
+    if case == "p3_spans":
+        k = math.isqrt(4 * m)
+        return 2, sum(2 + i for i in range(k)) + k + 4 * m + 1
+    return 2, width[case] + 1
+
+
 def _cap_cpu():
     try:
         import resource
@@ -142,9 +185,10 @@ def _child(argv):
     out = f()
     t = time.process_time() - t
     fw, wsize = _lib_case(case, n // WORK_DIV)
+    calibration = _work(_calibrate)              # the same tracer, in the same child, on a hand-counted function
     lines, scan = _work(fw)
-    print(json.dumps({"size": size, "cpu": t, "out": repr(out)[:200], "items": len(out),
-                      "wsize": wsize, "lines": lines, "scan": scan}))
+    print(json.dumps({"size": size, "cpu": t, "out": repr(out)[:200], "items": len(out), "wsize": wsize,
+                      "calibration": calibration, "lines": lines, "scan": scan}))
 
 
 def _run(test, args):
@@ -171,6 +215,12 @@ class LinearScanTest(unittest.TestCase):
             with self.subTest(case=case):
                 r = _run(self, [case, str(n)])
                 self.assertLess(r["cpu"], BOUND, "%s: %.3f CPU s at %d" % (case, r["cpu"], r["size"]))
+                self.assertEqual(r["calibration"], CALIBRATION, "%s: the work tracer's calibration" % case)
+                lines_floor, scan_floor = _floors(case, n // WORK_DIV)
+                self.assertGreaterEqual(r["lines"], lines_floor, "%s: %d line events at %d, floor %d" % (
+                    case, r["lines"], r["wsize"], lines_floor))
+                self.assertGreaterEqual(r["scan"], scan_floor, "%s: %d str characters scanned at %d, floor %d" % (
+                    case, r["scan"], r["wsize"], scan_floor))
                 self.assertLessEqual(r["lines"], LINES_PER_CHAR * r["wsize"],
                                      "%s: %d line events at %d" % (case, r["lines"], r["wsize"]))
                 self.assertLessEqual(r["scan"], SCAN_PER_CHAR * r["wsize"],
