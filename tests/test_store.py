@@ -1239,3 +1239,39 @@ class EscapeOnceTest(Base):
         line = res.render(False).splitlines()
         self.assertEqual(len(line), 1)
         self.assertTrue(line[0].endswith("differs from the record id a\\nb"), line[0])
+
+
+class UnusableStoreRootTest(GitCase):
+    """F-v2-2, owner Q-VER2-2 (a): a store.root or root that os.path.samefile rejects (TypeError, ValueError or
+    OSError) is refused with the same GateError as a root that is not the same file (plan :504)."""
+
+    WANT = "base_errors: the store's root %s is not the root given %s"
+    # (the root, as the reason renders it, the exception os.path.samefile raises for it)
+    BAD = ((None, "None", TypeError), (1.5, "1.5", TypeError), (["x"], "[x]", TypeError),
+           ("a\0b", "a\0b", ValueError), (b"a\0b", "b'a\0b'", ValueError), (-1, "-1", OSError))
+
+    def no_history_reads(self):
+        boom = AssertionError("git history read before the store check")
+        return mock.patch.multiple("gates.lib.store.gitinfo", merge_base=mock.Mock(side_effect=boom),
+                                   ls_tree=mock.Mock(side_effect=boom), show=mock.Mock(side_effect=boom))
+
+    def test_each_bad_value_is_one_samefile_rejects(self):  # the dimension is what the rows say it is
+        for bad, _, exc in self.BAD:
+            with self.subTest(root=repr(bad)), self.assertRaises(exc):
+                os.path.samefile(bad, self.root)
+
+    def test_a_store_root_set_afterwards_is_a_gate_error(self):  # F-v2-2
+        self.seed()
+        for bad, shown, _ in self.BAD:
+            with self.subTest(root=repr(bad)):
+                s = Store(self.root, "decision", self.cfg)
+                s.root = bad
+                with self.no_history_reads(), self.assertRaises(GateError) as e:
+                    base_errors(self.root, s, "main", resolved, never)
+                self.assertEqual(str(e.exception), self.WANT % (shown, self.root))
+
+    def test_through_run_check_it_is_the_input_fail_line(self):  # F-v2-2
+        s = Store(self.root, "decision", self.cfg)
+        s.root = None
+        out = run_check("x", lambda a: base_errors(self.root, s, "main", resolved, never), []).render(False)
+        self.assertEqual(out, "FAIL x.input: " + self.WANT % ("None", self.root) + "\n")
