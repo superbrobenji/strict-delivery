@@ -13,25 +13,25 @@ docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md; docs/
 block/sb2
 
 ## head
-bc2dacd (the checkpoint commit follows it)
+eee0c18 (the checkpoint commit follows it)
 
 ## base
-main 13ca17e
+main 1faa1f2 (merged in by 44edc05)
 
 ## ledger
 .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/ledger.md
 
 ## resume line
-Resume strict-delivery plan docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md at the B2.3 fix round 1; branch block/sb2; head bc2dacd; open questions: none.
+Resume strict-delivery plan docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md at the Block B2 fix round 2 re-review; branch block/sb2; head eee0c18; open questions: none.
 
 ## block
 sb2
 
 ## next task
-B2.3 fix round 1 (F-B23R-1 over its class, F-B22RR1-1 may ride along), B2.3 re-review, then the block end (final review, final verifier) and PR-B2; not merged by the stream
+Fresh task review of fix round 2 (eee0c18 against 2363f8a, each finding's whole dimension), then the final verifier over origin/main..HEAD; LOW_PLATEAU needs two consecutive all-LOW or clean reviews from here (the last verifier had a MEDIUM); then PR-B2 with gh pr create --base main --head block/sb2; not merged by the stream
 
 ## findings in flight
-F-B23R-1 LOW, change-caused by bc2dacd (class: profile: light, standard; final verifier stated as unconditional): skills/strict-delivery/SKILL.md:77, same class in playbook/review.md:11 and :15; review task-B2.3-review-v2.md; LOW run 1 of 2. F-B22RR1-1 LOW, registered under LOW_PLATEAU (class: Q-CONV-1 (a) wording: part of an owner clause missing): playbook/review.md:23 omits "and the weighted tally".
+F-B2V3-1 MEDIUM, F-B2V3-2 LOW, F-B2V3-3 LOW (verifier, block-B2-verifier-v3.md) and F-B2F1RR-1 LOW, F-B2F1RR-2 LOW (block-B2-fix1-rereview-v3.md): fixed in eee0c18, re-review pending. Registered, not fixed in PR-B2: prompts/final_reviewer.md:15 (Q-SPEC-1 (a)); main's lap-timer and hardware forbidden-text patterns (U+2010, double spaces).
 
 ## open decisions
 none
@@ -46,11 +46,11 @@ Owner 2026-11-09: merge grant delegated to the program controller for every PR o
 none
 
 ## worktrees
-- path ../strict-delivery-worktrees/b/sb2, branch block/sb2, head bc2dacd, porcelain: empty (apart from this handoff and the ledger)
+- path ../strict-delivery-worktrees/b/sb2, branch block/sb2, head eee0c18, porcelain: empty (apart from this handoff and the ledger)
 
 ## required_reads
-- the PC1 tables (git-ignored scratch in the main checkout): .superpowers/sdd/2026-10-31-strict-delivery-framework-b/task-B2.2-domain-v2.md, task-B2.3-domain-v2.md (sections "Owner answers applied" bind)
-- reviews: .superpowers/sdd/2026-10-31-strict-delivery-framework-b/task-B2.3-review-v2.md, task-B2.2-rereview1-v2.md
+- .superpowers/sdd/2026-10-31-strict-delivery-framework-b/block-B2-verifier-v3.md, block-B2-fix1-rereview-v3.md, block-B2-fix2-report-v3.md (git-ignored scratch in the main checkout)
+- the PC1 tables: .superpowers/sdd/2026-10-31-strict-delivery-framework-b/task-B2.1-domain-v2.md, task-B2.2-domain-v2.md, task-B2.3-domain-v2.md
 - plan lines 6556-6896 (Block B2) and 6220-6316 (stream rules)
 - .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-b-log.md (stream log)
 
@@ -58,7 +58,7 @@ none
 strict-delivery; strict-delivery-repo
 
 ## ledger_from
-12
+17
 
 ## batch_cut
 none
