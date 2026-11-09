@@ -1099,5 +1099,264 @@ class FrontMatterTest(unittest.TestCase):
             pc.front_matter(read(rel))
 
 
+# ---- Task B2.2 part 2: roles, decisions, sessions, streams, review ----
+# Every expected value below is a literal from the plan (Task B2.2 Step 1) or the brief's input-domain rows; the
+# production path is table_rows and section over the real files.
+
+CTRL = "open, planned, in-progress, deferred, closed"
+STATES = {"controller": CTRL, "program_controller": CTRL, "stream_controller": CTRL,
+          "implementer": "fixed-unpinned, pinned", "implementer_transcription": "fixed-unpinned, pinned",
+          "task_reviewer": "open", "final_reviewer": "open", "final_verifier": "open",
+          "audit_reviewer": "open", "audit_verifier": "open", "investigator": "none", "exception_reviewer": "none",
+          "plan_writer": "none", "plan_reviewer": "open", "drafter": "none"}  # fifteen: DB-2's twelve plus Task 2c.3's three
+TIERS = {"implementer_transcription": "tier1", "implementer": "tier2",
+         "controller": "tier3", "program_controller": "tier3", "stream_controller": "tier3", "task_reviewer": "tier3",
+         "final_reviewer": "tier3", "audit_reviewer": "tier3", "audit_verifier": "tier3", "investigator": "tier3",
+         "final_verifier": "tier4", "exception_reviewer": "tier4"}
+ROLES_HEADER = "| role | prompt block | minimum tier | needs brief | finding states |"
+ROLES_SECTIONS = ["Model tiers", "Budget cap", "Dispatch contract", "Report contract"]     # layout proposed (PC3)
+OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close", "finding-class",
+              "rule-override", "program-create", "stream-ownership", "stream-merge", "request-dispute",
+              "program-close"]    # row D8: hand-written, the 13 of gates/lib/config.py DEFAULTS on main
+NEW_PLAYBOOKS = ("roles", "decisions", "sessions", "streams", "review")
+PLAYBOOK_SECTIONS = {   # file stem -> [(heading, key phrases)]; each phrase is quoted from the source cited on its line
+    "decisions": [("Asking", ["`decisions ask`", "decisions find", "search before asking", "`decisions batch --since`",
+                              "Also open", "`source`", "recommended option", "`model-policy`", "`batch_cut`",
+                              "corrected to the spec"]),                                       # spec §7.4, §7.1; Q-LT-1 (a)
+                  ("Answering", ["`decisions decide`", "`decisions withdraw`", "human"]),       # spec §7.1
+                  ("Lasting decisions", ["`landed_in`", "never a spec"]),                       # spec §7.2, §7.4
+                  ("Owner-only classes", ["`decision_classes.owner_only`"])],                   # Q-B22v2-5 (a)
+    "sessions": [("Session kinds", ["`program`", "`program-controller`", "`sync`"]),             # design §10
+                 ("Start order", ["`in-force.md`", "`python3 -m gates context", "`required_reads`", "`ledger_from`",
+                                  "investigator", "Q9", "G4", "Resume check", "before any edit or dispatch"]),
+                 ("Blocks and checkpoints", ["`block.max_tasks`", "`CHECKPOINT`"]),              # spec §8, §9
+                 ("Handoffs and continuation", ["handoff", "80 %", "Nothing continues from inherited memory",
+                                                "`live_subagents`", "`worktrees`", "handoff is complete", "TaskStop"]),
+                 ("Agent tree", ["program controller", "workers never dispatch", "configured depth"]),
+                 ("Plan format", ["fail closed", "seeded generated-input test", "expected verdict",
+                                  "a row with no test is a finding",
+                                  "`what -- why -- cost if wrong -- spec cite`", "both quotes"]),       # spec §8a
+                 ("Agent rules", ["background shell jobs", "DENIED", "does not re-run the denied action",
+                                  "external code"]),                                                   # spec §10
+                 ("Commits", ["assume-unchanged", "by name", "never amends", "`Co-Authored-By:`"]),     # spec §8a
+                 ("Planning", ["planned in full before", "stream breakdown", "as they unblock",
+                               "superpowers:brainstorming", "superpowers:writing-plans",
+                               "superpowers:subagent-driven-development", "superpowers:executing-plans",
+                               "input-domain dimensions", "assertions as code"])],                    # spec §8, Q-PL-1 (a)
+    "streams": [("Programs and streams", ["program_controller", "stream_controller", "disjoint set of files"]),
+                ("Cross-stream requests", ["never edits", "request", "not on this branch", "before the final review"]),
+                ("Syncs", ["`sync`", "integration branch"]),                                           # design §10
+                ("Status page", ["status page"]),                                                     # design §11
+                ("Pull-request flow", ["`gh pr merge --merge --match-head-commit`", "head sha", "`MERGED`"])],
+    "review": [("Task review", ["re-run every gate"]),                                                 # spec §8
+               ("Final review", ["whole branch"]),                                                     # Task B1.2
+               ("Verifier", ["`final_verifier`", "tier4"]),                                            # DB-2
+               ("Fix loop", ["rounds 1-3", "rounds 4-5", "owner question", "cosmetic", "never deferred",
+                             "LOW_PLATEAU"]),                                                 # spec §10; spec §8; DN-4
+               ("Input domains", ["input-domain table", "independent expected value", "NEEDS_DECISION",
+                                  "class-narrowing question", "class: <dimension>: <members>"]),      # spec §8, Q-SDDT-5
+               ("Small re-review", ["`reviews.small`", "round 5", "escalate", "Rule N", "Rule T"]),
+               ("Process-defect stop", ["process defect", "stop fixing"]),                            # spec §8
+               ("Rules N and T", ["Rule N", "Rule T", "`python3 -m gates loopstats`"]),
+               ("Review methods", ["watched red", "behaviour stub", "pre-change commit", "pasted result"]),  # spec §8a
+               ("Plan review", ["verbatim", "occurs once", "`Consumes`", "pairwise disjoint", "omission"])],  # spec §8a
+}
+RESTART_END = ("Only the session writes decision records; workers never do, and never change anything for a question. "
+               "Fix and re-review rounds run until a clean pass.")      # row D9: design §3.8 without its ledger cite
+
+
+def headings(text):
+    return [line[3:] for line in text.split("\n") if line.startswith("## ")]
+
+
+def in_order(body, items):
+    """True when every item occurs in body, each after the previous one."""
+    at = -1
+    for s in items:
+        at = body.find(s, at + 1)
+        if at < 0:
+            return False
+    return True
+
+
+class PlaybookFilesTest(unittest.TestCase):
+    def test_roles_table_covers_spec_roles(self):                 # plan; RO2-RO6, RO11, RO12
+        rows = table_rows(read("playbook/roles.md"))
+        self.assertEqual([r["role"] for r in rows], list(pc.SPEC_ROLES))
+        for r in rows:
+            self.assertEqual(r["prompt block"], "skills/strict-delivery/prompts/%s.md" % r["role"])
+            self.assertIn(r["minimum tier"], ("tier1", "tier2", "tier3", "tier4"))
+            if r["role"] in pc.B_ROLES:
+                self.assertTrue(os.path.isfile(os.path.join(pc.REPO_ROOT, r["prompt block"])), r["role"])
+        self.assertEqual({r["role"]: r["minimum tier"] for r in rows}, TIERS)       # DB-2, all twelve
+        self.assertTrue(all(r["needs brief"] == "yes" for r in rows))               # Q-B22-1 (a)
+        self.assertTrue(len(STATES) == 15 and set(TIERS) <= set(STATES))
+        self.assertEqual({r["role"]: r["finding states"] for r in rows}, {k: STATES[k] for k in TIERS})
+
+    def test_roles_header_and_top_tier(self):                     # RO1, RO6, RO13: exact header; tier4 rows
+        text = read("playbook/roles.md")
+        self.assertEqual(pc.first_table_header(text), ROLES_HEADER)
+        rows = table_rows(text)
+        self.assertEqual([r["role"] for r in rows if r["minimum tier"] == "tier4"], ["final_verifier", "exception_reviewer"])
+        self.assertNotIn("merged", text)                              # RO12: no role sets merged
+
+    def test_roles_contract_sections(self):                       # RO7-RO10 (rulings R-v2-1, R-v2-2; Q-B2R-1 (a))
+        text = read("playbook/roles.md")
+        self.assertEqual(headings(text), ROLES_SECTIONS)
+        tiers = pc.section(text, "Model tiers")
+        for s in ("`top_tier_roles`", "`top_tier_fallback`", "`tier3`", "`tier4`"):
+            self.assertIn(s, tiers)                                   # RO7
+        budget = pc.section(text, "Budget cap")
+        self.assertIn("`budgets.<role>`", budget)                     # RO10: the key, not a number
+        self.assertIsNone(re.search(r"\d", budget.replace("`budgets.<role>`", "")))
+        dispatch = pc.section(text, "Dispatch contract")
+        self.assertTrue(in_order(dispatch, ["`%s`" % h for h in pc.DISPATCH_HEADINGS]))     # RO8
+        self.assertIn("fork dispatch is refused", dispatch)
+        self.assertIn("`%s`" % pc.STATUS_LINE, pc.section(text, "Report contract"))          # RO9
+
+    def test_playbook_files_first_line_and_clean(self):           # plan; A1, A3
+        for stem in ("rules",) + NEW_PLAYBOOKS:
+            with self.subTest(stem=stem):
+                t = read("playbook/%s.md" % stem)
+                self.assertEqual(t.split("\n", 1)[0], "# Base playbook: " + stem)
+                self.assertEqual(forbidden_hits(t), [])
+
+    def test_playbook_bytes(self):                                # A2: as rules.md (UTF-8, LF, no control, no trailing ws)
+        for stem in NEW_PLAYBOOKS:
+            with self.subTest(stem=stem):
+                with open(os.path.join(pc.REPO_ROOT, "playbook", stem + ".md"), "rb") as f:
+                    raw = f.read()
+                text = raw.decode("utf-8")
+                self.assertEqual([c for c in text if c != "\n" and unicodedata.category(c) in ("Cc", "Zl", "Zp", "Cf")], [])
+                self.assertTrue(text.endswith("\n") and not text.endswith("\n\n"))
+                self.assertEqual([n for n, line in enumerate(text.split("\n"), 1) if line != line.rstrip()], [])
+
+    def test_tiers_never_models(self):                            # A4: tier names only tier1-tier4
+        for stem in NEW_PLAYBOOKS:
+            with self.subTest(stem=stem):
+                t = read("playbook/%s.md" % stem)
+                self.assertEqual(set(re.findall(r"\btier\d+\b", t)) - {"tier1", "tier2", "tier3", "tier4"}, set())
+                self.assertEqual([h for h in forbidden_hits(t) if h[0] == "model-name"], [])
+
+    def test_decisions_playbook_human_only(self):                 # plan
+        self.assertIn("decisions decide", read("playbook/decisions.md"))
+        self.assertIn("human", read("playbook/decisions.md"))
+
+    def test_sessions_names_default_tree(self):                   # plan; Q-BD-5 (a); SS3
+        self.assertIn("workers never dispatch", pc.section(read("playbook/sessions.md"), "Agent tree"))
+
+    def test_streams_names_pr_flow(self):                         # plan; Q-BD-5 (a); ST2
+        self.assertIn("--match-head-commit", pc.section(read("playbook/streams.md"), "Pull-request flow"))
+
+    def test_playbook_sections_and_key_phrases(self):             # plan; A5, D1-D4, SS1, SS2, ST1, R1, R2, DN4-2
+        for stem, secs in PLAYBOOK_SECTIONS.items():
+            t = read("playbook/%s.md" % stem)
+            self.assertEqual(headings(t), [h for h, _ in secs], stem)
+            for h, phrases in secs:
+                body = pc.section(t, h)
+                for s in phrases:
+                    self.assertIn(s.lower(), body.lower(), (stem, h, s))
+
+    def test_key_phrase_only_in_another_section_fails(self):      # A5: the check reads the named section only
+        t = read("playbook/review.md")
+        self.assertNotIn("stop fixing", pc.section(t, "Task review").lower())
+        moved = t.replace("## Task review\n", "## Task review\nstop fixing\n", 1)
+        self.assertIn("stop fixing", pc.section(moved, "Task review").lower())
+
+    def test_plan_fix_loop_line_names_low_plateau(self):          # DN4-2: the plan line of B2.2's own section
+        plan = read("docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md")
+        line = [ln for ln in plan.split("\n") if ln.lstrip().startswith('("Fix loop", [')]
+        self.assertEqual(len(line), 1)
+        self.assertIn('"never deferred", "LOW_PLATEAU"]', line[0])
+
+    def test_decisions_answering_routes(self):                    # D5, D6, D7 (ruling R-v2-3)
+        body = pc.section(read("playbook/decisions.md"), "Answering")
+        for s in ("from any subagent", "the owner's exact words", "`!` prefix",                 # D5
+                  "refuses any agent Edit or Write under `paths.decisions`",                    # D6
+                  "not a decision record", "`MERGED`", "head sha"):                             # D7
+            self.assertIn(s, body)
+
+    def test_decisions_asking_by_hand_and_printed_form(self):     # D2: the plan's "Asking" content (design §3.6, §3.7)
+        body = pc.section(read("playbook/decisions.md"), "Asking")
+        for s in ("words of at least 4 characters", "`git log -S`", "A question found answered is cited, not asked",
+                  "the recommended option with its cost, every alternative with its cost",
+                  "are not printed", "one header per `source`", "Printing writes nothing"):
+            self.assertIn(s, body)
+
+    def test_decisions_owner_only_classes(self):                  # D8 (owner Q-B22v2-5 (a))
+        text = read("playbook/decisions.md")
+        body = pc.section(text, "Owner-only classes")
+        rows = table_rows(body)
+        self.assertEqual([r["slug"] for r in rows], OWNER_ONLY)
+        self.assertEqual(len(set(r["slug"] for r in rows)), len(rows))
+        self.assertIn("`decision_classes.owner_only`", body)
+        self.assertIn("a project may add", body.lower())
+        self.assertEqual(headings(text).index("Owner-only classes"), headings(text).index("Lasting decisions") + 1)
+
+    def test_decisions_owner_only_table_refuses_changes(self):    # D8: missing, extra, reordered, duplicated
+        body = pc.section(read("playbook/decisions.md"), "Owner-only classes")
+        lines = body.split("\n")
+        first = next(i for i, ln in enumerate(lines) if ln.startswith("| triage |"))
+        variants = [lines[:first] + lines[first + 1:],                                            # missing
+                    lines[:first] + ["| extra-class | x |"] + lines[first:],                      # extra
+                    lines[:first] + [lines[first + 1], lines[first]] + lines[first + 2:],          # reordered
+                    lines[:first] + [lines[first]] + lines[first:]]                                # duplicated
+        for v in variants:
+            self.assertNotEqual([r["slug"] for r in table_rows("\n".join(v))], OWNER_ONLY)
+
+    def test_decisions_restart_end_and_no_ledger_cite(self):      # D9, D10
+        text = read("playbook/decisions.md")
+        asking = pc.section(text, "Asking")
+        self.assertTrue(asking.rstrip("\n").endswith(RESTART_END))
+        self.assertIn("Owner answers (date), binding", asking)
+        self.assertIsNone(re.search(r"\bL:\d|\bX-\d", text))
+        self.assertEqual(pc.placeholder_hits(text), [])
+
+    def test_sessions_kinds_and_continuation(self):               # SS4, SS5 (ruling R-v2-4)
+        t = read("playbook/sessions.md")
+        self.assertIn("`plan`", pc.section(t, "Session kinds"))
+        hc = pc.section(t, "Handoffs and continuation")
+        for s in ("usage-limit stop", "fresh agent of the same role", "`BLOCKED: budget`"):
+            self.assertIn(s, hc)
+
+    def test_sessions_start_order_questions(self):                # SS6, SS7; F-RDV2-1 copy with code-span placeholders
+        t = read("playbook/sessions.md")
+        body = pc.section(t, "Start order")
+        for q in ["Q%d" % n for n in range(1, 10)] + ["G%d" % n for n in range(1, 5)]:
+            self.assertIsNotNone(re.search(r"(?m)^- %s " % q, body), q)
+        for s in ("`Q<n> <fact>: match`", "`G<n>`", "`ledger_from - 1`", "`<program>/integration`",
+                  "`git -C <path> merge-base --is-ancestor <head> HEAD`", "`git -C <root> show <branch>:<path>`"):
+            self.assertIn(s, body)
+        self.assertEqual(pc.placeholder_hits(t), [])
+        self.assertTrue(in_order(body, ["Resume check", "before any edit or dispatch"]))
+
+    def test_streams_rules(self):                                 # ST3-ST6 (rulings R-v2-5, R-v2-6)
+        t = read("playbook/streams.md")
+        pr = pc.section(t, "Pull-request flow")
+        for s in ("pushed or merged to the base branch directly", "Bash hook", "one pull request"):
+            self.assertIn(s, pr)                                      # ST3, ST2
+        self.assertIn("`Rq-<n> not on this branch`", pc.section(t, "Cross-stream requests"))     # ST4
+        self.assertIn("never a rebase", pc.section(t, "Syncs"))                                    # ST5
+        ps = pc.section(t, "Programs and streams")
+        self.assertIn("each stream owns a set of files disjoint from the other streams'", ps)   # ST6, spec §11
+
+    def test_review_fix_loop_zero_bugs(self):                     # DN4-1 (owner DN-4 (a), Q-CONV-1 (a), DN-1 (b))
+        body = pc.section(read("playbook/review.md"), "Fix loop")
+        for s in ("a minor is a real defect", "fixed, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred",
+                  "two consecutive reviews", "a review with no change-caused finding counts as all-LOW",
+                  "the loop ends", "registered", "always fixed"):
+            self.assertIn(s.lower(), body.lower())
+
+    def test_review_rules_n_t_and_methods(self):                  # R3, R4, R6
+        t = read("playbook/review.md")
+        self.assertIn("`class: <dimension>: <members>`", pc.section(t, "Input domains"))          # R3
+        self.assertIn("`Loopstats:`", pc.section(t, "Rules N and T"))                             # R4
+        methods = pc.section(t, "Review methods")
+        self.assertIn("`SD-R9`", methods)                                                          # R6
+        self.assertIn("`SD-R10`", methods)
+        for s in ("one mutant per changed condition", "git merge-tree", "git archive"):
+            self.assertNotIn(s, t)                                    # not restated: they are rules.md rows
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6767,7 +6767,7 @@ Stream B writes the prose of spec §17 block 3: the role prompt blocks, the base
       "review": [("Task review", ["re-run every gate"]),                                                     # spec §8
                  ("Final review", ["whole branch"]),                                                   # Task B1.2
                  ("Verifier", ["`final_verifier`", "tier4"]),                                                # DB-2
-                 ("Fix loop", ["rounds 1-3", "rounds 4-5", "owner question", "cosmetic", "never deferred"]),   # spec §10; spec §8
+                 ("Fix loop", ["rounds 1-3", "rounds 4-5", "owner question", "cosmetic", "never deferred", "LOW_PLATEAU"]),   # spec §10; spec §8
                  ("Input domains", ["input-domain table", "independent expected value", "NEEDS_DECISION",
                                     "class-narrowing question", "class: <dimension>: <members>"]),          # spec §8, Q-SDDT-5
                  ("Small re-review", ["`reviews.small`", "round 5", "escalate", "Rule N", "Rule T"]),        # spec §10, Q-COST-1, Q-COST-2 (a)
