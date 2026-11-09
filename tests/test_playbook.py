@@ -30,7 +30,8 @@ SPEC8_KEYS = {1: "register row", 2: "by contradiction", 3: "Owner-only", 4: "Rep
 RULE_PHRASES = {   # spec section 8 bullets 9, 10, 12, 15 as extended by the spec catch-up; case-insensitive
     "SD-R9": ["clean copy", "`git merge-tree`"], "SD-R10": ["one mutant per changed condition", "never the checkout"],
     "SD-R12": ["pull request", "owner's approval", "`checkpoint.pushed`"],
-    "SD-R15": ["`mktemp -d`", "`git stash`", "heredoc", "discloses a slip"]}
+    "SD-R15": ["`mktemp -d`", "`git stash`", "heredoc", "discloses a slip"],
+    "SD-R5": ["fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred"]}  # F-B2F-1
 RESUME_PHRASES = {   # session-resume design 3.3-3.5
     "SD-R4": ["superpowers:brainstorming", "superpowers:executing-plans"],
     "SD-R11": ["handoff is complete", "porcelain"],
@@ -1406,8 +1407,16 @@ VERIFIER_PROFILE = ("The top-tier verifier runs only where the profile enables i
 VERIFIER_OPENING = ("After a clean final review, where the profile enables it (strict), the `final_verifier` tries "
                     "to break the finished branch.")                                                           # D3
 PROFILE_CONDITION = "where the profile enables it"
-VERIFIER_TERMS = ("final verifier", "top-tier verifier", "final_verifier")
-_FINAL_REVIEW = re.compile(r"final review(?!er)")
+# F-B23RR1-1: a verifier term is `final_verifier` or the word "verifier" (so "final verifier", "top-tier verifier" and
+# a bare "the verifier"); `audit_verifier` is another role and does not match. Every prose unit naming one is a member
+# unless it is hand-listed below as a non-step unit, with its reason.
+_VERIFIER = re.compile(r"final_verifier|\bverifier\b", re.I)
+VERIFIER_NON_STEPS = [   # (file, the start of the unit, why it states no block-end step)
+    ("playbook/roles.md", "| final_verifier |", "role table row: prompt block, minimum tier, finding states"),
+    ("playbook/roles.md", "A role runs at its minimum tier", "tier rule: `final_verifier` is one of `top_tier_roles`"),
+    ("playbook/rules.md", "| SD-R9 |", "rule row: how the verifier runs the suite, not when it runs"),
+    ("skills/strict-delivery/SKILL.md", "The roles, with their prompt blocks", "the role list"),
+]
 # The class members, hand-listed: (file, the start of the paragraph that states the verifier as a block-end step).
 VERIFIER_STEP_MEMBERS = [
     ("playbook/review.md", "At a block's end a `final_reviewer`"),
@@ -1423,21 +1432,63 @@ def verifier_class_files():
     return [p for p in b_owned_markdown() if not p.startswith(pc.PROMPTS_DIR + "/")]
 
 
-def verifier_step_paragraphs(text):
-    """Blank-line paragraphs that name the final or top-tier verifier together with the final review: the paragraphs
-    that state the verifier as a block-end step."""
+def prose_units(text, cells=False):
+    """The prose units of a markdown text: each blank-line paragraph, headings dropped; in a table each row is a unit,
+    or with cells=True each cell of a row."""
     out = []
     for para in re.split(r"\n[ \t]*\n", text):
-        low = para.lower()
-        if any(t in low for t in VERIFIER_TERMS) and _FINAL_REVIEW.search(low):
-            out.append(para.strip("\n"))
+        para = para.strip("\n")
+        if not para.strip() or para.startswith("#"):
+            continue
+        if para.startswith("|"):
+            for row in para.split("\n"):
+                if cells:
+                    out += [c.strip() for c in row.strip().strip("|").split(" | ") if c.strip()]
+                else:
+                    out.append(row)
+        else:
+            out.append(para)
     return out
 
 
-def verifier_step_problems(text):
+def verifier_step_paragraphs(text, rel=None):
+    """The prose units that name a verifier term and are not hand-listed for rel as non-step units: the units that
+    state the verifier as a block-end step (F-B23RR1-1)."""
+    exempt = tuple(start for f, start, _ in VERIFIER_NON_STEPS if f == rel)
+    return [u for u in prose_units(text) if _VERIFIER.search(u) and not (exempt and u.startswith(exempt))]
+
+
+def verifier_step_problems(text, rel=None):
     """F-B23R-1 class check: each block-end verifier paragraph states the profile condition and the strict profile."""
-    return [p[:60] for p in verifier_step_paragraphs(text)
+    return [p[:60] for p in verifier_step_paragraphs(text, rel)
             if PROFILE_CONDITION not in p.lower() or "strict" not in p.lower()]
+
+
+# F-B2F-1, class "zero-bugs deferral statements in B2-owned files". A unit that states a minor is never deferred, or
+# names a minor with a deferral or a follow-up, also names LOW_PLATEAU (DN-4 (a); docs-owed spec section 8 wording).
+_DEFERRAL = re.compile(r"never deferred|\bminors?\b.*(?:defer|follow-up)", re.I | re.S)
+SD_R5_LOW_PLATEAU = "fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred"
+DEFERRAL_MEMBERS = [   # (file, the start of the unit), in b_owned_markdown() order; written by hand
+    ("skills/strict-delivery/prompts/controller.md", "Zero bugs. A change's own bug makes its task incomplete"),
+    ("playbook/review.md", "Zero bugs: a change's own bug makes it incomplete. A minor is a real defect"),
+    ("playbook/rules.md", "Zero bugs: a change's own bug makes it incomplete, and a minor is a real defect"),
+]
+DEFERRAL_NON_MEMBERS = [   # (file, the start of the unit, why it is not a statement of the deferral rule for minors)
+    ("skills/strict-delivery/prompts/implementer.md", "Zero bugs. A defect your own change introduces",
+     "the implementer's own change: no defect of it may be called minor; LOW_PLATEAU is the controller's act"),
+    ("skills/strict-delivery/prompts/implementer_transcription.md", "Zero bugs. A defect your own change introduces",
+     "as implementer.md"),
+]
+
+
+def deferral_units(text, rel=None):
+    """The prose units and table cells that state the deferral rule for minors, less the hand-listed non-members."""
+    exempt = tuple(start for f, start, _ in DEFERRAL_NON_MEMBERS if f == rel)
+    return [u for u in prose_units(text, cells=True) if _DEFERRAL.search(u) and not (exempt and u.startswith(exempt))]
+
+
+def deferral_problems(text, rel=None):
+    return [u[:60] for u in deferral_units(text, rel) if "LOW_PLATEAU" not in u]
 
 
 def non_ascii_lines(raw):
@@ -1470,22 +1521,65 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
         for rel in files:
             text = read(rel)
             with self.subTest(rel=rel):
-                self.assertEqual(verifier_step_problems(text), [])
-            found += [(rel, p) for p in verifier_step_paragraphs(text)]
+                self.assertEqual(verifier_step_problems(text, rel), [])
+            found += [(rel, p) for p in verifier_step_paragraphs(text, rel)]
+        self.assertEqual([(rel, p[:60]) for rel, p in found],
+                         [(rel, p[:60]) for rel, p in found if any(rel == r and p.startswith(s)
+                                                                   for r, s in VERIFIER_STEP_MEMBERS)])
         self.assertEqual(len(found), len(VERIFIER_STEP_MEMBERS))
         for (rel, para), (want_rel, start) in zip(found, VERIFIER_STEP_MEMBERS):
             self.assertEqual(rel, want_rel)
             self.assertTrue(para.startswith(start), (rel, para[:60]))
 
-    def test_class_refuses_an_unconditioned_paragraph(self):     # FX5: a new member without the condition fails
+    def test_verifier_non_steps_each_exempt_one_unit(self):      # F-B23RR1-1: every exemption names one real unit
+        for rel, start, why in VERIFIER_NON_STEPS:
+            with self.subTest(rel=rel, start=start):
+                units = [u for u in prose_units(read(rel)) if u.startswith(start)]
+                self.assertEqual(len(units), 1)
+                self.assertTrue(_VERIFIER.search(units[0]) and why)
+
+    def test_class_refuses_an_unconditioned_paragraph(self):     # FX5, F-B23RR1-1: a new member without the condition
         added = ["Each block ends with a final review and a final verifier.",
                  "After the final review the top-tier verifier runs.",
-                 "After a clean final review the `final_verifier` tries to break the branch; strict reviewers agree."]
+                 "After a clean final review the `final_verifier` tries to break the branch; strict reviewers agree.",
+                 "At a block's end the top-tier verifier runs.",                     # M9 of the B2.3 re-review
+                 "Then the verifier tries to break the branch."]                     # a bare "verifier"
         for rel in verifier_class_files():
             for s in added:
                 with self.subTest(rel=rel, s=s):
-                    self.assertEqual(verifier_step_problems(read(rel) + "\n" + s + "\n"), [s[:60]])
+                    self.assertEqual(verifier_step_problems(read(rel) + "\n" + s + "\n", rel), [s[:60]])
         self.assertEqual(verifier_step_problems("The final review checks `final_reviewer` output.\n"), [])
+        self.assertEqual(verifier_step_problems("The `audit_verifier` re-runs the audit.\n"), [])
+
+    def test_deferral_class_every_unit_names_low_plateau(self):   # F-B2F-1 (FR2), whole class, through the real files
+        found = []
+        for rel in b_owned_markdown():
+            text = read(rel)
+            with self.subTest(rel=rel):
+                self.assertEqual(deferral_problems(text, rel), [])
+            found += [(rel, u[:80]) for u in deferral_units(text, rel)]
+        self.assertEqual(len(found), len(DEFERRAL_MEMBERS), found)
+        for (rel, unit), (want_rel, start) in zip(found, DEFERRAL_MEMBERS):
+            self.assertEqual(rel, want_rel)
+            self.assertTrue(unit.startswith(start), (rel, unit))
+        for rel, start, why in DEFERRAL_NON_MEMBERS:          # each exemption names one real unit
+            self.assertEqual(len([u for u in prose_units(read(rel), cells=True) if u.startswith(start)]), 1, rel)
+
+    def test_deferral_class_refuses_a_statement_without_low_plateau(self):   # F-B2F-1 (FR2): a new member fails
+        added = ["A minor is a real defect and is never deferred.",
+                 "Review minors are fixed and never deferred to a follow-up.",
+                 "| X | a minor is fixed, never deferred | why |"]
+        for rel in b_owned_markdown():
+            for s in added:
+                with self.subTest(rel=rel, s=s):
+                    self.assertEqual(len(deferral_problems(read(rel) + "\n" + s + "\n", rel)), 1)
+        self.assertEqual(deferral_problems("A minor is fixed, or registered under LOW_PLATEAU, never deferred.\n"), [])
+
+    def test_sd_r5_low_plateau_exception(self):                   # F-B2F-1 (FR1), DN-4 (a)
+        row = [r for r in table_rows(read(RULES)) if r["id"] == "SD-R5"][0]
+        self.assertIn(SD_R5_LOW_PLATEAU, row["rule"])
+        self.assertNotIn("fixed in the fix round and never deferred", row["rule"])
+        self.assertEqual(row["source"], "spec §8")
 
     def test_edited_playbook_files_ascii(self):                   # FX7 (D2): review.md and sessions.md stay ASCII
         for rel in ("playbook/review.md", "playbook/sessions.md"):
