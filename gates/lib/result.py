@@ -261,20 +261,42 @@ def _filename_text(e: OSError) -> str:
     return out
 
 
+def _gate_filename_text(e: OSError) -> Optional[str]:
+    """A GateError that is an OSError with a filename: main d9798af's reason was ``str(e)``, CPython's
+    ``[Errno %S] %S: %R[ -> %R]``, so that form with each part once, the head kept whatever errno and strerror are
+    and a filename2 shown wherever CPython shows it (F-r13r-1, owner Q-ES-V1 (a)). The form is read off
+    ``OSError.__str__(e)`` itself, so a filename2 that the attribute reads as None but CPython shows is kept; None if
+    that text is not this form (the caller then renders the text as the generic branch does)."""
+    text = _text_of(lambda: OSError.__str__(e))
+    head = _text_of(lambda: "[Errno %s] %s: %s" % (_s(e.errno), _s(e.strerror), _exact(repr(e.filename))))
+    if text is None or head is None or not text.startswith(head):
+        return None
+    out = "[Errno %s] %s: %s" % (_raw(e.errno), _raw(e.strerror), _raw(e.filename))
+    if text == head:
+        return out
+    if text[len(head):] == _text_of(lambda: " -> " + _exact(repr(e.filename2))):
+        return out + " -> " + _raw(e.filename2)
+    return None
+
+
 _DICT = type.__dict__["__dict__"]
 
 
 def _own_str_or(e: BaseException, base: type, fallback) -> str:
     """``e``'s own ``__str__`` text, if the ``__str__`` its type's real ``__mro__`` resolves to is no built-in
-    exception class's in that ``__mro__`` (read through the ``type`` descriptors, so a metaclass changes nothing
-    and a class without an own ``__str__`` renders as before, F-r11r-1 (b)), as an exact ``str`` reconciled by
-    ``_own_str_text``; if it is ``base``'s, or that own ``__str__`` raises or returns a non-str, ``fallback(e)``,
-    the branch's rendering of the arguments; if it is another built-in's, that built-in's form with each part once
-    (``_built_in_text``), without calling it (owner Q-F80W-4 (a), Q-1C0FIN3-1 (a), Q-1C0FIN2-R1 (a), Q-ES-V1 (a))."""
+    class's in that ``__mro__`` (``object``'s included, owner Q-R13R-1 (b); read through the ``type`` descriptors,
+    so a metaclass changes nothing and a class without an own ``__str__`` renders as before, F-r11r-1 (b)), as an
+    exact ``str`` reconciled by ``_own_str_text``; if it is ``base``'s, or that own ``__str__`` raises or returns a
+    non-str, ``fallback(e)``, the branch's rendering of the arguments; if it is another built-in's, main d9798af's
+    form: the one argument in the KeyError branch (F-r13r-2), the filename form in the KeyError and OSError branches
+    (F-r12r-1), else that built-in's form with each part once (``_built_in_text``) (owner Q-F80W-4 (a), Q-1C0FIN3-1
+    (a), Q-1C0FIN2-R1 (a), Q-ES-V1 (a))."""
     mro = _MRO.__get__(type(e))
     own = next(_DICT.__get__(c)["__str__"] for c in mro if "__str__" in _DICT.__get__(c))
     for c in mro:
         if id(c) in _BUILTIN_CLASSES and _DICT.__get__(c).get("__str__") is own:
+            if base is KeyError and len(e.args) == 1:  # F-r13r-2: main's KeyError branch rendered the one argument
+                return fallback(e)
             if base is not BaseException and c is not OSError and _main_filename_form(e):  # F-r12r-1
                 return _filename_text(e)
             return fallback(e) if c is base else _built_in_text(e, c)
@@ -296,12 +318,15 @@ def _main_filename_form(e: BaseException) -> bool:
 
 def _built_in_text(e: BaseException, c: type) -> str:
     """The text of built-in ``c``'s ``__str__`` for ``e`` with the arguments rendered once: KeyError's and
-    BaseException's from the arguments, OSError's with a filename from its parts, as their own branches give them;
-    any other's (SyntaxError's, OSError's without a filename, ...) as the generic branch of ``_exc_text`` does."""
+    BaseException's from the arguments, OSError's with a filename from its parts, as their own branches give them
+    (for a GateError, CPython's form, ``_gate_filename_text``); any other's (SyntaxError's, OSError's without a
+    filename, ...) as the generic branch of ``_exc_text`` does."""
     if c is KeyError or c is BaseException:
         return _args_text(e)
     if c is OSError and e.filename is not None:
-        return _filename_text(e)
+        text = _gate_filename_text(e) if issubclass(type(e), GateError) else _filename_text(e)
+        if text is not None:
+            return text
     try:
         text = _s(e)
     except Exception:  # as the generic branch: render the arguments themselves
@@ -327,7 +352,10 @@ def _own_str_text(e: BaseException, text: str) -> str:
     if issubclass(type(e), KeyError) and text == _text_of(lambda: KeyError.__str__(e)):  # F-r11r-1 (a)
         return _args_text(e)
     if issubclass(type(e), OSError) and e.filename is not None and text == _text_of(lambda: OSError.__str__(e)):
-        return _filename_text(e)  # F-r11r-1 (a): the built-in filename form, each part once
+        # F-r11r-1 (a): the built-in filename form, each part once; a GateError's reason was str(e) in main (F-r13r-1)
+        once = _gate_filename_text(e) if issubclass(type(e), GateError) else _filename_text(e)
+        if once is not None:
+            return once
     if issubclass(type(e), OSError) and text == _text_of(lambda: "[Errno %s] %s" % (_s(e.errno), _s(e.strerror))):
         return "[Errno %s] %s" % (_raw(e.errno), _raw(e.strerror))
     msg = _text_of(lambda: _s(e.msg)) if issubclass(type(e), SyntaxError) and e.msg is not None else None
