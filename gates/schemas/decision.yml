@@ -1,5 +1,5 @@
 kind: decision
-version: 1
+version: 2
 format: yaml
 files:
   - dir: decisions
@@ -132,3 +132,12 @@ fields:
           - open
       - status:
           - withdrawn
+  overrides:
+    type: str
+    required: false
+  recommended:
+    type: str
+    required: false
+  source:
+    type: str
+    required: false

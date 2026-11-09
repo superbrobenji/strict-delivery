@@ -5,13 +5,20 @@ import copy
 import os
 import unittest
 
-from gates.lib import config, gitinfo, schema, yamlsub
-from gates.lib.decisions import (current, find, in_force, is_resolved, landed_errors, ref_errors, superseded_ids,
-                                 validate)
+from unittest import mock
+
+from gates.lib import config, decisions, gitinfo, migrations, schema, yamlsub
+from gates.lib.decisions import (FIXED_RULES, KNOWN_RULES, current, find, in_force, is_resolved, landed_errors,
+                                 ref_errors, superseded_ids, validate)
+from gates.lib.migrations import migrate
 from gates.lib.result import GateError, Result, run_check
 from gates.lib.store import Record
 from tests.helpers import GitIsolatedTestCase, commit_all, make_repo, write_record
 
+# The tag of every record built here comes from the schema it is checked against, never a literal (Global
+# Constraints "Test fixtures"; Q-2a1-3 (a), Q-RCp-3 (a)). Literal tags below are old-version refusal tests or
+# wrong or malformed tags, which are exempt.
+TAG = "decision/%d" % migrations.current_version("decision")
 A = "DEC-20261031-k3f9"
 B = "DEC-20261031-m4n5"
 C = "DEC-20261031-p6q7"
@@ -22,13 +29,164 @@ W = {"at": "a1b2c3d", "by": "who@example.invalid", "reason": "asked twice"}
 AT = {"at": "b2c3d4e", "by": "who@example.invalid"}
 SPEC_ERR = ("landed_in: docs/strict-delivery/specs/x.md is a spec; specs are cleaned, land the rule in a "
             "playbook, CLAUDE.md or architecture.md")
-OPEN = {"schema": "decision/1", "id": A, "status": "open", "class": "scope", "question": "Keep X?",
+OPEN = {"schema": TAG, "id": A, "status": "open", "class": "scope", "question": "Keep X?",
         "options": [OPT, OPT2], "asked_at": "a1b2c3d", "asked_by": "agent", "topics": ["ids"],
         "applies_to": ["src/*"], "checked_against": [], "effect": "lasting"}
 ANSWERED = {**OPEN, "status": "answered", "answer": "Yes", "answered_at": AT, "rule": "Keep X.",
             "landed_in": ["CLAUDE.md"]}
 WITHDRAWN = {**OPEN, "status": "withdrawn", "withdrawn": W}
 GRANT = {**OPEN, "class": "merge-grant", "plan": "p"}
+OVERRIDE = {**OPEN, "class": "rule-override", "overrides": "SD-R2"}
+OPEN2 = {**OPEN, "options": [{"label": "a", "cost": "x"}, {"label": "b", "cost": "y"}]}
+MODEL2 = {**OPEN2, "class": "model-policy"}
+OPTIONAL_FIELDS = ("overrides", "recommended", "source")
+
+# gates/schemas/decision.yml at version 1 (main 13ca17e), byte for byte: Task 2a.1 keeps every field (S2).
+DECISION_1_HEAD = """kind: decision
+version: 1
+format: yaml
+files:
+  - dir: decisions
+    glob: "*.yml"
+    exclude:
+      - index.yml
+fields:
+  schema:
+    type: str
+  id:
+    type: id
+    id_kind: decision
+  status:
+    type: enum
+    values:
+      - open
+      - answered
+      - withdrawn
+  class:
+    type: str
+  question:
+    type: str
+  options:
+    type: list
+    min: 2
+    items:
+      type: map
+      fields:
+        label:
+          type: str
+        cost:
+          type: str
+  asked_at:
+    type: sha
+  asked_by:
+    type: str
+  topics:
+    type: list
+    items:
+      type: str
+  applies_to:
+    type: list
+    items:
+      type: glob
+  checked_against:
+    type: list
+    items:
+      type: id
+      id_kind: decision
+  effect:
+    type: enum
+    values:
+      - lasting
+      - one-off
+  supersedes:
+    type: id
+    id_kind: decision
+    required: false
+  answer:
+    type: str
+    required_when:
+      - status:
+          - answered
+    absent_when:
+      - status:
+          - open
+          - withdrawn
+  answered_at:
+    type: map
+    required_when:
+      - status:
+          - answered
+    absent_when:
+      - status:
+          - open
+          - withdrawn
+    fields:
+      at:
+        type: sha
+      by:
+        type: str
+  rule:
+    type: str
+    required: false
+    absent_when:
+      - status:
+          - open
+          - withdrawn
+  withdrawn:
+    type: map
+    required_when:
+      - status:
+          - withdrawn
+    absent_when:
+      - status:
+          - open
+          - answered
+    fields:
+      at:
+        type: sha
+      by:
+        type: str
+      reason:
+        type: str
+  plan:
+    type: str
+    required_when:
+      - class:
+          - merge-grant
+  program:
+    type: str
+    required: false
+  stream:
+    type: str
+    required: false
+  landed_in:
+    type: list
+    min: 1
+    items:
+      type: cite
+    required_when:
+      - status:
+          - answered
+        effect:
+          - lasting
+    absent_when:
+      - effect:
+          - one-off
+      - status:
+          - open
+      - status:
+          - withdrawn
+"""
+NEW_FIELDS = """  overrides:
+    type: str
+    required: false
+  recommended:
+    type: str
+    required: false
+  source:
+    type: str
+    required: false
+"""
 
 
 def drop(row, *keys):
@@ -56,9 +214,19 @@ class RowTestCase(GitIsolatedTestCase):
 class SchemaFileTests(RowTestCase):
     def test_schema_file_loads_and_declares_files(self):  # S1, S2, S4, S5
         s = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "decision.yml"))
-        self.assertEqual((s.kind, s.version, s.format), ("decision", 1, "yaml"))
+        self.assertEqual((s.kind, s.version, s.format), ("decision", 2, "yaml"))
         self.assertEqual(s.files, [{"dir": "decisions", "glob": "*.yml", "exclude": ["index.yml"]}])
         self.assertEqual(s.fields["schema"], {"type": "str"})
+        for key in ("overrides", "recommended", "source"):  # S3, S5, S6 (Task 2a.1)
+            with self.subTest(key):
+                self.assertEqual(s.fields[key], {"type": "str", "required": False})
+
+    def test_version_1_fields_unchanged(self):  # S2 (Task 2a.1): every decision/1 field spec is as it was
+        with open(os.path.join(schema.SCHEMAS_DIR, "decision.yml"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertTrue(text.startswith(DECISION_1_HEAD.replace("version: 1\n", "version: 2\n")), text[:200])
+        tail = text[len(DECISION_1_HEAD):]
+        self.assertEqual(tail, NEW_FIELDS)
 
     def test_files_of_register_dir(self):  # S3
         make_repo(self.work)
@@ -73,14 +241,53 @@ class SchemaFileTests(RowTestCase):
             with self.subTest(name):
                 self.assertEqual(self.v(row), [])
 
-    def test_unknown_key_and_schema_tag(self):  # S6, S7
-        self.assertEqual(self.v({**OPEN, "overrides": "SD-R1"}), ["overrides: unknown key"])
-        self.assertEqual(validate({**OPEN, "schema": "decision/2"}, self.cfg),
-                         ["schema: expected decision/1, got decision/2; run /strict-delivery:upgrade"])
+    def test_unknown_key_and_schema_tag(self):  # S6, S7; T4 (malformed tags are exempt literals)
+        self.assertEqual(self.v({**OPEN, "zzz": "SD-R1"}), ["zzz: unknown key"])
         self.assertEqual(validate({**OPEN, "schema": "finding/1", "class": "style", "plan": "a/b"}, self.cfg),
-                         ["schema: expected decision/1, got finding/1"])
+                         ["schema: expected decision/2, got finding/1"])
         self.assertEqual(validate(drop({**GRANT, "class": "style"}, "schema"), self.cfg),
-                         ["schema: expected decision/1, got (missing)"])
+                         ["schema: expected decision/2, got (missing)"])
+
+    def test_decision_1_tag_names_upgrade(self):  # T1 (old-version refusal: exempt literal)
+        self.assertEqual(validate({**OPEN, "schema": "decision/1"}, self.cfg),
+                         ["schema: expected decision/2, got decision/1; run /strict-delivery:upgrade"])
+        # only the tag error: the class, grant and new-field rules do not run on an old row
+        bad = {**OPEN, "schema": "decision/1", "class": "style", "plan": "a/b", "overrides": "SD-R3",
+               "recommended": "zz", "source": ""}
+        self.assertEqual(validate(bad, self.cfg),
+                         ["schema: expected decision/2, got decision/1; run /strict-delivery:upgrade"])
+
+    def test_current_tag_valid(self):  # T2
+        self.assertEqual(OPEN["schema"], "decision/2")
+        self.assertEqual(self.v(OPEN), [])
+
+    def test_newer_tag_names_upgrade(self):  # T3 (exempt literal)
+        bad = {**OPEN, "schema": "decision/3", "class": "style"}
+        self.assertEqual(validate(bad, self.cfg),
+                         ["schema: expected decision/2, got decision/3; run /strict-delivery:upgrade"])
+
+    def test_malformed_tags_only_the_tag_error(self):  # T4 (exempt literals)
+        class S(str):
+            pass
+        for got, shown in (("decision/2 ", "decision/2 "), (2, "2"), (None, "None"), (S("decision/2"), "decision/2"),
+                           ("Decision/2", "Decision/2"), ("decision/02", "decision/02")):
+            with self.subTest(repr(got)):
+                row = {**OPEN, "schema": got, "class": "style", "overrides": "SD-R3", "source": ""}
+                self.assertEqual(validate(row, self.cfg), ["schema: expected decision/2, got %s" % shown])
+
+    def test_expected_tag_follows_the_schema_file(self):  # T5: never a literal
+        with open(os.path.join(schema.SCHEMAS_DIR, "decision.yml"), encoding="utf-8") as fh:
+            text = fh.read().replace("version: 2\n", "version: 3\n", 1)
+        path = os.path.join(self.work, "decision.yml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        with mock.patch.object(schema, "SCHEMAS_DIR", self.work), \
+                mock.patch.object(decisions, "_loaded", [schema.load_schema(path)]):
+            self.assertEqual(validate({**OPEN, "schema": "decision/3"}, self.cfg), [])
+            self.assertEqual(validate({**OPEN, "schema": "decision/3", "class": "style"}, self.cfg),
+                             ["class: style is not in decision_classes.owner_only"])
+            self.assertEqual(validate({**OPEN, "schema": "decision/2", "class": "style"}, self.cfg),
+                             ["schema: expected decision/3, got decision/2; run /strict-delivery:upgrade"])
 
     def test_top_level_not_a_mapping(self):  # T17
         for v in ([], None, "x", 1):
@@ -346,6 +553,285 @@ class GrantTests(RowTestCase):
     def test_grant_fields_through_file(self):  # OQ-8 via write_record/load
         self.assertEqual(self.v({**GRANT, "program": "prog", "stream": "s1"}), [])
         self.assertEqual(self.v({**GRANT, "plan": "a/b"}), ["plan: must not contain '/' or whitespace"])
+
+
+class S(str):
+    pass
+
+
+ONLY = "overrides: only class rule-override carries it"
+
+
+def form(v):
+    return "overrides: %s does not match SD-R[1-9][0-9]*" % v
+
+
+def fixed(v):
+    return "overrides: %s is a fixed rule and cannot be overridden" % v
+
+
+def unknown(v):
+    return "overrides: %s is not a base playbook rule" % v
+
+
+def not_label(v):
+    return "recommended: %s is not the label of exactly one option" % v
+
+
+MODEL = "recommended: class model-policy carries no recommended option"
+LINE = "source: must be a non-empty single line"
+
+
+class RuleConstantTests(unittest.TestCase):
+    def test_fixed_rules_literal(self):  # K1; F-2, literal owner value (F-B2p-4)
+        self.assertIs(type(FIXED_RULES), tuple)
+        self.assertEqual(FIXED_RULES, ("SD-R3", "SD-R12", "SD-R18"))
+
+    def test_known_rules_literal(self):  # K2; DB-6, Q-B2plan-8 (a)
+        self.assertIs(type(KNOWN_RULES), tuple)
+        self.assertEqual(KNOWN_RULES, tuple("SD-R%d" % n for n in range(1, 20)))
+        self.assertEqual(len(KNOWN_RULES), 19)
+
+    def test_fixed_rules_are_known(self):  # K3
+        self.assertTrue(set(FIXED_RULES) <= set(KNOWN_RULES))
+
+
+class OverridesTests(RowTestCase):
+    def test_well_formed_known_not_fixed(self):  # O1, O7
+        for v in ("SD-R1", "SD-R2", "SD-R19"):
+            with self.subTest(v):
+                self.assertEqual(self.v({**OVERRIDE, "overrides": v}), [])
+        self.assertEqual(self.v(drop(OVERRIDE, "overrides")), [])
+
+    def test_overrides_form(self):  # O2: one error per cause, a malformed value names no rule
+        for v in ("SD-R0", "SD-R01", "SD-R", "sd-r3", "SD-R3 ", " SD-R3", "SD-R3\n", "SD-R3a", "SD-R3\r",
+                  "SD-R٣", "XSD-R3"):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate({**OVERRIDE, "overrides": v}, self.cfg), [form(v)])
+
+    def test_form_through_file(self):  # O2 via write_record/load
+        for v in ("SD-R0", "sd-r3", "SD-R3a"):
+            with self.subTest(v):
+                self.assertEqual(self.v({**OVERRIDE, "overrides": v}), [form(v)])
+
+    def test_rendered_reason_escaped_once(self):  # O3
+        errs = validate({**OVERRIDE, "overrides": "SD-R3\n"}, self.cfg)
+        self.assertEqual(errs, ["overrides: SD-R3\n does not match SD-R[1-9][0-9]*"])
+        res = Result("x", [])
+        res.fail("x.o", errs[0])
+        self.assertEqual(res.render(False), "FAIL x.o: overrides: SD-R3\\n does not match SD-R[1-9][0-9]*\n")
+
+    def test_overrides_fixed_rule_refused(self):  # O4; literal list, not the constant
+        for r in ("SD-R3", "SD-R12", "SD-R18"):
+            with self.subTest(r):
+                self.assertEqual(self.v({**OVERRIDE, "overrides": r}), [fixed(r)])
+
+    def test_overrides_unknown_rule_refused(self):  # O5; Q-B2plan-8 (a)
+        for r in ("SD-R20", "SD-R100"):
+            with self.subTest(r):
+                self.assertEqual(self.v({**OVERRIDE, "overrides": r}), [unknown(r)])
+
+    def test_not_an_exact_non_empty_str(self):  # O6: the schema's error only; nothing raises
+        for v, err in ((1, "overrides: must be a non-empty string"), (None, "overrides: must not be null"),
+                       ("", "overrides: must be a non-empty string"), (True, "overrides: must be a non-empty string"),
+                       (S("SD-R3"), "overrides: must be a non-empty string"),
+                       (["SD-R2"], "overrides: must be a non-empty string"),
+                       ({"a": 1}, "overrides: must be a non-empty string")):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate({**OVERRIDE, "overrides": v}, self.cfg), [err])
+
+    def test_overrides_only_on_rule_override(self):  # O8
+        self.assertIn(ONLY, validate({**OPEN, "overrides": "SD-R2"}, self.cfg))
+        for c in cfg_default()["decision_classes"]["owner_only"]:
+            if c == "rule-override":
+                continue
+            with self.subTest(c):
+                row = {**OPEN, "class": c, "overrides": "SD-R2"}
+                if c == "merge-grant":
+                    row["plan"] = "p"
+                self.assertEqual(self.v(row), [ONLY])
+        self.cfg["decision_classes"]["owner_only"].append("hardware")
+        self.assertEqual(validate({**OPEN, "class": "hardware", "overrides": "SD-R2"}, self.cfg), [ONLY])
+        # exact class match (review 1 F1): near names of rule-override are other classes
+        near = ("rule-override-x", "rule-overrides", "x-rule-override", "rule-overrid", "rule", "override")
+        self.cfg["decision_classes"]["owner_only"].extend(near)
+        for c in near:
+            with self.subTest(near=c):
+                self.assertEqual(validate({**OPEN, "class": c, "overrides": "SD-R2"}, self.cfg), [ONLY])
+                self.assertEqual(validate({**OPEN, "class": c}, self.cfg), [])
+
+    def test_class_and_value_both_wrong(self):  # O9
+        self.assertEqual(validate({**OPEN, "overrides": "SD-R3"}, self.cfg), [ONLY, fixed("SD-R3")])
+        self.assertEqual(validate({**OPEN, "overrides": "SD-R20"}, self.cfg), [ONLY, unknown("SD-R20")])
+        self.assertEqual(validate({**OPEN, "overrides": "SD-R0"}, self.cfg), [ONLY, form("SD-R0")])
+        self.assertEqual(validate({**OPEN, "overrides": 1}, self.cfg),
+                         ["overrides: must be a non-empty string", ONLY])
+
+    def test_class_missing_or_not_a_str(self):  # O10
+        self.assertEqual(validate(drop(OVERRIDE, "class"), self.cfg), ["class: required key is missing"])
+        self.assertEqual(validate({**OVERRIDE, "class": 1, "overrides": "SD-R3"}, self.cfg),
+                         ["class: must be a non-empty string"])
+
+    def test_every_status(self):  # O11
+        for name, base in (("open", OPEN), ("answered", ANSWERED), ("withdrawn", WITHDRAWN)):
+            with self.subTest(name):
+                self.assertEqual(self.v({**base, "class": "rule-override", "overrides": "SD-R2"}), [])
+
+    def test_grant_rules_unchanged(self):  # O12
+        self.assertEqual(validate({**GRANT, "overrides": "SD-R2"}, self.cfg), [ONLY])
+        self.assertEqual(validate({**GRANT, "plan": "a/b", "overrides": "SD-R2"}, self.cfg),
+                         ["plan: must not contain '/' or whitespace", ONLY])
+        self.assertEqual(validate({**OVERRIDE, "plan": "p"}, self.cfg),
+                         ["plan: must be absent unless class is merge-grant"])
+
+
+class RecommendedTests(RowTestCase):
+    def test_absent(self):  # RC1
+        self.cfg["decision_classes"]["owner_only"].append("hardware")
+        for c in self.cfg["decision_classes"]["owner_only"]:
+            for name, base in (("open", OPEN2), ("answered", ANSWERED), ("withdrawn", WITHDRAWN)):
+                with self.subTest(c=c, status=name):
+                    row = {**base, "class": c}
+                    if c == "merge-grant":
+                        row["plan"] = "p"
+                    self.assertEqual(validate(row, self.cfg), [])
+
+    def test_recommended_must_name_one_option(self):  # RC2, RC4; session-resume design 3.6
+        self.assertEqual(self.v({**OPEN2, "recommended": "a"}), [])
+        self.assertEqual(self.v({**OPEN2, "recommended": "b"}), [])
+        for v in ("c", "A", "a ", " a", "x"):
+            with self.subTest(repr(v)):
+                self.assertEqual(self.v({**OPEN2, "recommended": v}), [not_label(v)])
+        self.assertEqual(validate({**OPEN2, "recommended": ""}, self.cfg),
+                         ["recommended: must be a non-empty string", not_label("")])
+
+    def test_label_held_by_two_options(self):  # RC3
+        row = {**OPEN2, "options": [{"label": "a", "cost": "x"}, {"label": "a", "cost": "y"}], "recommended": "a"}
+        self.assertEqual(self.v(row), [not_label("a")])
+
+    def test_not_an_exact_str(self):  # RC5: the schema's error only; nothing raises
+        for v, err in ((1, "recommended: must be a non-empty string"), (True, "recommended: must be a non-empty string"),
+                       (None, "recommended: must not be null"), (["a"], "recommended: must be a non-empty string"),
+                       (S("a"), "recommended: must be a non-empty string")):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate({**OPEN2, "recommended": v}, self.cfg), [err])
+
+    def test_recommended_refused_on_model_policy(self):  # RC6; L:415
+        self.assertEqual(self.v({**MODEL2, "recommended": "a"}), [MODEL])
+        self.assertEqual(validate({**MODEL2, "recommended": "c"}, self.cfg), [MODEL, not_label("c")])
+        self.assertEqual(self.v(MODEL2), [])
+
+    def test_config_added_class(self):  # RC7
+        self.cfg["decision_classes"]["owner_only"].append("hardware")
+        self.assertEqual(validate({**OPEN2, "class": "hardware", "recommended": "a"}, self.cfg), [])
+        # exact class match (review 1 F1): near names of model-policy carry `recommended` like any other class
+        near = ("model-policy-x", "x-model-policy", "model-polic", "model-policies", "model", "policy")
+        self.cfg["decision_classes"]["owner_only"].extend(near)
+        for c in near:
+            with self.subTest(near=c):
+                self.assertEqual(validate({**OPEN2, "class": c, "recommended": "a"}, self.cfg), [])
+                self.assertEqual(validate({**OPEN2, "class": c, "recommended": "c"}, self.cfg), [not_label("c")])
+
+    def test_label_compared_exactly(self):  # RC4 (review 1 F2): whitespace is part of the label, never stripped
+        for v in (" ", "\t", " a ", "\ta", "a\t", "a\n"):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate({**OPEN2, "recommended": v}, self.cfg), [not_label(v)])
+        opts = [{"label": "a", "cost": "x"}, {"label": " a", "cost": "y"}]
+        for v in ("a", " a"):
+            with self.subTest(both=repr(v)):
+                self.assertEqual(validate({**OPEN2, "options": opts, "recommended": v}, self.cfg), [])
+        ws = [{"label": " ", "cost": "x"}, {"label": "b", "cost": "y"}]
+        self.assertEqual(validate({**OPEN2, "options": ws, "recommended": " "}, self.cfg), [])
+
+    def test_every_status(self):  # RC8
+        for name, base in (("answered", ANSWERED), ("withdrawn", WITHDRAWN)):
+            with self.subTest(name):
+                self.assertEqual(self.v({**base, "options": OPEN2["options"], "recommended": "a"}), [])
+                self.assertEqual(self.v({**base, "recommended": "yes"}), [])
+
+    def test_options_malformed(self):  # RC9: fail closed, nothing raises
+        cases = (
+            ("a", ["options: must be a list", not_label("a")]),
+            ([{"label": "a", "cost": "x"}, "a"], ["options.1: must be a mapping"]),
+            (["a", "b"], ["options.0: must be a mapping", "options.1: must be a mapping", not_label("a")]),
+            ([{"cost": "x"}, {"label": "b", "cost": "y"}], ["options.0.label: required key is missing",
+                                                             not_label("a")]),
+            ([{"label": 1, "cost": "x"}, {"label": "b", "cost": "y"}], ["options.0.label: must be a non-empty string",
+                                                                         not_label("a")]),
+            ([{"label": S("a"), "cost": "x"}, {"label": "b", "cost": "y"}],
+             ["options.0.label: must be a non-empty string", not_label("a")]),
+            ([{"label": ["a"], "cost": "x"}, {"label": "b", "cost": "y"}],
+             ["options.0.label: must be a non-empty string", not_label("a")]),
+            (None, ["options: must not be null", not_label("a")]),
+        )
+        for opts, expected in cases:
+            with self.subTest(repr(opts)):
+                self.assertEqual(validate({**OPEN2, "options": opts, "recommended": "a"}, self.cfg), expected)
+        self.assertEqual(validate({**drop(OPEN2, "options"), "recommended": "a"}, self.cfg),
+                         ["options: required key is missing", not_label("a")])
+
+    def test_migrated_row_without_new_fields_valid(self):  # RC10, SC8; design 5 (old fixture: exempt literal)
+        row_v1 = {**drop(OPEN2, *OPTIONAL_FIELDS), "schema": "decision/1"}
+        got = migrate("decision", row_v1)
+        self.assertEqual(got, {**row_v1, "schema": "decision/2"})
+        self.assertEqual(validate(got, self.cfg), [])
+
+    def test_rendered_reason_escaped_once(self):  # RC11
+        errs = validate({**OPEN2, "recommended": "a\nb"}, self.cfg)
+        self.assertEqual(errs, [not_label("a\nb")])
+        res = Result("x", [])
+        res.fail("x.r", errs[0])
+        self.assertEqual(res.render(False),
+                         "FAIL x.r: recommended: a\\nb is not the label of exactly one option\n")
+
+
+class SourceTests(RowTestCase):
+    def test_absent(self):  # SC1
+        self.assertEqual(self.v(OPEN2), [])
+
+    def test_source_single_line(self):  # SC2; Q-X27 (a)
+        for v in ("r/a.md", "no/such/file.md", "a path/with spaces.md"):
+            with self.subTest(v):
+                self.assertEqual(self.v({**OPEN2, "source": v}), [])
+
+    def test_empty(self):  # SC3
+        self.assertEqual(validate({**OPEN2, "source": ""}, self.cfg),
+                         ["source: must be a non-empty string", LINE])
+
+    def test_line_breaks(self):  # SC4
+        for v in ("a\nb", "a\rb", "a\r\nb", "a\n", "\n", "\r"):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate({**OPEN2, "source": v}, self.cfg), [LINE])
+        self.assertEqual(self.v({**OPEN2, "source": "a\nb"}), [LINE])
+
+    def test_other_characters(self):  # SC5
+        for v in ("a\tb", "a b", "a\x0bb", "a\x85b", "a b"):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate({**OPEN2, "source": v}, self.cfg), [])
+        for v in (" ", "\t", "  a  ", " \t ", "\x0b", "\x85", "　"):  # review 1 F2: whitespace-only is valid
+            with self.subTest(ws=repr(v)):
+                self.assertEqual(validate({**OPEN2, "source": v}, self.cfg), [])
+        for v in (" ", "  a  "):  # and through a written record
+            with self.subTest(file=repr(v)):
+                self.assertEqual(self.v({**OPEN2, "source": v}), [])
+
+    def test_not_an_exact_str(self):  # SC6
+        for v, err in ((1, "source: must be a non-empty string"), (None, "source: must not be null"),
+                       (["r/a.md"], "source: must be a non-empty string"),
+                       (S("a\nb"), "source: must be a non-empty string")):
+            with self.subTest(repr(v)):
+                self.assertEqual(validate({**OPEN2, "source": v}, self.cfg), [err])
+
+    def test_status_and_class(self):  # SC7
+        for name, base in (("open", OPEN2), ("answered", ANSWERED), ("withdrawn", WITHDRAWN), ("model", MODEL2)):
+            with self.subTest(name):
+                self.assertEqual(self.v({**base, "source": "r/a.md"}), [])
+
+    def test_all_three_fields_together(self):  # O1 + RC2 + SC2 on one row; every rule independent
+        row = {**OPEN2, "class": "rule-override", "overrides": "SD-R2", "recommended": "a", "source": "r/a.md"}
+        self.assertEqual(self.v(row), [])
+        bad = {**row, "class": "model-policy", "overrides": "SD-R3", "recommended": "c", "source": "a\nb"}
+        self.assertEqual(validate(bad, self.cfg), [ONLY, fixed("SD-R3"), MODEL, not_label("c"), LINE])
 
 
 class LandedTests(GitIsolatedTestCase):

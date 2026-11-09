@@ -12,10 +12,19 @@ import re
 import stat
 from typing import List, Optional
 
-from gates.lib import gitinfo, schema
+from gates.lib import gitinfo, migrations, schema
 from gates.lib.result import GateError, _raw
 
 CLASS_GRANT = "merge-grant"
+CLASS_OVERRIDE = "rule-override"
+CLASS_MODEL = "model-policy"
+# The base playbook's fixed rules (owner F-2), which no `overrides` may name; kept equal to the `fixed: yes` rows
+# of playbook/rules.md by tests/test_playbook.py (stream B or A, "Cross-stream order").
+FIXED_RULES: tuple = ("SD-R3", "SD-R12", "SD-R18")
+# Every base playbook rule id (DB-6; Q-B2plan-8 (a)); tests/test_playbook_drift.py keeps it equal to rules.md.
+KNOWN_RULES: tuple = ("SD-R1", "SD-R2", "SD-R3", "SD-R4", "SD-R5", "SD-R6", "SD-R7", "SD-R8", "SD-R9", "SD-R10",
+                      "SD-R11", "SD-R12", "SD-R13", "SD-R14", "SD-R15", "SD-R16", "SD-R17", "SD-R18", "SD-R19")
+_RULE_ID = re.compile(r"SD-R[1-9][0-9]*")
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _SCHEMA_FILE = os.path.join(schema.SCHEMAS_DIR, "decision.yml")
 _loaded: List[schema.Schema] = []
@@ -34,9 +43,11 @@ def _present_text(row: dict, key: str) -> bool:
 
 
 def validate(row: object, cfg: dict) -> list:
-    """Schema errors of a decision row plus the class and grant-field rules; ``[]`` when valid."""
+    """Schema errors of a decision row plus the class, grant-field, ``overrides``, ``recommended`` and ``source``
+    rules; ``[]`` when valid."""
     errs = schema.validate(_schema(), row, cfg)
-    if type(row) is not dict or row.get("schema") != "decision/1":
+    tag = row.get("schema") if type(row) is dict else None
+    if type(tag) is not str or tag != "decision/%d" % migrations.current_version("decision"):
         return errs  # a wrong or missing tag, or a non-mapping: that is the only error to report
     cls = row.get("class")
     if type(cls) is not str or cls == "":
@@ -49,6 +60,50 @@ def validate(row: object, cfg: dict) -> list:
         for key in ("plan", "program", "stream"):
             if key in row:
                 errs.append("%s: must be absent unless class is %s" % (key, CLASS_GRANT))
+    errs.extend(_overrides_errors(row, cls))
+    errs.extend(_recommended_errors(row, cls))
+    src = row.get("source")
+    if type(src) is str and (src == "" or "\n" in src or "\r" in src):
+        errs.append("source: must be a non-empty single line")
+    return errs
+
+
+def _overrides_errors(row: dict, cls: str) -> list:
+    """Spec 7.1: only class ``rule-override`` carries ``overrides``, of the form ``SD-R<n>``, naming a known rule
+    that is not fixed. The value rules run on an exact non-empty ``str`` only; the schema names any other value."""
+    if "overrides" not in row:
+        return []
+    errs: list = []
+    if cls != CLASS_OVERRIDE:
+        errs.append("overrides: only class %s carries it" % CLASS_OVERRIDE)
+    v = row["overrides"]
+    if type(v) is not str or v == "":
+        return errs
+    if not _RULE_ID.fullmatch(v):
+        errs.append("overrides: %s does not match SD-R[1-9][0-9]*" % v)
+    elif v in FIXED_RULES:
+        errs.append("overrides: %s is a fixed rule and cannot be overridden" % v)
+    elif v not in KNOWN_RULES:
+        errs.append("overrides: %s is not a base playbook rule" % v)
+    return errs
+
+
+def _recommended_errors(row: dict, cls: str) -> list:
+    """Session-resume design 3.6: ``recommended`` is the label of exactly one option (exact ``str`` equality), and
+    class ``model-policy`` carries none (L:415)."""
+    if "recommended" not in row:
+        return []
+    errs: list = []
+    if cls == CLASS_MODEL:
+        errs.append("recommended: class %s carries no recommended option" % CLASS_MODEL)
+    v = row["recommended"]
+    if type(v) is str:
+        opts = row.get("options")
+        hits = 0
+        if type(opts) is list:
+            hits = sum(1 for o in opts if type(o) is dict and type(o.get("label")) is str and o["label"] == v)
+        if hits != 1:
+            errs.append("recommended: %s is not the label of exactly one option" % v)
     return errs
 
 
