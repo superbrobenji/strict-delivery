@@ -37,12 +37,12 @@ A program session keeps no handoff: after any compaction it re-reads the overvie
 
 ## Investigator check
 
-The investigator answers each question with one line, `Q<n> <fact>: match` or `Q<n> <fact>: differs: <recorded value> vs <real value> (<command>)`; G<n> the same.
+The investigator answers each question with one line, `Q<n> <fact>: match` or `Q<n> <fact>: differs: <recorded value> vs <real value> (<command>)`; `G<n>` the same.
 
 For a handoff:
 - Q1 each `worktrees` entry: `git -C <path> merge-base --is-ancestor <head> HEAD` exits 0 and `git -C <path> symbolic-ref --quiet --short HEAD` equals `branch` (no output for `null`).
 - Q2 each entry's `git -C <path> status --porcelain --untracked-files=all`, without the handoff's and the ledger's lines, equals `porcelain`.
-- Q3 the handoff's `head` is an ancestor of `HEAD` of its worktree and its `branch` is that worktree's branch (the P:2309 rule).
+- Q3 the handoff's `head` is an ancestor of `HEAD` of its worktree and its `branch` is that worktree's branch (the P:2330 rule).
 - Q4 the ledger is committed (`git status --porcelain -- <ledger>` empty) and its line `ledger_from - 1` is its last `CHECKPOINT` line.
 - Q5 each `live_subagents` entry: the last record of its `transcript` equals `last_record`.
 - Q6 each entry: every background job id its transcript starts has a completion record or a TaskStop, and the states agree with `jobs` (a job with neither is `running`).
@@ -58,7 +58,7 @@ For a program session:
 
 ## Checkpoints and complete handoffs
 
-- Triggers, unchanged, for every controller, the main session included (controller block "Continuation."): a block or task checkpoint, 80 % of the token or time budget, or a usage-limit stop. One block per agent context, at most `block.max_tasks` tasks. No limit has a default (Q-H2, P:1758).
+- Triggers, unchanged, for every controller, the main session included (controller block "Continuation."): a block or task checkpoint, 80 % of the token or time budget, or a usage-limit stop. One block per agent context, at most `block.max_tasks` tasks. No limit has a default (Q-H2, P:1779).
 - At a checkpoint: append the `CHECKPOINT <block> <task> head=<short sha> tests=<passed>/<total> gates=<PASS|n/a> next=<task id>` line to the ledger and rewrite `handoff.md` beside it (plan Process bullet "Checkpoint after every task"), then commit both after the commit gate.
 - The handoff fields: the fields spec §9 lists for `gate_checkpoint` (plan, spec, branch, head, base, ledger, resume line, block, next task, findings in flight, open decisions, rulings, grant, live subagents), plus `live_subagents` as entries (agent, task, worktree, transcript, last record, background job ids with their state), `worktrees` (path, branch, head, `git status --porcelain --untracked-files=all` output without the handoff's and the ledger's own lines), `required_reads` (path, optional line range, why), `skills` (in invocation order), `ledger_from` (the ledger line after the `CHECKPOINT` line just written) and `batch_cut` (the commit of the last printed owner batch, or none); each question carries its recommended option and `source`.
 - The handoff never tells the next session to read less than the default load and start order plus `required_reads`.
@@ -91,7 +91,7 @@ For a program session:
 ## Restarting agents
 
 An agent restarts as soon as every question with its `source` has an answered record; others in the batch may still be open (session-resume design §3.8). By its position in the tree:
-- A worker or reviewer stopped with NEEDS_DECISION and returned: its controller dispatches a fresh agent of the same role whose brief carries "Owner answers (<date>), binding" for its source.
+- A worker or reviewer stopped with NEEDS_DECISION and returned: its controller dispatches a fresh agent of the same role whose brief carries "Owner answers (date), binding" for its source.
 - A controller still alive and waiting: the session tells it to continue.
 - A controller that handed off: `continue` (Task P4.2) builds a fresh one.
 
@@ -115,11 +115,11 @@ Until the framework delivers each rule's tool or skill text, these bind the sess
 - B12 the small-re-review rule, its check recorded per re-review (L:406-L:408): only a `task_reviewer` re-review qualifies; it runs at the tier of the config key `reviews.small.tier`, default tier2; a fix touching an excluded path never qualifies, the framework default being the framework's own wiring (`.strict-delivery/**`, `.github/workflows/**`, `.claude/**`, `CLAUDE.md`) plus L:406's list in this repository's config; the controller's `small-re-review:` line states condition 4's no open owner question and condition 5, and the gate, once built, checks conditions 1-3, condition 4's severities and 6-8 (by hand until then) (owner Q-RD-10 (b), Q-RD-11 (b), Q-RD-12 (a), L:516);
 - B13 each finding's class `class: <dimension>: <members>` is ledgered and quoted in fix dispatches (P:53; CB "Finding class.");
 - B14 each finding is relayed by its substance, not by counts (owner L:488);
-- B15 document re-reviews run in full until a clean pass; a cosmetic item (no change of meaning) is not a finding and earns no fix round, and a minor is a real defect, fixed, never deferred (owner L:98; Q-CAT-8 L:442; design §3.8, X-43);
-- B16 the plan file and both specs belong to the session controller and the owner; a stream edits only its own task sections of the plan, and never another stream's file: it writes the need under `## Requests` and stops at a step boundary if blocked (owner Q-B1f-2 (a) L:319; design Appendix S V-9; P:6250-6251);
+- B15 document re-reviews run in full until a clean pass; a cosmetic item (no change of meaning) is not a finding and earns no fix round, and a minor is a real defect, fixed, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred (owner L:98; Q-CAT-8 L:442; design §3.8, X-43; Q-CONV-1 (a) L:687, DN-4 (b));
+- B16 the plan file and both specs belong to the session controller and the owner; a stream edits only its own task sections of the plan, and never another stream's file: it writes the need under `## Requests` and stops at a step boundary if blocked (owner Q-B1f-2 (a) L:319; design Appendix S V-9; P:6271-6272);
 - B17 an owner-approved design is committed at approval, in the docs-only pull request that carries it, before the plan and spec edits built on it (Q-BD-6, DD:136);
 - B18 the agent shell rules bind every agent, the main session included: temporary files only in its own `mktemp -d`, never the shared scratchpad; no `git stash` in the shared checkout; no heredocs; no `rm`, `rmtree` or `os.remove`; no `$(...)` except `mktemp`; a slip is disclosed in the report, and the main session's in the ledger (design Appendix S C-32, C-33; L:132; owner Q-RA2-3 (a));
-- B19 `## Model` names the model the role's resolved tier maps to, as MS:569 requires; every other line of a brief or report names tiers, never a model (CB "Dispatch discipline.", read under owner Q-RA2-4 (b); P:1900; P:2914).
+- B19 `## Model` names the model the role's resolved tier maps to, as MS:569 requires; every other line of a brief or report names tiers, never a model (CB "Dispatch discipline.", read under owner Q-RA2-4 (b); P:1921; P:2935).
 
 ## Until the framework delivers
 
