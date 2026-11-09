@@ -1,0 +1,12 @@
+kind: in-force
+version: 1
+format: markdown
+files:
+  - dir: decisions
+    glob: in-force.md
+first_line: "<!-- schema: in-force/1 -->"
+table:
+  - id
+  - topics
+  - rule
+  - landed_in

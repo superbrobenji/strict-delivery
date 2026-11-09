@@ -1,0 +1,10 @@
+kind: overview
+version: 1
+format: markdown
+files:
+  - path: index
+first_line: "<!-- schema: overview/1 -->"
+headings:
+  - "## Architecture"
+  - "## Open findings"
+  - "## In-force decisions"
