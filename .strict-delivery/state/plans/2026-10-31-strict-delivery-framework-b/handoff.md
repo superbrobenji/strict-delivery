@@ -13,7 +13,7 @@ docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md; docs/
 block/sb2
 
 ## head
-eee0c18 (the checkpoint commit follows it)
+8d26673 (the checkpoint commit follows it); fix round 2 is eee0c18
 
 ## base
 main 1faa1f2 (merged in by 44edc05)
@@ -22,19 +22,19 @@ main 1faa1f2 (merged in by 44edc05)
 .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/ledger.md
 
 ## resume line
-Resume strict-delivery plan docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md at the Block B2 fix round 2 re-review; branch block/sb2; head eee0c18; open questions: none.
+Resume strict-delivery plan docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md after owner Q-B2FX2-1; branch block/sb2; head 8d26673; open questions: Q-B2FX2-1.
 
 ## block
 sb2
 
 ## next task
-Fresh task review of fix round 2 (eee0c18 against 2363f8a, each finding's whole dimension), then the final verifier over origin/main..HEAD; LOW_PLATEAU needs two consecutive all-LOW or clean reviews from here (the last verifier had a MEDIUM); then PR-B2 with gh pr create --base main --head block/sb2; not merged by the stream
+On the owner's answer to Q-B2FX2-1: the fix round it names (fresh implementer one tier up per the round count, or the restriction round), a fresh re-review, then the final verifier over origin/main..HEAD; LOW_PLATEAU needs two consecutive all-LOW or clean reviews from here (the last verifier had a MEDIUM); then PR-B2 with gh pr create --base main --head block/sb2; not merged by the stream
 
 ## findings in flight
-F-B2V3-1 MEDIUM, F-B2V3-2 LOW, F-B2V3-3 LOW (verifier, block-B2-verifier-v3.md) and F-B2F1RR-1 LOW, F-B2F1RR-2 LOW (block-B2-fix1-rereview-v3.md): fixed in eee0c18, re-review pending. Registered, not fixed in PR-B2: prompts/final_reviewer.md:15 (Q-SPEC-1 (a)); main's lap-timer and hardware forbidden-text patterns (U+2010, double spaces).
+F-B2V3-1 MEDIUM, F-B2V3-2 LOW, F-B2V3-3 LOW (verifier, block-B2-verifier-v3.md) and F-B2F1RR-1 LOW, F-B2F1RR-2 LOW (block-B2-fix1-rereview-v3.md): fixed in eee0c18; re-review block-B2-fix2-rereview-v4.md closed F-B2V3-2 and F-B2F1RR-1 and found F-B2FX2RR-1 MEDIUM, F-B2FX2RR-2 LOW, F-B2FX2RR-3 LOW, F-B2FX2RR-4 LOW (classes in the ledger); fixing stopped under SD-R8 (D30). Registered, not fixed in PR-B2: prompts/final_reviewer.md:15 (Q-SPEC-1 (a)); main's lap-timer and hardware forbidden-text patterns (U+2010, double spaces).
 
 ## open decisions
-none
+Q-B2FX2-1 (finding-class, scope): recurring checker classes; question text in .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-b4-report.md
 
 ## rulings
 none taken in this block.
@@ -58,7 +58,7 @@ none
 strict-delivery; strict-delivery-repo
 
 ## ledger_from
-17
+27
 
 ## batch_cut
 none
