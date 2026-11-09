@@ -1,15 +1,21 @@
 """F-V1: every scan of the cite library and gate is linear (or n log n) in what it scans (task C2V1 rows P1a-P4, P6).
 
 Each test runs the production call (cites.extract, cites.anchors, cites.problem or gate_cites.main) in a child process
-of the interpreter under test, `python -m tests.test_cites_perf CASE`, with a timeout, so a quadratic scan fails
-within TIMEOUT instead of running for minutes. Two checks per case: the call at the larger size stays under BOUND
-seconds (21ad52d's code does not finish the smaller size within TIMEOUT, the fixed code takes at most BOUND / 10),
-and the ratio of the best of three runs at 2n over the best at n stays under RATIO (a quadratic scan gives about 4).
-Code spans (P3) can only be O(n^1.5) (the unmatched runs that each rescan the line have distinct lengths), so that
-case steps the size by 4 and allows RATIO * 2 (linear gives 4, the old scan 8)."""
+of the interpreter under test, `python -m tests.test_cites_perf CASE`. Every check counts CPU time or work, never wall
+time, so other load on the machine does not change the outcome (F-R1):
+- time: one call at size n uses under BOUND CPU seconds (time.process_time). The fixed code takes at most BOUND / 10;
+  21ad52d's P1a, P1b, P1d "(", P2 and P4 scans run past CPU_CAP, where RLIMIT_CPU kills the child (SIGXCPU).
+- work: one call at size n // WORK_DIV, run under sys.settrace and sys.setprofile, executes at most LINES_PER_CHAR
+  Python lines and passes at most SCAN_PER_CHAR characters of str receivers to C str methods (len(s) for each call
+  s.m(...)), per character of input. Both counts are deterministic. The fixed code stays under 21 lines and 5
+  characters; 21ad52d's P1c angle scan (str.find from every "<": quadratic inside C, which the time check cannot
+  separate at a usable size) passes about n characters per character, its P3 span scan (O(n^1.5)) runs about 77 lines
+  per character at the work size.
+TIMEOUT is a wall-clock backstop for a child that hangs; the CPU cap ends a slow child long before it."""
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -18,10 +24,12 @@ import unittest
 from tests.helpers import GitIsolatedTestCase, git, make_repo, write_record
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BOUND = 4.0          # seconds for one production call at the larger size
-RATIO = 2.6
-STEP = {"p3_spans": 4}
-TIMEOUT = 20         # seconds for the whole child: startup, three runs at n and three at 2n
+BOUND = 3.0          # CPU seconds for one production call at size n
+CPU_CAP = 15         # CPU seconds for the whole child (RLIMIT_CPU): 5 * BOUND
+TIMEOUT = 120        # wall seconds for the whole child: a backstop only
+WORK_DIV = 16        # the work counts run at size n // WORK_DIV
+LINES_PER_CHAR = 32  # Python line events per input character
+SCAN_PER_CHAR = 16   # str-method receiver characters per input character
 
 
 def _anchor_target(n):
@@ -81,34 +89,62 @@ def _lib_case(case, n):
     return (lambda: cites.extract("d.md", s + "\n")), len(s)
 
 
-def _best(f, runs=3):
-    best = None
-    out = None
-    for _ in range(runs):
-        t = time.perf_counter()
-        out = f()
-        t = time.perf_counter() - t
-        best = t if best is None else min(best, t)
-    return best, out
+def _work(f):
+    """(Python line events, characters of the str receivers of C method calls) during f()."""
+    count = [0, 0]
+
+    def local(frame, event, arg):
+        if event == "line":
+            count[0] += 1
+        return local
+
+    def call(frame, event, arg):
+        return local
+
+    def profile(frame, event, arg):
+        if event == "c_call" and isinstance(getattr(arg, "__self__", None), str):
+            count[1] += len(arg.__self__)
+
+    sys.settrace(call)
+    sys.setprofile(profile)
+    try:
+        f()
+    finally:
+        sys.settrace(None)
+        sys.setprofile(None)
+    return count
+
+
+def _cap_cpu():
+    try:
+        import resource
+    except ImportError:                          # no RLIMIT_CPU (Windows): TIMEOUT is the only limit
+        return
+    hard = resource.getrlimit(resource.RLIMIT_CPU)[1]
+    resource.setrlimit(resource.RLIMIT_CPU, (CPU_CAP, hard))
 
 
 def _child(argv):
-    if argv[0] == "gate":                        # gate ROOT: one gate_cites.main run, timed
+    _cap_cpu()
+    if argv[0] == "gate":                        # gate ROOT: one gate_cites.main run, CPU-timed
         import contextlib
         import io
         from gates import gate_cites
         buf = io.StringIO()
-        t = time.perf_counter()
+        t = time.process_time()
         with contextlib.redirect_stdout(buf):
             code = gate_cites.main(["--root", argv[1]])
-        print(json.dumps({"seconds": time.perf_counter() - t, "code": code, "out": buf.getvalue()}))
+        print(json.dumps({"seconds": time.process_time() - t, "code": code, "out": buf.getvalue()}))
         return
     case, n = argv[0], int(argv[1])
-    f1, size1 = _lib_case(case, n)
-    t1, out1 = _best(f1)
-    f2, size2 = _lib_case(case, STEP.get(case, 2) * n)
-    t2, out2 = _best(f2)
-    print(json.dumps({"n": [size1, t1], "2n": [size2, t2], "out": repr(out2)[:200], "items": len(out2)}))
+    f, size = _lib_case(case, n)
+    t = time.process_time()
+    out = f()
+    t = time.process_time() - t
+    fw, wsize = _lib_case(case, n // WORK_DIV)
+    lines, scan = _work(fw)
+    print(json.dumps({"size": size, "cpu": t, "out": repr(out)[:200], "items": len(out),
+                      "wsize": wsize, "lines": lines, "scan": scan}))
 
 
 def _run(test, args):
@@ -116,8 +152,11 @@ def _run(test, args):
         p = subprocess.run([sys.executable, "-m", "tests.test_cites_perf"] + list(args), cwd=ROOT, timeout=TIMEOUT,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
     except subprocess.TimeoutExpired:
-        test.fail("%s: still running after %d s (super-linear scan)" % (" ".join(args), TIMEOUT))
-    test.assertEqual(p.returncode, 0, p.stderr.decode("utf-8", "replace")[-2000:])
+        test.fail("%s: still running after %d wall s" % (" ".join(args), TIMEOUT))
+    xcpu = -getattr(signal, "SIGXCPU", 0)
+    test.assertEqual(p.returncode, 0, "%s: exit %d%s\n%s" % (
+        " ".join(args), p.returncode, " (SIGXCPU: over %d CPU s, super-linear scan)" % CPU_CAP
+        if xcpu and p.returncode == xcpu else "", p.stderr.decode("utf-8", "replace")[-2000:]))
     return json.loads(p.stdout.decode("utf-8"))
 
 
@@ -131,10 +170,11 @@ class LinearScanTest(unittest.TestCase):
         for case, n, expected in cases:
             with self.subTest(case=case):
                 r = _run(self, [case, str(n)])
-                (s1, t1), (s2, t2) = r["n"], r["2n"]
-                self.assertLess(t2, BOUND, "%s: %.3f s at %d" % (case, t2, s2))
-                limit = RATIO * 2 if case in STEP else RATIO
-                self.assertLess(t2 / max(t1, 1e-9), limit, "%s: %.4f s at %d, %.4f s at %d" % (case, t1, s1, t2, s2))
+                self.assertLess(r["cpu"], BOUND, "%s: %.3f CPU s at %d" % (case, r["cpu"], r["size"]))
+                self.assertLessEqual(r["lines"], LINES_PER_CHAR * r["wsize"],
+                                     "%s: %d line events at %d" % (case, r["lines"], r["wsize"]))
+                self.assertLessEqual(r["scan"], SCAN_PER_CHAR * r["wsize"],
+                                     "%s: %d str characters scanned at %d" % (case, r["scan"], r["wsize"]))
                 self.assertEqual((r["out"][:12], r["items"]), expected)
 
     def test_p1a_opener_search(self):
@@ -146,8 +186,9 @@ class LinearScanTest(unittest.TestCase):
                     ("p1b_no_hash", 25000, NONE)])
 
     def test_p1c_angle_destination(self):
-        # 21ad52d's angle scan is quadratic in C (find, slice): at these sizes its ratio is 3.3-3.6, not over BOUND
-        self.check([("p1c_angle", 100000, NONE), ("p1c_angle_far", 100000, NONE)])
+        # 21ad52d's angle scan is quadratic in C (find, slice): its CPU time is only about 10x the fixed code's at
+        # 1.6 M characters, so the str scan count, not the time check, is what fails it
+        self.check([("p1c_angle", 50000, NONE), ("p1c_angle_far", 50000, NONE)])
 
     def test_p1d_title(self):
         # Only the "(" title was quadratic at 21ad52d; a quote title stops at the next quote of its kind, and each
@@ -159,10 +200,10 @@ class LinearScanTest(unittest.TestCase):
         self.check([("p2_spaces", 100000, one), ("p2_tabs", 50000, one), ("p2_hash", 100000, one)])
 
     def test_p3_code_spans(self):
-        self.check([("p3_spans", 25000, NONE)])
+        self.check([("p3_spans", 50000, NONE)])
 
     def test_p4_problem_once_per_target(self):
-        self.check([("p4_anchor", 4000, ("['', '', '',", 4000)), ("p4_line", 20000, ("['', '', '',", 4000))])
+        self.check([("p4_anchor", 8000, ("['', '', '',", 4000)), ("p4_line", 40000, ("['', '', '',", 4000))])
 
 class GateLinearScanTest(GitIsolatedTestCase):
     """Row P1 through gate_cites.main on a real repository (24 KB and 100 KB lines), and row P4's landed_in and anchor
