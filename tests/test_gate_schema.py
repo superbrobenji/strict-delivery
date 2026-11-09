@@ -1,5 +1,6 @@
 """Tests of gates/gate_schema.py through run_gate on real fixture repositories; rows K, P, C, N, A, F, M, E."""
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -582,12 +583,119 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["check", "bogus"]), 2)
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
-        self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\ngates: decisions, schema\n" * 2
-                         + "usage: python3 -m gates <command> [args]\ncommands: check, index\n")
+        self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\ngates: cites, decisions, schema\n"
+                         * 2 + "usage: python3 -m gates <command> [args]\ncommands: check, index\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)
         self.assertEqual(out.getvalue().splitlines()[:2], ["PASS schema.kinds", "PASS schema.config"])
+
+
+
+class CitesDispatchTest(GitIsolatedTestCase):
+    """Q-C2fin-1 (a), Q-1c0-1 (a), Q-1c0-4 (a): `check cites` is registered, lazily imported inside the gate
+    contract, and fails closed as one `cites.input` line while gates/gate_cites.py is absent (task 1c0.1, D1-D10)."""
+
+    PRESENT = importlib.util.find_spec("gates.gate_cites") is not None
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = gates_main.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def module(self, name, source):
+        """A real module file on sys.path, registered as the cites gate for the duration of the test."""
+        directory = os.path.join(self.tmp, "mods")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, name + ".py"), "w", encoding="utf-8") as fh:
+            fh.write(source)
+        for patcher in (mock.patch.object(sys, "path", [directory] + sys.path),
+                        mock.patch.dict(sys.modules), mock.patch.dict(gates_main.GATES, {"cites": name})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_cites_registered_lazily(self):  # D1, D3
+        self.assertEqual(gates_main.GATES["cites"], "gates.gate_cites")
+        code = ("import sys\nfrom gates import __main__ as m\n"
+                "assert 'gates.gate_cites' not in sys.modules\n"
+                "code = m.main(['check', 'schema', '--root', sys.argv[1]])\n"
+                "print(code, 'gates.gate_cites' in sys.modules)\n")
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        p = subprocess.run([sys.executable, "-c", code, REPO], cwd=REPO, env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, check=False)
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.assertEqual(p.stdout.decode().splitlines()[-1], "0 False")
+
+    def test_check_schema_in_process_does_not_import_the_cites_gate(self):  # D3
+        with mock.patch.dict(sys.modules):
+            sys.modules.pop("gates.gate_cites", None)
+            code, out, _ = self.run_main(["check", "schema", "--root", REPO])
+            self.assertEqual(code, 0)
+            self.assertNotIn("gates.gate_cites", sys.modules)
+
+    def test_check_cites_missing_module_fails_closed(self):  # D4, Q-1c0-1 (a)
+        if self.PRESENT:
+            self.skipTest("gates/gate_cites.py exists")
+        want = "FAIL cites.input: gates/gate_cites.py missing (stream C, Task C2.2)\n"
+        self.assertEqual(self.run_main(["check", "cites"]), (1, want, ""))
+        code, out, err = self.run_main(["check", "cites", "--json"])
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(json.loads(out), {"gate": "cites", "ok": False, "lines": [
+            {"status": "FAIL", "id": "cites.input",
+             "reason": "gates/gate_cites.py missing (stream C, Task C2.2)"}]})
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "cites"], cwd=REPO, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((p.returncode, p.stdout.decode(), p.stderr), (1, want, b""))
+
+    def test_check_cites_runs(self):  # D6, Q-1c0-4 (a)
+        if not self.PRESENT:
+            self.skipTest("gates/gate_cites.py is absent until stream C (Task C2.2) merges")
+        root = make_repo(self.work)
+        code, out, err = self.run_main(["check", "cites", "--root", root])
+        lines = out.splitlines()
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertTrue(lines and all(ln.startswith("PASS cites.") for ln in lines), lines)
+
+    def test_skip_condition_is_the_module_not_being_found(self):  # D7
+        self.assertEqual(self.PRESENT, os.path.exists(os.path.join(REPO, "gates", "gate_cites.py")))
+
+    def test_registered_module_routes_through_the_gate_contract(self):  # D6 routing, whatever C has merged
+        self.module("stub_gate_ok", "from gates.lib.result import Result\n\n"
+                                    "def check(args):\n    r = Result('cites', [])\n    r.passed('cites.stub')\n"
+                                    "    return r\n")
+        self.assertEqual(self.run_main(["check", "cites"]), (0, "PASS cites.stub\n", ""))
+        self.assertEqual(self.run_main(["check", "cites", "--json"])[1],
+                         '{"gate": "cites", "ok": true, "lines": [{"status": "PASS", "id": "cites.stub", '
+                         '"reason": ""}]}\n')
+
+    def test_other_import_failures_are_not_reported_as_absent(self):  # D5
+        cases = {
+            "stub_dep_missing": ("import gates.lib.nonexistent_dep_x\n",
+                                 "FAIL cites.input: ModuleNotFoundError: No module named 'gates.lib.nonexistent_dep_x'\n"),
+            "stub_syntax": ("def (:\n", None),
+            "stub_boom": ("raise RuntimeError('boom')\n", "FAIL cites.input: RuntimeError: boom\n"),
+            "stub_no_check": ("X = 1\n", None),
+        }
+        for name, (source, want) in cases.items():
+            with self.subTest(module=name):
+                self.module(name, source)
+                code, out, err = self.run_main(["check", "cites"])
+                self.assertEqual((code, err), (1, ""))
+                self.assertEqual(len(out.splitlines()), 1)
+                if want is not None:
+                    self.assertEqual(out, want)
+                else:
+                    self.assertTrue(out.startswith("FAIL cites.input: "), out)
+                    self.assertNotIn("missing", out)
+
+    def test_json_flag_position(self):  # D8
+        code, out, err = self.run_main(["check", "--json", "cites"])
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("gates: cites, decisions, schema\n", err)
 
 
 if __name__ == "__main__":

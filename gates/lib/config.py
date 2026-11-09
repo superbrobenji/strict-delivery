@@ -7,7 +7,7 @@ import posixpath
 import re
 
 from gates.lib import yamlsub
-from gates.lib.gitinfo import LONG_HEX
+from gates.lib.gitinfo import LONG_HEX, _require_toplevel
 from gates.lib.result import GateError
 
 CONFIG_PATH = ".strict-delivery/config.yml"
@@ -121,6 +121,7 @@ def _validate(cfg: dict) -> None:
 
 def load(root: str) -> dict:
     """The merged config of the tree at ``root``; a GateError names whatever is wrong."""
+    _require_toplevel(root)
     path = os.path.join(root, CONFIG_PATH)
     if not os.path.lexists(path):
         raise GateError("%s: missing; run /strict-delivery:init" % CONFIG_PATH)

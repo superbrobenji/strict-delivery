@@ -13,7 +13,7 @@ import stat
 from typing import List, Optional
 
 from gates.lib import gitinfo, schema
-from gates.lib.result import GateError
+from gates.lib.result import GateError, _raw
 
 CLASS_GRANT = "merge-grant"
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -121,7 +121,7 @@ def landed_errors(row: object, root: str, cfg: dict, tracked: frozenset) -> list
     for cite in cites:
         problem = _cite_problem(cite)
         if problem:
-            errs.append("landed_in: %s %s" % (cite, problem))
+            errs.append("landed_in: %s %s" % (_raw(cite), problem))
             continue
         path = cite.partition("#")[0]
         if path == specs or path.startswith(specs + "/"):
