@@ -1074,6 +1074,33 @@ class Batch(Base):
         m.assert_called_once_with(self.root, c1)
         self.assertEqual((set(new_ids(out)), also_ids(out)), ({DA, DB}, []))
 
+    def test_C26_ambiguous_short_prefix_all_new(self):  # F-1d3-r3: a real 7-hex prefix shared by a commit and a blob
+        # Found offline by hashing candidates: commit object (empty tree, the fixture identity and date of
+        # tests/helpers.py, message "m5987") and blob "b5241\n" share the prefix 6b68082.
+        self.two_commits()
+        x = git(self.root, "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "m5987")
+        self.assertEqual(x, "6b68082fa320950795cf327440fecf620a0ca8f1")
+        merge = git(self.root, "commit-tree", git(self.root, "rev-parse", "HEAD^{tree}"), "-p", "HEAD", "-p", x,
+                    "-m", "merge")
+        git(self.root, "update-ref", "refs/heads/main", merge)  # x is now an ancestor of HEAD
+        blob_file = os.path.join(self.root, ".git", "b5241.txt")  # outside the work tree
+        with open(blob_file, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("b5241\n")
+        self.assertEqual(git(self.root, "hash-object", "-w", blob_file), "6b68082bede64516c74db20b8264241b73e79e8e")
+        self.assertEqual(git(self.root, "-c", "core.disambiguate=none", "rev-parse", "--verify", "--quiet",
+                             "6b68082", check=False), "")  # git itself finds the prefix ambiguous
+        self.assertFalse(decisions_cli.gitinfo.commit_exists(self.root, "6b68082"))  # the row's mechanism (C26)
+        self.assertTrue(decisions_cli.gitinfo.commit_exists(self.root, x[:8]))
+        for since in (x, x[:8]):  # control: an unambiguous name of x is an ancestor (no record at x: all new)
+            with self.subTest(since=since):
+                self.assertEqual(self.ok("--since", since).splitlines()[0],
+                                 "Owner questions: 2 new, 0 also open (cut-off %s)" % since)
+        before = self.snap()
+        out = self.ok("--since", "6b68082")
+        self.assertEqual(out.splitlines()[0], "Owner questions: 2 new, 0 also open (cut-off 6b68082%s)" % ALL_NEW)
+        self.assertEqual((set(new_ids(out)), also_ids(out)), ({DA, DB}, []))
+        self.assertEqual(self.snap(), before)
+
     def test_C30_custom_paths_decisions(self):
         cfg = minimal_config()
         cfg["paths"] = {"decisions": "state/decisions"}
@@ -1105,6 +1132,44 @@ class Batch(Base):
         with open(os.path.join(self.root, DEC, DA + ".yml"), "w", encoding="utf-8") as fh:
             fh.write("- a\n")
         self.refused(["batch"], "%s/%s.yml: the top level must be a mapping" % (DEC, DA))
+
+    def test_C9_C34_C36_answered_invalid_register_refused(self):  # F-1d3-r1: real validation, no patch (D-27)
+        self.assertIs(decisions.validate, decisions_cli.decisions.validate)
+        self.put(dec(DB, "answered"))  # a valid answered record beside the invalid one
+        f = "%s/%s.yml" % (DEC, DA)
+        forms = (["batch"], ["batch", "--answered", "--source", "r/a.md", "--date", "2026-11-02"])
+        cases = [("C36 source, queried", dec(DA, "answered", source="r/a.md"), f + ": source: unknown key"),
+                 ("C36 source, other", dec(DA, "answered", source="r/b.md"), f + ": source: unknown key"),
+                 ("C36 recommended", dec(DA, "answered", recommended="yes"), f + ": recommended: unknown key"),
+                 ("C9 open, missing field", dec(DA, "open", question=None), f + ": ")]
+        for name, r, needle in cases:
+            self.put(r)
+            for argv in forms:
+                with self.subTest(case=name, argv=argv):
+                    self.refused(argv, needle)
+        stray = "%s/notes.txt: not a regular file named <id>.yml" % DEC
+        texts = [("C34 bad YAML", DA + ".yml", "id: [\n", f), ("C34 non-mapping", DA + ".yml", "- a\n",
+                                                                f + ": the top level must be a mapping")]
+        for n in (4300, 4301):  # PC1 skeleton: numeric text at the int-conversion limit of 3.11+
+            texts.append(("PC1 %d-digit id" % n, DA + ".yml", "id: %s\n" % ("9" * n), f))
+            texts.append(("PC1 %d-digit source" % n, DA + ".yml", "id: %s\nsource: %s\n" % (DA, "9" * n), f))
+        texts.append(("PC1 U+1FAE8 source", DA + ".yml", "id: %s\nsource: \U0001FAE8\n" % DA, f))  # So on 3.13,
+        # unassigned (Cn) on 3.9
+        texts.append(("C34 stray non-record file", "notes.txt", "x\n", stray))  # last: it stays in the directory
+        for name, fname, text, needle in texts:
+            self.put(dec(DA, "open"))
+            with open(os.path.join(self.root, DEC, fname), "w", encoding="utf-8") as fh:
+                fh.write(text)
+            for argv in forms:
+                with self.subTest(case=name, argv=argv):
+                    self.refused(argv, needle)
+
+    def test_PC1_answered_source_skeleton_unpatched(self):  # real validation of a valid register; nothing matches
+        self.put(dec(DB, "answered"))
+        for s in ("9" * 4300, "9" * 4301, "r/\U0001FAE8.md"):
+            with self.subTest(n=len(s)):
+                self.assertEqual(self.ok("--answered", "--source", s, "--date", "2026-11-02"),
+                                 "Owner answers (2026-11-02), binding\n")
 
     def test_Q13_breaker_in_open_record_refused_answered_ignored(self):
         self.put(dec(DA, "open", question="a\x85b"))
@@ -1177,8 +1242,11 @@ class Batch(Base):
                                                           "YYYY-MM-DD\n"))
 
     def answered_with_source(self):
-        """decision/1 on main refuses ``source`` (OQ-16); the CLI path is exercised with validation passing these
-        decision/2-shaped rows, whose rendering test_batch.py pins (Q-X27 (a))."""
+        """Known divergence KD-1: decision/1 on main refuses ``source`` (OQ-16), so this fixture patches
+        ``decisions.validate`` to pass these decision/2-shaped rows and exercise the CLI rendering and filter path
+        (Q-X27 (a)); rendering itself is pinned in test_batch.py. The ``decisions.validate`` patch is to be removed
+        when decision/2 (PR-D) is merged into this code. Real validation under ``--answered`` is pinned unpatched
+        by test_C9_C34_C36_answered_invalid_register_refused."""
         self.put(dec(DC, "answered", source="r/a.md", answer="Second"),
                  dec(DA, "answered", source="r/a.md", answer="First\nline"),
                  dec(DB, "open", source="r/a.md"), dec(DD, "answered", source="r/b.md"),

@@ -221,8 +221,28 @@ class RenderAnswers(unittest.TestCase):
 
     def test_A5_exact_match(self):
         recs = [(ID1, self.ans())]
-        for s in ("./r/a.md", "R/a.md", "r/a.md "):
-            self.assertEqual(batch.render_answers(recs, s, "d"), "Owner answers (d), binding\n")
+        for s in ("./r/a.md", "R/a.md", "r/a.md ", "r/a.MD", "r/a.mdx", "r/a.md/", "r/a", "a.md", "/r/a.md", ""):
+            with self.subTest(query=s):  # the query extends, is cut from, or differs in case from the record
+                self.assertEqual(batch.render_answers(recs, s, "d"), "Owner answers (d), binding\n")
+
+    def test_A5_record_source_extending_or_cut_from_the_query_not_matched(self):  # F-1d3-r2: mutant M8 and kin
+        hit = "Owner answers (d), binding\n%s: Which?\nAnswer: Yes\n" % ID1
+        self.assertEqual(batch.render_answers([(ID1, self.ans())], "r/a.md", "d"), hit)  # control: equal prints
+        for src in ("r/a.md.bak", "r/a.md ", "r/a.mdx", "r/a.md/x", "./r/a.md", "xr/a.md", " r/a.md", "R/a.md",
+                    "r/A.md", "r/a.MD", "r/a", "a.md", "r/a.m"):
+            with self.subTest(record=src):  # extends the query at either end, is cut from it, or differs in case
+                self.assertEqual(batch.render_answers([(ID1, self.ans(source=src))], "r/a.md", "d"),
+                                 "Owner answers (d), binding\n")
+
+    def test_A5_PC1_skeleton_sources(self):  # 4300/4301-digit text; U+1FAE8 is So on 3.13 and Cn on 3.9
+        for src in ("9" * 4300, "9" * 4301, "r/\U0001FAE8.md"):
+            with self.subTest(n=len(src)):
+                hit = "Owner answers (d), binding\n%s: Which?\nAnswer: Yes\n" % ID1
+                self.assertEqual(batch.render_answers([(ID1, self.ans(source=src))], src, "d"), hit)
+                for other in (src[:-1], src + "9", src.replace("\U0001FAE8", "\U0001FAE9")):
+                    if other != src:
+                        self.assertEqual(batch.render_answers([(ID1, self.ans(source=src))], other, "d"),
+                                         "Owner answers (d), binding\n")
 
     def test_A6_line_breaks(self):
         recs = [(ID1, self.ans("x\r\ny\rz", question="q\nr"))]
