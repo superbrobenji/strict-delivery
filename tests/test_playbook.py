@@ -934,34 +934,42 @@ def b_owned_markdown():
 
 
 # Row P1-P10 samples: (text, expected [(line, match)]); every expected value is written here by hand.
-R1, R2, R3 = ("refused: multi-line code span", "refused: backtick in angle construct",
-              "refused: pipe in table-row code span")      # owner Q-B2FX2-1 (a), controller D1 (names exactly)
-PLACEHOLDER_REFUSED = [
-    ("G<n> the same", [(1, "<n>")]), ("Owner answers (<date>), binding", [(1, "<date>")]),
-    ("<program>/integration", [(1, "<program>")]), ("class: <dimension>: <members>", [(1, "<dimension>"), (1, "<members>")]),
-    ("<role>.md", [(1, "<role>")]), ("<Rq-n>", [(1, "<Rq-n>")]),                                         # P1
-    ("<the slugs in order>", [(1, "<the slugs in order>")]), ("<a href=\"x\">", [(1, "<a href=\"x\">")]),
-    ("<a b='x y' c=d e>", [(1, "<a b='x y' c=d e>")]), ("<br/>", [(1, "<br/>")]), ("<n />", [(1, "<n />")]),
-    ("<the slugs\nin order>", [(1, "<the slugs\nin order>")]),                                           # P5
-    ("</n>", [(1, "</n>")]), ("</n >", [(1, "</n >")]), ("<!-- x -->", [(1, "<!-- x -->")]),
-    ("a <!-- open", [(1, "<!--")]), ("<!--\nx -->", [(1, "<!--\nx -->")]),                               # P7
-    ("\\<n>", [(1, "<n>")]),                                                                             # P8
-    ("a ` b <n>", [(1, "<n>"), (1, R1)]), ("`a`` <n>", [(1, "<n>"), (1, R1)]),                         # P9 + R1
-    ("\\`a <n> `", [(1, "<n>"), (1, R1)]),
-    ("` <n> ``", [(1, "<n>"), (1, R1)]), ("`` <n> `", [(1, "<n>"), (1, R1)]),    # P9: runs of unequal length pair not
-    ("`a\n<n>`", [(1, R1), (2, "<n>"), (2, R1)]),                                                      # P10 + R1
-    ("x\n```\ny\n```\n<n>", [(5, "<n>")]), ("~~~\n```\n<n>\n~~~\n<m>", [(5, "<m>")]),
-    ("    ```\n<n>\n    ```", [(1, R1), (2, "<n>"), (3, R1)]), ("``` a`b\n<n>", [(1, R1), (2, "<n>")]),   # P3 edges
-    ("<a `x`>", [(1, R2)]),                                    # was accepted (spans break a tag): now refused, R2
+R1, R3 = "refused: multi-line code span", "refused: pipe in table-row code span"   # owner Q-B2FX2-1 (a), D1
+RA, RB, RL, RI, RQ = ("refused: angle bracket outside code span", "refused: backslash outside code span",
+                      "refused: link syntax", "refused: indented line", "refused: block quote")   # W1 (fix round 4)
+PLACEHOLDER_REFUSED = [   # fix round 4 (W1): every '<' outside a code span is also refused (RA), after the line's hits
+    ("G<n> the same", [(1, "<n>"), (1, RA)]), ("Owner answers (<date>), binding", [(1, "<date>"), (1, RA)]),
+    ("<program>/integration", [(1, "<program>"), (1, RA)]),
+    ("class: <dimension>: <members>", [(1, "<dimension>"), (1, "<members>"), (1, RA)]),
+    ("<role>.md", [(1, "<role>"), (1, RA)]), ("<Rq-n>", [(1, "<Rq-n>"), (1, RA)]),                      # P1
+    ("<the slugs in order>", [(1, "<the slugs in order>"), (1, RA)]),
+    ("<a href=\"x\">", [(1, "<a href=\"x\">"), (1, RA)]),
+    ("<a b='x y' c=d e>", [(1, "<a b='x y' c=d e>"), (1, RA)]), ("<br/>", [(1, "<br/>"), (1, RA)]),
+    ("<n />", [(1, "<n />"), (1, RA)]),
+    ("<the slugs\nin order>", [(1, "<the slugs\nin order>"), (1, RA)]),                                  # P5
+    ("</n>", [(1, "</n>"), (1, RA)]), ("</n >", [(1, "</n >"), (1, RA)]),
+    ("<!-- x -->", [(1, "<!-- x -->"), (1, RA)]),
+    ("a <!-- open", [(1, "<!--"), (1, RA)]), ("<!--\nx -->", [(1, "<!--\nx -->"), (1, RA)]),            # P7
+    ("\\<n>", [(1, "<n>"), (1, RA), (1, RB)]),                                                           # P8
+    ("a ` b <n>", [(1, "<n>"), (1, R1), (1, RA)]), ("`a`` <n>", [(1, "<n>"), (1, R1), (1, RA)]),       # P9 + R1
+    ("\\`a <n> `", [(1, "<n>"), (1, R1), (1, RA), (1, RB)]),
+    ("` <n> ``", [(1, "<n>"), (1, R1), (1, RA)]), ("`` <n> `", [(1, "<n>"), (1, R1), (1, RA)]),   # unequal runs
+    ("`a\n<n>`", [(1, R1), (2, "<n>"), (2, R1), (2, RA)]),                                             # P10 + R1
+    ("x\n```\ny\n```\n<n>", [(5, "<n>"), (5, RA)]), ("~~~\n```\n<n>\n~~~\n<m>", [(5, "<m>"), (5, RA)]),
+    ("    ```\n<n>\n    ```", [(1, R1), (1, RI), (2, "<n>"), (2, RA), (3, R1), (3, RI)]),
+    ("``` a`b\n<n>", [(1, R1), (2, "<n>"), (2, RA)]),                                                    # P3 edges
+    ("<a `x`>", [(1, RA)]),                                    # was R2 (round 3); RA from round 4
     ("# `a\n`<x>`\n", [(1, R1)]),                              # was accepted (heading ends a paragraph): R1
+    ("  ```py\n<n>\n  ```", [(1, RI), (3, RI)]),               # was accepted (indented fence): RI from round 4
+    ("a < b", [(1, RA)]), ("x<y", [(1, RA)]), ("<1-4>", [(1, RA)]), ("< n>", [(1, RA)]), ("a <", [(1, RA)]),
+    ("<>", [(1, RA)]), ("<-n>", [(1, RA)]), ("<_n>", [(1, RA)]),          # P4: were accepted; RA from round 4
+    ("<https://example.org/x>", [(1, RA)]), ("<mailto:a@b.c>", [(1, RA)]), ("<a@b.c>", [(1, RA)]),   # P6: were too
+    ("<`n`>", [(1, RA)]),                                      # was accepted (no R2 opener); RA from round 4
 ]
 PLACEHOLDER_ACCEPTED = [
     "`G<n>`", "`<date>`", "``a `<n>` b``", "`` <n> ``", "``x` <n> `y``",                                # P2
-    "```\n<n>\n```", "~~~\n<n>\n~~~", "````\n```\n<n>\n````", "  ```py\n<n>\n  ```", "```\n<n>\n",
+    "```\n<n>\n```", "~~~\n<n>\n~~~", "````\n```\n<n>\n````", "```\n<n>\n",
     "~~~~\n<n>\n~~~~~", "```\n<n>\n```  ",                                                               # P3
-    "a < b", "x<y", "<1-4>", "< n>", "a <", "<>", "<-n>", "<_n>",                                          # P4
-    "<https://example.org/x>", "<mailto:a@b.c>", "<a@b.c>",                                              # P6
-    "<`n`>",                                                    # '<' then a backtick: not an angle opener, no R2
 ]
 
 
@@ -1001,6 +1009,9 @@ class PlaceholderTest(unittest.TestCase):
                     want.append((len(lines), tags[ph]))
                 if wrap == "unpaired":       # Q-B2FX2-1 (a): an unpaired run is refused (R1), after the line's hit
                     want.append((len(lines), "refused: multi-line code span"))
+                if wrap in ("none", "unpaired"):     # W1 (round 4): every '<' outside a span is refused, after R1
+                    want.append((len(lines), "refused: angle bracket outside code span"))
+                if wrap == "unpaired":
                     lines.append("")
             with self.subTest(doc=lines):
                 self.assertEqual(pc.placeholder_hits("\n".join(lines) + "\n"), want)
@@ -1016,7 +1027,8 @@ class PlaceholderTest(unittest.TestCase):
     def test_seeded_hit_in_a_real_file_is_found(self):      # A6: the file check is not vacuous
         text = read(RULES)
         t = changed(text, "the active overrides", "the <n> active overrides")
-        self.assertEqual(pc.placeholder_hits(t), [(text[:text.index("the active overrides")].count("\n") + 1, "<n>")])
+        n = text[:text.index("the active overrides")].count("\n") + 1
+        self.assertEqual(pc.placeholder_hits(t), [(n, "<n>"), (n, RA)])          # W2: the hit and its refusal
 
     def test_takes_str(self):
         with self.assertRaises(TypeError):
@@ -1697,36 +1709,62 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
 # Block B2 verifier round (F-B2V3-1..3), converted in fix round 3 to the input restriction (owner Q-B2FX2-1 (a),
 # controller D1-D5). Every expected value is written here by hand.
 SPAN_HTML_REFUSED = [   # V1: (text, result)
-    ('x <a title="`"> y ` z\n', [(1, R2)]),                                 # reproducer 1: backtick inside a tag
+    ('x <a title="`"> y ` z\n', [(1, RA)]),                                 # reproducer 1: backtick inside a tag
     ("`a\nb` <x> `c`\n", [(1, R1), (2, R1)]),                               # reproducer 2: span over a line break
-    ('see <n title="`"> and ` here\n', [(1, R2)]),
-    ("`a b` <x> `c`\n", [(1, "<x>")]),                                       # control of reproducer 2, one line
-    ('x <a title="q"> y\n', [(1, '<a title="q">')]),                         # control of reproducer 1, no backtick
-    ("`a\n<n>`\n", [(1, R1), (2, "<n>"), (2, R1)]),                          # P10: fail closed
-    ("- `a\n  b` <x> `c`\n", [(1, R1), (2, R1)]),                            # a list item's lazy line
+    ('see <n title="`"> and ` here\n', [(1, RA)]),
+    ("`a b` <x> `c`\n", [(1, "<x>"), (1, RA)]),                              # control of reproducer 2, one line
+    ('x <a title="q"> y\n', [(1, '<a title="q">'), (1, RA)]),                # control of reproducer 1, no backtick
+    ("`a\n<n>`\n", [(1, R1), (2, "<n>"), (2, R1), (2, RA)]),                 # P10: fail closed
+    ("- `a\n  b` <x> `c`\n", [(1, R1), (2, R1), (2, RI)]),                   # a list item's continuation line
     ("# `a\n`<x>`\n", [(1, R1)]),                                            # was accepted: a heading's unpaired run
 ]
 SPAN_HTML_ACCEPTED = ["`<x>`\n", "a `<x>` b\nc `d`\n", "`a`\n\n`<x>`\n", "``a ` <x> ` b``\n"]
 # M1-M5 (fix round 3). F-B2FX2RR-1 reproducers, the class members and controls.
 RESTRICT_SAMPLES = [
     ("e `\n- a `b\nc` <x> `d\n", [(1, R1), (2, R1)]),                       # F-B2FX2RR-1: bullet list item
-    ("e `\n> a `b\nc` <x> `d\n", [(1, R1), (2, R1)]),                       # block quote, then a lazy line
+    ("e `\n> a `b\nc` <x> `d\n", [(1, R1), (2, R1), (2, RQ)]),              # block quote, then a lazy line
     ("e `\n***\na `b\nc` <x> `d\n", [(1, R1), (3, R1)]),                    # thematic break
     ("a `b\n| c` <x> `d\n", [(1, R1)]),                                     # a `|` line inside a paragraph
     ("| `a | <x> | b` |\n|---|---|---|\n", [(1, R3)]),                       # GFM cell split on pipes in a span
-    ("<http://a`b> <x> `c\n", [(1, R2)]), ("<a`b@c.de> <x> `c\n", [(1, R2)]),   # autolinks holding a backtick
-    ("x \\` y\n", []), ("```\n` a\n```\n", []),                              # M1: escaped run; inside a fence
-    ("- ` a\n", [(1, R1)]), ("> ` a\n", [(1, R1)]), ("# ` a\n", [(1, R1)]), ("| ` a |\n", [(1, R1)]),
-    ("<a href=`x`>\n", [(1, "<a href=\0\0\0>"), (1, R2)]), ("<a\ntitle=`x`>\n", [(1, "<a\ntitle=\0\0\0>"), (1, R2)]),
-    ("</a`>\n", [(1, R1), (1, R2)]),            # M2; a hit is matched on the masked text (NUL per span char)
-    ("<!-- ` -->\n", [(1, "<!-- ` -->"), (1, R1), (1, R2)]), ("<?x `?>\n", [(1, R1), (1, R2)]),
-    ("`<a>` `b`\n", []), ("<1 `x` >\n", []), ("< a `x` >\n", []), ("<a `x`\n", []),
+    ("<http://a`b> <x> `c\n", [(1, RA)]), ("<a`b@c.de> <x> `c\n", [(1, RA)]),   # autolinks holding a backtick
+    ("x \\` y\n", [(1, RB)]), ("```\n` a\n```\n", []),                       # M1: escaped run (RB, round 4); fence
+    ("- ` a\n", [(1, R1)]), ("> ` a\n", [(1, R1), (1, RQ)]), ("# ` a\n", [(1, R1)]), ("| ` a |\n", [(1, R1)]),
+    ("<a href=`x`>\n", [(1, "<a href=\0\0\0>"), (1, RA)]), ("<a\ntitle=`x`>\n", [(1, "<a\ntitle=\0\0\0>"), (1, RA)]),
+    ("</a`>\n", [(1, R1), (1, RA)]),            # M2; a hit is matched on the masked text (NUL per span char)
+    ("<!-- ` -->\n", [(1, "<!-- ` -->"), (1, R1), (1, RA)]), ("<?x `?>\n", [(1, R1), (1, RA)]),
+    ("`<a>` `b`\n", []), ("<1 `x` >\n", [(1, RA)]), ("< a `x` >\n", [(1, RA)]), ("<a `x`\n", [(1, RA)]),
     ("| `a|b` |\n", [(1, R3)]), ("a | `b|c`\n--|--\n", [(1, R3)]), ("a | `b|c`\n:-|-:\n", [(1, R3)]),   # M3
     ("see `a|b` here\n", []), ("| `a\\|b` |\n", [(1, R3)]), ("x\n\na | `b|c`\n", []),
-    ("a `<!-- ` b\n", []), ("(`<!-- ` or `# `)\n", []), ("`a` <x> `b`\n", [(1, "<x>")]),          # M4, F-B2FX2RR-4
-    ("a `\n<b `x`>\n| `c|d` |\n", [(1, R1), (2, R2), (3, R3)]),                                  # M5: each kind
-    ("| `a|b` ` |\n", [(1, R1), (1, R3)]), ("<x> `\n", [(1, "<x>"), (1, R1)]),                   # two; mixed
+    ("a `<!-- ` b\n", []), ("(`<!-- ` or `# `)\n", []), ("`a` <x> `b`\n", [(1, "<x>"), (1, RA)]),   # M4, FX2RR-4
+    ("a `\n<b `x`>\n| `c|d` |\n", [(1, R1), (2, RA), (3, R3)]),                                  # M5: each kind
+    ("| `a|b` ` |\n", [(1, R1), (1, R3)]), ("<x> `\n", [(1, "<x>"), (1, R1), (1, RA)]),          # two; mixed
 ]
+# W1-W5 (fix round 4, owner Q-B2FX2-1 (a) as a whitelist). The refused forms, enumerated: two characters, two
+# sequences and three line starts outside every per-line code span and fenced block, with R1 and R3.
+W_CHARS = [("<", RA), ("\\", RB), ("](", RL), ("]:", RL)]
+W_POSITIONS = ["%s x", "x %s y", "x y %s", "`a`%s b", "b %s`a`", "# x %s y", "- x %s y", "1. x %s y", "| x %s y |"]
+W_STARTS = [(" x", RI), ("\tx", RI), ("  x", RI), ("    x", RI), ("> x", RQ), (">x", RQ)]
+W_REPRODUCERS = [   # F-B2FX2RR5-1, F-B2FX2RR5-2: each refused by name (they were [] at 66b494c)
+    ('<a t=">" u="`"> <x> `\n', [(1, RA)]), ("y <a t='>' u='`'> <x> `\n", [(1, RA)]),          # F-B2FX2RR5-1
+    ("see [a](`) <x> ` here\n", [(1, RL)]), ("see [a](<`>) <x> ` here\n", [(1, RA), (1, RL)]),    # RR5-2 member 1
+    ('see [a](/u "`") <x> ` here\n', [(1, RL)]), ("see ![a](`) <x> ` here\n", [(1, RL)]),
+    ("- a\n  ```\n<x>\n```\n", [(2, RI)]), ("1. a\n   ~~~\n<x>\n~~~\n", [(2, RI)]),                # member 2
+    ("<div\n```\n<x>\n```\n", [(1, RA)]), ("</div\n```\n<x>\n```\n", [(1, RA)]),                  # member 3
+    ("> | h |\n> | - |\n> | `a | <z> b` |\n", [(1, RQ), (2, RQ), (3, RQ)]),                       # member 4
+    ("- > | h |\n  > | - |\n  > | `a | <z> b` |\n", [(2, RI), (3, RI)]),
+]
+W_FAIL_CLOSED = [   # the round 3 fail-closed notes: each is now a named refusal
+    ("para\n\n    <x>\n", [(3, "<x>"), (3, RA), (3, RI)]),                           # indented code
+    ("    ```\nx\n    ```\n", [(1, R1), (1, RI), (3, R1), (3, RI)]),                 # an indented fence under no list
+    ("| `a` |\n|---|\nprose `b|c`\n", [(3, R3)]),                                    # R3 past a table's end: kept
+]
+W_ADMITTED = [   # W-h: the block forms the whitelist leaves, each with a code span holding '<'
+    "a `<x>` b\n", "# h `<x>`\n", "## h\n", "a\n---\n", "a\n===\n", "***\n", "---\n", "- a `<x>`\n", "1. a `<x>`\n",
+    "| a | `<x>` |\n|---|---|\n| b | c |\n", "```\n<x>\n```\n", "~~~\n<x>\n~~~\n",
+    "---\nname: x\ndescription: y `<z>`\n---\n# Body\n", "a > b\n", "a ] (b)\n", "a ]x( b\n", "[a] (b)\n",
+    "a\tb\n", "a\n   \nb\n", "a\n\t\nb\n", "a\n \t \nb\n",
+]
+W_BLANK_AND_FENCED = ["```\n x\n```\n", "```\n\tx\n```\n", "```\n> x\n```\n", "~~~\n    <x> \\ ](a) ]: b\n~~~\n"]
 STERM_26 = [0x0701, 0x0702, 0x07F9, 0x1367, 0x166E, 0x1803, 0x1809, 0x1944, 0x1945, 0x2E3C, 0x2E53, 0x2E54, 0xA4FF,
             0xA60E, 0xA60F, 0xA6F3, 0xA6F7, 0xFE12, 0xFE15, 0xFE16, 0x11143, 0x16AF5, 0x16E98, 0x1BC9F, 0x1DA88,
             0x1E95E]                                                    # F-B2FX2RR-2, named by the re-review
@@ -1742,8 +1780,9 @@ class VerifierRoundTest(unittest.TestCase):
                 self.assertEqual(pc.placeholder_hits(text), [])
 
     def test_input_restriction_samples(self):                     # F-B2FX2RR-1, -4; M1-M5
-        self.assertEqual(pc.REFUSED_KINDS, ("multi-line code span", "backtick in angle construct",
-                                            "pipe in table-row code span"))
+        self.assertEqual(pc.REFUSED_KINDS, ("multi-line code span", "angle bracket outside code span",
+                                            "backslash outside code span", "link syntax", "indented line",
+                                            "block quote", "pipe in table-row code span"))
         for text, want in RESTRICT_SAMPLES:
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), want)
@@ -1833,6 +1872,106 @@ class VerifierRoundTest(unittest.TestCase):
         for fn in (pc.placeholder_hits, pc._unpaired_runs, pc._table_row_lines, pc.rules_problems, sentences):
             self.assertNotIn("ExceptionGroup", inspect.getsource(fn))
             self.assertNotIn("except*", inspect.getsource(fn))
+
+
+class WhitelistTest(unittest.TestCase):                             # W1-W5, fix round 4; rows W-a..W-h, PC1-b
+    def _form(self, form, kind):
+        """A refused character or sequence: refused at each position outside spans, accepted in a span or fence."""
+        for pos in W_POSITIONS:
+            text = pos % form + "\n"
+            want = [(1, R1), (1, kind)] if form == "\\" and pos.endswith("%s`a`") else [(1, kind)]   # '\`' escapes
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+            for fenced in ("```\n%s```\n", "~~~~\n%s~~~~\n"):
+                with self.subTest(fenced=fenced % text):
+                    self.assertEqual(pc.placeholder_hits(fenced % text), [])
+        for span in ("`%s`", "x `a %s b` y", "``%s``", "| `%s` |", "- `%s`", "# `%s` h"):
+            text = span % form + "\n"
+            with self.subTest(span=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+        with self.subTest(second_line=form):
+            self.assertEqual(pc.placeholder_hits("a\nb %s c\n" % form), [(2, kind)])
+
+    def test_angle_bracket(self):                                  # W-a
+        self._form("<", RA)
+
+    def test_backslash(self):                                      # W-a
+        self._form("\\", RB)
+
+    def test_link_paren(self):                                     # W-b
+        self._form("](", RL)
+
+    def test_link_colon(self):                                     # W-b
+        self._form("]:", RL)
+
+    def test_link_parts_apart_accepted(self):                      # W-b: ']' and '(' or ':' separated
+        for text in ("a ] (b)\n", "a ]x( b\n", "[a] (b)\n", "a ] : b\n", "a ]\n(b)\n", "a ]\n: b\n", "`a]`(b)\n"):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+
+    def test_line_starts(self):                                    # W-c
+        for start, kind in W_STARTS:
+            for text, line in ((start + "\n", 1), ("a\n" + start + "\n", 2), ("```\nc\n```\n" + start + "\n", 4),
+                               ("- a\n" + start + " `b`\n", 2)):
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), [(line, kind)])
+            with self.subTest(fenced=start):
+                self.assertEqual(pc.placeholder_hits("```\n" + start + "\n```\n"), [])
+        for text in W_BLANK_AND_FENCED + ["a\n \nb\n", "a\n\t\nb\n", "a\n   \t\nb\n", "a > b\n", "a\n- > b\n"]:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+
+    def test_indented_fence_lines(self):                           # W-c: an indented opener or closer is refused
+        for text, want in (("  ```\nx\n```\n", [(1, RI)]), ("```\nx\n  ```\n", [(3, RI)]),
+                           (" ~~~\n<x>\n ~~~\n", [(1, RI), (3, RI)]), ("```\nx\n    ```\n", [])):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_round3_rereview_reproducers(self):                    # W-e: F-B2FX2RR5-1, F-B2FX2RR5-2
+        for text, want in W_REPRODUCERS:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_round3_fail_closed_notes(self):                       # W4: named refusals now (R3 note: stays fail closed)
+        for text, want in W_FAIL_CLOSED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_output_shape(self):                                   # W-f: kinds, order, several on a line, with hits
+        text = "<x> ` \\ ](a\n  b\n> c\n| `d|e` |\n  | `f|g` |\n> <y> `\n"
+        want = [(1, "<x>"), (1, R1), (1, RA), (1, RB), (1, RL), (2, RI), (3, RQ), (4, R3), (5, RI), (5, R3),
+                (6, "<y>"), (6, R1), (6, RA), (6, RQ)]
+        got = pc.placeholder_hits(text)
+        self.assertEqual(got, want)
+        kinds = [k[len("refused: "):] for _, k in got if k.startswith("refused: ")]
+        self.assertEqual(sorted(set(kinds), key=kinds.index), list(pc.REFUSED_KINDS))
+        self.assertEqual(len(pc.REFUSED_KINDS), 7)
+        for n, kind in enumerate(pc.REFUSED_KINDS):                # each kind alone, once
+            sample = ["a `\n", "a < b\n", "a \\ b\n", "a ](b\n", " a\n", "> a\n", "| `a|b` |\n"][n]
+            with self.subTest(kind=kind):
+                self.assertEqual(pc.placeholder_hits(sample), [(1, "refused: " + kind)])
+
+    def test_hit_has_its_refusal(self):                            # W2: every hit's line carries the RA refusal
+        for text, _ in PLACEHOLDER_REFUSED + SPAN_HTML_REFUSED + RESTRICT_SAMPLES + W_FAIL_CLOSED:
+            got = pc.placeholder_hits(text)
+            for n, m in got:
+                if not m.startswith("refused: "):
+                    with self.subTest(text=text, hit=m):
+                        self.assertIn((n, RA), got)
+
+    def test_admitted_forms(self):                                 # W-h
+        for text in W_ADMITTED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+
+    def test_unicode_version_independent(self):                    # PC1-b: U+A7C0 (category differs 13.0/15.1)
+        c = chr(0xA7C0)
+        rows = [("x %s y\n" % c, []), ("`%s<x>`\n" % c, []), ("%s <x>\n" % c, [(1, "<x>"), (1, RA)]),
+                (" %s\n" % c, [(1, RI)]), ("%s\n%s\n" % (c, c), [])]
+        with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
+            for text, want in rows:
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), want)
 
 
 if __name__ == "__main__":

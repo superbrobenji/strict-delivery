@@ -563,10 +563,10 @@ def _mask_spans(line):
     return _masked(line, _span_ranges(line))
 
 
-REFUSED_KINDS = ("multi-line code span", "backtick in angle construct", "pipe in table-row code span")
+REFUSED_KINDS = ("multi-line code span", "angle bracket outside code span", "backslash outside code span",
+                 "link syntax", "indented line", "block quote", "pipe in table-row code span")
 _DELIMITER_ROW = re.compile(r"[ \t|:-]*")
 _TABLE_START = re.compile(r" {0,3}\|")
-_ANGLE_OPEN = re.compile(r"<[A-Za-z/!?]")
 
 
 def _unpaired_runs(line):
@@ -613,42 +613,56 @@ def placeholder_hits(text):
     """(line_no, match) for each raw-HTML open tag, closing tag or comment outside code spans and fenced blocks, and
     (line_no, "refused: <kind>") for each input the check refuses instead of parsing (owner Q-B2FX2-1 (a), which
     narrows Q-B22v2-3 (a)), merged in line order (on one line: hits, then refusals in REFUSED_KINDS order).
-    Outside fences, three inputs are refused: R1 "multi-line code span", a line holding a backtick run its own line
-    leaves unpaired; R2 "backtick in angle construct", a '<' outside every code span followed by an ASCII letter,
-    '/', '!' or '?', with a backtick before the next '>' (searched across lines); R3 "pipe in table-row code span",
-    a code span holding '|' on a table-row line (_table_row_lines). With R1-R3 absent, code spans paired per line are
-    exact: no span crosses a line (R1), no construct that starts before a span can swallow its backtick (R2), and
-    the table cell split cannot reach into a span (R3). A '<' inside a span is code: the span starts first."""
+    The rule is a whitelist (Q-B2FX2-1 (a), fix round 4). Every line outside a fenced block (front matter included)
+    is refused when it holds, outside every per-line code span, a '<' ("angle bracket outside code span"), a '\\'
+    ("backslash outside code span") or the sequence '](' or ']:' ("link syntax"); a line outside a fenced block or
+    opening or closing one is refused when it is non-blank and starts with a space or a tab ("indented line") or
+    starts with '>' ("block quote"); R1 "multi-line code span", a backtick run its own line leaves unpaired; R3 "pipe in table-row code
+    span", a code span holding '|' on a table-row line (_table_row_lines). With these refused, a line holds only
+    text, code spans, emphasis, entities and inert brackets, and the block forms left are column-0 paragraphs,
+    headings, thematic breaks, column-0 list items, tables and column-0 fences, so no construct can take a backtick
+    from a per-line span or hide text the per-line masking keeps. A hit is an _HTML match on the masked text, so its
+    line always carries an "angle bracket outside code span" refusal too."""
     _need_str(text, "placeholder_hits")
-    base = []
+    base, outside = [], []
     fence = None
     for line in text.split("\n"):
         if fence is not None:
             m = re.match(r" {0,3}(`{3,}|~{3,})[ \t]*$", line)
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 fence = None
+                outside.append(line)
+            else:
+                outside.append("")
             base.append("")
             continue
+        outside.append(line)
         m = _FENCE_OPEN.match(line)
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             fence = m.group(1)
             base.append("")
             continue
         base.append(line)
-    joined = "\n".join(base)
-    masked = "\n".join(_mask_spans(line) for line in base)
+    lines = [_mask_spans(line) for line in base]
+    masked = "\n".join(lines)
     out = [(masked.count("\n", 0, m.start()) + 1, m.group(0)) for m in _HTML.finditer(masked)]
     refused = []
-    for n, line in enumerate(base, 1):
+    for n, (line, low, raw) in enumerate(zip(base, lines, outside), 1):
         if _unpaired_runs(line):
             refused.append((n, 0))
-    for m in _ANGLE_OPEN.finditer(masked):
-        close = joined.find(">", m.start())
-        if close >= 0 and "`" in joined[m.start():close]:
-            refused.append((masked.count("\n", 0, m.start()) + 1, 1))
+        if "<" in low:
+            refused.append((n, 1))
+        if "\\" in low:
+            refused.append((n, 2))
+        if "](" in low or "]:" in low:
+            refused.append((n, 3))
+        if raw[:1] in (" ", "\t") and raw.strip(" \t"):
+            refused.append((n, 4))
+        if raw[:1] == ">":
+            refused.append((n, 5))
     for i in sorted(_table_row_lines(base)):
         if any("|" in base[i][a:b] for a, b in _span_ranges(base[i])):
-            refused.append((i + 1, 2))
+            refused.append((i + 1, 6))
     out += sorted(set((n, "refused: " + REFUSED_KINDS[k]) for n, k in refused),
                   key=lambda r: (r[0], REFUSED_KINDS.index(r[1][len("refused: "):])))
     return sorted(out, key=lambda r: (r[0], r[1].startswith("refused: ")))

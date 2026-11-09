@@ -1,0 +1,150 @@
+F-B2FX2RR5-2: markdown placeholder: angle constructs hidden where code spans, raw HTML, links, tables and block structure interact, beyond R1-R3; fixed by the W1 whitelist kinds 'backslash outside code span', 'link syntax', 'indented line', 'block quote' and the fence-line checks (Q-B2FX2-1 (a), fix round 4)
+harness: as F-B2FX2RR5-1.txt (mut.py, same test classes, both interpreters)
+
+F-B2FX2RR5-2 mutation transcript (fix round 4, W1 whitelist); interpreter 3.9.6
+
+mutant: backslash outside code span disabled
+  replace 'if "\\\\" in low:' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_backslash, test_input_restriction_samples, test_output_shape, test_refused_samples)
+  fix restored: PASS (27 tests)
+
+mutant: backslash checked on the unmasked line
+  replace 'if "\\\\" in low:' -> 'if "\\\\" in line:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_backslash, test_input_restriction_samples)
+  fix restored: PASS (27 tests)
+
+mutant: link syntax '](' disabled
+  replace 'if "](" in low or "]:" in low:' -> 'if "]:" in low:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_link_paren, test_output_shape, test_round3_rereview_reproducers)
+  fix restored: PASS (27 tests)
+
+mutant: link syntax ']:' disabled
+  replace 'if "](" in low or "]:" in low:' -> 'if "](" in low:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_link_colon)
+  fix restored: PASS (27 tests)
+
+mutant: link syntax checked on the unmasked line
+  replace 'if "](" in low or "]:" in low:' -> 'if "](" in line or "]:" in line:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_link_colon, test_link_paren)
+  fix restored: PASS (27 tests)
+
+mutant: indented line: space start disabled
+  replace 'raw[:1] in (" ", "\\t")' -> 'raw[:1] in ("\\t",)'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_indented_fence_lines, test_line_starts, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+mutant: indented line: tab start disabled
+  replace 'raw[:1] in (" ", "\\t")' -> 'raw[:1] in (" ",)'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_line_starts)
+  fix restored: PASS (27 tests)
+
+mutant: indented line: blank-line exemption dropped
+  replace ' and raw.strip(" \\t"):' -> ':'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_admitted_forms, test_line_starts)
+  fix restored: PASS (27 tests)
+
+mutant: indented line disabled
+  replace 'if raw[:1] in (" ", "\\t") and raw.strip(" \\t"):' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_indented_fence_lines, test_line_starts, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+mutant: block quote disabled
+  replace 'if raw[:1] == ">":' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_input_restriction_samples, test_line_starts, test_output_shape, test_round3_rereview_reproducers)
+  fix restored: PASS (27 tests)
+
+mutant: fence closing line not checked
+  replace 'fence = None\n                outside.append(line)' -> 'fence = None\n                outside.append("")'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_indented_fence_lines, test_refused_samples)
+  fix restored: PASS (27 tests)
+
+mutant: fence opening line not checked
+  replace '    outside.append(line)\n        m = _FENCE_OPEN' -> '    m = _FENCE_OPEN'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_angle_bracket, test_backslash, test_backtick_runs_one_to_four, test_generated_inputs, test_hit_has_its_refusal, test_indented_fence_lines, test_input_restriction_samples, test_line_starts, test_link_colon, test_link_paren, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_seeded_hit_in_a_real_file_is_found, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+F-B2FX2RR5-2 mutation transcript (fix round 4, W1 whitelist); interpreter 3.13.18
+
+mutant: backslash outside code span disabled
+  replace 'if "\\\\" in low:' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_backslash, test_input_restriction_samples, test_output_shape, test_refused_samples)
+  fix restored: PASS (27 tests)
+
+mutant: backslash checked on the unmasked line
+  replace 'if "\\\\" in low:' -> 'if "\\\\" in line:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_backslash, test_input_restriction_samples)
+  fix restored: PASS (27 tests)
+
+mutant: link syntax '](' disabled
+  replace 'if "](" in low or "]:" in low:' -> 'if "]:" in low:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_link_paren, test_output_shape, test_round3_rereview_reproducers)
+  fix restored: PASS (27 tests)
+
+mutant: link syntax ']:' disabled
+  replace 'if "](" in low or "]:" in low:' -> 'if "](" in low:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_link_colon)
+  fix restored: PASS (27 tests)
+
+mutant: link syntax checked on the unmasked line
+  replace 'if "](" in low or "]:" in low:' -> 'if "](" in line or "]:" in line:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_link_colon, test_link_paren)
+  fix restored: PASS (27 tests)
+
+mutant: indented line: space start disabled
+  replace 'raw[:1] in (" ", "\\t")' -> 'raw[:1] in ("\\t",)'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_indented_fence_lines, test_line_starts, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+mutant: indented line: tab start disabled
+  replace 'raw[:1] in (" ", "\\t")' -> 'raw[:1] in (" ",)'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_line_starts)
+  fix restored: PASS (27 tests)
+
+mutant: indented line: blank-line exemption dropped
+  replace ' and raw.strip(" \\t"):' -> ':'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_admitted_forms, test_line_starts)
+  fix restored: PASS (27 tests)
+
+mutant: indented line disabled
+  replace 'if raw[:1] in (" ", "\\t") and raw.strip(" \\t"):' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_indented_fence_lines, test_line_starts, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+mutant: block quote disabled
+  replace 'if raw[:1] == ">":' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_input_restriction_samples, test_line_starts, test_output_shape, test_round3_rereview_reproducers)
+  fix restored: PASS (27 tests)
+
+mutant: fence closing line not checked
+  replace 'fence = None\n                outside.append(line)' -> 'fence = None\n                outside.append("")'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_indented_fence_lines, test_refused_samples)
+  fix restored: PASS (27 tests)
+
+mutant: fence opening line not checked
+  replace '    outside.append(line)\n        m = _FENCE_OPEN' -> '    m = _FENCE_OPEN'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_angle_bracket, test_backslash, test_backtick_runs_one_to_four, test_generated_inputs, test_hit_has_its_refusal, test_indented_fence_lines, test_input_restriction_samples, test_line_starts, test_link_colon, test_link_paren, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_seeded_hit_in_a_real_file_is_found, test_unicode_version_independent)
+  fix restored: PASS (27 tests)

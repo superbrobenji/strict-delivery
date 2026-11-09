@@ -1,0 +1,30 @@
+F-B2FX2RR5-1: markdown placeholder: angle constructs whose extent the R2 next-'>' search misreads; fixed by the W1 whitelist kind 'angle bracket outside code span' (Q-B2FX2-1 (a), fix round 4)
+harness: mut.py; each mutant replaces one condition of tests/prose_check.placeholder_hits in memory, then runs tests.test_playbook PlaceholderTest, VerifierRoundTest and WhitelistTest (all but the whole-code-space sentences() tests and the getsource test); run on /usr/bin/python3 and /opt/homebrew/bin/python3.13
+
+F-B2FX2RR5-1 mutation transcript (fix round 4, W1 whitelist); interpreter 3.9.6
+
+mutant: angle bracket outside code span disabled
+  replace 'if "<" in low:' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_angle_bracket, test_generated_inputs, test_hit_has_its_refusal, test_input_restriction_samples, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_seeded_hit_in_a_real_file_is_found, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+mutant: angle bracket checked on the unmasked line (span masking dropped)
+  replace 'if "<" in low:' -> 'if "<" in line:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_accepted_samples, test_admitted_forms, test_angle_bracket, test_b_owned_markdown_has_no_placeholder, test_generated_inputs, test_input_restriction_samples, test_placeholder_span_html_class, test_real_b_owned_files_pass_the_restriction, test_refused_samples, test_round3_rereview_reproducers, test_seeded_hit_in_a_real_file_is_found, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+F-B2FX2RR5-1 mutation transcript (fix round 4, W1 whitelist); interpreter 3.13.18
+
+mutant: angle bracket outside code span disabled
+  replace 'if "<" in low:' -> 'if False:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_angle_bracket, test_generated_inputs, test_hit_has_its_refusal, test_input_restriction_samples, test_output_shape, test_placeholder_span_html_class, test_refused_samples, test_round3_fail_closed_notes, test_round3_rereview_reproducers, test_seeded_hit_in_a_real_file_is_found, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
+
+mutant: angle bracket checked on the unmasked line (span masking dropped)
+  replace 'if "<" in low:' -> 'if "<" in line:'
+  fix present: PASS (27 tests)
+  fix reverted: FAIL (27 tests; killed by test_accepted_samples, test_admitted_forms, test_angle_bracket, test_b_owned_markdown_has_no_placeholder, test_generated_inputs, test_input_restriction_samples, test_placeholder_span_html_class, test_real_b_owned_files_pass_the_restriction, test_refused_samples, test_round3_rereview_reproducers, test_seeded_hit_in_a_real_file_is_found, test_unicode_version_independent)
+  fix restored: PASS (27 tests)
