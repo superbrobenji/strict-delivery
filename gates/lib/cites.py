@@ -8,6 +8,7 @@ from __future__ import annotations
 import bisect
 import posixpath
 import re
+import weakref
 from dataclasses import dataclass
 from typing import Callable, Iterator, List, Optional, Tuple
 
@@ -91,7 +92,6 @@ _HEX = re.compile(r"[0-9a-f]{7,40}")
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _PERCENT = re.compile(r"%([0-9A-Fa-f]{2})")
 _ATX = re.compile(r"(#{1,6}) (.*)")
-_CLOSING = re.compile(r"[ \t]+#+\Z")
 
 
 def _lines(text: str) -> Iterator[Tuple[int, str, bool]]:
@@ -115,14 +115,18 @@ def _lines(text: str) -> Iterator[Tuple[int, str, bool]]:
 def _spans(line: str) -> List[Tuple[int, int, int]]:
     """Code spans as CommonMark finds them within the line: (start of opener, end of closer, run length)."""
     runs = [(m.start(), m.end() - m.start()) for m in re.finditer(r"`+", line)]
+    following: List[Optional[int]] = [None] * len(runs)     # index of the next run of the same length, one pass (F-V1)
+    last: dict = {}
+    for k in range(len(runs) - 1, -1, -1):
+        following[k] = last.get(runs[k][1])
+        last[runs[k][1]] = k
     spans = []
     i = 0
     while i < len(runs):
-        for j in range(i + 1, len(runs)):
-            if runs[j][1] == runs[i][1]:
-                spans.append((runs[i][0], runs[j][0] + runs[j][1], runs[i][1]))
-                i = j
-                break
+        j = following[i]
+        if j is not None:
+            spans.append((runs[i][0], runs[j][0] + runs[j][1], runs[i][1]))
+            i = j
         i += 1
     return spans
 
@@ -146,71 +150,116 @@ def _decode_percent(part: str) -> str:
         return part
 
 
-def _destination(line: str, pos: int) -> Optional[Tuple[str, int]]:
-    """Parse ``destination [title] )`` from pos (just after ``](``): (destination, index after ``)``) or None."""
+_BRACKET = re.compile(r"[\[\]]")
+_BLANKS = re.compile(r"[ \t]*")
+_BREAK = re.compile(r"[\x00- \x7f]")
+_UNESCAPED = re.compile(r"(?<!\\)(?:\\\\)*([()\"'])")   # a ( ) " or ' after an even run of backslashes
+
+
+def _openers(masked: str, closes: List[int]) -> List[Optional[int]]:
+    """For each ``]`` index in closes (ascending): the ``[`` that balances it (brackets counted, escapes not decoded);
+    failing that, the nearest ``[`` before it; None when there is no ``[`` before it. One pass over the brackets
+    (F-V1): with level(i) the count of ``[`` minus the count of ``]`` in masked[:i], the balancing ``[`` is the last
+    i before close with level(i) == level(close) - 1, the first place a backward bracket count reaches 0."""
+    result: List[Optional[int]] = []
+    last_at: dict = {}
+    last_open = None
+    level = 0
+    q = 0
+    for m in _BRACKET.finditer(masked):
+        i = m.start()
+        if q < len(closes) and closes[q] == i:
+            j = last_at.get(level - 1)
+            result.append(j if j is not None else last_open)
+            q += 1
+        last_at[level] = i
+        if masked[i] == "[":
+            level += 1
+            last_open = i
+        else:
+            level -= 1
+    return result
+
+
+def _destinations(line: str, starts: List[int]) -> List[Optional[Tuple[int, int]]]:
+    """For each start (ascending, the index just after a ``](``), parse ``destination [title] )`` from it:
+    (begin, end) of the destination in line, or None. Per-line tables make each parse O(1) amortised (F-V1).
+
+    A backslash keeps the next character out of the parenthesis depth of a bare destination and from closing a
+    title. A destination or title never starts right after a backslash (it follows ``(``, a space, a tab or a
+    quote), so whether a character there is escaped is a property of the line alone: it is escaped when the run of
+    backslashes right before it is odd."""
     n = len(line)
-    while pos < n and line[pos] in " \t":
-        pos += 1
-    if pos < n and line[pos] == "<":
-        close = line.find(">", pos + 1)
-        if close < 0:
-            return None
-        dest = line[pos + 1:close]
-        if "<" in dest:
-            return None
-        pos = close + 1
-    else:
-        depth = 0
-        begin = pos
-        while pos < n:
-            c = line[pos]
-            if c <= " " or c == "\x7f":
-                break
-            if c == "\\" and pos + 1 < n and line[pos + 1] > " " and line[pos + 1] != "\x7f":
-                pos += 2                            # a backslash is literal; it keeps the next character out of the depth count
+    blank_end: dict = {}
+
+    def skip(p: int) -> int:
+        e = blank_end.get(p)
+        if e is None:
+            e = blank_end[p] = _BLANKS.match(line, p).end()
+        return e
+
+    closers: dict = {")": [], "\"": [], "'": []}
+    parens: List[int] = []
+    for m in _UNESCAPED.finditer(line):
+        p = m.start(1)
+        if line[p] != "(":
+            closers[line[p]].append(p)
+        if line[p] in "()":
+            parens.append(p)
+    breaks = [m.start() for m in _BREAK.finditer(line)]
+    gts = [m.start() for m in re.finditer(">", line)]
+    lts = [m.start() for m in re.finditer("<", line)]
+    begins = [skip(p) for p in starts]
+    # Bare destination: it runs to the first break character or to the first unescaped ")" at depth 0, that is the
+    # first ")" at or after begin whose depth before it (count of "(" minus ")" before it) equals the depth at begin.
+    depth_before = []
+    depth = 0
+    for p in parens:
+        depth_before.append(depth)
+        depth += 1 if line[p] == "(" else -1
+    first_close: dict = {}
+    drop: dict = {}
+    order = sorted(range(len(begins)), key=lambda t: begins[t], reverse=True)
+    k = len(parens)
+    for t in order:
+        b = begins[t]
+        while k > 0 and parens[k - 1] >= b:
+            k -= 1
+            if line[parens[k]] == ")":
+                first_close[depth_before[k]] = parens[k]
+        drop[b] = first_close.get(depth_before[k] if k < len(parens) else depth)
+    result: List[Optional[Tuple[int, int]]] = []
+    for b in begins:
+        result.append(None)
+        if b < n and line[b] == "<":
+            g = bisect.bisect_left(gts, b + 1)
+            if g == len(gts):
                 continue
-            if c == "(":
-                depth += 1
-            elif c == ")":
-                if depth == 0:
-                    break
-                depth -= 1
-            pos += 1
-        dest = line[begin:pos]
-    gap = pos
-    while pos < n and line[pos] in " \t":
-        pos += 1
-    gap = pos - gap
-    if pos < n and line[pos] == ")":
-        return dest, pos + 1
-    if gap == 0 or pos >= n or line[pos] not in "\"'(":
-        return None
-    closer = ")" if line[pos] == "(" else line[pos]
-    end = pos + 1
-    while end < n and line[end] != closer:
-        end += 2 if line[end] == "\\" else 1       # a backslash is literal; it keeps the next character from closing
-    if end >= n:
-        return None
-    pos = end + 1
-    while pos < n and line[pos] in " \t":
-        pos += 1
-    if pos < n and line[pos] == ")":
-        return dest, pos + 1
-    return None
-
-
-def _link_opener(masked: str, close: int) -> Optional[int]:
-    """Index of the ``[`` that balances the ``]`` at close (brackets counted, escapes not decoded); failing that,
-    the nearest ``[`` before it. None when there is no ``[``."""
-    depth = 1
-    for i in range(close - 1, -1, -1):
-        if masked[i] == "]":
-            depth += 1
-        elif masked[i] == "[":
-            depth -= 1
-            if depth == 0:
-                return i
-    return masked.rfind("[", 0, close) if "[" in masked[:close] else None
+            close = gts[g]
+            j = bisect.bisect_left(lts, b + 1)
+            if j < len(lts) and lts[j] < close:
+                continue
+            begin, end, pos = b + 1, close, close + 1
+        else:
+            j = bisect.bisect_left(breaks, b)
+            stop = breaks[j] if j < len(breaks) else n
+            d = drop[b]
+            begin, end = b, d if d is not None and d < stop else stop
+            pos = end
+        after = skip(pos)
+        if after < n and line[after] == ")":
+            result[-1] = (begin, end)
+            continue
+        if after == pos or after >= n or line[after] not in "\"'(":
+            continue
+        listed = closers[")" if line[after] == "(" else line[after]]
+        j = bisect.bisect_left(listed, after + 1)
+        if j == len(listed):
+            continue
+        pos = skip(listed[j] + 1)
+        if pos < n and line[pos] == ")":
+            result[-1] = (begin, end)
+    return result
 
 
 def _resolve(doc: str, dest: str) -> Optional[Tuple[str, str]]:
@@ -266,21 +315,38 @@ def extract(doc: str, text: str) -> list:
                 c = Cite(doc, number, tok, path, _number(m.group("start")), None if end is None else _number(end), None)
             found.append((s, c))
         masked_line = "".join(masked)
-        for m in re.finditer(r"\]\(", masked_line):
-            opener = _link_opener(masked_line, m.start())
+        closes = [m.start() for m in re.finditer(r"\]\(", masked_line)]
+        links = []
+        for close, opener in zip(closes, _openers(masked_line, closes)):
             if opener is None or (opener > 0 and masked_line[opener - 1] == "!" and masked_line[opener - 2:opener - 1] != "\\"):
                 continue
-            parsed = _destination(line, m.end())
+            links.append(close)
+        hashes = [m.start() for m in re.finditer("#", line)] if links else []
+        for close, parsed in zip(links, _destinations(line, [c + 2 for c in links])):
             if parsed is None:
                 continue
-            dest = parsed[0]
+            begin, end = parsed
+            # No slice of line before the destination is known to be a cite: destinations of many links can overlap.
+            h = bisect.bisect_left(hashes, begin)
+            if h == len(hashes) or hashes[h] >= end or _SCHEME.match(line, begin, end):
+                continue
+            dest = line[begin:end]
             resolved = _resolve(doc, dest)
             if resolved is None:
                 continue
-            found.append((m.start(),Cite(doc, number, dest, resolved[0], None, None, resolved[1])))
+            found.append((close, Cite(doc, number, dest, resolved[0], None, None, resolved[1])))
         found.sort(key=lambda t: t[0])
         cites.extend(c for _, c in found)
     return cites
+
+
+def _strip_closing(content: str) -> str:
+    """content without a closing sequence: the trailing run of ``#`` and the spaces or tabs before it, when that run
+    has at least one space or tab before it (the regex ``[ \\t]+#+\\Z``, without its backtracking over the run)."""
+    head = content.rstrip("#")
+    if len(head) < len(content) and head[-1:] in (" ", "\t"):
+        return head.rstrip(" \t")
+    return content
 
 
 def anchors(text: str) -> frozenset:
@@ -292,13 +358,34 @@ def anchors(text: str) -> frozenset:
         m = _ATX.fullmatch(line)
         if not m:
             continue
-        content = _CLOSING.sub("", m.group(2).strip(" \t"))
-        slugs.append(slugify(content))
+        slugs.append(slugify(_strip_closing(m.group(2).strip(" \t"))))
     return frozenset(number_repeats(slugs))
 
 
 def _line_count(text: str) -> int:
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+
+
+def _not_utf8(text: str) -> bool:
+    return re.search("[\udc80-\udcff]", text) is not None
+
+
+_FACTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _fact(read: Callable, text: str, compute: Callable[[str], object]) -> object:
+    """compute(text), computed once per target text while the reader that returned it lives, so K cites to one
+    target cost O(K + T), not O(K x T) (F-V1). A reader that cannot be weakly referenced gets no cache."""
+    try:
+        per_read = _FACTS.get(read)
+        if per_read is None:
+            per_read = _FACTS[read] = {}
+    except TypeError:
+        return compute(text)
+    key = (compute, text)
+    if key not in per_read:
+        per_read[key] = compute(text)
+    return per_read[key]
 
 
 def _outside(path: str) -> bool:
@@ -318,14 +405,14 @@ def problem(cite: Cite, tracked: frozenset, read: Callable[[str], Optional[str]]
     text = read(p)
     if text is None:
         return "%s: tracked but missing from the working tree" % p
-    if re.search("[\udc80-\udcff]", text):
+    if _fact(read, text, _not_utf8):
         return "%s: not UTF-8" % p
     if cite.anchor is not None:
         if not p.endswith(".md"):
             return "%s: anchor on a non-markdown file" % p
         if cite.anchor == "":
             return "%s: empty anchor" % p
-        if cite.anchor not in anchors(text):
+        if cite.anchor not in _fact(read, text, anchors):
             return "%s: no heading with anchor #%s" % (p, cite.anchor)
         return ""
     m = _BACKTICK_CITE.fullmatch(cite.token[1:-1])
@@ -337,7 +424,7 @@ def problem(cite: Cite, tracked: frozenset, read: Callable[[str], Optional[str]]
     start_text, end_text = (texts + [None])[:2] if texts else ("%d" % cite.start, None if cite.end is None else "%d" % cite.end)
     if cite.end is not None and cite.end < cite.start:
         return "%s: range end %s is before start %s" % (p, end_text, start_text)
-    count = _line_count(text)
+    count = _fact(read, text, _line_count)
     if cite.start > count:
         return "%s: line %s is past the end (%d lines)" % (p, start_text, count)
     if cite.end is not None and cite.end > count:
