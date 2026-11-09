@@ -1094,7 +1094,7 @@ class FrontMatterTest(unittest.TestCase):
 
     def test_b_owned_front_matter_files(self):        # Y8: the files the check runs on; not vacuous
         with_fm = [rel for rel in b_owned_markdown() if read(rel).split("\n", 1)[0] == "---"]
-        self.assertEqual(with_fm, [])   # Task B2.3 adds skills/strict-delivery/SKILL.md
+        self.assertEqual(with_fm, ["skills/strict-delivery/SKILL.md"])   # Task B2.3
         for rel in with_fm:
             pc.front_matter(read(rel))
 

@@ -1541,7 +1541,7 @@ EXACT_PARAGRAPHS = {
         )),
         ("Zero bugs.", (
             "Zero bugs.",
-            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, never deferred.",
+            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred.",
             "An unrelated bug gets a register row and an owner.",
             "A deleted test is restored and fixed; dropping a test is never offered as a fix.",
         )),
@@ -2016,6 +2016,134 @@ class B13KeyTest(unittest.TestCase):
                 sent = [s for l, s in SINGLE_SENTENCES[role] if l == "Owner-only decisions."][0]
                 bad = in_para(disk(role), "Owner-only decisions.", lambda p: p.replace(sent, sent.replace(c, "`zzz`", 1), 1))
                 self.assertTrue(key_problems(role, bad), (role, c))
+
+
+# Task B2.3: the session-resume sentences (plan Task B2.3 Produces, "Prompt blocks"; spec section 7.1, 8), written out.
+OWNER_RECOMMENDED = ("Mark one option recommended, except in the `model-policy` class, and name the report the question "
+                     "came from.")
+HANDOFF_ANCHOR = "Write the ledger and the handoff at every checkpoint, before the next dispatch."
+HANDOFF_COMPLETE = ("Never state that a handoff is complete without pasting the `git status --porcelain "
+                    "--untracked-files=all` output, the handoff field check and the background-job check.")
+CTRL_BACKGROUND = ("Before you ledger a child's result, list its background job ids from its transcript: each has a "
+                   "completion record, or you stop it with TaskStop and ledger the stop; a notice that a child is "
+                   "waiting on its own background work leaves its task open.")
+WORKER_BACKGROUND = ("A poll loop has a bounded timeout and never matches its own command line; a job you no longer need "
+                     "is stopped with TaskStop, not by pattern-killing processes; the report lists each background id "
+                     "as finished or stopped.")
+CONTINUATION = (   # controller "Continuation." unchanged (session-resume design 3.9)
+    "Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner "
+    "question. One block runs per agent context, at most `block.max_tasks` tasks, with a clean worktree at every "
+    "checkpoint. When you reach a checkpoint, 80 % of your token or time budget, or a usage-limit stop, write your "
+    "handoff and return. When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same "
+    "role with a continue prompt built from the handoff, the ledger and the status page. Nothing continues from "
+    "inherited memory, and the owner never clears the session and re-prompts.")
+RESUME_PINS = ((("controller", "Merge and checkpoint.", "handoff is complete"),)
+               + tuple((r, "Background work.", "TaskStop") for r in WRITTEN)
+               + tuple((r, "Owner-only decisions.", "recommended") for r in WRITTEN))
+ZERO_BUGS_TAIL = "in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred."  # DN-4 (a)
+
+
+def resume_sentences(role):
+    """(label, sentence, where) for the B2.3 additions of one block; where is 'last' or the anchor it follows."""
+    out = [("Owner-only decisions.", OWNER_RECOMMENDED, "last")]
+    if role == "controller":
+        out += [("Merge and checkpoint.", HANDOFF_COMPLETE, HANDOFF_ANCHOR), ("Background work.", CTRL_BACKGROUND, "last")]
+    else:
+        out.append(("Background work.", WORKER_BACKGROUND, "last"))
+    return out
+
+
+def resume_problems(role, text):
+    out = []
+    for role_, label, token in RESUME_PINS:
+        if role_ != role:
+            continue
+        try:
+            if not whole_token(token, paragraph(text, label)):
+                out.append("%s lacks %r" % (label, token))
+        except ValueError:
+            out.append("%s is missing" % label)
+    for label, sentence, where in resume_sentences(role):
+        try:
+            p = paragraph(text, label)
+        except ValueError:
+            out.append("%s is missing" % label)
+            continue
+        ok = p.endswith(" " + sentence) if where == "last" else (where + " " + sentence) in p
+        if p.count(sentence) != 1 or not ok:
+            out.append("%s: %r not in place" % (label, sentence[:40]))
+    return out
+
+
+class SessionResumeTest(unittest.TestCase):
+    def test_session_resume_phrases(self):                       # PT1, PB1-PB6: whole tokens in the named paragraph
+        for role in WRITTEN:
+            with self.subTest(role=role):
+                self.assertEqual(resume_problems(role, disk(role)), [])
+
+    def test_resume_pins_refuse_absent_moved_joined(self):       # PT1, PT2
+        for role, label, token in RESUME_PINS:
+            t = disk(role)
+            dest = "Budget."
+            sentence = [s for l, s, _ in resume_sentences(role) if l == label][0]
+            for name, bad in (("absent", in_para(t, label, lambda p: p.replace(token, "zzz"))),
+                              ("moved", other_para(t, label, token, dest)),
+                              ("joined", in_para(t, label, lambda p: p.replace(token, "x" + token))),
+                              ("sentence deleted", in_para(t, label, lambda p: p.replace(" " + sentence, "")))):
+                with self.subTest(role=role, label=label, case=name):
+                    self.assertTrue(resume_problems(role, bad))
+
+    def test_resume_sentences_in_place(self):                    # PB2, PB4: appended last; handoff after its anchor
+        for role in WRITTEN:
+            t = disk(role)
+            for label, sentence, where in resume_sentences(role):
+                with self.subTest(role=role, label=label, case="moved first"):
+                    bad = in_para(t, label, lambda p: p.replace(" " + sentence, "").replace(label, label + " " + sentence, 1))
+                    self.assertTrue(resume_problems(role, bad))
+                with self.subTest(role=role, label=label, case="glued"):
+                    bad = in_para(t, label, lambda p: p.replace(" " + sentence, sentence))
+                    self.assertTrue(resume_problems(role, bad) or key_problems(role, bad))
+        t = disk("controller")
+        bad = in_para(t, "Merge and checkpoint.", lambda p: p.replace(" " + HANDOFF_COMPLETE, "") + " " + HANDOFF_COMPLETE)
+        self.assertTrue(resume_problems("controller", bad))
+
+    def test_resume_sentences_keep_b1_rules(self):               # PB5, PB6, PB8, PB9, PB10
+        pat = re.compile(r"\b(hardware|devices?|flash\w*|serial|ports?)\b", re.I)
+        for s in (OWNER_RECOMMENDED, HANDOFF_COMPLETE, CTRL_BACKGROUND, WORKER_BACKGROUND):
+            self.assertEqual(forbidden_hits(s), [], s)
+            self.assertEqual(pat.findall(s), [], s)
+            s.encode("ascii")
+        for role in WRITTEN:
+            with self.subTest(role=role):
+                t = disk(role)
+                self.assertEqual(block_problems(t.encode("ascii"), role), [])
+                self.assertEqual(key_problems(role, t), [])
+                bg = paragraph(t, "Background work.")
+                self.assertTrue(bg.startswith("Background work. A job you start in the background is yours until it "
+                                              "exits: before you report, every one has finished or been killed,"), role)
+        self.assertEqual(paragraph(disk("controller"), "Continuation."), CONTINUATION)       # PB7
+
+    def test_continuation_unchanged_refuses_edits(self):         # PB7
+        t = disk("controller")
+        for new in (" Never state that a handoff is complete.", " Stop jobs with TaskStop."):
+            bad = in_para(t, "Continuation.", lambda p: p + new)
+            self.assertNotEqual(paragraph(bad, "Continuation."), CONTINUATION)
+
+    def test_zero_bugs_low_plateau_sentence(self):               # ZB1, ZB2 (owner DN-4 (a))
+        from tests.test_playbook import b_owned_markdown
+        p = paragraph(disk("controller"), "Zero bugs.")
+        pinned = dict(EXACT_PARAGRAPHS["controller"])["Zero bugs."][1]   # the one exact pin (line 1544 area)
+        self.assertTrue(pinned.endswith(" " + ZERO_BUGS_TAIL), pinned)
+        self.assertEqual(p.count(pinned), 1)
+        self.assertNotIn("fix round, never deferred", p)
+        bad = in_para(disk("controller"), "Zero bugs.", lambda q: q.replace(ZERO_BUGS_TAIL, "in the fix round, never deferred.", 1))
+        self.assertTrue(key_problems("controller", bad))
+        with_copy = []
+        for rel in b_owned_markdown():
+            with open(os.path.join(pc.REPO_ROOT, rel), "rb") as f:
+                if b"minors are fixed" in f.read():
+                    with_copy.append(rel)
+        self.assertEqual(with_copy, ["%s/controller.md" % PROMPTS_DIR])
 
 
 if __name__ == "__main__":
