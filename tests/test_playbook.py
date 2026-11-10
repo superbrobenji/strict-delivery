@@ -1080,6 +1080,77 @@ class PlaceholderTest(unittest.TestCase):
             pc.placeholder_hits(b"<n>")
 
 
+class SpanPositionTest(unittest.TestCase):                   # verifier v11 F-1, F-2: rows S-a..S-e, PC1-a, PC1-b
+    """Every per-span loop must see every code span, not only the first (prose_check.py _mask_spans,
+    _info_refusals, _unpaired_runs and the table-row loop). Expected values are written by hand."""
+    def check(self, cases):
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_table_row_pipe_span_after_the_first(self):      # S-a (F-1)
+        self.check([
+            ("| a | b |\n|---|---|\n| `x` | `<b>|` |", [(3, R3)]),                  # the reproducer: 2nd span, body row
+            ("| a | `x` | `a|b` |\n|---|---|---|\n", [(1, R3)]),                     # header row, 3rd (last) span
+            ("| `x` | `y` | `a|b` |\n|---|---|---|\n", [(1, R3)]),                   # 3rd of three
+            ("| `x` | `a|b` | `y` |\n|---|---|---|\n", [(1, R3)]),                   # middle of three
+            ("| `x` | `y` |\n|---|---|\n| `x` | `a|b` | `y` | `z` |", [(3, R3)]),    # body row, 2nd of four
+            ("a | `x` | `a|b`\n---|---|---\n", [(1, R3)]),                           # no leading pipe, header
+            ("a | b\n---|---\n`x` | `<b>|`", [(3, R3)]),                             # no leading pipe, body, last span
+            ("a | b\n---|---\n`x` | `y` | `z` | `a|b`", [(3, R3)]),                  # no leading pipe, 4th
+            ("| a |\n| `x` `|` |\n|---|", [(2, R3)]),                                # pipe span right after a span
+            ("| a |\n|---|\n| `x` | `a|b` |\n| `y` | `c|d` |", [(3, R3), (4, R3)]),   # two rows
+        ])
+
+    def test_tilde_info_string_pipe_span_after_the_first(self):    # S-b (F-2)
+        self.check([
+            ("~~~ `x` `a|b`\ny\n~~~\n", [(1, R3)]),
+            ("~~~ `x` `y` `a|b`\ny\n~~~\n", [(1, R3)]),
+            ("~~~ `x` `a|b` `y`\ny\n~~~\n", [(1, R3)]),
+            ("~~~~ a `x` b `c` d `e|f` g\ny\n~~~~\n", [(1, R3)]),
+        ])
+
+    def test_unpaired_run_after_spans(self):                  # S-c (R1)
+        self.check([
+            ("`a` `b` `\n", [(1, R1)]),
+            ("`a` x ``\n", [(1, R1)]),
+            ("`a` `b` `c` `\n", [(1, R1)]),
+            ("~~~ `a` `b` `\ny\n~~~\n", [(1, R1)]),
+            ("`a` `b`\n", []),            # controls: every run paired, no refusal for a span after the first
+            ("`a` `b` `c`\n", []),
+            ("`a` x ``b`` y\n", []),
+        ])
+
+    def test_mask_covers_every_span(self):                    # S-d
+        self.check([
+            ("`a` `<b>`\n", []),
+            ("`a` `b` `<c>`\n", []),
+            ("`a` `b` `c` `<d>`\n", []),
+            ("`a` `www.x` `b` `\\c`\n", []),
+            ("`a` <b>\n", [(1, "<b>"), (1, RA)]),     # control: the '<' outside a span is still found
+        ])
+
+    def test_controls_without_the_pipe_in_a_span(self):      # S-e
+        self.check([
+            ("| a | b |\n|---|---|\n| `x` | `y` |", []),
+            ("| `x` | `y` | `z` |\n|---|---|---|\n", []),
+            ("`x` `y` a|b\n", []),                                  # pipe outside every span, not a table row
+            ("`x` | `y` | `z`\n", []),                              # no delimiter run, no leading pipe: not a row
+            ("~~~ `x` `y` a|b\ny\n~~~\n", []),                      # pipe outside the spans
+            ("`x` `a|b`\n", []),                                    # pipe span on a non-table line
+        ])
+
+    def test_long_digit_run_in_a_later_span(self):           # PC1-a: 4301 digits, same on 3.9 and 3.13
+        digits = "1" * 4301
+        self.check([
+            ("| `x` | `%s|` |\n" % digits, [(1, R3)]),
+            ("~~~ `x` `%s|`\ny\n~~~\n" % digits, [(1, R3)]),
+        ])
+
+    def test_non_ascii_gives_only_the_character_refusal(self):    # PC1-b
+        self.check([("| `x` | `a|b%s` |\n" % chr(0xe9), [(1, RC)])])
+
+
 # Row Y samples. GOOD_FM's expected dict is written here, not parsed back.
 GOOD_FM = "---\nname: strict-delivery\ndescription: \"Use at the start: paths \\\"q\\\" and \\\\ b\"\n---\n# Body\n"
 GOOD_FM_DICT = {"name": "strict-delivery", "description": "Use at the start: paths \"q\" and \\ b"}
