@@ -627,6 +627,18 @@ def _list_block_start(line):
     return content[0] in "-*_" and not content.replace(content[0], "").strip(" ") and content.count(content[0]) >= 3
 
 
+def _bracket_start(line):
+    """True when the line's content starts with '[' (fix round 8, owner Q-B2F1-1 (a), F-1, U-1). The content is the
+    text after every column-0 list marker (_LIST_MARKER, the marker reading of _list_block_start) and all the spaces
+    after each, or the whole line when it has no marker."""
+    content = line
+    m = _LIST_MARKER.match(content)
+    while m:
+        content = content[m.end():].lstrip(" ")
+        m = _LIST_MARKER.match(content)
+    return content[:1] == "["
+
+
 def _info_refusals(info, tilde):
     """REFUSED_KINDS indexes for a fence opener's info string (fix round 6, D-v8-1, D1), checked RAW: an info string
     parses no code spans, so nothing is masked. '<', '\\', '](' or ']:', and 'www.' (any case) or '://' are refused
@@ -699,10 +711,13 @@ def placeholder_hits(text):
     only (line_no, "refused: character outside whitelist") for each LF-counted line holding one, in line order, and
     no hit. So LF is the one line ending and space the one whitespace character inside a line. Then every line
     outside a fenced block (front matter included) is refused when it holds, outside every per-line code span, a '<'
-    ("angle bracket outside code span"), a '\\' ("backslash outside code span"), the sequence '](' or ']:' ("link
-    syntax"), or 'www.' (any case) or '://' ("extended autolink": a GFM www or URL autolink runs on to the next space
-    or '<' and can take a span's backtick); a line outside a fenced block or opening or closing one is refused when
-    it is non-blank and starts with a space ("indented line") or starts with '>' ("block quote"); R1 "multi-line code
+    ("angle bracket outside code span"), a '\\' ("backslash outside code span"), or 'www.' (any case) or '://'
+    ("extended autolink": a GFM www or URL autolink runs on to the next space or '<' and can take a span's
+    backtick); fix round 8 (owner Q-B2F1-1 (a), F-1, U-1): every line outside a fenced block is refused as "link
+    syntax" when it holds the sequence '](' or ']:' anywhere, code spans included (checked on the raw line), or when
+    its content, the text after every list marker and the spaces after each or the whole line without one, starts
+    with '[' (_bracket_start), reported once per line; a line outside a fenced block or opening or closing one is
+    refused when it is non-blank and starts with a space ("indented line") or starts with '>' ("block quote"); R1 "multi-line code
     span", a backtick run its own line leaves unpaired; R3 "pipe in table-row code span", a code span holding '|' on
     a table-row line (_table_row_lines). A fence opener's info string (the text after its fence marker) is checked RAW,
     with no span masking, on the opener's line (_info_refusals; fix round 6, D-v8-1): '<', '\\', '](' or ']:', and
@@ -713,12 +728,15 @@ def placeholder_hits(text):
     follow it, starts a block: a backtick or tilde run of 3 or more, '#', '>', '|', '<', another list marker, 5 or
     more spaces before non-blank content, or a thematic break (_list_block_start). The line keeps its other
     refusals, and no fence opens on it. A block quote is refused as a line start, and footnote and reference
-    definitions by "link syntax", so a list item is the one container left. With these refused, a line holds only
-    text, code spans, emphasis, entities, email autolinks (no backtick can be part of one) and inert brackets, and
-    the block forms left are column-0 paragraphs, headings, thematic breaks, column-0 list items whose content holds
-    no block start, tables and column-0 fences, so no construct can take
-    a backtick from a per-line span or hide text the per-line masking keeps. A hit is an _HTML match on the masked
-    text, so its line always carries an "angle bracket outside code span" refusal too."""
+    definitions by "link syntax", because '](' and ']:' are checked on the raw line and a '[' content start is
+    refused (before round 8 a backtick in the label could mask the ']:'), so a list item is the one container left.
+    The dimension closed is the block-level constructs whose marker a per-line code span could mask: the fence info
+    string (round 6), the table row (R3, raw spans), the list item (round 7) and the definition (round 8). With these
+    refused, a line holds only text, code spans, emphasis, entities, email autolinks (no backtick can be part of one)
+    and inert brackets, and the block forms left are column-0 paragraphs, headings, thematic breaks, column-0 list
+    items whose content holds no block start, tables and column-0 fences, none whose content starts with '[', so no
+    construct can take a backtick from a per-line span or hide text the per-line masking keeps. A hit is an _HTML
+    match on the masked text, so its line always carries an "angle bracket outside code span" refusal too."""
     _need_str(text, "placeholder_hits")
     bad = char_refusals(text)
     if bad:
@@ -753,7 +771,7 @@ def placeholder_hits(text):
             refused.append((n, 1))
         if "\\" in low:
             refused.append((n, 2))
-        if "](" in low or "]:" in low:
+        if "](" in line or "]:" in line or _bracket_start(line):    # fix round 8: raw line, spans included
             refused.append((n, 3))
         if raw[:1] == " " and raw.strip(" "):       # in the whitelist, space is the one whitespace character
             refused.append((n, 4))

@@ -1766,7 +1766,7 @@ W_FAIL_CLOSED = [   # the round 3 fail-closed notes: each is now a named refusal
 W_ADMITTED = [   # W-h: the block forms the whitelist leaves, each with a code span holding '<'
     "a `<x>` b\n", "# h `<x>`\n", "## h\n", "a\n---\n", "a\n===\n", "***\n", "---\n", "- a `<x>`\n", "1. a `<x>`\n",
     "| a | `<x>` |\n|---|---|\n| b | c |\n", "```\n<x>\n```\n", "~~~\n<x>\n~~~\n",
-    "---\nname: x\ndescription: y `<z>`\n---\n# Body\n", "a > b\n", "a ] (b)\n", "a ]x( b\n", "[a] (b)\n",
+    "---\nname: x\ndescription: y `<z>`\n---\n# Body\n", "a > b\n", "a ] (b)\n", "a ]x( b\n", "x [a] (b)\n",   # round 8: was "[a] (b)"
     "a\n   \nb\n",
 ]
 W_BLANK_AND_FENCED = ["```\n x\n```\n", "```\n> x\n```\n", "~~~\n    <x> \\ ](a) ]: b\n~~~\n"]
@@ -1884,7 +1884,8 @@ class VerifierRoundTest(unittest.TestCase):
         for fn in (pc.placeholder_hits, pc._unpaired_runs, pc._table_row_lines, pc.rules_problems, sentences,
                    pc.char_refusals, pc._refuse_chars, pc.forbidden_hits, pc.labels, pc.paragraph, pc.section,
                    pc.first_table_header, pc.table_rows, pc.front_matter, pc.block_problems,    # + round 5's helpers
-                   pc._info_refusals, pc._list_block_start):                    # + round 6's and round 7's helpers
+                   pc._info_refusals, pc._list_block_start,                     # + round 6's and round 7's helpers
+                   pc._bracket_start):                                          # + round 8's helper
             self.assertNotIn("ExceptionGroup", inspect.getsource(fn))
             self.assertNotIn("except*", inspect.getsource(fn))
 
@@ -1902,8 +1903,8 @@ class WhitelistTest(unittest.TestCase):                             # W1-W5, fix
                     self.assertEqual(pc.placeholder_hits(fenced % text), [])
         for span in ("`%s`", "x `a %s b` y", "``%s``", "| `%s` |", "- `%s`", "# `%s` h"):
             text = span % form + "\n"
-            with self.subTest(span=text):
-                self.assertEqual(pc.placeholder_hits(text), [])
+            with self.subTest(span=text):   # round 8 (Q-B2F1-1 (a), D-i): '](' and ']:' are checked raw, spans too
+                self.assertEqual(pc.placeholder_hits(text), [(1, kind)] if kind == RL else [])
         with self.subTest(second_line=form):
             self.assertEqual(pc.placeholder_hits("a\nb %s c\n" % form), [(2, kind)])
 
@@ -1920,7 +1921,7 @@ class WhitelistTest(unittest.TestCase):                             # W1-W5, fix
         self._form("]:", RL)
 
     def test_link_parts_apart_accepted(self):                      # W-b: ']' and '(' or ':' separated
-        for text in ("a ] (b)\n", "a ]x( b\n", "[a] (b)\n", "a ] : b\n", "a ]\n(b)\n", "a ]\n: b\n", "`a]`(b)\n"):
+        for text in ("a ] (b)\n", "a ]x( b\n", "x [a] (b)\n", "a ] : b\n", "a ]\n(b)\n", "a ]\n: b\n", "`a]`(b)\n"):
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), [])
 
@@ -2172,11 +2173,34 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
                   "non-blank content (an indented code block inside the item); and when it is a thematic break "
                   "(3 or more of one of `-`, `*` and `_`, with spaces between and nothing else)",
                   "the checker opens no fence on a list item line",
+                  # round 8 (D-h, E4): D5's definition claim corrected, the rule, and the closed dimension
                   "a block quote is refused as a line start (`block quote`), and footnote definitions and "
-                  "reference definitions are refused by `link syntax` (`]:`)",
-                  "column-0 list items whose content holds no block start, tables and column-0 fences"):
+                  "reference definitions are refused by `link syntax`, because `](` and `]:` are checked on the raw "
+                  "line and a `[` content start is refused",
+                  "fix round 8, owner answer Q-B2F1-1 (a), 2026-11-10: `](` and `]:` checked on the raw line and a "
+                  "`[` content start refused",
+                  "`link syntax` is checked on the raw line, before code-span masking: a line holding `](` or `]:` "
+                  "anywhere, code spans included, is refused, and so is a line whose content starts with `[`",
+                  "at every nesting depth, or the whole line when it has no marker; `link syntax` is reported once "
+                  "per line",
+                  "content beginning `[` is refused as `link syntax` from fix round 8",
+                  "The dimension closed is the block-level constructs whose marker a per-line code span could mask: "
+                  "the fence info string (fix round 6), the table row (R3, raw spans), the list item (fix round 7) "
+                  "and the definition (fix round 8)",
+                  "column-0 list items whose content holds no block start, tables and column-0 fences, none whose "
+                  "content starts with `[`"):
             self.assertIn(s, p)
         self.assertNotIn("thematic breaks, column-0 list items, tables", p)          # round 7: the old sentence
+        self.assertNotIn("are refused by `link syntax` (`]:`)", p)                   # round 8: the false claim
+        self.assertNotIn("code span are `](` and `]:` (`link syntax`)", p)           # round 8: masked check gone
+        self.assertNotIn("backticks, `[`, a letter", p)                              # round 8: `[` no longer accepted
+        doc = " ".join(pc.placeholder_hits.__doc__.split())                          # round 8 (E4): the docstring
+        for s in ("code spans included (checked on the raw line)", "starts with '[' (_bracket_start)",
+                  "definitions by \"link syntax\", because '](' and ']:' are checked on the raw line and a '[' "
+                  "content start is refused", "the definition (round 8)"):
+            self.assertIn(s, doc)
+        self.assertNotIn("outside every per-line code span, a '<' (\"angle bracket outside code span\"), a '\\' "
+                         "(\"backslash outside code span\"), the sequence", doc)
         self.assertIn(", ".join("`%s`" % k for k in pc.REFUSED_KINDS), p)
 
     def test_numeric_text_same_on_every_interpreter(self):           # PC1-a: a placeholder_hits row
@@ -2321,7 +2345,7 @@ N_Z1 = ["- ~~~ `<role>`", "1. ~~~ `www.x`", "- ~~~ `a|b`", "* ~~~ `<role>`", "+ 
         "- - ~~~ `<role>`"]
 N_CODE_AND_BREAK = ["-     code", "1.      x", "- ---", "- * * *", "* ___", "- - -", "+ _ _ _", "1. ***",
                     "- *  *  * ", "-      ~~~", "10)     x"]
-N_ACCEPTED = ["- plain", "- **bold** x", "- *em*", "- _em_", "- `code` x", "- ``a`` x", "- [x] y", "1. 2026 text",
+N_ACCEPTED = ["- plain", "- **bold** x", "- *em*", "- _em_", "- `code` x", "- ``a`` x", "1. 2026 text",
               "1.5 x", "-x", "---", "--- ", "***", "12345678901234567890. x\nplain", "- a # b", "- a | b",
               "- a ~~~ b", "-    code", "- --", "- ~~ x", "- ~~x~~", "- *x y", "- _x_", "- 1.5 x", "- 2026 text",
               "-", "- ", "-     ", "1.", "1)", "* x", "+ x", "1) x", "a - # b", "x\n- a\n- b\n\n1. c\n2. d"]
@@ -2348,9 +2372,9 @@ class ListItemBlockStartTest(unittest.TestCase):                    # fix round 
                 self.assertEqual(pc.placeholder_hits(line + "\n"), want)
 
     def test_z1_reproducers(self):                                   # N-c: each was [] at dfb6667
-        for line in N_Z1:
+        for line in N_Z1:   # round 8 (D-i): '](' in a span is now checked raw, so "1) ~~~ `a](b`" also earns RL
             with self.subTest(text=line):
-                self.assertEqual(pc.placeholder_hits(line + "\n"), [(1, RN)])
+                self.assertEqual(pc.placeholder_hits(line + "\n"), [(1, RL), (1, RN)] if "](" in line else [(1, RN)])
         self.assertEqual(pc.placeholder_hits("~~~ `<role>`\n~~~\n"), [(1, RA)])                 # the control
         self.assertEqual(pc.placeholder_hits("- ~~~ x\n<y>\n~~~\n"), [(1, RN), (2, "<y>"), (2, RA)])  # D4: no fence
         self.assertEqual(pc.placeholder_hits("- ``` x\n<y> `\n```\n"), [(1, R1), (1, RN), (2, "<y>"), (2, R1),
@@ -2413,6 +2437,90 @@ class ListItemBlockStartTest(unittest.TestCase):                    # fix round 
                 with self.subTest(text=text):
                     self.assertEqual(pc.placeholder_hits(text), [(1, RC)])
             self.assertEqual(pc.placeholder_hits("- # h\n"), [(1, RN)])
+
+
+# Fix round 8 (owner Q-B2F1-1 (a), 2026-11-10; F-1 / F-B2R7-1, U-1; controller E1-E4). Rows D-a..D-i, PC1-a..c.
+# Every expected value is written here by hand from the round 8 table, never read back from the code.
+D_RAW_IN_SPAN = ["x `a]:b` y", "x `a](b` y", "`]:`", "`](`", "`a]:b` x", "x `a]:b`", "`a](b` x", "x `a](b`",
+                 "``a]:b``", "x ``a](b`` y", "x ``]:`` y", "- `a]:b`", "# h `a](b`", "| `a]:b` |"]
+D_REPRODUCERS = [   # F-1 (list item) and U-1 (top level): each was [] at 01cc2bd, or lacked RL
+    ("- [a`]: x '<role>`'", [RL]), ("- [a`]:` x", [RL]), ("[a`]: x '<role>`'", [RL]), ("[^a`]: x", [R1, RL]),
+    ("1. [a`]: y", [R1, RL]), ("- - [a`]: y", [R1, RL, RN]), ("1) [^a`]: y", [R1, RL]),
+]
+D_BRACKETS = ["[a]", "[x] y", "[^1] z", "[", "[[a]]"]
+D_MARKERS = ["-", "*", "+", "1.", "1)", "10."]
+D_CONTROLS = ["a [b] c", "`[a]`", "x ] y", "a]b", "```\n[\n```", "```\n]:\n```", "- a [b] c", "~~~\n[a]: x\n~~~",
+              "x [a] (b)", "a ]\n: b", "-[a]", "`a]`(b)", "a\n\n- b [c]\n"]
+
+
+class RawLinkSyntaxTest(unittest.TestCase):                         # fix round 8, rows D-a..D-i, PC1-a..c
+    def test_raw_link_syntax_in_span(self):                          # D-a
+        for line in D_RAW_IN_SPAN:
+            with self.subTest(text=line):
+                self.assertEqual(pc.placeholder_hits(line + "\n"), [(1, RL)])
+            with self.subTest(second_line=line):
+                self.assertEqual(pc.placeholder_hits("a\n" + line + "\n"), [(2, RL)])
+
+    def test_f1_u1_reproducers(self):                                # D-b
+        for line, kinds in D_REPRODUCERS:
+            with self.subTest(text=line):
+                self.assertEqual(pc.placeholder_hits(line + "\n"), [(1, k) for k in kinds])
+
+    def test_bracket_content_start(self):                            # D-c: column 0, each marker, depth 2
+        for b in D_BRACKETS:
+            with self.subTest(text=b):
+                self.assertEqual(pc.placeholder_hits(b + "\n"), [(1, RL)])
+            for marker in D_MARKERS:
+                for gap in (" ", "    "):
+                    text = "%s%s%s\n" % (marker, gap, b)
+                    with self.subTest(text=text):
+                        self.assertEqual(pc.placeholder_hits(text), [(1, RL)])
+                text = "%s      %s\n" % (marker, b)          # 6 spaces: round 7's indented code in the item too
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), [(1, RL), (1, RN)])
+                text = "- %s %s\n" % (marker, b)             # depth 2: round 7 gives RN for the inner marker (E2)
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), [(1, RL), (1, RN)])
+        self.assertEqual(pc.placeholder_hits("- - [a]\n"), [(1, RL), (1, RN)])
+        self.assertEqual(pc.placeholder_hits("1. * 2) [a]\n"), [(1, RL), (1, RN)])
+        self.assertEqual(pc.placeholder_hits("a\n[b]: x\nc\n"), [(2, RL)])
+        self.assertEqual(pc.placeholder_hits("- [x] <b>\n"), [(1, "<b>"), (1, RA), (1, RL)])   # was N_ACCEPTED's "- [x] y"
+
+    def test_multi_line_label(self):                                 # D-d
+        self.assertEqual(pc.placeholder_hits("[a\nb`]: x\n"), [(1, RL), (2, R1), (2, RL)])
+        self.assertEqual(pc.placeholder_hits("- [a\n  b]: x\n"), [(1, RL), (2, RL), (2, RI)])
+        self.assertEqual(pc.placeholder_hits("x [a\nb]: c\n"), [(2, RL)])
+
+    def test_controls(self):                                         # D-e: [] as at 01cc2bd
+        for text in D_CONTROLS:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text + "\n"), [])
+
+    def test_whitelist_first(self):                                  # D-f: only the char kind
+        for text, want in (("[\tx\n", [(1, RC)]), ("]:\xa0\n", [(1, RC)]), ("- [a]:\xa0x\n", [(1, RC)]),
+                           ("a\n`]:`\xa0\n", [(2, RC)]), ("[a]\n\tb\n", [(2, RC)])):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_fence_opener_unchanged(self):                           # E1: the info string stays checked raw
+        self.assertEqual(pc.placeholder_hits("~~~ `a]:b`\n[x]\n~~~\n"), [(1, RL)])
+        self.assertEqual(pc.placeholder_hits("```\nx\n```\n[a]: y\n"), [(4, RL)])
+
+    def test_numeric_text_same_on_every_interpreter(self):           # PC1-a
+        for digits in (4300, 4301):
+            num = "1" * digits
+            for text, want in (("%s. [a]\n" % num, [(1, RL)]), ("[%s]: x\n" % num, [(1, RL)]),
+                               ("- %s. [a]\n" % num, [(1, RL), (1, RN)]), ("%s) `a](b`\n" % num, [(1, RL)])):
+                with self.subTest(digits=digits, text=text[-8:]):
+                    self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_no_unicode_database_read(self):                         # PC1-b: U+A7C0 is Cn on 3.9, Lu on 3.13
+        c = chr(0xA7C0)
+        with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
+            for text in ("[%s\n" % c, "- [%s]: x\n" % c, "`a]:%s`\n" % c):
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), [(1, RC)])
+            self.assertEqual(pc.placeholder_hits("- [a]\n"), [(1, RL)])
 
 
 if __name__ == "__main__":
