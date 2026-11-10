@@ -345,7 +345,12 @@ def _matches(row: dict, terms: list, path: Optional[str], topic: Optional[str]) 
         return False
     if path is not None:
         globs = row.get("applies_to")
-        if type(globs) is not list or not any(type(g) is str and fnmatch.fnmatchcase(path, g) for g in globs):
+        if type(globs) is not list:
+            return False
+        for i, g in enumerate(globs):  # F-1, U-2 folded into F-1 (D-31): no glob outside the grammar is compiled
+            if type(g) is str and schema.bracket_problem(g):
+                raise GateError("%s: applies_to.%d: %s" % (row.get("id"), i, schema.bracket_problem(g)))
+        if not any(type(g) is str and fnmatch.fnmatchcase(path, g) for g in globs):
             return False
     if topic is not None:
         topics = row.get("topics")

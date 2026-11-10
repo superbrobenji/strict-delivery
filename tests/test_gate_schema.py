@@ -244,6 +244,9 @@ class Config(GateCase):
         pre = "FAIL schema.config..strict-delivery/config.yml: "
         cases = [({"decisions": {"scan": []}}, []),
                  ({"decisions": {"scan": [""]}}, [pre + "decisions.scan.0: must be a non-empty glob"]),
+                 ({"decisions": {"scan": ["a", "d/[z-a]"]}},  # F-1, U-2 folded into F-1 (D-31)
+                  [pre + "decisions.scan.1: must be a supported glob: the bracket expression [z-a] holds the "
+                         "reversed range z-a"]),
                  ({"decision_classes": {"owner_only": []}}, [pre + "decision_classes.owner_only: must hold at least 1 items"]),
                  ({"decision_classes": {"owner_only": [""]}},
                   [pre + "decision_classes.owner_only.0: must be a non-empty string"]),
@@ -584,7 +587,7 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                         "gates: cites, decisions, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, index\n")
+                         "gates: cites, decisions, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, index\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)
