@@ -1201,9 +1201,9 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - Not checked (stated limit): a record of another class without `recommended` is valid, since migrated records have none; `ask` is the place that requires it. Whether `source` names an existing file is not checked (reports may be git-ignored).
   - `store.base_errors`:
     - The signature is unchanged.
-    - Each row at the merge base and each row at the tip of `base` is passed through `migrations.migrate(store.kind, row)` before comparing.
+    - Each row at the merge base, each row at the tip of `base` and each tree row is passed through `migrations.migrate(store.kind, row)` before comparing, and the migrated rows are compared once (stream d decision under the owner delegation, L:739, row B9 of the Task 2a.1 input-domain table).
     - `deleted.<id>` still calls `may_delete` with the unmigrated base row.
-    - A record equal to its base row before or after migration passes, for `immutable` and for `collision` (owner Q-2a1-2 (a)); an unmigrated tree record still fails `check schema` until it is migrated. Any other change to a resolved record fails `immutable.<id>` (spec §7.2, F-1).
+    - A record equal to its base row before or after migration passes, for `immutable` and for `collision` (owner Q-2a1-2 (a)); an unmigrated tree record still fails `check decisions` until it is migrated. Any other change to a resolved record fails `immutable.<id>` (spec §7.2, F-1).
   - Not this task's: `tests/test_playbook.py::test_fixed_rules_match_decisions_constant` is written by stream B or by A in Task 2b.1, per "Cross-stream order".
 
 **Input-domain dimensions:**
