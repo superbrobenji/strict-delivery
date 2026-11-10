@@ -6,7 +6,7 @@ import os
 import posixpath
 import re
 
-from gates.lib import yamlsub
+from gates.lib import print_table, yamlsub
 from gates.lib.gitinfo import LONG_HEX, _require_toplevel
 from gates.lib.result import GateError
 
@@ -84,7 +84,7 @@ def _merge_map(default: dict, over: object, name: str) -> None:
 
 
 def _check_path(key: str, v: object) -> None:
-    if (not isinstance(v, str) or not v.isprintable() or v.startswith("/") or ".." in v.split("/")
+    if (not isinstance(v, str) or not print_table.is_printable(v) or v.startswith("/") or ".." in v.split("/")
             or v == "." or posixpath.normpath(v) != v):
         raise _bad(key, "must be a non-empty normalised repo-relative path of printable characters")
 

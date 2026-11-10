@@ -12,7 +12,7 @@ import re
 import stat
 from typing import List, Optional
 
-from gates.lib import gitinfo, migrations, schema
+from gates.lib import gitinfo, migrations, print_table, schema
 from gates.lib.result import GateError, _raw
 
 CLASS_GRANT = "merge-grant"
@@ -154,7 +154,7 @@ def _cite_problem(cite: object) -> str:
     if type(cite) is not str:
         return "is not a string"
     path, sep, anchor = cite.partition("#")
-    if not schema._path_ok(path) or (sep and (anchor == "" or "#" in anchor or not anchor.isprintable())):
+    if not schema._path_ok(path) or (sep and (anchor == "" or "#" in anchor or not print_table.is_printable(anchor))):
         return "is not a normalised repo-relative path with an optional non-empty #anchor"
     return ""
 

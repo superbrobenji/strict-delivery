@@ -9,7 +9,6 @@ import io
 import json
 import os
 import sys
-import unicodedata
 import unittest
 from unittest import mock
 
@@ -869,11 +868,9 @@ class SkeletonTests(GateCase):
             for word in (".lower(", ".upper(", "casefold", "unicodedata"):
                 self.assertNotIn(word, text, rel)
 
-    def test_K6_K8_printable_follows_the_interpreter(self):
-        # Until Task 1d2.1 (owner Q-RCp-2 (a)) pins isprintable to Unicode 13.0.0, each interpreter's own verdict.
-        ver = unicodedata.unidata_version
-        if ver not in ("13.0.0", "15.1.0"):
-            self.skipTest("Unicode %s: no recorded verdict" % ver)
+    def test_K6_K8_printable_is_frozen_at_unicode_13(self):
+        # U+1F6DD (Unicode 14.0) is printable on 3.13's own database, but Task 1d2.1 (owner Q-RCp-2 (a)) pins the
+        # printable verdict to Unicode 13.0.0: every interpreter refuses the path and escapes it in the output.
         doc = "docs/a\U0001F6DD.md"
         write(self.root, "src/x.txt", "x\n")
         rel = CDIR + "/docs--a\U0001F6DD.yml"
@@ -882,13 +879,10 @@ class SkeletonTests(GateCase):
         commit_all(self.root, "emoji")
         out, code = run(self.root)
         self.assertEqual(code, 1)
-        if ver == "13.0.0":
-            self.assertIn("FAIL claims.schema.%s/docs--a\\U0001f6dd.yml: document: must be a normalised "
-                          "repo-relative path with no '#'\n" % CDIR, out)
-            self.assertIn("document docs/a\\U0001f6dd.md is not a tracked file\n", out)
-        else:
-            self.assertIn("PASS claims.schema\n", out)
-            self.assertIn("document docs/a\U0001F6DD.md is not a tracked file\n", out)
+        self.assertIn("FAIL claims.schema.%s/docs--a\\U0001f6dd.yml: document: must be a normalised "
+                      "repo-relative path with no '#'\n" % CDIR, out)
+        self.assertIn("document docs/a\\U0001f6dd.md is not a tracked file\n", out)
+        self.assertNotIn("\U0001F6DD", out)
 
     @unittest.skipIf(not hasattr(builtins, "BaseExceptionGroup"), "BaseExceptionGroup present: False (Python < 3.11)")
     def test_K9_exception_groups(self):
