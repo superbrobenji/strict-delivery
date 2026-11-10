@@ -1164,6 +1164,42 @@ class Batch(Base):
                 with self.subTest(case=name, argv=argv):
                     self.refused(argv, needle)
 
+    def test_C9_store_errors_refused_both_forms_unpatched(self):  # F-1d3-rr1-2: index.store_errors under --answered
+        forms = (["batch"], ["batch", "--answered", "--source", "r/a.md", "--date", "2026-11-02"])
+        f = "%s/%s.yml" % (DEC, DA)
+        cases = [("name mismatch", [(DA, dec(DB, "answered"))], f + ": file name %s.yml differs from the record id %s"
+                  % (DA, DB)),
+                 # a duplicate id always also has a file named after another id: that error comes first (store.py:227)
+                 ("duplicate id", [(DA, dec(DB, "answered")), (DB, dec(DB, "answered"))], f + ": "),
+                 ("bad id", [(DA, dec("DEC-20261031-A2B3", "answered"))], f + ": ")]
+        for name, files, needle in cases:
+            for stem, r in files:
+                write_record(self.root, "%s/%s.yml" % (DEC, stem), r)
+            for argv in forms:
+                with self.subTest(case=name, argv=argv):
+                    self.refused(argv, needle)
+            for stem, _ in files:
+                write_record(self.root, "%s/%s.yml" % (DEC, stem), dec(stem, "answered"))
+            self.assertEqual(self.ok("--answered", "--source", "r/a.md", "--date", "2026-11-02"),
+                             "Owner answers (2026-11-02), binding\n")  # control: the repaired register passes
+
+    def test_A5_cli_query_not_normalised(self):  # F-1d3-rr1-1: no transform between argv and render_answers (KD-1)
+        self.answered_with_source()
+        self.put(dec(DF, "answered", source="r/é.md", answer="E"),
+                 dec(DG, "answered", source="r/\U0001FAE8" + "9" * 4300, answer="G"))
+        head = "Owner answers (2026-11-02), binding\n"
+        both = head + "%s: Keep X?\nAnswer: First\\nline\n%s: Keep X?\nAnswer: Second\n" % (DA, DC)
+        self.assertEqual(self.ok("--answered", "--source", "r/a.md", "--date", "2026-11-02"), both)  # control
+        self.assertEqual(self.ok("--answered", "--source", "r/é.md", "--date", "2026-11-02"),
+                         head + "%s: Keep X?\nAnswer: E\n" % DF)
+        g = "r/\U0001FAE8" + "9" * 4300  # PC1: So on 3.13, Cn on 3.9; 4300 digits
+        self.assertEqual(self.ok("--answered", "--source", g, "--date", "2026-11-02"),
+                         head + "%s: Keep X?\nAnswer: G\n" % DG)
+        for q in ("R/a.md", "r/a.md ", " r/a.md", "./r/a.md", "r/a.MD", "r/a.md/", "r/a", "a.md", "r//a.md",
+                  "r/./a.md", "r/é.md", "R/É.md", g + "9", g[:-1], "r/\U0001FAE9" + "9" * 4300):
+            with self.subTest(query=q[:12], n=len(q)):
+                self.assertEqual(self.ok("--answered", "--source", q, "--date", "2026-11-02"), head)
+
     def test_PC1_answered_source_skeleton_unpatched(self):  # real validation of a valid register; nothing matches
         self.put(dec(DB, "answered"))
         for s in ("9" * 4300, "9" * 4301, "r/\U0001FAE8.md"):
