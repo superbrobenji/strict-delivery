@@ -1,0 +1,101 @@
+B2-FR mutation transcript: tests/test_playbook.py::RealFileTest::test_fixed_rules_match_decisions_constant (plan:6330, b8/fr-task.md)
+scratch worktree at HEAD c185518 plus this task's tests/test_playbook.py; module tests.test_playbook
+on /usr/bin/python3 and /opt/homebrew/bin/python3.13
+
+fix present (HEAD files):
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -; new test killed it: no
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -; new test killed it: no
+
+mutant [FR-b rules.md SD-R3 fixed yes -> no]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems; new test killed it: yes
+  restored, PASS expected; python3: PASS (ran=187; OK) failing tests: -; new test killed it: no
+  restored, PASS expected; python3.13: PASS (ran=187; OK) failing tests: -; new test killed it: no
+
+mutant [FR-b rules.md SD-R5 fixed no -> yes]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems; new test killed it: yes
+  restored, PASS expected; python3: PASS (ran=187; OK) failing tests: -; new test killed it: no
+  restored, PASS expected; python3.13: PASS (ran=187; OK) failing tests: -; new test killed it: no
+
+mutant [FR-d rules.md SD-R3 fixed yes -> Yes]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=39)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems, test_real_inputs_unchanged, test_rule_id_digit_count_same_on_every_interpreter, test_rules_problems_empty, test_unpinned_sentence_any_start_or_end, test_unpinned_sentence_with_no_space; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=39)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems, test_real_inputs_unchanged, test_rule_id_digit_count_same_on_every_interpreter, test_rules_problems_empty, test_unpinned_sentence_any_start_or_end, test_unpinned_sentence_with_no_space; new test killed it: yes
+  restored, PASS expected; python3: PASS (ran=187; OK) failing tests: -; new test killed it: no
+  restored, PASS expected; python3.13: PASS (ran=187; OK) failing tests: -; new test killed it: no
+
+mutant [FR-c gates/lib/decisions.py FIXED_RULES gains SD-R1: ("SD-R3", "SD-R12", "SD-R18", "SD-R1")]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant; new test killed it: yes
+  restored, PASS expected; python3: PASS (ran=187; OK) failing tests: -; new test killed it: no
+  restored, PASS expected; python3.13: PASS (ran=187; OK) failing tests: -; new test killed it: no
+
+mutant [FR-c gates/lib/decisions.py FIXED_RULES loses SD-R18: ("SD-R3", "SD-R12")]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant; new test killed it: yes
+  restored, PASS expected; python3: PASS (ran=187; OK) failing tests: -; new test killed it: no
+  restored, PASS expected; python3.13: PASS (ran=187; OK) failing tests: -; new test killed it: no
+
+mutant [FR-c gates/lib/decisions.py FIXED_RULES reordered: ("SD-R12", "SD-R3", "SD-R18")]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant; new test killed it: yes
+  restored, PASS expected; python3: PASS (ran=187; OK) failing tests: -; new test killed it: no
+  restored, PASS expected; python3.13: PASS (ran=187; OK) failing tests: -; new test killed it: no
+
+
+=== fix round 1 (F-FR-1) ===
+assert is now sorted(ids) == sorted(FIXED_RULES) per plan:6700; the reordered-FIXED_RULES mutant now PASSES (expected per plan:6700); duplicate SD-R3 and the other mutants still FAIL; restored PASS.
+fix round 1 (F-FR-1): scratch worktree at HEAD c4a7d0b plus the fixed tests/test_playbook.py; module tests.test_playbook
+
+fix present:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+
+mutant [FIXED_RULES reordered (SD-R12, SD-R3, SD-R18): plan:6700 accepts order-free]:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+  restored:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+
+mutant [FIXED_RULES duplicate entry (SD-R3 twice)]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant
+  restored:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+
+mutant [FIXED_RULES gains SD-R1]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant
+  restored:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+
+mutant [FIXED_RULES loses SD-R18]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=1)) failing tests: test_fixed_rules_match_decisions_constant
+  restored:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+
+mutant [rules.md SD-R3 fixed yes -> no]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems
+  restored:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+
+mutant [rules.md SD-R5 fixed no -> yes]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=5)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems
+  restored:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -
+
+mutant [rules.md SD-R3 fixed yes -> Yes]:
+  FAIL expected; python3: FAIL (ran=187; FAILED (failures=39)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems, test_real_inputs_unchanged, test_rule_id_digit_count_same_on_every_interpreter, test_rules_problems_empty, test_unpinned_sentence_any_start_or_end, test_unpinned_sentence_with_no_space
+  FAIL expected; python3.13: FAIL (ran=187; FAILED (failures=39)) failing tests: test_every_row_matches_derivation_table, test_fixed_rules_match_decisions_constant, test_fixed_set_exact, test_harmless_rewording_passes, test_real_file_has_no_content_problems, test_real_inputs_unchanged, test_rule_id_digit_count_same_on_every_interpreter, test_rules_problems_empty, test_unpinned_sentence_any_start_or_end, test_unpinned_sentence_with_no_space
+  restored:
+  PASS expected; python3: PASS (ran=187; OK) failing tests: -
+  PASS expected; python3.13: PASS (ran=187; OK) failing tests: -

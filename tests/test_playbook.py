@@ -225,6 +225,19 @@ def restored_problems(rows):
     return ["restored %s %r" % (rid, p) for rid, ps in RESTORED.items() for p in ps if p not in rule.get(rid, "")]
 
 
+def fixed_split(text):
+    """(the ids of the rows whose `fixed` cell is `yes`, as a tuple in table order; the (id, cell) pairs whose `fixed`
+    cell is neither `yes` nor `no`, None for a missing column), from prose_check.table_rows (padding stripped)."""
+    ids, bad = [], []
+    for r in table_rows(text):
+        cell = r.get("fixed")
+        if cell == "yes":
+            ids.append(r.get("id"))
+        elif cell != "no":
+            bad.append((r.get("id"), cell))
+    return tuple(ids), bad
+
+
 def all_content_problems(text):
     rows = table_rows(text)
     return (key_problems(rows) + phrase_problems(rows) + column_problems(rows) + intro_problems(text)
@@ -286,6 +299,34 @@ class RealFileTest(unittest.TestCase):
     def test_fixed_set_exact(self):                            # X0, X2 (plan)
         self.assertEqual({r["id"] for r in self.rows if r["fixed"] == "yes"}, {"SD-R3", "SD-R12", "SD-R18"})
         self.assertTrue(all(r["fixed"] in ("yes", "no") for r in self.rows))
+
+    def test_fixed_rules_match_decisions_constant(self):       # FR-a..FR-e, PC1-a; F-2, "Cross-stream order"
+        from gates.lib.decisions import FIXED_RULES             # A's constant; literal pinned in test_decisions_lib
+        ids, bad = fixed_split(self.text)
+        self.assertEqual(bad, [])                               # FR-d, FR-e: every fixed cell is exactly yes or no
+        self.assertEqual(sorted(ids), sorted(FIXED_RULES))      # FR-a..FR-c: plan:6700, sorted lists: order-free, count-sensitive
+        cases = [   # (name, fixture, expected (ids, bad)) through the same helper, on GOOD_TEXT (fixed: SD-R2 only)
+            ("good", GOOD_TEXT, (("SD-R2",), [])),
+            ("padded yes", with_cell(2, 5, "yes "), (("SD-R2",), [])),       # the checker strips cell padding
+            ("Yes", with_cell(2, 5, "Yes"), ((), [("SD-R2", "Yes")])),
+            ("y", with_cell(2, 5, "y"), ((), [("SD-R2", "y")])),
+            ("empty", with_cell(2, 5, ""), ((), [("SD-R2", "")])),
+            ("second yes", with_cell(1, 5, "yes"), (("SD-R1", "SD-R2"), [])),
+            ("no fixed column", with_line(4, HEADER.replace("| fixed |", "| fix |")),
+             ((), [("SD-R1", None), ("SD-R2", None), ("SD-R3", None), ("SD-R4", None)])),
+        ]
+        for name, text, want in cases:
+            with self.subTest(name):
+                self.assertEqual(fixed_split(text), want)
+        with self.subTest("4301-digit id"):                     # PC1-a: compared as text, never converted to int
+            long_id = "SD-R" + "1" * 4301
+            ids, bad = fixed_split(with_cell(2, 0, long_id))
+            self.assertEqual((ids, bad), ((long_id,), []))
+            self.assertNotEqual(ids, FIXED_RULES)
+        with self.subTest("rules.md absent"), tempfile.TemporaryDirectory() as td:      # FR-e: fails, never skips
+            with mock.patch.object(pc, "REPO_ROOT", td):
+                with self.assertRaises(FileNotFoundError):
+                    read(RULES)
 
     def test_columns_valid(self):                              # E1, P1, S1 (plan)
         for r in self.rows:
