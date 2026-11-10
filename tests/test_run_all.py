@@ -253,6 +253,21 @@ class GateListTest(RunAllCase):
                 call()
             self.assertEqual(type(cm.exception).__name__, "Odd")
 
+    def test_check_read_systemexit_is_missing(self):  # F-1 (round 2): SystemExit while reading module.check
+        root = self.fixture()
+        for exc in (SystemExit(3), SystemExit()):
+            with self.subTest(args=exc.args):
+                del self.seen[:]
+                self.all_pass()
+
+                def getattr_(name, exc=exc):
+                    raise exc
+                mod = self.fake("claims", __getattr__=getattr_)
+                self.expect(["--root", root],
+                            ok_lines("schema", "register", "decisions")
+                            + "FAIL run_all.missing.claims: reading %s.check raised SystemExit\n" % mod.__name__
+                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+
     def test_check_read_baseexception_propagates(self):  # F-1: reading module.check
         root = self.fixture()
 

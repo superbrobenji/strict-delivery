@@ -44,7 +44,7 @@ def _load(gate: str):
         fn = module.check
     except AttributeError:
         return None, _missing(gate, "%s has no check" % name)
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         return None, _missing(gate, "reading %s.check raised %s" % (name, result._type_name(e)))
     if not callable(fn):
         return None, _missing(gate, "%s.check is not callable (%s)" % (name, result._type_name(fn)))
