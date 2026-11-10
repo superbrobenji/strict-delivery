@@ -141,6 +141,8 @@ def _check_files(path: str, files: object) -> None:
             for k in ("dir", "glob"):
                 if type(item.get(k)) is not str or item[k] == "":
                     raise _err(path, "%s.%s" % (where, k), "a dir item needs a non-empty string dir and glob")
+            if bracket_problem(item["glob"]):
+                raise _err(path, where + ".glob", bracket_problem(item["glob"]))
             ex = item.get("exclude", [])
             if type(ex) is not list or not all(type(x) is str for x in ex):
                 raise _err(path, where + ".exclude", "must be a list of strings")
@@ -249,6 +251,57 @@ def _in(v: object, values: list) -> bool:
     return any(type(x) is type(v) and x == v for x in values)
 
 
+_NOT_IN_BRACKET = "!-[\\]^&~|"
+
+
+def _bracket_char(c: str) -> str:
+    """'' when ``c`` may stand in a bracket expression, else the problem."""
+    if 0x21 <= ord(c) <= 0x7E and c not in _NOT_IN_BRACKET:
+        return ""
+    return ("U+%04X, which is not allowed: inside [ ] use an optional leading ! then characters or ranges x-y "
+            "(x <= y) of printable ASCII other than ! - [ \\ ] ^ & ~ |" % ord(c))
+
+
+def bracket_problem(glob: str) -> str:
+    """'' when every bracket expression of ``glob`` is in the supported grammar, else the problem (F-1, U-2 folded
+    into F-1, decision D-31). A bracket expression is found exactly as fnmatch finds it: ``[``, an optional ``!``,
+    an optional ``]``, then text up to the next ``]``; a ``[`` with no such ``]`` is a literal on 3.9 and 3.13
+    alike and is accepted. The supported grammar of the text between the brackets is ``!``? then one or more
+    characters ``c`` or ranges ``c-d`` with ``c <= d``, each ``c`` and ``d`` printable ASCII other than
+    ``_NOT_IN_BRACKET``. fnmatch.translate turns such an expression into the same regex text on 3.9 and 3.13, and
+    every glob it refuses (a reversed range, a literal ``-``, ``]``, ``[``, ``^``, ``\\``, ``&``, ``~``, ``|`` or
+    ``!``, a non-ASCII character) is outside it. Pure string parsing: the verdict never depends on the interpreter's
+    ``re``."""
+    i, n = 0, len(glob)
+    while i < n:
+        i += 1
+        if glob[i - 1] != "[":
+            continue
+        j = i
+        if j < n and glob[j] == "!":
+            j += 1
+        if j < n and glob[j] == "]":
+            j += 1
+        while j < n and glob[j] != "]":
+            j += 1
+        if j >= n:
+            continue
+        body = glob[i:j]
+        items = body[1:] if body.startswith("!") else body
+        k = 0
+        while k < len(items):
+            problem = _bracket_char(items[k])
+            if problem == "" and items[k + 1:k + 2] == "-" and k + 2 < len(items):
+                problem = _bracket_char(items[k + 2])
+                if problem == "" and items[k] > items[k + 2]:
+                    problem = "the reversed range %s-%s" % (items[k], items[k + 2])
+                k += 2
+            if problem:
+                return "must be a supported glob: the bracket expression [%s] holds %s" % (body, problem)
+            k += 1
+    return ""  # an accepted body holds no [, so scanning on from i finds the same expressions fnmatch does
+
+
 def _check_value(spec: dict, v: object, path: str, cfg: dict, errs: list) -> None:
     if v is None:
         if not spec.get("nullable", False):
@@ -298,6 +351,8 @@ def _check_value(spec: dict, v: object, path: str, cfg: dict, errs: list) -> Non
     elif t == "glob":
         if type(v) is not str or v == "":
             errs.append("%s: must be a non-empty glob" % path)
+        elif bracket_problem(v):
+            errs.append("%s: %s" % (path, bracket_problem(v)))
     elif t == "cite":
         p, sep, anchor = v.partition("#") if type(v) is str else ("", "", "")
         if not _path_ok(p) or (sep and (anchor == "" or "#" in anchor or not anchor.isprintable())):

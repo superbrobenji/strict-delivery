@@ -732,6 +732,17 @@ class FindTests(unittest.TestCase):
         self.assertEqual(self.ids(recs, path="SRC/a"), [])
         self.assertEqual(self.ids(recs, path=None), [A, B, C])
 
+    def test_path_glob_outside_the_grammar_refused(self):  # F-1, U-2 folded into F-1 (D-31)
+        recs = [rec(dec(A, applies_to=["src/*"])), rec(dec(B, applies_to=["src/*", 5, "", "src/[z-a].py"]))]
+        with self.assertRaises(GateError) as cm:
+            find(recs, [], "src/x.py", None, True)
+        self.assertEqual(str(cm.exception), "%s: applies_to.3: must be a supported glob: the bracket expression "
+                                            "[z-a] holds the reversed range z-a" % B)
+        self.assertEqual(self.ids(recs, all_=True), [A, B])  # no --path: no glob is read
+        recs[1] = rec(dec(B, applies_to=[5, "", "src/[a-c].py"]))
+        self.assertEqual(self.ids(recs, path="src/b.py", all_=True), [A, B])
+        self.assertEqual(self.ids(recs, path="", all_=True), [B])  # "" matches only the empty path, as before
+
     def test_find_by_path_glob_and_topic(self):  # plan test
         recs = [rec(dec(D, applies_to=["src/*"], topics=["ids"])), rec(dec(A, applies_to=["doc/*"], topics=["x"]))]
         self.assertEqual(self.ids(recs, path="src/a/b.py"), [D])
