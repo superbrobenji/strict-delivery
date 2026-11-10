@@ -125,29 +125,29 @@ class TableTests(unittest.TestCase):
 class SiteTests(unittest.TestCase):
     """One test per call site; the output is 3.9.6's on both interpreters (K2)."""
 
-    def test_site_result_safe_text(self):  # result.py:38; the golden output of spec 14
+    def test_site_result_safe_text(self):  # result.py:39 (safe_text); the golden output of spec 14
         self.assertEqual(result.safe_text("id" + W), "id\\U0001fae0")
         self.assertEqual(result.safe_text("id" + N), "id\\u0c5d")
 
-    def test_site_config_check_path(self):  # config.py:87
+    def test_site_config_check_path(self):  # config.py:87 (_check_path)
         for v in ("a" + N, "a" + W):
             with self.subTest(repr(v)), self.assertRaises(GateError):
                 config._check_path("paths.x", v)
 
-    def test_site_schema_path_ok(self):  # schema.py:246
+    def test_site_schema_path_ok(self):  # schema.py:246 (_path_ok)
         self.assertIs(schema._path_ok("a" + N), False)
         self.assertIs(schema._path_ok("a" + W), False)
 
-    def test_site_decisions_cite_anchor(self):  # decisions.py:157 (the path part passes, so only the anchor decides)
+    def test_site_decisions_cite_anchor(self):  # decisions.py:157 (_cite_problem) (the path part passes, so only the anchor decides)
         for c in (N, W):
             with self.subTest(repr(c)):
                 self.assertEqual(decisions._cite_problem("docs/a.md#x" + c),
                                  "is not a normalised repo-relative path with an optional non-empty #anchor")
 
-    def test_site_yamlsub_dq(self):  # yamlsub.py:571 (a leading space forces the double-quoted form)
+    def test_site_yamlsub_dq(self):  # yamlsub.py:573 (_dq) (a leading space forces the double-quoted form)
         self.assertEqual(yamlsub.emit({"k": " a" + N}), 'k: " a\\u0c5d"\n')
 
-    def test_site_yamlsub_block_form(self):  # yamlsub.py:585 (W is above U+FFFF, so :571 leaves it raw)
+    def test_site_yamlsub_block_form(self):  # yamlsub.py:587 (_block_form) (W is above U+FFFF, so _dq at :573 leaves it raw)
         self.assertEqual(yamlsub.emit({"k": "a\nb" + W + "\n"}), 'k: "a\\nb\U0001fae0\\n"\n')
 
     def test_no_isprintable_call_left(self):  # S8: attribute uses only; print_table's header may name the method
