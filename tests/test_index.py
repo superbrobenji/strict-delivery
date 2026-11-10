@@ -317,7 +317,7 @@ class RootArgvConfig(Base):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.assertEqual(gates_main.main(["bogus"]), 2)
-        self.assertEqual(err.getvalue(), "usage: python3 -m gates <command> [args]\ncommands: check, decisions, index\n")
+        self.assertEqual(err.getvalue(), "usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, index\n")
 
 
 # ---------------------------------------------------------------- G: registers
