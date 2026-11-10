@@ -703,6 +703,27 @@ class OpenRefTests(Base):  # O1-O16
         self.build([row(OID)], {"docs/a.md": OID}, cfg=cfg)
         self.assertEqual(self.run_(), (passes(*CATS), 0))
 
+    def test_o17_scan_glob_outside_the_grammar_fails_named(self):  # F-1, U-2 folded into F-1 (D-31)
+        cfg = {**minimal_config(), "decisions": {"scan": ["docs/*", "docs/[z-a]", "src/[^a]"]}}
+        self.build([row(OID)], {"docs/a.md": OID}, cfg=cfg)
+        out, code = self.run_()
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL decisions.scan-glob.1: config decisions.scan.1: must be a supported glob: the bracket "
+                      "expression [z-a] holds the reversed range z-a\n", out)
+        self.assertIn("FAIL decisions.scan-glob.2: config decisions.scan.2: must be a supported glob: the bracket "
+                      "expression [^a] holds U+005E", out)
+        self.assertNotIn("decisions.scan-glob.0", out)
+        for name in ("PASS decisions.scan", "PASS decisions.open-ref", "decisions.open-ref."):
+            self.assertNotIn(name, out)
+        self.assertEqual(sum(1 for ln in out.splitlines() if ln.startswith("FAIL ")), 2, out)
+
+    def test_o17_scan_glob_supported_brackets_pass(self):
+        cfg = {**minimal_config(), "decisions": {"scan": ["docs/[a-c].md"]}}
+        self.build([row(OID)], {"docs/b.md": OID, "docs/d.md": OID}, cfg=cfg)
+        out = self.run_()[0]
+        self.assertIn("FAIL decisions.open-ref.docs/b.md:1", out)
+        self.assertNotIn("docs/d.md", out)
+
     def test_o4_state_dirs_excluded(self):
         files = {".strict-delivery/state/plans/p/handoff.md": "open_decisions: [%s]\n" % OID,
                  ".strict-delivery/state2/x.md": OID + "\n", ".strict-delivery/state": "x"}

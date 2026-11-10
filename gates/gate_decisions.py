@@ -7,7 +7,7 @@ import re
 import stat
 import sys
 
-from gates.lib import config, decisions, gitinfo, ids
+from gates.lib import config, decisions, gitinfo, ids, schema
 from gates.lib.result import GateError, Result, _Once, gate_args, repo_root, run_gate
 from gates.lib.store import Store, base_errors, store_errors
 
@@ -58,6 +58,13 @@ def _read_bytes(root: str, rel: str) -> bytes:
             raise OSError("not a regular file")
     with open(cur, "rb") as fh:
         return fh.read()
+
+
+def _bad_scan_globs(cfg: dict) -> list:
+    """``(index, problem)`` for every ``decisions.scan`` glob outside the schema glob grammar (F-1, U-2 folded into
+    F-1, decision D-31): fnmatch never compiles one."""
+    return [(i, schema.bracket_problem(g)) for i, g in enumerate(cfg["decisions"]["scan"])
+            if schema.bracket_problem(g)]
 
 
 def _scanned(tracked: frozenset, cfg: dict) -> list:
@@ -119,7 +126,11 @@ def check(args: list) -> Result:
     _category(res, "refs", decisions.ref_errors(records))
     open_ids = sorted({r.id for r in records if type(r.id) is str and r.row.get("status") == "open"
                        and ids.id_problem(r.id, store.prefix) == ""})
-    _scan(res, root, _scanned(tracked, cfg), open_ids)
+    bad = _bad_scan_globs(cfg)
+    for i, problem in bad:
+        res.fail("decisions.scan-glob.%d" % i, "config decisions.scan.%d: %s" % (i, problem))
+    if not bad:
+        _scan(res, root, _scanned(tracked, cfg), open_ids)
     return res
 
 
