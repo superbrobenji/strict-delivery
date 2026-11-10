@@ -304,7 +304,7 @@ class RealFileTest(unittest.TestCase):
         from gates.lib.decisions import FIXED_RULES             # A's constant; literal pinned in test_decisions_lib
         ids, bad = fixed_split(self.text)
         self.assertEqual(bad, [])                               # FR-d, FR-e: every fixed cell is exactly yes or no
-        self.assertEqual(ids, FIXED_RULES)                      # FR-a..FR-c: order and count, not only the set
+        self.assertEqual(sorted(ids), sorted(FIXED_RULES))      # FR-a..FR-c: plan:6700, sorted lists: order-free, count-sensitive
         cases = [   # (name, fixture, expected (ids, bad)) through the same helper, on GOOD_TEXT (fixed: SD-R2 only)
             ("good", GOOD_TEXT, (("SD-R2",), [])),
             ("padded yes", with_cell(2, 5, "yes "), (("SD-R2",), [])),       # the checker strips cell padding
