@@ -11,7 +11,7 @@ import re
 import stat
 from typing import List, Optional
 
-from gates.lib import config, gitinfo, ids, yamlsub
+from gates.lib import config, gitinfo, ids, print_table, yamlsub
 from gates.lib.result import GateError, _raw
 
 KNOWN_KINDS = ("config", "decision", "finding", "claim", "request", "streams", "context", "handoff", "ledger",
@@ -243,7 +243,7 @@ def schemas(dirpath: Optional[str] = None) -> dict:
 
 def _path_ok(s: str) -> bool:
     """config.load's path rule: normalised, repo-relative, printable, non-empty."""
-    return (s.isprintable() and not s.startswith("/") and ".." not in s.split("/") and s != "."
+    return (print_table.is_printable(s) and not s.startswith("/") and ".." not in s.split("/") and s != "."
             and os.path.normpath(s).replace(os.sep, "/") == s)
 
 
@@ -355,7 +355,7 @@ def _check_value(spec: dict, v: object, path: str, cfg: dict, errs: list) -> Non
             errs.append("%s: %s" % (path, bracket_problem(v)))
     elif t == "cite":
         p, sep, anchor = v.partition("#") if type(v) is str else ("", "", "")
-        if not _path_ok(p) or (sep and (anchor == "" or "#" in anchor or not anchor.isprintable())):
+        if not _path_ok(p) or (sep and (anchor == "" or "#" in anchor or not print_table.is_printable(anchor))):
             errs.append("%s: must be a normalised repo-relative path with an optional non-empty #anchor" % path)
     elif t == "sha-path":
         sha, _, p = v.partition(":") if type(v) is str else ("", "", "")

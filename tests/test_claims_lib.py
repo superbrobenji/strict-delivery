@@ -960,8 +960,9 @@ class DigitLimitTests(unittest.TestCase):  # FD1 (fix round 1); class: digit-lim
 
 
 def c17_refused() -> bool:
-    """Row C17's expected verdict on the running interpreter: U+1F6DD is refused exactly when the Unicode database
-    has it unassigned (category Cn), the only non-printable category it can have (Python: Cn is not printable)."""
+    """The running interpreter's own verdict for U+1F6DD: not printable exactly when its Unicode database has it
+    unassigned (category Cn), the only non-printable category it can have (Python: Cn is not printable). Since
+    Task 1d2.1 the gates refuse it on every interpreter; this is the str.isprintable they no longer use."""
     import unicodedata
     return unicodedata.category("\U0001F6DD") == "Cn"
 
@@ -981,15 +982,15 @@ class InterpreterSkeletonTests(unittest.TestCase):  # PC1 skeleton rows (owner Q
             self.assertEqual(unicodedata.category("\U0001F6DD"), cats[unicodedata.unidata_version])
 
     def test_code_point_printable_on_one_interpreter_only(self):
-        # U+1F6DD is unassigned in Unicode 13.0 (Python 3.9) and assigned in 15.1 (3.13). The verdict follows
-        # schema._path_ok (isprintable), frozen later by Task 1d2.1 (owner Q-RCp-2 (a)); derived per interpreter.
-        refused = c17_refused()
-        self.assertEqual("\U0001F6DD".isprintable(), not refused)  # schema._path_ok's rule: str.isprintable
+        # U+1F6DD is unassigned in Unicode 13.0 (Python 3.9) and assigned in 15.1 (3.13), so str.isprintable differs
+        # between them. schema._path_ok uses the frozen Unicode 13.0.0 table (Task 1d2.1, owner Q-RCp-2 (a)), so
+        # both interpreters refuse it.
+        self.assertEqual("\U0001F6DD".isprintable(), not c17_refused())  # the interpreter's own verdict
         doc, path = "docs/\U0001F6DD.md", "src/\U0001F6DD.txt"
         errs = validate({**CLAIM_FILE, "document": doc}, cfg_defaults())
-        self.assertEqual(errs, ["document: " + PATH_ERR] if refused else [])
+        self.assertEqual(errs, ["document: " + PATH_ERR])
         errs = validate(with_cite(path=path), cfg_defaults())
-        self.assertEqual(errs, ["claims.0.cites.0.path: " + PATH_ERR] if refused else [])
+        self.assertEqual(errs, ["claims.0.cites.0.path: " + PATH_ERR])
         self.assertEqual(slug(doc), "docs--\U0001F6DD")
 
     def test_no_handler_needs_an_exception_group(self):

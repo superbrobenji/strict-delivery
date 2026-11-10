@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+from gates.lib import print_table
 from gates.lib.yamlsub import MAX_DEPTH  # owner Q-R6R-2 (b): the renderer's nesting cap is the plan's MAX_DEPTH
 
 
@@ -35,7 +36,7 @@ def safe_text(s: object) -> str:
     for c in text:
         if c == "\\":
             out.append("\\\\")
-        elif c.isprintable():
+        elif print_table.is_printable(c):
             out.append(c)
         elif c == "\n":
             out.append("\\n")
