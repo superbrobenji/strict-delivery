@@ -866,5 +866,137 @@ class TestEnd(Base):
                 self.assertNotIn(name, src)
 
 
+# ================================================================ D-32: duplicates compare referents (F-1d2-r1)
+
+class TestDuplicateReferents(Base):
+    """D-10 as settled by D-32: one referent under two spellings is a duplicate (exit 1, nothing written); the
+    exact-text duplicate still refuses; distinct referents are accepted, in argv order, stored as typed."""
+
+    def second_commit(self):
+        self.write("src/b.py", "b\n")
+        return commit_all(self.root, "second")
+
+    def closing(self, F, *evidence):
+        return ["move", F, "--to", "closed", "--by", "c", "--resolved-by", "p"] + \
+            [x for e in evidence for x in ("--evidence", e)]
+
+    def test_d32_cite_same_referent_refused(self):
+        s7, s12, full = self.sha[:7], self.sha[:12], self.sha
+        pairs = [("src/a.py:1@" + s7, "src/a.py:1@" + full), ("src/a.py:1@" + full, "src/a.py:1@" + s12),
+                 ("src/a.py:1@" + s7, "src/a.py:1@" + s12), ("src/a.py:3@" + s7, "src/a.py:3-3@" + s7),
+                 ("src/a.py:3-3@" + s7, "src/a.py:3@" + full), ("src/a.py:2-4@" + s12, "src/a.py:2-4@" + full),
+                 ("src/a.py:1@" + s7, "src/a.py:1@" + s7)]
+        for a, b in pairs:
+            with self.subTest(a=a, b=b):
+                self.refused("new", *self.new_args(), "--cite", a, "--cite", b,
+                             has="--cite: %s given more than once" % b)
+        self.refused("new", *self.new_args(), "--cite", "src/a.py:1@" + s7, "--cite", "src/a.py:2@" + s7,
+                     "--cite", "src/a.py:1-1@" + full, has="--cite: src/a.py:1-1@%s given more than once" % full)
+
+    def test_d32_cite_distinct_referents_kept_as_typed(self):
+        sha2 = self.second_commit()
+        s7 = self.sha[:7]
+        groups = [["src/a.py:1@" + s7, "src/a.py:2@" + self.sha], ["src/a.py:1@" + s7, "src/a.py:1-2@" + s7],
+                  ["src/a.py:1@" + s7, "src/b.py:1@" + s7], ["src/a.py:1@" + s7, "src/a.py:1@" + sha2[:7]],
+                  ["src/a.py:2-3@" + self.sha, "src/a.py:2@" + s7, "src/a.py:3-3@" + s7]]
+        for cites in groups:
+            with self.subTest(cites=cites):
+                f = self.new(*[x for c in cites for x in ("--cite", c)])
+                want = []
+                for c in cites:
+                    rest, _, sha = c.rpartition("@")
+                    file, _, lines = rest.rpartition(":")
+                    want.append({"file": file, "lines": lines, "sha": sha})
+                self.assertEqual(self.rec(f)["cites"], want)
+
+    def test_d32_evidence_same_referent_refused(self):
+        F = self.stored("open")
+        commit_all(self.root, "row")
+        s7, s12, full = self.sha[:7], self.sha[:12], self.sha
+        pairs = [(s7, full), (full, s12), (s7, s12), ("%s:notes.txt" % s7, "%s:notes.txt" % full),
+                 ("%s:notes.txt" % full, "%s:notes.txt" % s12), (full, full), ("notes.txt", "notes.txt")]
+        path = os.path.join(self.root, *FDIR.split("/"), F + ".yml")
+        with open(path, "rb") as fh:
+            orig = fh.read()
+        for a, b in pairs:
+            with self.subTest(a=a, b=b):
+                try:
+                    self.refused(*self.closing(F, a, b), has="--evidence: %s given more than once" % b)
+                finally:  # keep each pair independent of an earlier wrong accept
+                    with open(path, "wb") as fh:
+                        fh.write(orig)
+
+    def test_d32_evidence_same_referent_as_stored_refused(self):
+        s7, full = self.sha[:7], self.sha
+        P = self.stored("pinned")  # evidence [<full>:REVIEW]
+        H = self.stored("in-progress", id_="F-20261031-p6q7", evidence=[full])
+        commit_all(self.root, "rows")
+        self.refused(*self.closing(P, "%s:%s" % (s7, REVIEW)),
+                     has="--evidence: %s:%s given more than once" % (s7, REVIEW))
+        self.refused("move", H, "--to", "pinned", "--by", "c", "--pin-test", "t", "--pin-transcript",
+                     "%s:%s" % (full, TRANSCRIPT), "--evidence", "%s:%s" % (full, REVIEW), "--evidence", s7,
+                     has="--evidence: %s given more than once" % s7)
+
+    def test_d32_evidence_distinct_referents_kept_as_typed(self):
+        F = self.stored("open")
+        sha2 = self.second_commit()
+        s7 = self.sha[:7]
+        path = os.path.join(self.root, *FDIR.split("/"), F + ".yml")
+        with open(path, "rb") as fh:
+            orig = fh.read()
+        groups = [[s7, "%s:notes.txt" % s7], ["%s:notes.txt" % s7, "%s:src/a.py" % self.sha],
+                  [s7, sha2[:7]], ["notes.txt", "%s:notes.txt" % s7], ["%s:src/a.py" % s7, "%s:src/a.py" % sha2]]
+        for ev in groups:
+            with self.subTest(ev=ev):
+                self.move(F, "closed", "--resolved-by", "p", *[x for e in ev for x in ("--evidence", e)])
+                self.assertEqual(self.rec(F)["evidence"], ev)
+                with open(path, "wb") as fh:
+                    fh.write(orig)
+        P = self.stored("pinned", id_="F-20261031-m4n5")
+        self.move(P, "closed", "--resolved-by", "p", "--evidence", s7)
+        self.assertEqual(self.rec(P)["evidence"], ["%s:%s" % (self.sha, REVIEW), s7])
+
+    def test_d32_stored_duplicates_unchanged(self):
+        """Invariant of the replaced code: a stored exact-text duplicate refuses any move; a stored pair of one
+        referent under two spellings is not compared with itself (D-32 names argv-vs-argv and argv-vs-stored)."""
+        full = self.sha
+        A = self.stored("open", evidence=[full, full])
+        B = self.stored("open", id_="F-20261031-m4n5", evidence=[full, full[:7]])
+        commit_all(self.root, "rows")
+        self.refused("move", A, "--to", "planned", "--by", "c", has="--evidence: %s given more than once" % full)
+        self.move(B, "planned")
+        C = self.stored("open", id_="F-20261031-p6q7", evidence=[5])  # hand-written non-string entry
+        commit_all(self.root, "row C")
+        self.refused("move", C, "--to", "planned", "--by", "c")
+
+    def test_d32_only_sha_forms_are_resolved(self):
+        """A plain path is compared as typed even when git could read it as a commit, and a bare ``<sha>:`` is
+        not the sha: both reach the evidence validator instead of the duplicate check."""
+        F = self.stored("open")
+        commit_all(self.root, "row")
+        self.refused(*self.closing(F, "HEAD", "HEAD^{commit}"), has="evidence.0: HEAD is not a tracked regular file")
+        s7 = self.sha[:7]
+        self.refused(*self.closing(F, s7, s7 + ":"), has="evidence.1:  is not a normalised repo-relative path")
+
+    def test_d32_skeleton_rows_same_bytes_on_every_interpreter(self):
+        s7 = self.sha[:7]
+        for lines, cp in (("9" * 4300, None), ("9" * 4301, None), ("\U00016AC1", 0x16AC1), ("١٠", 0x661)):
+            with self.subTest(lines=lines[:6]):
+                want = ("findings new: --cite 2: LINES must be N or N-M (1 to 9 digits each)\n" if cp is None
+                        else "findings new: --cite 2: U+%04X is not allowed (only U+0021-U+007E)\n" % cp)
+                self.assertEqual(self.refused("new", *self.new_args(), "--cite", "a.py:1@" + s7,
+                                              "--cite", "a.py:%s@%s" % (lines, s7)), want)
+        F = self.stored("open")
+        commit_all(self.root, "row")
+        n4300, n4301 = "9" * 4300, "9" * 4301
+        for e, want in ((n4300, "evidence.1: %s is not a tracked regular file" % n4300),
+                        (n4301, "evidence.1: %s is not a tracked regular file" % n4301),
+                        (n4300 + ":notes.txt", "evidence.1: %s:notes.txt is not a tracked regular file" % n4300),
+                        ("\U00016AC1", "--evidence 2: U+16AC1 is not allowed (only U+0021-U+007E)"),
+                        ("١٠", "--evidence 2: U+0661 is not allowed (only U+0021-U+007E)")):
+            with self.subTest(e=e[:6]):
+                self.assertEqual(self.refused(*self.closing(F, s7, e)), "findings move: %s\n" % want)
+
+
 if __name__ == "__main__":
     unittest.main()

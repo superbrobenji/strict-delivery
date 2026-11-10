@@ -61,6 +61,31 @@ def _no_dups(flag: str, values: list) -> None:
         seen.append(v)
 
 
+def _no_dup_referents(flag: str, values: list, keys: list, first: int = 0) -> None:
+    """D-32: ``values[i]`` for ``i >= first`` whose referent key equals an earlier one is a duplicate."""
+    for i in range(first, len(values)):
+        if keys[i] in keys[:i]:
+            raise _Refusal("%s: %s given more than once" % (flag, values[i]))
+
+
+def _commit(root: str, sha: str) -> str:
+    """The full sha of the commit ``sha`` names; ``sha`` has passed ``gitinfo.commit_exists``."""
+    return gitinfo.merge_base(root, sha, sha)
+
+
+def _evidence_key(root: str, e: object) -> object:
+    """D-32: a sha or ``<sha>:<path>`` entry naming a commit is keyed by its form, that commit's full sha and its
+    path; any other entry (a non-commit, a non-string stored by hand) by itself. A plain path is its own ``path``
+    (``findings._split``), so its key holds its whole text and two spellings never collide."""
+    if type(e) is not str:
+        return ("text", e)
+    kind, path = findings._split(e)
+    sha = e.partition(":")[0]
+    if gitinfo.commit_exists(root, sha):
+        return (kind, _commit(root, sha), path)
+    return ("text", e)
+
+
 def _cite(n: int, v: str, root: str) -> dict:
     where = "--cite %d" % n
     _token(where, v)
@@ -127,6 +152,9 @@ def _new(ns) -> tuple:
     cite_args = ns.cite or []
     _no_dups("--cite", cite_args)
     cites = [_cite(n, v, root) for n, v in enumerate(cite_args, 1)]
+    keys = [(c["file"], c["lines"].partition("-")[0], c["lines"].rpartition("-")[2], _commit(root, c["sha"]))
+            for c in cites]  # D-32: N is N-N; LINES has no leading zero (D-19), so text equality is number equality
+    _no_dup_referents("--cite", cite_args, keys)
     head = gitinfo.head_sha(root)
     fstore, frecs, decs = _load(root, cfg)
     index.render(root, cfg)  # D-7: a register the index refuses is refused before any write
@@ -184,6 +212,8 @@ def _move(ns) -> tuple:
         raise _Refusal("--resolved-by is given only with --to closed")
     stored = old.get("evidence") if type(old.get("evidence")) is list else []
     _no_dups("--evidence", stored + evidence)
+    _no_dup_referents("--evidence", stored + evidence, [_evidence_key(root, e) for e in stored + evidence],
+                      len(stored))
     head = gitinfo.head_sha(root)
     index.render(root, cfg)  # D-7
     row = copy.deepcopy(old)
