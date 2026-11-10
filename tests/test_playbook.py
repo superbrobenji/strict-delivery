@@ -938,6 +938,7 @@ R1, R3 = "refused: multi-line code span", "refused: pipe in table-row code span"
 RA, RB, RL, RI, RQ = ("refused: angle bracket outside code span", "refused: backslash outside code span",
                       "refused: link syntax", "refused: indented line", "refused: block quote")   # W1 (fix round 4)
 RC, RX = "refused: character outside whitelist", "refused: extended autolink"           # fix round 5 (D1, D6)
+RN = "refused: block start in list item"                                       # fix round 7 (Q-B2Z1-1 (a), D1)
 PLACEHOLDER_REFUSED = [   # fix round 4 (W1): every '<' outside a code span is also refused (RA), after the line's hits
     ("G<n> the same", [(1, "<n>"), (1, RA)]), ("Owner answers (<date>), binding", [(1, "<date>"), (1, RA)]),
     ("<program>/integration", [(1, "<program>"), (1, RA)]),
@@ -1755,7 +1756,7 @@ W_REPRODUCERS = [   # F-B2FX2RR5-1, F-B2FX2RR5-2: each refused by name (they wer
     ("- a\n  ```\n<x>\n```\n", [(2, RI)]), ("1. a\n   ~~~\n<x>\n~~~\n", [(2, RI)]),                # member 2
     ("<div\n```\n<x>\n```\n", [(1, RA)]), ("</div\n```\n<x>\n```\n", [(1, RA)]),                  # member 3
     ("> | h |\n> | - |\n> | `a | <z> b` |\n", [(1, RQ), (2, RQ), (3, RQ)]),                       # member 4
-    ("- > | h |\n  > | - |\n  > | `a | <z> b` |\n", [(2, RI), (3, RI)]),
+    ("- > | h |\n  > | - |\n  > | `a | <z> b` |\n", [(1, RN), (2, RI), (3, RI)]),       # round 7: line 1 RN too
 ]
 W_FAIL_CLOSED = [   # the round 3 fail-closed notes: each is now a named refusal
     ("para\n\n    <x>\n", [(3, "<x>"), (3, RA), (3, RI)]),                           # indented code
@@ -1792,7 +1793,8 @@ class VerifierRoundTest(unittest.TestCase):
         self.assertEqual(pc.REFUSED_KINDS, ("multi-line code span", "angle bracket outside code span",
                                             "backslash outside code span", "link syntax", "indented line",
                                             "block quote", "pipe in table-row code span",
-                                            "character outside whitelist", "extended autolink"))   # round 5: 8th, 9th
+                                            "character outside whitelist", "extended autolink",    # round 5: 8th, 9th
+                                            "block start in list item"))                           # round 7: 10th
         for text, want in RESTRICT_SAMPLES:
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), want)
@@ -1882,7 +1884,7 @@ class VerifierRoundTest(unittest.TestCase):
         for fn in (pc.placeholder_hits, pc._unpaired_runs, pc._table_row_lines, pc.rules_problems, sentences,
                    pc.char_refusals, pc._refuse_chars, pc.forbidden_hits, pc.labels, pc.paragraph, pc.section,
                    pc.first_table_header, pc.table_rows, pc.front_matter, pc.block_problems,    # + round 5's helpers
-                   pc._info_refusals):                                                          # + round 6's helper
+                   pc._info_refusals, pc._list_block_start):                    # + round 6's and round 7's helpers
             self.assertNotIn("ExceptionGroup", inspect.getsource(fn))
             self.assertNotIn("except*", inspect.getsource(fn))
 
@@ -1930,9 +1932,10 @@ class WhitelistTest(unittest.TestCase):                             # W1-W5, fix
                     self.assertEqual(pc.placeholder_hits(text), [(line, kind)])
             with self.subTest(fenced=start):        # round 5: a tab is refused inside a fence too (before the parse)
                 self.assertEqual(pc.placeholder_hits("```\n" + start + "\n```\n"), [(2, RC)] if kind == RC else [])
-        for text in W_BLANK_AND_FENCED + ["a\n \nb\n", "a > b\n", "a\n- > b\n"]:
+        for text in W_BLANK_AND_FENCED + ["a\n \nb\n", "a > b\n"]:
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), [])
+        self.assertEqual(pc.placeholder_hits("a\n- > b\n"), [(2, RN)])         # round 7 (D3): was [] at dfb6667
         for text, want in W_TAB_CONVERTED:           # round 5 (D8): were accepted blank or fenced tab lines
             with self.subTest(text=text):
                 self.assertEqual(pc.placeholder_hits(text), want)
@@ -1960,11 +1963,13 @@ class WhitelistTest(unittest.TestCase):                             # W1-W5, fix
         got = pc.placeholder_hits(text)
         self.assertEqual(got, want)
         kinds = [k[len("refused: "):] for _, k in got if k.startswith("refused: ")]
-        self.assertEqual(sorted(set(kinds), key=kinds.index), [k for k in pc.REFUSED_KINDS if k != pc.CHAR_KIND])
-        self.assertEqual(len(pc.REFUSED_KINDS), 9)                 # round 5: the char kind 8th (D1), autolink 9th
+        self.assertEqual(sorted(set(kinds), key=kinds.index), [k for k in pc.REFUSED_KINDS[:9] if k != pc.CHAR_KIND])
+        self.assertEqual(len(pc.REFUSED_KINDS), 10)                # round 5: the char kind 8th (D1), autolink 9th
+        self.assertEqual(pc.placeholder_hits(text + "- # <z>\n"), want + [(8, "<z>"), (8, RA), (8, RN)])   # round 7
         self.assertEqual(pc.placeholder_hits(text + "\t" + text), [(8, RC)])       # D1: only the char kind, no hit
         for n, kind in enumerate(pc.REFUSED_KINDS):                # each kind alone, once
-            sample = ["a `\n", "a < b\n", "a \\ b\n", "a ](b\n", " a\n", "> a\n", "| `a|b` |\n", "a\tb\n", "www.a\n"][n]
+            sample = ["a `\n", "a < b\n", "a \\ b\n", "a ](b\n", " a\n", "> a\n", "| `a|b` |\n", "a\tb\n", "www.a\n",
+                      "- # a\n"][n]
             with self.subTest(kind=kind):
                 self.assertEqual(pc.placeholder_hits(sample), [(1, "refused: " + kind)])
 
@@ -2154,8 +2159,24 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
                   "with no code-span masking", "each refusal is reported on the opener's line",
                   "for backtick and tilde fences alike; in a tilde fence also a backtick run the per-line pairing "
                   "leaves unpaired (`multi-line code span`) and a code span holding `|` (`pipe in table-row code span`)",
-                  "The fence still opens and its content stays masked."):
+                  "The fence still opens and its content stays masked.",
+                  # round 7 (N-h): the rule (D2, D3, D4, D5) and the corrected "block forms left" sentence
+                  "any block start inside a list item is refused as `block start in list item`, reported on the "
+                  "list item's line, so nested positions are closed as a whole class by construction",
+                  "a run of one or more ASCII digits (any length, read as text, never converted to a number) "
+                  "followed by `.` or `)`; the marker is followed by a space or the end of the line",
+                  "so markers are at column 0 only",
+                  "The content is the text after the marker and all the spaces that follow it. It is refused when "
+                  "it begins with a backtick run of 3 or more, a tilde run of 3 or more, `#`, `>`, `|`, `<`, or "
+                  "another list marker of the same form; when 5 or more spaces stand between the marker and "
+                  "non-blank content (an indented code block inside the item); and when it is a thematic break "
+                  "(3 or more of one of `-`, `*` and `_`, with spaces between and nothing else)",
+                  "the checker opens no fence on a list item line",
+                  "a block quote is refused as a line start (`block quote`), and footnote definitions and "
+                  "reference definitions are refused by `link syntax` (`]:`)",
+                  "column-0 list items whose content holds no block start, tables and column-0 fences"):
             self.assertIn(s, p)
+        self.assertNotIn("thematic breaks, column-0 list items, tables", p)          # round 7: the old sentence
         self.assertIn(", ".join("`%s`" % k for k in pc.REFUSED_KINDS), p)
 
     def test_numeric_text_same_on_every_interpreter(self):           # PC1-a: a placeholder_hits row
@@ -2239,15 +2260,15 @@ class InfoStringTableTest(unittest.TestCase):                       # fix round 
     def test_widening_controls(self):                                # Z-b2: unchanged from d013b15
         for d in Z_DELIM_CONTROLS:
             for text in ("h\n%s\n`c|d`\n" % d, "h `a|b`\n%s\n" % d):
-                with self.subTest(text=text):
-                    self.assertEqual(pc.placeholder_hits(text), [])
+                with self.subTest(text=text):     # round 7 (D3): "- - -" is a thematic break in a list item
+                    self.assertEqual(pc.placeholder_hits(text), [(2, RN)] if d == "- - -" else [])
         self.assertEqual(pc.placeholder_hits("h\nx\n`c|d`\ny `e|f`\n"), [])
         self.assertEqual(pc.placeholder_hits("a | `b|c`\n--|--\n"), [(1, R3)])                  # the old form, kept
 
     def test_delimiter_row_space_member(self):                       # Z-c, F-B2V8-1 (mutant V29)
         for text in ("a | `b|c`\n- | - | -\n", "a | `b|c`\n--- | ---\n", "a | `b|c`\n:- | -:\n", "`b|c`\n-- |\n"):
-            with self.subTest(text=text):
-                self.assertEqual(pc.placeholder_hits(text), [(1, R3)])
+            with self.subTest(text=text):     # round 7 (D3): "- | - | -" is a list item whose content starts '|'
+                self.assertEqual(pc.placeholder_hits(text), [(1, R3)] + ([(2, RN)] if "\n- | " in text else []))
         self.assertEqual(pc.placeholder_hits("a | `b|c`\n- |\t-\n"), [(2, RC)])               # tab: char refusal
 
     def test_run_predicate_dash_and_blank_boundary(self):            # Z-d, F-B2V8-2 (mutants V17, V30)
@@ -2283,6 +2304,115 @@ class InfoStringTableTest(unittest.TestCase):                       # fix round 
                     self.assertEqual(len(got), 1)
                     self.assertEqual(got[0][1], RC)
             self.assertEqual(pc.placeholder_hits("``` <x>\n```\n"), [(1, RA)])
+
+
+# Fix round 7 (owner Q-B2Z1-1 (a), 2026-11-10; Z-1; controller D1-D5). Rows N-a..N-k, PC1-a..c. Every expected
+# value is written here by hand from the round 7 table, never read back from the code. RN is defined beside RC, RX.
+N_MARKERS = ["-", "*", "+", "1.", "1)", "10.", "123456789)"]
+N_STARTS = [   # (block start, hits on the line, refusals the line earns besides RN, in REFUSED_KINDS order)
+    ("```", [], [R1]), ("````", [], [R1]), ("```python", [], [R1]),     # the fence is not opened (D4): R1 stays
+    ("~~~", [], []), ("~~~~", [], []), ("~~~ x", [], []),
+    ("#", [], []), ("# h", [], []), ("######", [], []), (">", [], []), ("> q", [], []), ("|", [], []),
+    ("| a |", [], []), ("<", [], [RA]), ("<b>", ["<b>"], [RA]),
+    ("- x", [], []), ("* x", [], []), ("+ x", [], []), ("1. x", [], []), ("2) x", [], []), ("-", [], []),
+]
+N_NESTED = [("- - ~~~ x", []), ("* 1. # h", []), ("1) + > q", []), ("- - - |", []), ("1. 2. 3. <b>", ["<b>", RA])]
+N_Z1 = ["- ~~~ `<role>`", "1. ~~~ `www.x`", "- ~~~ `a|b`", "* ~~~ `<role>`", "+ ~~~ `a\\b`", "1) ~~~ `a](b`",
+        "- - ~~~ `<role>`"]
+N_CODE_AND_BREAK = ["-     code", "1.      x", "- ---", "- * * *", "* ___", "- - -", "+ _ _ _", "1. ***",
+                    "- *  *  * ", "-      ~~~", "10)     x"]
+N_ACCEPTED = ["- plain", "- **bold** x", "- *em*", "- _em_", "- `code` x", "- ``a`` x", "- [x] y", "1. 2026 text",
+              "1.5 x", "-x", "---", "--- ", "***", "12345678901234567890. x\nplain", "- a # b", "- a | b",
+              "- a ~~~ b", "-    code", "- --", "- ~~ x", "- ~~x~~", "- *x y", "- _x_", "- 1.5 x", "- 2026 text",
+              "-", "- ", "-     ", "1.", "1)", "* x", "+ x", "1) x", "a - # b", "x\n- a\n- b\n\n1. c\n2. d"]
+N_TOP_LEVEL = [("```\nx\n```\n", []), ("~~~\nx\n~~~\n", []), ("# h\n", []), ("| a |\n|---|\n| b |\n", []),
+               ("> q\n", [(1, RQ)]), ("~~~ `<role>`\n", [(1, RA)]), ("~~~ `<role>`\nx\n~~~\n", [(1, RA)])]
+
+
+class ListItemBlockStartTest(unittest.TestCase):                    # fix round 7, rows N-a..N-k, PC1-a..c
+    def test_block_start_after_every_marker(self):                   # N-a: the class, one subTest per cell
+        for marker in N_MARKERS:
+            for start, hits, kinds in N_STARTS:
+                for gap in (" ", "  ", "    "):
+                    text = "%s%s%s\n" % (marker, gap, start)
+                    want = [(1, h) for h in hits] + [(1, k) for k in kinds] + [(1, RN)]
+                    with self.subTest(text=text):
+                        self.assertEqual(pc.placeholder_hits(text), want)
+                    with self.subTest(second_line=text):
+                        self.assertEqual(pc.placeholder_hits("a\n\n" + text), [(n + 2, k) for n, k in want])
+
+    def test_nested_depth(self):                                     # N-b
+        for line, before in N_NESTED:
+            want = [(1, "<b>"), (1, RA), (1, RN)] if before else [(1, RN)]
+            with self.subTest(text=line):
+                self.assertEqual(pc.placeholder_hits(line + "\n"), want)
+
+    def test_z1_reproducers(self):                                   # N-c: each was [] at dfb6667
+        for line in N_Z1:
+            with self.subTest(text=line):
+                self.assertEqual(pc.placeholder_hits(line + "\n"), [(1, RN)])
+        self.assertEqual(pc.placeholder_hits("~~~ `<role>`\n~~~\n"), [(1, RA)])                 # the control
+        self.assertEqual(pc.placeholder_hits("- ~~~ x\n<y>\n~~~\n"), [(1, RN), (2, "<y>"), (2, RA)])  # D4: no fence
+        self.assertEqual(pc.placeholder_hits("- ``` x\n<y> `\n```\n"), [(1, R1), (1, RN), (2, "<y>"), (2, R1),
+                                                                       (2, RA)])
+
+    def test_indented_code_and_thematic_break_in_item(self):         # N-d
+        for line in N_CODE_AND_BREAK:
+            with self.subTest(text=line):
+                self.assertEqual(pc.placeholder_hits(line + "\n"), [(1, RN)])
+
+    def test_accepted_controls(self):                                # N-e: [] as at dfb6667
+        for text in N_ACCEPTED:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text + "\n"), [])
+
+    def test_top_level_controls(self):                               # N-f: no new kind
+        for text, want in N_TOP_LEVEL:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_old_kinds_kept_in_list_item(self):                      # invariants: each old kind, inside an item
+        for content, kind in (("a `", R1), ("a < b", RA), ("a \\ b", RB), ("a ](b", RL), ("a `x|y` | b |", None),
+                              ("www.a", RX)):
+            for marker in ("-", "1."):
+                text = "%s %s\n" % (marker, content)
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), [(1, kind)] if kind else [])
+        self.assertEqual(pc.placeholder_hits("- a\n  b\n> c\n"), [(2, RI), (3, RQ)])
+        self.assertEqual(pc.placeholder_hits("- a `x|y`\n-|-\n"), [(1, R3)])
+        self.assertEqual(pc.placeholder_hits("- a <b>\n"), [(1, "<b>"), (1, RA)])
+        self.assertEqual(pc.placeholder_hits("- <b> a\n"), [(1, "<b>"), (1, RA), (1, RN)])         # D4's example
+        self.assertEqual(pc.placeholder_hits("- `a` <b> # c `\n"), [(1, "<b>"), (1, R1), (1, RA)])
+
+    def test_whitelist_first(self):                                  # N-j: only the char kind, as today
+        for text, want in (("-\tx\n", [(1, RC)]), ("- \t~~~\n", [(1, RC)]), ("-\xa0~~~ x\n", [(1, RC)]),
+                           ("- \xa0# h\n", [(1, RC)]), ("- # h\n-\t> q\n", [(2, RC)]), ("1.\t<b>\n", [(1, RC)])):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_inside_fences_masked(self):                             # N-k
+        for text in ("```\n- ~~~ x\n- # h\n1. 2. y\n- > q\n- | a |\n-     code\n- ---\n```\n",
+                     "~~~\n- > q\n* ```\n~~~\n", "````\n- ```\n```\n````\n", "```python\n1) # x\n```\n"):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+        self.assertEqual(pc.placeholder_hits("```\n- # h\n```\n- # h\n"), [(4, RN)])            # after the close
+
+    def test_numeric_text_same_on_every_interpreter(self):           # PC1-a: 4300 / 4301 digits, no int()
+        for digits in (4300, 4301):
+            num = "1" * digits
+            for text, want in (("%s. ~~~ x\n" % num, [(1, RN)]), ("%s) # h\n" % num, [(1, RN)]),
+                               ("- %s\n" % num, []), ("%s. x\n" % num, []), ("- %s. # h\n" % num, [(1, RN)]),
+                               ("- %s.5 x\n" % num, [])):
+                with self.subTest(digits=digits, text=text[-8:]):
+                    self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_no_unicode_database_read(self):                         # PC1-b: U+A7C0 is Cn on 3.9, Lu on 3.13
+        c = chr(0xA7C0)
+        with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
+            for text in ("- %s ~~~\n" % c, "- # %s\n" % c, "%s. # h\n" % c, "- %s\n" % c):
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), [(1, RC)])
+            self.assertEqual(pc.placeholder_hits("- # h\n"), [(1, RN)])
 
 
 if __name__ == "__main__":

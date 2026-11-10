@@ -599,10 +599,32 @@ def _mask_spans(line):
 
 REFUSED_KINDS = ("multi-line code span", "angle bracket outside code span", "backslash outside code span",
                  "link syntax", "indented line", "block quote", "pipe in table-row code span", CHAR_KIND,
-                 "extended autolink")
+                 "extended autolink", "block start in list item")
 _DELIMITER_ROW = re.compile(r"[ \t|:-]*")
 _DELIMITER_ROW_NO_PIPE = re.compile(r"[ :-]*")          # fix round 6 (U-v7-1, D2): a pipe-less delimiter-shaped line
 _TABLE_START = re.compile(r" {0,3}\|")
+_LIST_MARKER = re.compile(r"(?:[-*+]|[0-9]+[.)])(?= |\Z)")   # fix round 7 (Q-B2Z1-1 (a), D2): ASCII digits, no int()
+_ITEM_BLOCK_STARTS = ("```", "~~~", "#", ">", "|", "<")
+
+
+def _list_block_start(line):
+    """True when line is a list item line whose content starts a block (fix round 7, owner Q-B2Z1-1 (a), Z-1). A list
+    item line starts at column 0 with a marker, '-', '*', '+' or one or more ASCII digits then '.' or ')', followed by
+    a space or the end of the line. Its content, the text after the marker and all the spaces after it, starts a
+    block when it begins with a backtick or tilde run of 3 or more, '#', '>', '|', '<' or another such marker; when 5
+    or more spaces stand before non-blank content (indented code); or when it is a thematic break: 3 or more of one
+    of '-', '*', '_', with only spaces between."""
+    m = _LIST_MARKER.match(line)
+    if not m:
+        return False
+    content = line[m.end():].lstrip(" ")
+    if not content:
+        return False
+    if len(line) - m.end() - len(content) >= 5:
+        return True
+    if content.startswith(_ITEM_BLOCK_STARTS) or _LIST_MARKER.match(content):
+        return True
+    return content[0] in "-*_" and not content.replace(content[0], "").strip(" ") and content.count(content[0]) >= 3
 
 
 def _info_refusals(info, tilde):
@@ -685,9 +707,16 @@ def placeholder_hits(text):
     a table-row line (_table_row_lines). A fence opener's info string (the text after its fence marker) is checked RAW,
     with no span masking, on the opener's line (_info_refusals; fix round 6, D-v8-1): '<', '\\', '](' or ']:', and
     'www.' or '://' by the kinds above, and in a tilde fence an unpaired backtick run (R1) and a code span holding '|'
-    (R3); the fence still opens and its content stays masked. With these refused, a line holds only text, code spans, emphasis, entities,
-    email autolinks (no backtick can be part of one) and inert brackets, and the block forms left are column-0
-    paragraphs, headings, thematic breaks, column-0 list items, tables and column-0 fences, so no construct can take
+    (R3); the fence still opens and its content stays masked. Fix round 7 (owner Q-B2Z1-1 (a), Z-1): a list item
+    line outside a fenced block (column 0: '-', '*', '+' or ASCII digits then '.' or ')', then a space or the end of
+    the line) is refused as "block start in list item" when its content, after the marker and all the spaces that
+    follow it, starts a block: a backtick or tilde run of 3 or more, '#', '>', '|', '<', another list marker, 5 or
+    more spaces before non-blank content, or a thematic break (_list_block_start). The line keeps its other
+    refusals, and no fence opens on it. A block quote is refused as a line start, and footnote and reference
+    definitions by "link syntax", so a list item is the one container left. With these refused, a line holds only
+    text, code spans, emphasis, entities, email autolinks (no backtick can be part of one) and inert brackets, and
+    the block forms left are column-0 paragraphs, headings, thematic breaks, column-0 list items whose content holds
+    no block start, tables and column-0 fences, so no construct can take
     a backtick from a per-line span or hide text the per-line masking keeps. A hit is an _HTML match on the masked
     text, so its line always carries an "angle bracket outside code span" refusal too."""
     _need_str(text, "placeholder_hits")
@@ -732,6 +761,8 @@ def placeholder_hits(text):
             refused.append((n, 5))
         if "www." in low.lower() or "://" in low:
             refused.append((n, 8))
+        if _list_block_start(line):                  # fix round 7: base is "" inside a fence and on its fence lines
+            refused.append((n, 9))
     for i in sorted(_table_row_lines(base)):
         if any("|" in base[i][a:b] for a, b in _span_ranges(base[i])):
             refused.append((i + 1, 6))
