@@ -1308,21 +1308,23 @@ class Batch(Base):
                                                           "YYYY-MM-DD\n"))
 
     def answered_with_source(self):
-        """Known divergence KD-1: decision/1 on main refuses ``source`` (OQ-16), so this fixture patches
-        ``decisions.validate`` to pass these decision/2-shaped rows and exercise the CLI rendering and filter path
-        (Q-X27 (a)); rendering itself is pinned in test_batch.py. The ``decisions.validate`` patch is to be removed
-        when decision/2 (PR-D) is merged into this code. Real validation under ``--answered`` is pinned unpatched
-        by test_C9_C34_C36_answered_invalid_register_refused."""
-        self.put(dec(DC, "answered", source="r/a.md", answer="Second"),
-                 dec(DA, "answered", source="r/a.md", answer="First\nline"),
-                 dec(DB, "open", source="r/a.md"), dec(DD, "answered", source="r/b.md"),
-                 dec(DE, "withdrawn", source="r/a.md"))
-        p = mock.patch.object(decisions, "validate", return_value=[])
-        p.start()
-        self.addCleanup(p.stop)
+        """decision/2 rows carrying ``source`` (OQ-16) for the CLI rendering and filter path (Q-X27 (a));
+        rendering itself is pinned in test_batch.py. Known divergence KD-1 is removed: decision/2 (Task 2a.1) is on
+        this branch, so these rows go through the real ``decisions.validate`` (no patch), and
+        test_batch_answers_for_source asserts each row validates to ``[]``. Returns the rows."""
+        rows = (dec(DC, "answered", source="r/a.md", answer="Second"),
+                dec(DA, "answered", source="r/a.md", answer="First\nline"),
+                dec(DB, "open", source="r/a.md"), dec(DD, "answered", source="r/b.md"),
+                dec(DE, "withdrawn", source="r/a.md"))
+        self.put(*rows)
+        return rows
 
     def test_batch_answers_for_source(self):  # A2, A3, A4, N3, N10, N12; plan test P:1017-1018
-        self.answered_with_source()
+        rows = self.answered_with_source()
+        # KD-1 removed: the CLI's validate is the real function, and every fixture row is decision/2-valid
+        self.assertNotIsInstance(decisions_cli.decisions.validate, mock.Mock)
+        cfg = self.cfg()
+        self.assertEqual([(r["id"], decisions.validate(r, cfg)) for r in rows], [(r["id"], []) for r in rows])
         before = self.snap()
         for flag in ("--answered", "--ans"):
             out = self.ok(flag, "--source", "r/a.md", "--date", "2026-11-02")

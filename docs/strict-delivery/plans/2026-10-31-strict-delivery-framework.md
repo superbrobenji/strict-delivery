@@ -1414,10 +1414,10 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
 - Modify: `gates/__main__.py` (`GATES["claims"]`; order rule O3: committed after `block/sd1` has merged `main` containing block 1d's pull request)
 - Test: `tests/test_gate_claims.py`
 
-**Owner answers applied:** OQ-4, OQ-14; controller ruling on claim execution; Q-B2plan-4, Q-B2plan-5, Q-B2plan-6.
+**Owner answers applied:** OQ-4, OQ-14; controller ruling on claim execution; Q-B2plan-4, Q-B2plan-5, Q-B2plan-6; Q-2a2r4-1 (a) (one index copy per gate run).
 
 **Interfaces:**
-- Consumes: `claims.*`, `gitinfo.tracked_files`, `result.Result/gate_args/run_gate`, `config.load`, `__main__.GATES`.
+- Consumes: `claims.*` (`stale_paths`, and `stale_errors` with its `blob_ids` keyword among them), `gitinfo.tracked_files`, `gitinfo.blob_ids` (Q-2a2r4-1 (a)), `result.Result/gate_args/run_gate`, `config.load`, `__main__.GATES`.
 - Produces:
   - `PRODUCES = ()` (Task 2c.1's claims tool declares `claim`, Q-B2plan-6 (a)).
   - `check(args: list) -> Result` (gate `claims`) and `main(argv=None) -> int`.
@@ -1426,7 +1426,7 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
     - `schema`: `claims.schema.<file>`;
     - `store`: `claims.store.<suffix>`;
     - `document`: `claims.document.<file>`;
-    - `stale`: `claims.stale.<id>`, run per Q-B2plan-4;
+    - `stale`: `claims.stale.<id>`, run per Q-B2plan-4. The gate calls `gitinfo.blob_ids(root, claims.stale_paths(files, root))` once per run (every cited tracked regular path, each once; at most one index copy per run) and passes the map to every `claims.stale_errors(..., blob_ids=...)` call (owner Q-2a2r4-1 (a)); a map lacking a needed path is `claims.input`;
     - `base`: `claims.base.<suffix>`.
   - The gate never runs a claim's commands (controller ruling).
 
@@ -1446,8 +1446,12 @@ Owner answers on the controller tree, recorded since the first draft, are bindin
       assert "FAIL claims.stale." + CID in out and code == 1
   def test_cited_file_and_claim_changed_together_pass():   # F-B2p-1, Q-B2plan-4 (a)
       assert "PASS claims.stale" in out
+  def test_E9_several_files_several_items():   # Q-2a2r4-1 (a): gitinfo.blob_ids and shutil.copy2 counted, still real
+      assert (blob_ids_calls, index_copies) == (1, 1)
   def test_deleted_claim_file_fails():
       assert "FAIL claims.base.deleted." in out
+  def test_N14_different_tip_copies():         # F-R3-1: the tip holds the id twice, with different content
+      assert base_lines == ["FAIL claims.base.collision.%s: id %s already exists on main with other content; mint a new id" % (CID2, CID2)]
   def test_commands_never_run():               # direct: "touch ran"
       assert not os.path.exists(os.path.join(root, "ran"))
   def test_missing_config_is_input_fail():
