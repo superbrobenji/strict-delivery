@@ -18,6 +18,7 @@ from gates.lib import config, decisions, ids, schema
 from gates.lib.store import Store
 from gates.tools import decisions_cli
 from tests.helpers import E128, TOP, GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
+from tests.test_fold_table import FORTY
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEC = ".strict-delivery/state/decisions"
@@ -233,6 +234,33 @@ class PlanTests(Base):
         self.assertEqual((code, out), (0, "%s [] Gizmo rule? -> Yes\n" % DB))
         code, out, _ = self.cli("find", "widget", "--all")
         self.assertEqual(out, "%s [] Widget rule? -> Yes\n%s [] Widget again? -> (withdrawn)\n" % (DA, DC))
+
+    def test_fold_ascii_case(self):  # Task U1 D1: a record side of any case, an ASCII query side
+        self.put(dec(DA, effect="lasting", landed_in=["CLAUDE.md"], topics=["Alpha"], question="Prefix rule?"),
+                 dec(DB, effect="lasting", landed_in=["CLAUDE.md"], topics=["beta"], question="Other rule?"))
+        line = "%s [Alpha] Prefix rule? -> Yes\n" % DA
+        self.assertEqual(self.cli("find", "--topic", "alpha"), (0, line, ""))
+        self.assertEqual(self.cli("find", "PREFIX"), (0, line, ""))
+        self.assertEqual(self.cli("find", "--topic", "alph"), (0, "", ""))
+
+    def test_fold_full_folding_cli(self):  # Task U1 D2: ASCII terms against full-folding record text
+        sharp, kelvin = "Stra" + chr(0xDF) + "e rule?", chr(0x212A) + " rule?"
+        self.put(dec(DA, effect="lasting", landed_in=["CLAUDE.md"], question=sharp),
+                 dec(DB, effect="lasting", landed_in=["CLAUDE.md"], question=kelvin))
+        self.assertEqual(self.cli("find", "STRASSE"), (0, "%s [] %s -> Yes\n" % (DA, sharp), ""))
+        self.assertEqual(self.cli("find", "strasse"), (0, "%s [] %s -> Yes\n" % (DA, sharp), ""))
+        self.assertEqual(self.cli("find", "k", "rule"), (0, "%s [] %s -> Yes\n" % (DB, kelvin), ""))
+        self.assertEqual(self.cli("find", "K"), (0, "%s [] %s -> Yes\n" % (DB, kelvin), ""))
+
+    def test_cli_forty_refused(self):  # Task U1 D10: the argv whitelists refuse each of the 40, on both interpreters
+        self.put(dec(DA, effect="lasting", landed_in=["CLAUDE.md"]))
+        for cp in FORTY:
+            c = chr(cp)
+            with self.subTest(hex(cp)):
+                self.refused(["find", c], "TERM: U+%04X is not allowed" % cp)
+                self.refused(["find", "--topic", c], "--topic: must match")
+                self.refused(ask_argv(question="Keep " + c + "?"), "--question: U+%04X is not allowed" % cp)
+                self.refused(ask_argv(extra=["--topic", c]), "--topic: must match")
 
     def test_gates_pass_after_ask_and_decide(self):
         new, _ = self.ask(extra=["--topic", "ids"])

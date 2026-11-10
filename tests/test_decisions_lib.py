@@ -1,6 +1,7 @@
 """Tests for the decision schema and rules (gates.lib.decisions) through the production call paths: rows are
 written with ``write_record`` and read back with ``yamlsub.load``; ``landed_errors`` runs on real git
 repositories. Expected error lists are written out literally, never derived from the code under test."""
+import ast
 import copy
 import os
 import unicodedata
@@ -15,6 +16,7 @@ from gates.lib.migrations import migrate
 from gates.lib.result import GateError, Result, run_check
 from gates.lib.store import Record
 from tests.helpers import GitIsolatedTestCase, commit_all, make_repo, write_record
+from tests.test_fold_table import FORTY, FORTY_TARGET_313
 
 # The tag of every record built here comes from the schema it is checked against, never a literal (Global
 # Constraints "Test fixtures"; Q-2a1-3 (a), Q-RCp-3 (a)). Literal tags below are old-version refusal tests or
@@ -1390,6 +1392,153 @@ class LandedMapReasonTest(GitIsolatedTestCase):
         raised = run_check("x", lambda a: (_ for _ in ()).throw(GateError(errs[0])), []).render(False)
         self.assertEqual(raised, "FAIL x.input: landed_in: {k: a\\\\b} is not a string\n")
         self.assertNotIn("\\\\\\\\", res.render(False))
+
+
+class FoldTests(unittest.TestCase):
+    """Case folding through the frozen Unicode 13.0.0 table (Task U1 rows D1-D9, D11, K1, K3): expected match sets
+    are written by hand and the production path is ``find`` on hand-built records. The 40 code points are unassigned
+    at 13.0.0, so they fold to themselves on both interpreters (3.13's own ``casefold`` would fold them)."""
+
+    def ids(self, recs, terms=(), topic=None):
+        return [r.id for r in find(recs, list(terms), None, topic, False)]
+
+    def test_fold_ascii_case(self):  # D1
+        recs = [rec(dec(A, question="strasse", topics=["alpha"]))]
+        self.assertEqual(self.ids(recs, ["STRASSE"]), [A])
+        self.assertEqual(self.ids(recs, ["StRaSsE", "ALPHA"]), [A])
+        self.assertEqual(self.ids(recs, topic="Alpha"), [A])
+        self.assertEqual(self.ids(recs, topic="ALPHA"), [A])
+        recs = [rec(dec(A, question="STRASSE", topics=["Alpha"]))]
+        self.assertEqual(self.ids(recs, ["strasse", "alpha"]), [A])
+        self.assertEqual(self.ids(recs, topic="alpha"), [A])
+        self.assertEqual(self.ids(recs, ["strassen"]), [])
+        self.assertEqual(self.ids(recs, topic="alph"), [])
+
+    def test_fold_full_folding(self):  # D2
+        sharp, kelvin, dot, sigma = "stra\u00dfe", "\u212a", "\u0130", "\u03a3\u0391\u03a3"
+        cases = [("STRASSE", sharp), ("strasse", "STRA\u1e9eE"), ("strasse", "STRA\u00dfE"), ("STRASSE", "stra\u1e9ee"),
+                 ("k", kelvin), (kelvin, "k"), (kelvin, "K"), ("i", dot), ("i\u0307", dot), (dot, "i\u0307"),
+                 ("\u03c3\u03b1\u03c3", sigma), ("\u03c3\u03b1\u03c2", sigma), (sigma, "\u03c3\u03b1\u03c2"),
+                 ("\u03c2", "\u03c3"), ("ffi", "\ufb03"), ("\ufb03", "FFI")]
+        for term, text in cases:
+            with self.subTest(term=term, text=text):
+                self.assertEqual(self.ids([rec(dec(A, question=text))], [term]), [A])
+                self.assertEqual(self.ids([rec(dec(A, answer=text))], [term]), [A])
+                self.assertEqual(self.ids([rec(dec(A, topics=[text]))], [term]), [A])
+        self.assertEqual(self.ids([rec(dec(A, topics=["\u03c3\u03b1\u03c2"]))], topic=sigma), [A])
+        self.assertEqual(self.ids([rec(dec(A, topics=[dot]))], topic="i\u0307"), [A])
+        self.assertEqual(self.ids([rec(dec(A, topics=[dot]))], topic="i"), [])
+        for term, text in (("k", "l"), ("\u03c3", "\u03c4"), ("ss", "s"), ("i\u0307", "i")):
+            with self.subTest(term=term, text=text):
+                self.assertEqual(self.ids([rec(dec(A, question=text))], [term]), [])
+
+    def test_fold_forty_topic(self):  # D3, K2
+        for cp in FORTY:
+            c, target = chr(cp), chr(FORTY_TARGET_313[cp])
+            with self.subTest(hex(cp)):
+                self.assertEqual(self.ids([rec(dec(A, topics=[target]))], topic=c), [])
+                self.assertEqual(self.ids([rec(dec(A, topics=[c]))], topic=target), [])
+                self.assertEqual(self.ids([rec(dec(A, topics=[c]))], topic=c), [A])
+                self.assertEqual(self.ids([rec(dec(A, topics=[target]))], topic=target), [A])
+
+    def test_fold_forty_term(self):  # D4, K2
+        for cp in FORTY:
+            c, target = chr(cp), chr(FORTY_TARGET_313[cp])
+            with self.subTest(hex(cp)):
+                self.assertEqual(self.ids([rec(dec(A, question="x" + target + "y"))], [c]), [])
+                self.assertEqual(self.ids([rec(dec(A, question="x" + c + "y"))], [target]), [])
+                self.assertEqual(self.ids([rec(dec(A, question="x" + c + "y"))], [c]), [A])
+                self.assertEqual(self.ids([rec(dec(A, question="x" + target + "y"))], [target]), [A])
+
+    def test_fold_forty_row_text(self):  # D5, K2
+        for cp in FORTY:
+            c, target = chr(cp), chr(FORTY_TARGET_313[cp])
+            for field in ("question", "answer", "topics"):
+                with self.subTest(hex(cp), field=field):
+                    def row(s):
+                        return [rec(dec(A, **{field: [s] if field == "topics" else s}))]
+                    self.assertEqual(self.ids(row("a" + c + "b"), [target]), [])
+                    self.assertEqual(self.ids(row("a" + c + "b"), [c]), [A])
+                    self.assertEqual(self.ids(row("a" + c + "b"), ["a" + c + "b"]), [A])
+                    self.assertEqual(self.ids(row("a" + c + "b"), ["a" + target + "b"]), [])
+
+    def test_fold_surrogate(self):  # D6
+        recs = [rec(dec(A, question="a\udc80", topics=["\udc80"]))]
+        self.assertEqual(self.ids(recs, ["\udc80"]), [A])
+        self.assertEqual(self.ids(recs, ["\udc81"]), [])
+        self.assertEqual(self.ids(recs, topic="\udc80"), [A])
+        self.assertEqual(self.ids(recs, topic="\udc81"), [])
+
+    def test_fold_empty(self):  # D7
+        self.assertEqual(self.ids([rec(dec(A, question="q"))], [""]), [A])
+        self.assertEqual(self.ids([rec(dec(A, question=None, answer=None, topics=[]))], [""]), [])
+        self.assertEqual(self.ids([rec(dec(A, topics=[""]))], topic=""), [A])
+        self.assertEqual(self.ids([rec(dec(A, topics=["a"]))], topic=""), [])
+
+    def test_fold_non_str(self):  # D8
+        recs = [rec(dec(A, question=5, answer=None, topics=[["alpha"], 7, "alpha"]))]
+        self.assertEqual(self.ids(recs, ["ALPHA"]), [A])
+        self.assertEqual(self.ids(recs, topic="alpha"), [A])
+        self.assertEqual(self.ids([rec(dec(A, question=5, answer=None, topics=[]))], ["5"]), [])
+        for bad in (5, None, b"alpha", ["alpha"]):  # as a topic, None means no topic filter: not tested there
+            with self.subTest(repr(bad)):
+                with self.assertRaises(TypeError) as cm:
+                    self.ids(recs, [bad])
+                self.assertEqual(str(cm.exception), "_fold() argument must be str, not %s" % type(bad).__name__)
+                if bad is not None:
+                    with self.assertRaises(TypeError):
+                        self.ids(recs, topic=bad)
+
+    def test_fold_str_subclass(self):  # D9: the characters decide, never the subclass's own methods
+        class Liar(str):
+            def casefold(self):
+                return "zzz"
+
+            def __iter__(self):
+                return iter("zz")
+
+            def __eq__(self, other):
+                return True
+
+            def __hash__(self):
+                return 1
+
+        recs = [rec(dec(A, question="ab", topics=["ab"]))]
+        self.assertEqual(self.ids(recs, [Liar("AB")]), [A])
+        self.assertEqual(self.ids(recs, [Liar("zz")]), [])
+        self.assertEqual(self.ids(recs, topic=Liar("AB")), [A])
+        self.assertEqual(self.ids(recs, topic=Liar("zz")), [])
+        # a row text that is a str subclass is skipped, as before (the exact-type test of _texts)
+        self.assertEqual(self.ids([rec(dec(A, question=Liar("alpha"), answer=None))], ["alpha"]), [])
+
+    def test_skeleton_digit_runs(self):  # K1: numeric text at and past the int() digit limit
+        for n in (4300, 4301):
+            d = "1" * n
+            with self.subTest(n=n):
+                self.assertEqual(self.ids([rec(dec(A, question=d, topics=[d]))], [d], topic=d), [A])
+                self.assertEqual(self.ids([rec(dec(A, question=d + "2", topics=[d + "2"]))], [d], topic=d), [])
+
+    def test_decisions_no_case_method(self):  # D11, G4
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gates", "lib",
+                            "decisions.py")
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        methods = ("lower", "casefold", "upper", "swapcase", "title", "capitalize")
+        self.assertEqual([n.lineno for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr in methods], [])
+        mods = [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
+        mods += [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
+        self.assertNotIn("unicodedata", mods)
+
+    def test_skeleton_no_handler(self):  # K3: nothing in the fold path catches an exception
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gates", "lib",
+                            "decisions.py")
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        for name in ("_fold", "_texts", "_matches"):
+            self.assertIn(name, funcs)
+            self.assertEqual([n for n in ast.walk(funcs[name]) if isinstance(n, (ast.Try, ast.ExceptHandler))], [],
+                             name)
 
 
 if __name__ == "__main__":
