@@ -521,7 +521,9 @@ class Types(Dirs):
         self.run_types({"type": "cite"}, [
             ("docs/a.md", []), ("docs/a.md#sec", []), ("docs/a.md#", [m]), ("#sec", [m]), ("/abs.md", [m]),
             ("a/../b.md", [m]), ("./a.md", [m]), ("a//b.md", [m]), ("a/", [m]), ("../a.md", [m]), ("..", [m]), ("a\x01b", [m]), ("a.md#x\ny", [m]),
-            (5, [m]), ("", [m]), (".", [m]), ("docs/a.md#a#b", [m]), ("docs/a.md#sec#", [m])])
+            (5, [m]), ("", [m]), (".", [m]), ("docs/a.md#a#b", [m]), ("docs/a.md#sec#", [m]),
+            # the anchor site (Task 1d2.1): U+0C5D and U+1FAE0 are not printable at Unicode 13.0.0, on every interpreter
+            ("docs/a.md#xౝ", [m]), ("docs/a.md#x\U0001FAE0", [m])])
 
     def test_T13_sha_path(self):
         m = "must be <sha>:<normalised repo-relative path>"

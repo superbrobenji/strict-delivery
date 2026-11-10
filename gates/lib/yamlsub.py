@@ -12,6 +12,8 @@ import os
 import re
 import stat
 
+from gates.lib import print_table
+
 MAX_DEPTH = 50
 MAX_INT_CHARS = 1000
 _INT = re.compile(r"-?(0|[1-9][0-9]*)\Z")
@@ -568,7 +570,7 @@ def _dq(s: str) -> str:
             out.append("\\n")
         elif c == "\t":
             out.append("\\t")
-        elif ord(c) < 0x20 or ord(c) == 0x7F or (not c.isprintable() and ord(c) <= 0xFFFF):
+        elif ord(c) < 0x20 or ord(c) == 0x7F or (not print_table.is_printable(c) and ord(c) <= 0xFFFF):
             out.append("\\u%04x" % ord(c))
         else:
             out.append(c)
@@ -582,7 +584,7 @@ def _str_text(s: str, pos: str) -> str:
 
 def _block_form(s: str):
     """Return (header, lines) if s can be written as '|' or '|-', else None."""
-    if "\n" not in s or not all(c == "\n" or c.isprintable() for c in s):
+    if "\n" not in s or not all(c == "\n" or print_table.is_printable(c) for c in s):
         return None
     if s.endswith("\n"):
         body, header = s[:-1], "|"
