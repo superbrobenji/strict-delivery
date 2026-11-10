@@ -252,7 +252,7 @@ class ArgvTests(Base):  # A1-A4
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gates_main.main(["check"]), 2)
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                                         "gates: cites, decisions, register, schema\n")
+                                         "gates: cites, claims, decisions, register, schema\n")
         self.assertEqual(gates_main.GATES["register"], "gates.gate_register")
 
     def test_a2_config_invalid(self):  # A2
@@ -792,9 +792,10 @@ class EvidenceTests(Base):  # C9-C11, C14-C16
         at = store._merge_base_rows(root, st.directory, "main")
         self.assertEqual(sorted(at), [fpath(F)])
         cur = st.load()[0]
-        self.assertIs(store._row_changed(cur, at), False)
-        self.assertIs(store._row_changed(store.Record(F, {**cur.row, "review_round": 1}, cur.file), at), True)
-        self.assertIs(store._row_changed(store.Record(F, cur.row, FIND + "/y.yml"), at), True)
+        self.assertIs(store._row_changed(cur, at, "finding"), False)
+        self.assertIs(store._row_changed(store.Record(F, {**cur.row, "review_round": 1}, cur.file), at, "finding"),
+                      True)
+        self.assertIs(store._row_changed(store.Record(F, cur.row, FIND + "/y.yml"), at, "finding"), True)
         from gates.lib.result import GateError
         with self.assertRaisesRegex(GateError, "^the base ref must be a string$"):
             store._merge_base_rows(root, st.directory, 1)

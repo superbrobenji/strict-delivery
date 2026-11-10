@@ -587,7 +587,7 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                         "gates: cites, decisions, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, index\n")
+                         "gates: cites, claims, decisions, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, index\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)
@@ -698,7 +698,7 @@ class CitesDispatchTest(GitIsolatedTestCase):
     def test_json_flag_position(self):  # D8
         code, out, err = self.run_main(["check", "--json", "cites"])
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("gates: cites, decisions, register, schema\n", err)
+        self.assertIn("gates: cites, claims, decisions, register, schema\n", err)
 
 
 if __name__ == "__main__":

@@ -80,7 +80,7 @@ def check(args: list) -> Result:
     at_mb = _merge_base_rows(root, store.directory, base)
     _category(res, "evidence", [(key[r.file], e) for r in records
                                 for e in findings.evidence_errors(r.row, root, cfg, decision_records, tracked,
-                                                                  _row_changed(r, at_mb))])
+                                                                  _row_changed(r, at_mb, "finding"))])
     _category(res, "epic", findings.epic_errors(records))
     known = {r.id for r in records if ids.id_problem(r.id, store.prefix) == ""}
     _reports(res, root, cfg, tracked, known, store.prefix)
