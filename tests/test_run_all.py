@@ -302,6 +302,21 @@ class GateListTest(RunAllCase):
                             + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % modname
                             + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
 
+    def test_module_not_found_without_a_module_name_is_import_failure(self):  # F-5: e.name None or not a module
+        root = self.fixture()
+        for label, body in (("name None", "raise ModuleNotFoundError('boom')\n"),
+                            ("name empty", "raise ModuleNotFoundError('boom', name='')\n"),
+                            ("name other", "raise ModuleNotFoundError('boom', name='some.other')\n")):
+            with self.subTest(label):
+                del self.seen[:]
+                self.all_pass()
+                modname = self.file_module(body)
+                self.put(gates_main.GATES, "claims", modname)
+                self.expect(["--root", root],
+                            ok_lines("schema", "register", "decisions")
+                            + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % modname
+                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+
     def test_no_check_is_missing(self):  # G4
         self.all_pass()
         mod = self.fake("claims")
