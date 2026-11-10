@@ -1,0 +1,9 @@
+F-B2V3-2: int() on an unbounded SD-R id (class: input size by interpreter: digit count of an SD-R id: {>4300 digits on 3.11+}); run on /usr/bin/python3 and /opt/homebrew/bin/python3.13
+harness: mut3.py (with fix.py, fix3.py, fix4.py, mut.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill tests.test_prompt_blocks; each row but present and restored applies one change to the fixed tree (a member's fix reverted, or a class mutant)
+present [python3]                                rc=0 OK
+reverted: int() on every id [python3]            rc=1 FAILED (failures=3) test_rule_id_digit_count_same_on_every_interpreter
+restored [python3]                               rc=0 OK
+present [python3.13]                             rc=0 OK
+reverted: int() on every id [python3.13]         rc=1 FAILED (failures=2, errors=1) test_rule_id_digit_count_same_on_every_interpreter
+restored [python3.13]                            rc=0 OK
+mutants 2 killed 2

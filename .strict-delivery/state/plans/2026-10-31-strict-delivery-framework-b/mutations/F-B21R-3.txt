@@ -1,0 +1,9 @@
+F-B21R-3: sentence pin check boundaries
+harness: fix1.py; each run in a fresh copy of tests/__init__.py, tests/prose_check.py, tests/test_playbook.py, playbook/rules.md under a private mktemp -d; command: python3 -m unittest tests.test_playbook; base of the revert: f8780e7
+present   rc=0 OK 
+reverted  rc=1 FAILED (failures=7) test_sentences_split,test_unpinned_sentence_any_start_or_end
+restored  rc=0 OK 
+mutant full stop only               rc=1 FAILED (failures=3) killed-by=test_sentences_split,test_unpinned_sentence_any_start_or_end
+mutant no bracket alternative       rc=1 FAILED (failures=1) killed-by=test_sentences_split
+mutant one space only               rc=1 FAILED (failures=2) killed-by=test_sentences_split,test_unpinned_sentence_any_start_or_end
+mutants 3 killed 3

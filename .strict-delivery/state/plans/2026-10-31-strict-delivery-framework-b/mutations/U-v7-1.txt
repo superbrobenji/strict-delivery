@@ -1,0 +1,32 @@
+interpreter 3.13.18 finding U-v7-1
+fix present: PASS (ran=168 failures=0)
+mutant [fix reverted: pipe-less form removed]: fix reverted: FAIL (ran=168 failures=45) killed by test_numeric_text_same_on_every_interpreter (digits=4300, text='h\n:---------'), test_numeric_text_same_on_every_interpreter (digits=4300, text='h\n:-\n`a|b` 1'), test_numeric_text_same_on_every_interpreter (digits=4301, text='h\n:---------'), test_numeric_text_same_on_every_interpreter (digits=4301, text='h\n:-\n`a|b` 1'), test_pipe_less_delimiter_rows, test_pipe_less_delimiter_rows (text='h `a|b`\n :- \n`c|d`\nx `e|f` y\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: '-' requirement dropped]: fix reverted: FAIL (ran=168 failures=4) killed by test_widening_controls (text='h `a|b`\n::\n'), test_widening_controls (text='h `a|b`\n:\n'), test_widening_controls (text='h\n::\n`c|d`\n'), test_widening_controls (text='h\n:\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: ':' requirement dropped]: fix reverted: FAIL (ran=168 failures=6) killed by test_widening_controls (text='h `a|b`\n- - -\n'), test_widening_controls (text='h `a|b`\n---\n'), test_widening_controls (text='h `a|b`\n-\n'), test_widening_controls (text='h\n- - -\n`c|d`\n'), test_widening_controls (text='h\n---\n`c|d`\n'), test_widening_controls (text='h\n-\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: space member dropped]: fix reverted: FAIL (ran=168 failures=8) killed by test_pipe_less_delimiter_rows (text='h `a|b`\n :- \n`c|d`\nx `e|f` y\n'), test_pipe_less_delimiter_rows (text='h `a|b`\n: - :\n`c|d`\nx `e|f` y\n'), test_pipe_less_delimiter_rows (text='h\n :- \n`c|d`\n'), test_pipe_less_delimiter_rows (text='h\n :- \n`c|d`\n\n`e|f`\n'), test_pipe_less_delimiter_rows (text='h\n :- \nb\nc `c|d`\n'), test_pipe_less_delimiter_rows (text='h\n: - :\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: fullmatch -> match]: fix reverted: FAIL (ran=168 failures=32) killed by md'), test_widening_controls (text='h `a|b`\n:-x\n'), test_widening_controls (text='h\n:-x\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [equivalent: pipe-less form admits '|' (the old form covers it)]: fix reverted: SURVIVED (ran=168 failures=0) killed by -
+  fix restored: PASS (ran=168 failures=0)
+mutant [equivalent: pipe-less form admits tab (the character whitelist refuses it first)]: fix reverted: SURVIVED (ran=168 failures=0) killed by -
+  fix restored: PASS (ran=168 failures=0)
+interpreter 3.9.6 finding U-v7-1
+fix present: PASS (ran=168 failures=0)
+mutant [fix reverted: pipe-less form removed]: fix reverted: FAIL (ran=168 failures=45) killed by test_numeric_text_same_on_every_interpreter (digits=4300, text='h\n:---------'), test_numeric_text_same_on_every_interpreter (digits=4300, text='h\n:-\n`a|b` 1'), test_numeric_text_same_on_every_interpreter (digits=4301, text='h\n:---------'), test_numeric_text_same_on_every_interpreter (digits=4301, text='h\n:-\n`a|b` 1'), test_pipe_less_delimiter_rows, test_pipe_less_delimiter_rows (text='h `a|b`\n :- \n`c|d`\nx `e|f` y\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: '-' requirement dropped]: fix reverted: FAIL (ran=168 failures=4) killed by test_widening_controls (text='h `a|b`\n::\n'), test_widening_controls (text='h `a|b`\n:\n'), test_widening_controls (text='h\n::\n`c|d`\n'), test_widening_controls (text='h\n:\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: ':' requirement dropped]: fix reverted: FAIL (ran=168 failures=6) killed by test_widening_controls (text='h `a|b`\n- - -\n'), test_widening_controls (text='h `a|b`\n---\n'), test_widening_controls (text='h `a|b`\n-\n'), test_widening_controls (text='h\n- - -\n`c|d`\n'), test_widening_controls (text='h\n---\n`c|d`\n'), test_widening_controls (text='h\n-\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: space member dropped]: fix reverted: FAIL (ran=168 failures=8) killed by test_pipe_less_delimiter_rows (text='h `a|b`\n :- \n`c|d`\nx `e|f` y\n'), test_pipe_less_delimiter_rows (text='h `a|b`\n: - :\n`c|d`\nx `e|f` y\n'), test_pipe_less_delimiter_rows (text='h\n :- \n`c|d`\n'), test_pipe_less_delimiter_rows (text='h\n :- \n`c|d`\n\n`e|f`\n'), test_pipe_less_delimiter_rows (text='h\n :- \nb\nc `c|d`\n'), test_pipe_less_delimiter_rows (text='h\n: - :\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [pipe-less form: fullmatch -> match]: fix reverted: FAIL (ran=168 failures=32) killed by md'), test_widening_controls (text='h `a|b`\n:-x\n'), test_widening_controls (text='h\n:-x\n`c|d`\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [equivalent: pipe-less form admits '|' (the old form covers it)]: fix reverted: SURVIVED (ran=168 failures=0) killed by -
+  fix restored: PASS (ran=168 failures=0)
+mutant [equivalent: pipe-less form admits tab (the character whitelist refuses it first)]: fix reverted: SURVIVED (ran=168 failures=0) killed by -
+  fix restored: PASS (ran=168 failures=0)

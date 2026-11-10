@@ -1,0 +1,10 @@
+F-B23RR1-1: FX5 class detector (class: FX5 class detector: block-end verifier paragraphs not recognised: those without the phrase "final review"; those naming the bare "verifier")
+harness: mut2.py (with fix.py, fix2.py, mut.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill; each row but present and restored applies one change to the fixed tree (a member reverted or stripped, or a class mutant)
+present                                          rc=0 OK
+reverted detector (final review + named term)    rc=1 FAILED (failures=14) test_class_refuses_an_unconditioned_paragraph
+reverted bare-verifier term only                 rc=1 FAILED (failures=8) test_class_refuses_an_unconditioned_paragraph test_verifier_non_steps_each_exempt_one_unit
+M9 inserted in review.md (Verifier section)      rc=1 FAILED (failures=7) test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph
+bare verifier step inserted in sessions.md       rc=1 FAILED (failures=7) test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph
+exemption too broad (roles.md any row)           rc=1 FAILED (failures=1) test_verifier_non_steps_each_exempt_one_unit
+restored                                         rc=0 OK
+mutants 5 killed 5

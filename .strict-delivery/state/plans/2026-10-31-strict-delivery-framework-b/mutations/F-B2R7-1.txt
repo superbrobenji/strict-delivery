@@ -1,0 +1,53 @@
+F-B2R7-1 (F-1, U-1): mutation transcript of tests/prose_check.py, fix round 8 (owner Q-B2F1-1 (a)); the revert puts back 01cc2bd's masked check ('"](" in low or "]:" in low') and drops the '[' start; each run is python -m unittest tests.test_playbook with a fresh PYTHONPYCACHEPREFIX
+
+interpreter: /usr/bin/python3 Python 3.9.6
+prose_check.py sha256 (fix present): 6cb260de42879155f28297a5e592f1b2ed3d82934a4f15896dc0c35538f4ec28
+== fix present: rc=0 Ran 186 tests in 8.315s | OK -> PASS
+  reproducers:
+    "- [a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]:` x\n' [(1, 'refused: link syntax')]
+    "[a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]: x\n' [(1, 'refused: multi-line code span'), (1, 'refused: link syntax')]
+    '[a]: x\n' [(1, 'refused: link syntax')]
+== fix reverted: rc=1 Ran 186 tests in 8.165s | FAILED (failures=178) -> FAIL
+  failing: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_f1_u1_reproducers (RawLinkSyntaxTest); FAIL: test_link_colon (WhitelistTest); FAIL: test_link_paren (WhitelistTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest); FAIL: test_raw_link_syntax_in_span (RawLinkSyntaxTest) (+1 more)
+  reproducers:
+    "- [a`]: x '<role>`'\n" []
+    '- [a`]:` x\n' []
+    "[a`]: x '<role>`'\n" []
+    '- [a`]: x\n' [(1, 'refused: multi-line code span'), (1, 'refused: link syntax')]
+    '[a]: x\n' [(1, 'refused: link syntax')]
+== fix restored: rc=0 Ran 186 tests in 8.304s | OK -> PASS
+  reproducers:
+    "- [a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]:` x\n' [(1, 'refused: link syntax')]
+    "[a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]: x\n' [(1, 'refused: multi-line code span'), (1, 'refused: link syntax')]
+    '[a]: x\n' [(1, 'refused: link syntax')]
+
+interpreter: /opt/homebrew/bin/python3.13 Python 3.13.18
+prose_check.py sha256 (fix present): 6cb260de42879155f28297a5e592f1b2ed3d82934a4f15896dc0c35538f4ec28
+== fix present: rc=0 Ran 186 tests in 6.623s | OK -> PASS
+  reproducers:
+    "- [a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]:` x\n' [(1, 'refused: link syntax')]
+    "[a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]: x\n' [(1, 'refused: multi-line code span'), (1, 'refused: link syntax')]
+    '[a]: x\n' [(1, 'refused: link syntax')]
+== fix reverted: rc=1 Ran 186 tests in 6.483s | FAILED (failures=178) -> FAIL
+  failing: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_f1_u1_reproducers (RawLinkSyntaxTest); FAIL: test_link_colon (WhitelistTest); FAIL: test_link_paren (WhitelistTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest); FAIL: test_raw_link_syntax_in_span (RawLinkSyntaxTest) (+1 more)
+  reproducers:
+    "- [a`]: x '<role>`'\n" []
+    '- [a`]:` x\n' []
+    "[a`]: x '<role>`'\n" []
+    '- [a`]: x\n' [(1, 'refused: multi-line code span'), (1, 'refused: link syntax')]
+    '[a]: x\n' [(1, 'refused: link syntax')]
+== fix restored: rc=0 Ran 186 tests in 6.524s | OK -> PASS
+  reproducers:
+    "- [a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]:` x\n' [(1, 'refused: link syntax')]
+    "[a`]: x '<role>`'\n" [(1, 'refused: link syntax')]
+    '- [a`]: x\n' [(1, 'refused: multi-line code span'), (1, 'refused: link syntax')]
+    '[a]: x\n' [(1, 'refused: link syntax')]
+
+prose_check.py sha256 after restore: 6cb260de42879155f28297a5e592f1b2ed3d82934a4f15896dc0c35538f4ec28 (same)

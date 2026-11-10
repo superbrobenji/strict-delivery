@@ -1,0 +1,8 @@
+F-B2V3-3: sentences() undersplits (class: input alphabet: sentence boundary characters: {U+2026 and other non-listed terminal punctuation (STerm), letters unassigned in the 3.9 UCD but uppercase in later versions})
+harness: mut3.py (with fix.py, fix3.py, fix4.py, mut.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill tests.test_prompt_blocks; each row but present and restored applies one change to the fixed tree (a member's fix reverted, or a class mutant)
+present                                          rc=0 OK
+reverted: stops (U+2026 and STerm)               rc=1 FAILED (failures=17) test_sentence_stops_class
+reverted: UCD boundary (Cn/Lu after a stop)      rc=1 FAILED (failures=2) test_sentence_split_uses_no_unicode_database test_sentence_stops_class
+reverted: both                                   rc=1 FAILED (failures=19) test_sentence_split_uses_no_unicode_database test_sentence_stops_class
+restored                                         rc=0 OK
+mutants 3 killed 3

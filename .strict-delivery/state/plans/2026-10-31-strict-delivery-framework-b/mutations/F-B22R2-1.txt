@@ -1,0 +1,10 @@
+F-B22R2-1: playbook rule cross-reference
+harness: fix1.py; each run in a fresh copy of tests/, playbook/, skills/, docs/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook; reverted = the fix text replaced by the 0566871 text
+present   rc=0 OK 
+reverted  rc=1 FAILED (failures=1) test_rule_row_references_pair_each_method_with_its_row
+restored  rc=0 OK 
+mutant intro ids swapped          rc=1 FAILED (failures=1) test_rule_row_references_pair_each_method_with_its_row
+mutant methods ids swapped        rc=1 FAILED (failures=1) test_rule_row_references_pair_each_method_with_its_row
+mutant task review id wrong       rc=1 FAILED (failures=1) test_rule_row_references_pair_each_method_with_its_row
+mutant unpinned reference         rc=1 FAILED (failures=1) test_rule_row_references_pair_each_method_with_its_row
+mutants 4 killed 4

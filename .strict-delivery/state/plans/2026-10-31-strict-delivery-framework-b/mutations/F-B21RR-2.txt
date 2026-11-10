@@ -1,0 +1,13 @@
+F-B21RR-2: rule text fidelity: cross-references and gate attribution
+harness: fix2.py; each run in a fresh copy of tests/__init__.py, tests/prose_check.py, tests/test_playbook.py, playbook/rules.md under a private mktemp -d; command: python3 -m unittest tests.test_playbook; base of the revert: 689162e
+present   rc=0 OK 
+reverted  rc=1 FAILED (failures=9) test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+restored  rc=0 OK 
+mutant drop '(kind `breakdown/1`, spec appendix A)' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'measured Claude Code limits, spec §10)' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop '`streams.yml` (programs and streams design §5).' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'bring process changes to the owner' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'the background-job check below.' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop "(`gate_checkpoint`'s `checkpoint.pushed`)" rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'in a pull request of its own (spec §5);' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutants 7 killed 7

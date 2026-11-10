@@ -1,0 +1,7 @@
+F-B2FX2RR-3: exempt prose units edited in place; fixed by verbatim exemptions (D6)
+harness: mut4.py (with fix.py, fix5.py, mut.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill tests.test_prompt_blocks; each row but present and restored applies one change to the fixed tree (a member's fix reverted, or a class mutant)
+present                                          rc=0 OK
+verifier exemption back to start-only            rc=1 FAILED (failures=8) test_exempt_unit_with_an_added_step_fails
+deferral exemption back to start-only            rc=1 FAILED (failures=1) test_deferral_class_every_unit_names_low_plateau
+restored                                         rc=0 OK
+mutants 2 killed 2
