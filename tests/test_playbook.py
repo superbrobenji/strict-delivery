@@ -2215,6 +2215,20 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
                       "are dropped by the renderer", doc)
         self.assertIn("This is part of the accepted residual (other GFM table forms are not modeled; owner "
                       "2026-11-10, Q-B2UR1-1 (a))", doc)
+        # fix round 1 (F-1): exact residual wording; a code span there gives no hit, raw HTML there is still caught
+        self.assertNotIn("is hidden while placeholder_hits returns no hit", doc)
+        self.assertNotIn("is not rendered while `placeholder_hits` returns no hit; this", p)
+        self.assertIn("so a code span there is hidden and gives no hit and no refusal (raw HTML there is still "
+                      "caught: a hit plus an \"angle bracket outside code span\" refusal). This is part of", doc)
+        self.assertIn("so a code span there is not rendered and `placeholder_hits` gives no hit and no refusal for "
+                      "it (raw HTML there is still caught: a hit plus an `angle bracket outside code span` "
+                      "refusal); this is part of", p)
+
+    def test_excess_table_cell_raw_html_is_still_caught(self):       # UR-1 review F-1
+        # Raw HTML (outside a code span) in an excess cell is not hidden from the checker: a hit plus the
+        # angle-bracket refusal, both on line 3. Only the code span case is the residual.
+        self.assertEqual(pc.placeholder_hits("| a |\n| - |\n| x | <b> |"),
+                         [(3, "<b>"), (3, "refused: angle bracket outside code span")])
 
     def test_excess_table_cell_is_the_documented_residual(self):     # UR-1
         # Owner Q-B2UR1-1 (a), 2026-11-10: GFM drops a table body row's cells beyond the header's count, so the

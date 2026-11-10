@@ -27,3 +27,33 @@ OK
 /opt/homebrew/bin/python3.13: 4. both restored (PASS expected)
 Ran 187 tests in 8.284s
 OK
+
+fix round 1 (F-1): exact residual wording; tests.test_playbook, both interpreters; tests: CharWhitelistTest.test_plan_sentence, test_excess_table_cell_raw_html_is_still_caught (hit plus refusal on line 3)
+/usr/bin/python3: 5. corrected sentences present (PASS expected)
+Ran 188 tests in 10.267s
+OK
+/opt/homebrew/bin/python3.13: 5. corrected sentences present (PASS expected)
+Ran 188 tests in 7.816s
+OK
+/usr/bin/python3: 6. plan sentence reverted to the 14f4197 wording (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest)
+Ran 188 tests in 10.333s
+FAILED (failures=1)
+/opt/homebrew/bin/python3.13: 6. plan sentence reverted to the 14f4197 wording (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest.test_plan_sentence)
+Ran 188 tests in 7.976s
+FAILED (failures=1)
+/usr/bin/python3: 7. docstring sentence reverted to the 14f4197 wording (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest)
+Ran 188 tests in 10.324s
+FAILED (failures=1)
+/opt/homebrew/bin/python3.13: 7. docstring sentence reverted to the 14f4197 wording (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest.test_plan_sentence)
+Ran 188 tests in 7.706s
+FAILED (failures=1)
+/usr/bin/python3: 8. both restored (PASS expected)
+Ran 188 tests in 10.223s
+OK
+/opt/homebrew/bin/python3.13: 8. both restored (PASS expected)
+Ran 188 tests in 7.841s
+OK
