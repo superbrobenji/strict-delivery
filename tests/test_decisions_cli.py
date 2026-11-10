@@ -256,7 +256,7 @@ class Argv(Base):
                 with contextlib.redirect_stderr(err):
                     self.assertEqual(decisions_cli.main(argv), 2)
                 self.assertEqual(err.getvalue(), "usage: python3 -m gates decisions <sub> [args]\n"
-                                                 "subcommands: ask, decide, find, withdraw\n")
+                                                 "subcommands: ask, batch, decide, find, withdraw\n")
 
     def test_A1_subprocess(self):
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
@@ -927,6 +927,416 @@ class Grammars(Base):
         with mock.patch.object(decisions_cli.gitinfo, "head_sha", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 self.cli(*ask_argv())
+
+
+# ---------------------------------------------------------------- Task 1d.3: batch (task-1d.3-domain.md C, N, U)
+
+_IDLINE = __import__("re").compile(ids.id_pattern("DEC").pattern + r" \| class: ")
+ALL_NEW = "; not an ancestor of HEAD: every open record is new"
+NO_CUT = "; no cut-off: every open record is new"
+
+
+def _section(out, head):
+    lines = out.splitlines()
+    if head not in lines:
+        return []
+    rest = lines[lines.index(head) + 1:]
+    if head == "## New" and "## Also open" in rest:
+        rest = rest[:rest.index("## Also open")]
+    return [l.split(" | ")[0] for l in rest if _IDLINE.match(l)]
+
+
+def new_ids(out):
+    return _section(out, "## New")
+
+
+def also_ids(out):
+    return _section(out, "## Also open")
+
+
+def qlines(id_, question="Keep X?"):  # decision/1 rows from dec(): typed from P:973
+    return [id_ + " | class: scope", "Question: " + question, "Recommended: none", "Alternatives:",
+            "- yes -- cost: none", "- no -- cost: rework", "Effect: one-off", "Topics: none", "Applies to: none", ""]
+
+
+class Batch(Base):
+    def porcelain(self):
+        return git(self.root, "status", "--porcelain", "--untracked-files=all")
+
+    def ok(self, *args):
+        code, out, err = self.cli("batch", *args)
+        self.assertEqual((code, err), (0, ""), err)
+        return out
+
+    def two_commits(self):
+        self.put(dec(DA, "open"), commit=True)
+        c1 = git(self.root, "rev-parse", "HEAD")
+        self.put(dec(DB, "open"), commit=True)
+        return c1
+
+    def test_batch_since_ancestor_splits_new_and_also_open(self):  # C3, C4, C28, C35, C37
+        c1 = self.two_commits()
+        for since in (c1, c1[:7]):
+            with self.subTest(since=since):
+                out = self.ok("--since", since)
+                self.assertEqual((new_ids(out), also_ids(out)), ([DB], [DA]))
+                self.assertEqual(out, "\n".join(["Owner questions: 1 new, 1 also open (cut-off %s)" % since, "",
+                                                 "## New", "### source: none"] + qlines(DB)
+                                                + ["## Also open", "### source: none"] + qlines(DA)) + "\n")
+
+    def test_C5_head_itself_and_working_tree_record(self):
+        self.two_commits()
+        head = git(self.root, "rev-parse", "HEAD")
+        out = self.ok("--since", head)
+        self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+        self.put(dec(DC, "open"))  # only in the working tree
+        out = self.ok("--since", head)
+        self.assertEqual((new_ids(out), also_ids(out)), ([DC], [DA, DB]))
+
+    def test_batch_since_not_ancestor_all_new(self):  # C7, C8, C20, C23, C25
+        c1 = self.two_commits()
+        git(self.root, "checkout", "-q", "-b", "side", c1)
+        commit_all(self.root, "side")
+        side = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "checkout", "-q", "--orphan", "orph")
+        orphan = commit_all(self.root, "orphan")
+        git(self.root, "checkout", "-q", "-f", "main")
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        git(self.root, "branch", c1[:7] + "f", side)  # a hex ref name naming the side commit wins over the prefix
+        for since in (side, "0" * 40, orphan, tree, c1[:7] + "f"):
+            with self.subTest(since=since):
+                out = self.ok("--since", since)
+                self.assertEqual(out.splitlines()[0], "Owner questions: 2 new, 0 also open (cut-off %s%s)"
+                                 % (since, ALL_NEW))
+                self.assertEqual((set(new_ids(out)), also_ids(out)), ({DA, DB}, []))
+
+    def test_C24_annotated_tag_object_is_an_ancestor(self):
+        c1 = self.two_commits()
+        git(self.root, "tag", "-a", "t1", "-m", "t", c1)
+        tag = git(self.root, "rev-parse", "t1")
+        self.assertNotEqual(tag, c1)
+        out = self.ok("--since", tag)
+        self.assertEqual((new_ids(out), also_ids(out)), ([DB], [DA]))
+        self.assertIn("(cut-off %s)" % tag, out.splitlines()[0])
+
+    def test_C22_shallow_clone_cut_beyond_boundary(self):
+        c1 = self.two_commits()
+        clone = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", "--depth", "1", "file://" + self.root, clone)
+        self.root = clone
+        out = self.ok("--since", c1)
+        self.assertEqual((set(new_ids(out)), also_ids(out)), ({DA, DB}, []))
+        self.assertIn(ALL_NEW, out.splitlines()[0])
+
+    def test_batch_without_since_all_new(self):  # C2
+        self.two_commits()
+        out = self.ok()
+        self.assertEqual(out.splitlines()[0], "Owner questions: 2 new, 0 also open (cut-off none%s)" % NO_CUT)
+        self.assertIn("no cut-off", out.splitlines()[0])
+        self.assertEqual(new_ids(out), [DA, DB])
+
+    def test_C21_unborn_head(self):
+        unborn = os.path.join(self.tmp, "unborn")
+        os.mkdir(unborn)
+        git(unborn, "init", "-q", "-b", "main")
+        write_record(unborn, ".strict-delivery/config.yml", minimal_config())
+        write_record(unborn, "%s/%s.yml" % (DEC, DA), dec(DA, "open"))
+        self.root = unborn
+        for args in ((), ("--since", "a" * 40)):
+            with self.subTest(args=args):
+                self.assertEqual(new_ids(self.ok(*args)), [DA])
+
+    def test_batch_writes_nothing(self):  # C38, C39
+        self.two_commits()
+        self.put(dec(DC, "open"))
+        before, snap = self.porcelain(), self.snap()
+        a, b = self.ok(), self.ok()
+        self.assertEqual(a, b)
+        self.assertEqual((self.porcelain(), self.snap()), (before, snap))
+        self.assertFalse(os.path.exists(os.path.join(self.root, DEC, "index.yml")))
+
+    def test_batch_skips_resolved(self):  # C31, C32, C33
+        self.put(dec(DA, "answered"), dec(DB, "withdrawn"), commit=True)
+        c1 = git(self.root, "rev-parse", "HEAD")
+        self.put(dec(DC, "answered"), commit=True)  # added after the cut-off, then answered
+        for args in ((), ("--since", c1)):
+            out = self.ok(*args)
+            self.assertTrue(out.startswith("Owner questions: 0 new, 0 also open (cut-off "), out)
+            for i in (DA, DB, DC):
+                self.assertNotIn(i, out)
+
+    def test_C46_no_register_directory(self):
+        self.assertEqual(self.ok(), "Owner questions: 0 new, 0 also open (cut-off none%s)\n\n## New\n" % NO_CUT)
+
+    def test_batch_bad_since_refused(self):  # C1, C6, C10, C11, C13, C14, C27, U3; D-23, D-24
+        msg = "--since must be 7 to 40 lowercase hex digits"
+        for v in ("ABC1234", "abc12", "abc123", "a" * 41, "x" * 41, "HEAD", "main", "-1234567", "a" * 64,
+                  "a" * 4300, "a" * 4301, "１" * 4300, "abc1234 ", ""):
+            with self.subTest(v=v[:12]):
+                code, out, err = self.cli("batch", "--since", v)
+                self.assertEqual((code, out), (1, ""))
+                self.assertEqual(err, "decisions batch: %s\n" % msg)
+        code, out, err = self.cli("batch", "--since=-x")
+        self.assertEqual((code, out, err), (1, "", "decisions batch: %s\n" % msg))
+        self.usage(["batch", "--since", "-x"])
+
+    def test_usage_errors(self):  # C12, C15, C16, C18, C44, N3, N7, N8, U5
+        for args in (["batch", "--since", "-x"], ["batch", "--since", "abc1234", "--since", "abc1235"],
+                     ["batch", "--since", "abc1234", "--sin=abc1235"], ["batch", "--s", "abc1234"],
+                     ["batch", "--since"], ["batch", "--root", self.root], ["batch", "--answered", "--source", "-r"],
+                     ["batch", "--answered", "--source", "r", "--date", "-2026-11-02"],
+                     ["batch", "--answered", "--source", "r", "--date", "2026-11-02", "--date", "2026-11-03"],
+                     ["batch", "--answered", "--source", "r", "--source", "s"], ["batch", "extra"], ["batch", "-h"],
+                     ["batch", "--help"]):
+            with self.subTest(args=args):
+                self.usage(args)
+        c1 = self.two_commits()
+        self.assertEqual(also_ids(self.ok("--sin", c1)), [DA])  # C16: argparse abbreviation, as gate_args
+
+    def test_C19_commit_exists_is_consulted(self):  # P:976 names commit_exists; merge_base alone is not the rule
+        c1 = self.two_commits()
+        with mock.patch.object(decisions_cli.gitinfo, "commit_exists", return_value=False) as m:
+            out = self.ok("--since", c1)
+        m.assert_called_once_with(self.root, c1)
+        self.assertEqual((set(new_ids(out)), also_ids(out)), ({DA, DB}, []))
+
+    def test_C26_ambiguous_short_prefix_all_new(self):  # F-1d3-r3: a real 7-hex prefix shared by a commit and a blob
+        # Found offline by hashing candidates: commit object (empty tree, the fixture identity and date of
+        # tests/helpers.py, message "m5987") and blob "b5241\n" share the prefix 6b68082.
+        self.two_commits()
+        x = git(self.root, "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "m5987")
+        self.assertEqual(x, "6b68082fa320950795cf327440fecf620a0ca8f1")
+        merge = git(self.root, "commit-tree", git(self.root, "rev-parse", "HEAD^{tree}"), "-p", "HEAD", "-p", x,
+                    "-m", "merge")
+        git(self.root, "update-ref", "refs/heads/main", merge)  # x is now an ancestor of HEAD
+        blob_file = os.path.join(self.root, ".git", "b5241.txt")  # outside the work tree
+        with open(blob_file, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("b5241\n")
+        self.assertEqual(git(self.root, "hash-object", "-w", blob_file), "6b68082bede64516c74db20b8264241b73e79e8e")
+        self.assertEqual(git(self.root, "-c", "core.disambiguate=none", "rev-parse", "--verify", "--quiet",
+                             "6b68082", check=False), "")  # git itself finds the prefix ambiguous
+        self.assertFalse(decisions_cli.gitinfo.commit_exists(self.root, "6b68082"))  # the row's mechanism (C26)
+        self.assertTrue(decisions_cli.gitinfo.commit_exists(self.root, x[:8]))
+        for since in (x, x[:8]):  # control: an unambiguous name of x is an ancestor (no record at x: all new)
+            with self.subTest(since=since):
+                self.assertEqual(self.ok("--since", since).splitlines()[0],
+                                 "Owner questions: 2 new, 0 also open (cut-off %s)" % since)
+        before = self.snap()
+        out = self.ok("--since", "6b68082")
+        self.assertEqual(out.splitlines()[0], "Owner questions: 2 new, 0 also open (cut-off 6b68082%s)" % ALL_NEW)
+        self.assertEqual((set(new_ids(out)), also_ids(out)), ({DA, DB}, []))
+        self.assertEqual(self.snap(), before)
+
+    def test_C30_custom_paths_decisions(self):
+        cfg = minimal_config()
+        cfg["paths"] = {"decisions": "state/decisions"}
+        write_record(self.root, ".strict-delivery/config.yml", cfg)
+        write_record(self.root, "state/decisions/%s.yml" % DA, dec(DA, "open"))
+        c1 = commit_all(self.root, "at cut")
+        write_record(self.root, "state/decisions/%s.yml" % DB, dec(DB, "open"))
+        out = self.ok("--since", c1)
+        self.assertEqual((new_ids(out), also_ids(out)), ([DB], [DA]))
+
+    def test_Q13_breaker_in_answered_record_of_source_refused(self):
+        self.answered_with_source()
+        self.put(dec(DF, "answered", source="r/a.md", answer="x\x85"), dec(DG, "open", source="r/a.md",
+                                                                            question="q\x85"))
+        self.refused(["batch", "--answered", "--source", "r/a.md"],
+                     "%s/%s.yml: answer: holds a character outside the batch text set (U+0085)" % (DEC, DF))
+
+    def test_C9_C34_C36_C29_invalid_register_refused(self):
+        for r in (dec(DA, "open", question=None), dec(DA, "answered", source="r/a.md"),
+                  dec(DA, "answered", recommended="yes")):
+            with self.subTest(keys=sorted(r)):
+                self.put(r)
+                self.refused(["batch"], "%s/%s.yml: " % (DEC, DA))
+        write_record(self.root, "%s/%s.yml" % (DEC, DA), dec(DB, "open"))  # file name differs from its id
+        self.refused(["batch"], DB)
+        with open(os.path.join(self.root, DEC, DA + ".yml"), "w", encoding="utf-8") as fh:
+            fh.write("id: [\n")
+        self.refused(["batch"], "%s/%s.yml" % (DEC, DA))
+        with open(os.path.join(self.root, DEC, DA + ".yml"), "w", encoding="utf-8") as fh:
+            fh.write("- a\n")
+        self.refused(["batch"], "%s/%s.yml: the top level must be a mapping" % (DEC, DA))
+
+    def test_C9_C34_C36_answered_invalid_register_refused(self):  # F-1d3-r1: real validation, no patch (D-27)
+        self.assertIs(decisions.validate, decisions_cli.decisions.validate)
+        self.put(dec(DB, "answered"))  # a valid answered record beside the invalid one
+        f = "%s/%s.yml" % (DEC, DA)
+        forms = (["batch"], ["batch", "--answered", "--source", "r/a.md", "--date", "2026-11-02"])
+        cases = [("C36 source, queried", dec(DA, "answered", source="r/a.md"), f + ": source: unknown key"),
+                 ("C36 source, other", dec(DA, "answered", source="r/b.md"), f + ": source: unknown key"),
+                 ("C36 recommended", dec(DA, "answered", recommended="yes"), f + ": recommended: unknown key"),
+                 ("C9 open, missing field", dec(DA, "open", question=None), f + ": ")]
+        for name, r, needle in cases:
+            self.put(r)
+            for argv in forms:
+                with self.subTest(case=name, argv=argv):
+                    self.refused(argv, needle)
+        stray = "%s/notes.txt: not a regular file named <id>.yml" % DEC
+        texts = [("C34 bad YAML", DA + ".yml", "id: [\n", f), ("C34 non-mapping", DA + ".yml", "- a\n",
+                                                                f + ": the top level must be a mapping")]
+        for n in (4300, 4301):  # PC1 skeleton: numeric text at the int-conversion limit of 3.11+
+            texts.append(("PC1 %d-digit id" % n, DA + ".yml", "id: %s\n" % ("9" * n), f))
+            texts.append(("PC1 %d-digit source" % n, DA + ".yml", "id: %s\nsource: %s\n" % (DA, "9" * n), f))
+        texts.append(("PC1 U+1FAE8 source", DA + ".yml", "id: %s\nsource: \U0001FAE8\n" % DA, f))  # So on 3.13,
+        # unassigned (Cn) on 3.9
+        texts.append(("C34 stray non-record file", "notes.txt", "x\n", stray))  # last: it stays in the directory
+        for name, fname, text, needle in texts:
+            self.put(dec(DA, "open"))
+            with open(os.path.join(self.root, DEC, fname), "w", encoding="utf-8") as fh:
+                fh.write(text)
+            for argv in forms:
+                with self.subTest(case=name, argv=argv):
+                    self.refused(argv, needle)
+
+    def test_C9_store_errors_refused_both_forms_unpatched(self):  # F-1d3-rr1-2: index.store_errors under --answered
+        forms = (["batch"], ["batch", "--answered", "--source", "r/a.md", "--date", "2026-11-02"])
+        f = "%s/%s.yml" % (DEC, DA)
+        cases = [("name mismatch", [(DA, dec(DB, "answered"))], f + ": file name %s.yml differs from the record id %s"
+                  % (DA, DB)),
+                 # a duplicate id always also has a file named after another id: that error comes first (store.py:227)
+                 ("duplicate id", [(DA, dec(DB, "answered")), (DB, dec(DB, "answered"))], f + ": "),
+                 ("bad id", [(DA, dec("DEC-20261031-A2B3", "answered"))], f + ": ")]
+        for name, files, needle in cases:
+            for stem, r in files:
+                write_record(self.root, "%s/%s.yml" % (DEC, stem), r)
+            for argv in forms:
+                with self.subTest(case=name, argv=argv):
+                    self.refused(argv, needle)
+            for stem, _ in files:
+                write_record(self.root, "%s/%s.yml" % (DEC, stem), dec(stem, "answered"))
+            self.assertEqual(self.ok("--answered", "--source", "r/a.md", "--date", "2026-11-02"),
+                             "Owner answers (2026-11-02), binding\n")  # control: the repaired register passes
+
+    def test_A5_cli_query_not_normalised(self):  # F-1d3-rr1-1: no transform between argv and render_answers (KD-1)
+        self.answered_with_source()
+        self.put(dec(DF, "answered", source="r/é.md", answer="E"),
+                 dec(DG, "answered", source="r/\U0001FAE8" + "9" * 4300, answer="G"))
+        head = "Owner answers (2026-11-02), binding\n"
+        both = head + "%s: Keep X?\nAnswer: First\\nline\n%s: Keep X?\nAnswer: Second\n" % (DA, DC)
+        self.assertEqual(self.ok("--answered", "--source", "r/a.md", "--date", "2026-11-02"), both)  # control
+        self.assertEqual(self.ok("--answered", "--source", "r/é.md", "--date", "2026-11-02"),
+                         head + "%s: Keep X?\nAnswer: E\n" % DF)
+        g = "r/\U0001FAE8" + "9" * 4300  # PC1: So on 3.13, Cn on 3.9; 4300 digits
+        self.assertEqual(self.ok("--answered", "--source", g, "--date", "2026-11-02"),
+                         head + "%s: Keep X?\nAnswer: G\n" % DG)
+        for q in ("R/a.md", "r/a.md ", " r/a.md", "./r/a.md", "r/a.MD", "r/a.md/", "r/a", "a.md", "r//a.md",
+                  "r/./a.md", "r/é.md", "R/É.md", g + "9", g[:-1], "r/\U0001FAE9" + "9" * 4300):
+            with self.subTest(query=q[:12], n=len(q)):
+                self.assertEqual(self.ok("--answered", "--source", q, "--date", "2026-11-02"), head)
+
+    def test_PC1_answered_source_skeleton_unpatched(self):  # real validation of a valid register; nothing matches
+        self.put(dec(DB, "answered"))
+        for s in ("9" * 4300, "9" * 4301, "r/\U0001FAE8.md"):
+            with self.subTest(n=len(s)):
+                self.assertEqual(self.ok("--answered", "--source", s, "--date", "2026-11-02"),
+                                 "Owner answers (2026-11-02), binding\n")
+
+    def test_Q13_breaker_in_open_record_refused_answered_ignored(self):
+        self.put(dec(DA, "open", question="a\x85b"))
+        self.refused(["batch"], "%s/%s.yml: question: holds a character outside the batch text set (U+0085)"
+                     % (DEC, DA))
+        self.put(dec(DA, "answered", question="a\x85b"), dec(DB, "open", question="p\r\nq"))
+        self.assertEqual(new_ids(self.ok()), [DB])
+        self.assertIn("Question: p\\nq\n", self.ok())
+
+    def test_C47_U1_non_ascii_printed_raw(self):
+        self.put(dec(DA, "open", question="Café \U0001FAE0?"))
+        self.assertIn("Question: Café \U0001FAE0?\n", self.ok())
+
+    def test_C30_paths_decisions_changed(self):
+        self.two_commits()
+        c = git(self.root, "rev-parse", "HEAD")
+        cfg = minimal_config()
+        cfg["paths"] = {"decisions": "state/decisions"}
+        write_record(self.root, ".strict-delivery/config.yml", cfg)
+        os.makedirs(os.path.join(self.root, "state"))
+        os.rename(os.path.join(self.root, DEC), os.path.join(self.root, "state", "decisions"))
+        out = self.ok("--since", c)
+        self.assertEqual((new_ids(out), also_ids(out)), ([DA, DB], []))
+        self.assertEqual(out.splitlines()[0], "Owner questions: 2 new, 0 also open (cut-off %s)" % c)
+
+    def test_C40_C43_bad_roots(self):
+        plain = os.path.join(self.tmp, "plain")
+        os.mkdir(plain)
+        sub = os.path.join(self.root, "sub")
+        os.mkdir(sub)
+        noconf = os.path.join(self.tmp, "noconf")
+        os.mkdir(noconf)
+        git(noconf, "init", "-q")
+        for path, needle in ((os.path.join(self.tmp, "nonexistent"), E128 + "; run /strict-delivery:init"),
+                             (plain, E128 + "; run /strict-delivery:init"), (sub, TOP),
+                             (noconf, "missing; run /strict-delivery:init")):
+            for argv in (["batch"], ["batch", "--answered", "--source", "r"]):
+                with self.subTest(path=path, argv=argv):
+                    self.refused(argv + ["--root", path], needle, root=False)
+
+    def test_C45_root_from_project_dir(self):
+        self.put(dec(DA, "open"))
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": self.root}):
+            code, out, err = self.cli("batch", root=False)
+        self.assertEqual((code, err, new_ids(out)), (0, "", [DA]))
+
+    def test_C17_N1_N4_N9_flag_combinations(self):
+        for args, msg in ((["--answered", "--since", "abc1234", "--source", "r"], "--since has no meaning with "
+                           "--answered"), (["--answered"], "--answered needs --source"),
+                          (["--source", "r"], "--source and --date need --answered"),
+                          (["--date", "2026-11-02"], "--source and --date need --answered")):
+            with self.subTest(args=args):
+                code, out, err = self.cli("batch", *args)
+                self.assertEqual((code, out, err), (1, "", "decisions batch: %s\n" % msg))
+
+    def test_N2_source_whitelist(self):
+        for v in ("", "a\nb", "a\rb", "a\x85b", "a b", "a\x00b", "a\x7fb"):
+            with self.subTest(v=repr(v)):
+                code, out, err = self.cli("batch", "--answered", "--source", v)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("decisions batch: --source: "), err)
+                self.assertEqual(err.count("\n"), 1)
+
+    def test_N6_U2_date_whitelist(self):
+        for v in ("2026-1-2", "２０２６-11-02", "2026-11-02 ", "2026-02-30", "20261102", "",
+                  "9" * 4300 + "-01-01", "9" * 4301 + "-01-01", "0000-01-01", "2026-13-01"):
+            with self.subTest(v=v[:12]):
+                code, out, err = self.cli("batch", "--answered", "--source", "r", "--date", v)
+                self.assertEqual((code, out, err), (1, "", "decisions batch: --date must be a calendar date "
+                                                          "YYYY-MM-DD\n"))
+
+    def answered_with_source(self):
+        """Known divergence KD-1: decision/1 on main refuses ``source`` (OQ-16), so this fixture patches
+        ``decisions.validate`` to pass these decision/2-shaped rows and exercise the CLI rendering and filter path
+        (Q-X27 (a)); rendering itself is pinned in test_batch.py. The ``decisions.validate`` patch is to be removed
+        when decision/2 (PR-D) is merged into this code. Real validation under ``--answered`` is pinned unpatched
+        by test_C9_C34_C36_answered_invalid_register_refused."""
+        self.put(dec(DC, "answered", source="r/a.md", answer="Second"),
+                 dec(DA, "answered", source="r/a.md", answer="First\nline"),
+                 dec(DB, "open", source="r/a.md"), dec(DD, "answered", source="r/b.md"),
+                 dec(DE, "withdrawn", source="r/a.md"))
+        p = mock.patch.object(decisions, "validate", return_value=[])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_batch_answers_for_source(self):  # A2, A3, A4, N3, N10, N12; plan test P:1017-1018
+        self.answered_with_source()
+        before = self.snap()
+        for flag in ("--answered", "--ans"):
+            out = self.ok(flag, "--source", "r/a.md", "--date", "2026-11-02")
+            self.assertEqual(out.splitlines()[0], "Owner answers (2026-11-02), binding")
+            self.assertIn("Answer: First\\nline", out)
+            self.assertEqual(out, "Owner answers (2026-11-02), binding\n%s: Keep X?\nAnswer: First\\nline\n"
+                             "%s: Keep X?\nAnswer: Second\n" % (DA, DC))
+        self.assertEqual(self.snap(), before)
+        self.assertEqual(self.ok("--answered", "--source", "r/c.md", "--date", "2026-11-02"),
+                         "Owner answers (2026-11-02), binding\n")
+        self.assertEqual(self.ok("--answered", "--source=-r", "--date", "2026-11-02"),
+                         "Owner answers (2026-11-02), binding\n")
+
+    def test_N5_date_defaults_to_utc_today(self):
+        import datetime
+        with mock.patch.object(decisions_cli.ids, "utc_today", return_value=datetime.date(2027, 3, 4)):
+            self.assertEqual(self.ok("--answered", "--source", "r"), "Owner answers (2027-03-04), binding\n")
 
 
 if __name__ == "__main__":

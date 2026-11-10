@@ -7,6 +7,7 @@ line are the same on every interpreter. Exit 2 on a usage error, 1 on a refusal 
 """
 from __future__ import annotations
 
+import datetime
 import fnmatch
 import random
 import re
@@ -14,6 +15,7 @@ import sys
 from typing import List, Optional
 
 from gates.lib import config, decisions, gitinfo, ids, schema
+from gates.lib import batch
 from gates.lib.result import GateError, _Once, gate_args, safe_text
 from gates.lib.store import Store
 from gates.tools import index
@@ -21,7 +23,7 @@ from gates.tools import index
 PRODUCES = ("decision",)
 
 _rng = random.SystemRandom()  # the mint's generator (decision D-6); tests patch it to force a collision
-_SUBS = ("ask", "decide", "find", "withdraw")
+_SUBS = ("ask", "batch", "decide", "find", "withdraw")
 _TOPIC = re.compile(r"[a-z0-9][a-z0-9-]*")
 _PLAN = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _WORD = re.compile(r"[0-9A-Za-z]+")
@@ -281,6 +283,89 @@ def _find(ns) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- batch (plan Task 1d.3; decisions D-22..D-29)
+
+_SINCE = re.compile(r"[0-9a-f]{7,40}")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_NOT_ANCESTOR = "; not an ancestor of HEAD: every open record is new"
+_NO_CUT = "; no cut-off: every open record is new"
+
+
+def _batch_date(value: Optional[str]) -> str:
+    if value is None:
+        return ids.utc_today().isoformat()
+    if _DATE.fullmatch(value):  # an ASCII class first: strptime alone takes 2026-1-2 and fullwidth digits (N6, U2)
+        try:
+            datetime.datetime.strptime(value, "%Y-%m-%d")
+            return value
+        except ValueError:
+            pass
+    raise GateError("--date must be a calendar date YYYY-MM-DD")
+
+
+def _is_ancestor(root: str, sha: str) -> bool:
+    """``sha`` names a commit that is an ancestor of HEAD (plan P:976); no common history counts as not."""
+    if not gitinfo.commit_exists(root, sha):
+        return False
+    try:
+        return gitinfo.merge_base(root, sha, "HEAD") == gitinfo.merge_base(root, sha, sha)
+    except GateError:
+        return False
+
+
+def _printable(records: list, check) -> list:
+    """``(id, row)`` of ``records``; a row ``check`` refuses names its file (rows C9, Q13)."""
+    out = []
+    for r in records:
+        try:
+            check(r)
+        except GateError as e:
+            raise GateError("%s: %s" % (r.file, e)) from None
+        out.append((r.id, r.row))
+    return out
+
+
+def _batch(ns) -> int:
+    if ns.answered:
+        if ns.since is not None:
+            raise GateError("--since has no meaning with --answered")
+        if ns.source is None:
+            raise GateError("--answered needs --source")
+        source = ns.source
+        if source == "":
+            raise GateError("--source: must not be empty")
+        for c in source:
+            if c in "\n\r" or ord(c) in batch._REFUSED:
+                raise GateError("--source: U+%04X is not allowed" % ord(c))
+        date = _batch_date(ns.date)
+    else:
+        if ns.source is not None or ns.date is not None:
+            raise GateError("--source and --date need --answered")
+        if ns.since is not None and not _SINCE.fullmatch(ns.since):
+            raise GateError("--since must be 7 to 40 lowercase hex digits")
+    root, cfg = _setup(ns.root)
+    decs = index._records(root, "decision", cfg, decisions.validate)
+    if ns.answered:
+        # render_answers prints, and so checks, only the answered records of this source
+        rows = _printable(decs, lambda r: batch.render_answers([(r.id, r.row)], source, date))
+        sys.stdout.write(batch.render_answers(rows, source, date))
+        return 0
+    open_ = _printable([r for r in decs if not decisions.is_resolved(r.row)],
+                       lambda r: batch.render_question(r.id, r.row))
+    if ns.since is None:
+        new, also, note = open_, [], _NO_CUT
+    elif _is_ancestor(root, ns.since):
+        at_cut = set(gitinfo.ls_tree(root, ns.since, cfg["paths"]["decisions"]))
+        files = {r.id: r.file for r in decs}
+        new = [(i, row) for i, row in open_ if files[i] not in at_cut]
+        also = [(i, row) for i, row in open_ if files[i] in at_cut]
+        note = ""
+    else:
+        new, also, note = open_, [], _NOT_ANCESTOR
+    sys.stdout.write(batch.render(new, also, ns.since, note))
+    return 0
+
+
 # ---------------------------------------------------------------- argv
 
 def _parser(sub: str):
@@ -305,6 +390,11 @@ def _parser(sub: str):
     elif sub == "withdraw":
         p.add_argument("id", metavar="ID")
         p.add_argument("--reason", required=True, action=_Once)
+    elif sub == "batch":
+        p.add_argument("--since", action=_Once)
+        p.add_argument("--answered", action="store_true")
+        p.add_argument("--source", action=_Once)
+        p.add_argument("--date", action=_Once)
     else:
         p.add_argument("terms", metavar="TERM", nargs="*")
         p.add_argument("--path", action=_Once)
@@ -313,7 +403,7 @@ def _parser(sub: str):
     return p
 
 
-_RUN = {"ask": _ask, "decide": _decide, "find": _find, "withdraw": _withdraw}
+_RUN = {"ask": _ask, "batch": _batch, "decide": _decide, "find": _find, "withdraw": _withdraw}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
