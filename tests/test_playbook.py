@@ -1881,7 +1881,8 @@ class VerifierRoundTest(unittest.TestCase):
         import inspect
         for fn in (pc.placeholder_hits, pc._unpaired_runs, pc._table_row_lines, pc.rules_problems, sentences,
                    pc.char_refusals, pc._refuse_chars, pc.forbidden_hits, pc.labels, pc.paragraph, pc.section,
-                   pc.first_table_header, pc.table_rows, pc.front_matter, pc.block_problems):   # + round 5's helpers
+                   pc.first_table_header, pc.table_rows, pc.front_matter, pc.block_problems,    # + round 5's helpers
+                   pc._info_refusals):                                                          # + round 6's helper
             self.assertNotIn("ExceptionGroup", inspect.getsource(fn))
             self.assertNotIn("except*", inspect.getsource(fn))
 
@@ -2147,6 +2148,14 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
         self.assertLess(p.index("character whitelist LF"), p.index("Then the markdown whitelist"))
         self.assertNotIn("whatever CommonMark or GFM would do", p)        # the round 4 claim the re-review refuted
         self.assertNotIn("a space or a tab", p)
+        for s in ("or, from fix round 6, only space, `-` and `:`, with at least one `-` and one `:` and no `|`",   # Z-f
+                  "Other GFM table forms are not modeled by this predicate (residual accepted by the owner, 2026-11-10)",
+                  "A fence opener's info string (the text after the fence marker on the opener line) is checked raw, "
+                  "with no code-span masking", "each refusal is reported on the opener's line",
+                  "for backtick and tilde fences alike; in a tilde fence also a backtick run the per-line pairing "
+                  "leaves unpaired (`multi-line code span`) and a code span holding `|` (`pipe in table-row code span`)",
+                  "The fence still opens and its content stays masked."):
+            self.assertIn(s, p)
         self.assertIn(", ".join("`%s`" % k for k in pc.REFUSED_KINDS), p)
 
     def test_numeric_text_same_on_every_interpreter(self):           # PC1-a: a placeholder_hits row
@@ -2168,6 +2177,112 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
                     if exc is not None:
                         with self.assertRaisesRegex(exc, "U\\+A7C0, character outside whitelist"):
                             call(X_GOOD.replace("Build. a", "Build. a" + c))
+
+
+# Fix round 6 (owner 2026-11-10; D-v8-1, U-v7-1, F-B2V8-1, F-B2V8-2). Rows Z-a..Z-g, PC1-a..c.
+Z_INFO_FORMS = [("<", RA), ("\\", RB), ("](", RL), ("]:", RL), ("www.", RX), ("WWW.", RX), ("wWw.", RX), ("://", RX)]
+Z_INFO_TILDE_FORMS = [("`", R1), ("```", R1), ("`a|b`", R3), ("``a|b``", R3), ("`|`", R3)]
+Z_INFO_POSITIONS = ["%s a", "a %s b", "a %s", "%s"]
+Z_INFO_CONTROLS = ["```python\n<x>\n```\n", "``` text x-y\n<x>\n```\n", "~~~ a b\n<x>\n~~~\n", "```\n<x>\n```\n",
+                   "~~~\n<x>\n~~~\n", "~~~ `a` b\n<x>\n~~~\n", "``` a|b c:d [e] (f) ]x(\n<x>\n```\n",
+                   "~~~ a|b\n<x>\n~~~\n"]
+Z_DELIMS = [":-", "-:", ":-:", ":--", "--:", " :- ", "::-", "-:-", ":---:", ": - :"]
+Z_DELIM_CONTROLS = ["---", "-", "- - -", ":", "::", "a : b", "x", "-- a", ":-x"]
+
+
+def _kind_order(refusals):
+    return sorted(refusals, key=lambda r: (r[0], pc.REFUSED_KINDS.index(r[1][len("refused: "):])))
+
+
+class InfoStringTableTest(unittest.TestCase):                       # fix round 6, rows Z-a..Z-d, Z-g, PC1-a, PC1-b
+    def test_info_string_refused(self):                              # Z-a, D-v8-1 (D1)
+        for marker in ("```", "````", "~~~", "~~~~~"):
+            forms = Z_INFO_FORMS + (Z_INFO_TILDE_FORMS if marker[0] == "~" else [])
+            for indent in ("", " ", "  ", "   "):
+                for form, kind in forms:
+                    for pos in Z_INFO_POSITIONS:
+                        text = "%s%s%s\n<x> ` \\ ](a) www.b `c|d`\n%s%s\n" % (indent, marker, pos % form, indent, marker)
+                        want = [(1, kind)] + ([(1, RI), (3, RI)] if indent else [])
+                        with self.subTest(text=text):
+                            self.assertEqual(pc.placeholder_hits(text), _kind_order(want))
+        self.assertEqual(pc.placeholder_hits("``` <role>\nx\n```\n"), [(1, RA)])                 # the reproducer
+        self.assertEqual(pc.placeholder_hits("a\n\n~~~ `<x>`\n~~~\n"), [(3, RA)])                # RAW: no masking
+        self.assertEqual(pc.placeholder_hits("~~~ ` <x> ` www.a\n~~~\n"), [(1, RA), (1, RX)])
+        self.assertEqual(pc.placeholder_hits("~~~ \\` <a>](b) `|`\n~~~\n"), [(1, RA), (1, RB), (1, RL), (1, R3)])
+        self.assertEqual(pc.placeholder_hits("~~~ a `b|c` ` d\n~~~\n"), [(1, R1), (1, R3)])
+        self.assertEqual(pc.placeholder_hits("x\n```\ny\n```\n```http://a\n<b>\n```\n"), [(5, RX)])  # opener line no.
+
+    def test_info_string_fence_still_opens(self):                    # Z-a: the content stays masked
+        for opener in ("``` <x>", "~~~ <x>", "~~~ `", "~~~ `a|b`", "```` ://", "~~~ \\"):
+            close = opener.split(" ")[0]
+            text = "%s\n<y> `\n%s\n<z>\n" % (opener, close)
+            with self.subTest(text=text):
+                got = pc.placeholder_hits(text)
+                self.assertEqual([r for r in got if r[0] != 1], [(4, "<z>"), (4, RA)])
+                self.assertEqual(len([r for r in got if r[0] == 1]), 1)
+
+    def test_info_string_controls(self):                             # Z-a2
+        for text in Z_INFO_CONTROLS:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+
+    def test_pipe_less_delimiter_rows(self):                         # Z-b, U-v7-1 (D2)
+        for d in Z_DELIMS:
+            for text, want, at in (("h `a|b`\n%s\n`c|d`\nx `e|f` y\n" % d, [(1, R3), (3, R3), (4, R3)], 2),
+                                   ("h\n%s\n`c|d`\n" % d, [(3, R3)], 2), ("h\n%s\n`c|d`\n\n`e|f`\n" % d, [(3, R3)], 2),
+                                   ("h\n%s\nb\nc `c|d`\n" % d, [(4, R3)], 2), ("p `a|b`\n\nh\n%s\n" % d, [], 4)):
+                ri = [(at, RI)] if d.startswith(" ") else []
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), _kind_order(want + ri))
+        self.assertEqual(pc.placeholder_hits("a\n:-\n`<name>|`\n"), [(3, R3)])                  # the reproducer
+
+    def test_widening_controls(self):                                # Z-b2: unchanged from d013b15
+        for d in Z_DELIM_CONTROLS:
+            for text in ("h\n%s\n`c|d`\n" % d, "h `a|b`\n%s\n" % d):
+                with self.subTest(text=text):
+                    self.assertEqual(pc.placeholder_hits(text), [])
+        self.assertEqual(pc.placeholder_hits("h\nx\n`c|d`\ny `e|f`\n"), [])
+        self.assertEqual(pc.placeholder_hits("a | `b|c`\n--|--\n"), [(1, R3)])                  # the old form, kept
+
+    def test_delimiter_row_space_member(self):                       # Z-c, F-B2V8-1 (mutant V29)
+        for text in ("a | `b|c`\n- | - | -\n", "a | `b|c`\n--- | ---\n", "a | `b|c`\n:- | -:\n", "`b|c`\n-- |\n"):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [(1, R3)])
+        self.assertEqual(pc.placeholder_hits("a | `b|c`\n- |\t-\n"), [(2, RC)])               # tab: char refusal
+
+    def test_run_predicate_dash_and_blank_boundary(self):            # Z-d, F-B2V8-2 (mutants V17, V30)
+        for text in ("a `b|c`\n|\n", "a `b|c`\n| : |\n", "a `b|c`\n \n-|-\n", "a `b|c`\n   \n-|-\n",
+                     "a `b|c`\n \n:-\n", "-|-\n \nx `b|c`\n"):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), [])
+        self.assertEqual(pc.placeholder_hits("a `b|c`\n-|-\n"), [(1, R3)])                     # one run: refused
+
+    def test_whitelist_first(self):                                  # Z-g
+        for text, want in (("``` a\t<\n```\n", [(1, RC)]), ("~~~ \x0b`\n~~~\n", [(1, RC)]),
+                           ("~~~ `a|\xa0`\n<x>\n~~~\n", [(1, RC)]), ("h\n:-\t\n`a|b`\n", [(2, RC)]),
+                           ("h\n:-\xa0\n`a|b`\n", [(2, RC)]), ("h\n:-\n`a|b`\r\n", [(3, RC)])):
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_numeric_text_same_on_every_interpreter(self):           # PC1-a
+        for digits in (4300, 4301):
+            num = "1" * digits
+            for text, want in (("```%s\n```\n" % num, []), ("``` <%s\n```\n" % num, [(1, RA)]),
+                               ("~~~ `%s\n~~~\n" % num, [(1, R1)]), ("~~~ `%s|`\n~~~\n" % num, [(1, R3)]),
+                               ("h\n:-\n`a|b` %s\n" % num, [(3, R3)]), ("h\n:-\n%s\n" % num, []),
+                               ("h\n:-%s\n`a|b`\n" % ("-" * digits), [(3, R3)])):
+                with self.subTest(digits=digits, text=text[:12]):
+                    self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_no_unicode_database_read(self):                         # PC1-b: U+A7C0 is Cn on 3.9, Lu on 3.13
+        c = chr(0xA7C0)
+        with mock.patch.object(unicodedata, "category", side_effect=AssertionError("UCD lookup")):
+            for text in ("``` %s <x>\n```\n" % c, "~~~ `a|%s`\n~~~\n" % c, "h\n:-%s\n`a|b`\n" % c):
+                with self.subTest(text=text):
+                    got = pc.placeholder_hits(text)
+                    self.assertEqual(len(got), 1)
+                    self.assertEqual(got[0][1], RC)
+            self.assertEqual(pc.placeholder_hits("``` <x>\n```\n"), [(1, RA)])
 
 
 if __name__ == "__main__":

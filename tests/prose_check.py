@@ -601,7 +601,29 @@ REFUSED_KINDS = ("multi-line code span", "angle bracket outside code span", "bac
                  "link syntax", "indented line", "block quote", "pipe in table-row code span", CHAR_KIND,
                  "extended autolink")
 _DELIMITER_ROW = re.compile(r"[ \t|:-]*")
+_DELIMITER_ROW_NO_PIPE = re.compile(r"[ :-]*")          # fix round 6 (U-v7-1, D2): a pipe-less delimiter-shaped line
 _TABLE_START = re.compile(r" {0,3}\|")
+
+
+def _info_refusals(info, tilde):
+    """REFUSED_KINDS indexes for a fence opener's info string (fix round 6, D-v8-1, D1), checked RAW: an info string
+    parses no code spans, so nothing is masked. '<', '\\', '](' or ']:', and 'www.' (any case) or '://' are refused
+    for every fence; in a tilde fence (whose info string may hold backticks) an unpaired backtick run and a code span
+    holding '|' are refused too."""
+    out = []
+    if tilde and _unpaired_runs(info):
+        out.append(0)
+    if "<" in info:
+        out.append(1)
+    if "\\" in info:
+        out.append(2)
+    if "](" in info or "]:" in info:
+        out.append(3)
+    if tilde and any("|" in info[a:b] for a, b in _span_ranges(info)):
+        out.append(6)
+    if "www." in info.lower() or "://" in info:
+        out.append(8)
+    return out
 
 
 def _unpaired_runs(line):
@@ -630,15 +652,17 @@ def _unpaired_runs(line):
 
 def _table_row_lines(base):
     """Indexes of the lines read as table rows, fail closed: a line starting (after at most 3 spaces) with '|', and
-    every line of a blank-line-delimited run that holds a delimiter-shaped line (only '|', '-', ':', space and tab,
-    with at least one '-' and one '|')."""
+    every line of a blank-line-delimited run that holds a delimiter-shaped line: only '|', '-', ':', space and tab,
+    with at least one '-' and one '|'; or (fix round 6, U-v7-1, D2) only space, '-' and ':', with at least one '-'
+    and one ':' (so no '|'). Other GFM table forms are not modeled (owner 2026-11-10)."""
     rows = {i for i, line in enumerate(base) if _TABLE_START.match(line)}
     run = []
     for i, line in enumerate(base + [""]):
         if line.strip():
             run.append(i)
             continue
-        if any(_DELIMITER_ROW.fullmatch(base[p]) and "-" in base[p] and "|" in base[p] for p in run):
+        if any((_DELIMITER_ROW.fullmatch(base[p]) and "-" in base[p] and "|" in base[p])
+               or (_DELIMITER_ROW_NO_PIPE.fullmatch(base[p]) and "-" in base[p] and ":" in base[p]) for p in run):
             rows.update(run)
         run = []
     return rows
@@ -658,7 +682,10 @@ def placeholder_hits(text):
     or '<' and can take a span's backtick); a line outside a fenced block or opening or closing one is refused when
     it is non-blank and starts with a space ("indented line") or starts with '>' ("block quote"); R1 "multi-line code
     span", a backtick run its own line leaves unpaired; R3 "pipe in table-row code span", a code span holding '|' on
-    a table-row line (_table_row_lines). With these refused, a line holds only text, code spans, emphasis, entities,
+    a table-row line (_table_row_lines). A fence opener's info string (the text after its fence marker) is checked RAW,
+    with no span masking, on the opener's line (_info_refusals; fix round 6, D-v8-1): '<', '\\', '](' or ']:', and
+    'www.' or '://' by the kinds above, and in a tilde fence an unpaired backtick run (R1) and a code span holding '|'
+    (R3); the fence still opens and its content stays masked. With these refused, a line holds only text, code spans, emphasis, entities,
     email autolinks (no backtick can be part of one) and inert brackets, and the block forms left are column-0
     paragraphs, headings, thematic breaks, column-0 list items, tables and column-0 fences, so no construct can take
     a backtick from a per-line span or hide text the per-line masking keeps. A hit is an _HTML match on the masked
@@ -667,9 +694,9 @@ def placeholder_hits(text):
     bad = char_refusals(text)
     if bad:
         return [(n, "refused: " + CHAR_KIND) for n, _ in bad]
-    base, outside = [], []
+    base, outside, refused = [], [], []
     fence = None
-    for line in text.split("\n"):
+    for n, line in enumerate(text.split("\n"), 1):
         if fence is not None:
             m = re.match(r" {0,3}(`{3,}|~{3,})[ \t]*$", line)
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
@@ -683,13 +710,13 @@ def placeholder_hits(text):
         m = _FENCE_OPEN.match(line)
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             fence = m.group(1)
+            refused += [(n, k) for k in _info_refusals(m.group(2), fence[0] == "~")]
             base.append("")
             continue
         base.append(line)
     lines = [_mask_spans(line) for line in base]
     masked = "\n".join(lines)
     out = [(masked.count("\n", 0, m.start()) + 1, m.group(0)) for m in _HTML.finditer(masked)]
-    refused = []
     for n, (line, low, raw) in enumerate(zip(base, lines, outside), 1):
         if _unpaired_runs(line):
             refused.append((n, 0))
