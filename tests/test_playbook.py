@@ -2202,8 +2202,27 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
         self.assertNotIn("outside every per-line code span, a '<' (\"angle bracket outside code span\"), a '\\' "
                          "(\"backslash outside code span\"), the sequence", doc)
         self.assertIn(", ".join("`%s`" % k for k in pc.REFUSED_KINDS), p)
+        # UR-1 (owner Q-B2UR1-1 (a)): the masking claim names its one exception, the excess table cells
+        self.assertNotIn("or hide text the masking keeps.", p)
+        self.assertNotIn("or hide text the per-line masking keeps", doc)
+        self.assertIn("can take a backtick from a per-line span, and none of them hides text the masking keeps. "
+                      "One construct does hide text the masking keeps: a GFM table body row's cells beyond the "
+                      "header row's cell count are dropped by the renderer", p)
+        self.assertIn("this is part of the accepted residual (other GFM table forms are not modeled; owner "
+                      "2026-11-10, Q-B2UR1-1 (a))", p)
+        self.assertIn("no construct can take a backtick from a per-line span, and no construct but one hides text "
+                      "the per-line masking keeps: a GFM table body row's cells beyond the header row's cell count "
+                      "are dropped by the renderer", doc)
+        self.assertIn("This is part of the accepted residual (other GFM table forms are not modeled; owner "
+                      "2026-11-10, Q-B2UR1-1 (a))", doc)
 
-    def test_numeric_text_same_on_every_interpreter(self):           # PC1-a: a placeholder_hits row
+    def test_excess_table_cell_is_the_documented_residual(self):     # UR-1
+        # Owner Q-B2UR1-1 (a), 2026-11-10: GFM drops a table body row's cells beyond the header's count, so the
+        # code span below is not rendered, yet placeholder_hits gives []. It is inside the accepted table residual
+        # ("other GFM table forms are not modeled"); if this changes, the residual sentences must change with it.
+        self.assertEqual(pc.placeholder_hits("| a |\n| - |\n| x | `<role>` |"), [])
+
+    def test_numeric_text_same_on_every_interpreter(self):          # PC1-a: a placeholder_hits row
         for digits in (4300, 4301):
             with self.subTest(digits=digits):
                 self.assertEqual(pc.placeholder_hits("1" * digits + "\n"), [])

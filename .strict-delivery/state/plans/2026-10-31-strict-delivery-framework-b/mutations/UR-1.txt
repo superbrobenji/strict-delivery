@@ -1,0 +1,29 @@
+UR-1 mutation transcript (tests.test_playbook, both interpreters; new/updated tests: CharWhitelistTest.test_plan_sentence, test_excess_table_cell_is_the_documented_residual)
+/usr/bin/python3: 1. fix present (PASS expected)
+Ran 187 tests in 10.879s
+OK
+/opt/homebrew/bin/python3.13: 1. fix present (PASS expected)
+Ran 187 tests in 8.350s
+OK
+/usr/bin/python3: 2. plan sentence reverted (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest)
+Ran 187 tests in 11.184s
+FAILED (failures=1)
+/opt/homebrew/bin/python3.13: 2. plan sentence reverted (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest.test_plan_sentence)
+Ran 187 tests in 8.836s
+FAILED (failures=1)
+/usr/bin/python3: 3. docstring sentence reverted (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest)
+Ran 187 tests in 10.674s
+FAILED (failures=1)
+/opt/homebrew/bin/python3.13: 3. docstring sentence reverted (FAIL expected)
+FAIL: test_plan_sentence (tests.test_playbook.CharWhitelistTest.test_plan_sentence)
+Ran 187 tests in 8.428s
+FAILED (failures=1)
+/usr/bin/python3: 4. both restored (PASS expected)
+Ran 187 tests in 11.361s
+OK
+/opt/homebrew/bin/python3.13: 4. both restored (PASS expected)
+Ran 187 tests in 8.284s
+OK

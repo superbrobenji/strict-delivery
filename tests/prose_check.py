@@ -735,7 +735,10 @@ def placeholder_hits(text):
     refused, a line holds only text, code spans, emphasis, entities, email autolinks (no backtick can be part of one)
     and inert brackets, and the block forms left are column-0 paragraphs, headings, thematic breaks, column-0 list
     items whose content holds no block start, tables and column-0 fences, none whose content starts with '[', so no
-    construct can take a backtick from a per-line span or hide text the per-line masking keeps. A hit is an _HTML
+    construct can take a backtick from a per-line span, and no construct but one hides text the per-line masking
+    keeps: a GFM table body row's cells beyond the header row's cell count are dropped by the renderer, so their text,
+    a code span included, is hidden while placeholder_hits returns no hit. This is part of the accepted residual
+    (other GFM table forms are not modeled; owner 2026-11-10, Q-B2UR1-1 (a)). A hit is an _HTML
     match on the masked text, so its line always carries an "angle bracket outside code span" refusal too."""
     _need_str(text, "placeholder_hits")
     bad = char_refusals(text)
