@@ -1,0 +1,8 @@
+F-B22R2-2: Q-CONV-1 (a) wording
+harness: fix1.py; each run in a fresh copy of tests/, playbook/, skills/, docs/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook; reverted = the fix text replaced by the 0566871 text
+present   rc=0 OK 
+reverted  rc=1 FAILED (failures=1) test_signals_keep_the_low_plateau_exception
+restored  rc=0 OK 
+mutant exception dropped          rc=1 FAILED (failures=1) test_signals_keep_the_low_plateau_exception
+mutant sentence in sessions.md    rc=1 FAILED (failures=1) test_signals_keep_the_low_plateau_exception
+mutants 2 killed 2

@@ -1,0 +1,16 @@
+F-B21R-1: table_rows table shape
+harness: fix1.py; each run in a fresh copy of tests/__init__.py, tests/prose_check.py, tests/test_playbook.py, playbook/rules.md under a private mktemp -d; command: python3 -m unittest tests.test_playbook; base of the revert: f8780e7
+present   rc=0 OK 
+reverted  rc=1 FAILED (failures=16) test_duplicate_header_raises,test_separator_shape_raises,test_table_line_after_the_table_raises
+restored  rc=0 OK 
+mutant duplicate header             rc=1 FAILED (failures=2) killed-by=test_duplicate_header_raises
+mutant separator absent             rc=1 FAILED (errors=1) killed-by=test_separator_shape_raises
+mutant separator not a row          rc=1 FAILED (failures=3) killed-by=test_separator_shape_raises
+mutant separator count              rc=1 FAILED (failures=2) killed-by=test_separator_shape_raises
+mutant separator cells              rc=1 FAILED (failures=5) killed-by=test_separator_shape_raises
+mutant separator regex empty        rc=1 FAILED (failures=2) killed-by=test_separator_shape_raises
+mutant separator regex free         rc=1 FAILED (failures=2) killed-by=test_separator_shape_raises
+mutant table end                    rc=1 FAILED (failures=3) killed-by=test_table_line_after_the_table_raises
+mutant later line                   rc=1 FAILED (failures=3) killed-by=test_table_line_after_the_table_raises
+mutant row count kept               rc=1 FAILED (failures=1) killed-by=test_cell_count_mismatch_raises
+mutants 10 killed 10

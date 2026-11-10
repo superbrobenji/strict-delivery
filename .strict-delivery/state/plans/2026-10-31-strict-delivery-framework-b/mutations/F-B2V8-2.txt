@@ -1,0 +1,12 @@
+interpreter 3.13.18 finding F-B2V8-2
+fix present: PASS (ran=168 failures=0)
+mutant [V17: '-' requirement dropped]: fix reverted: FAIL (ran=168 failures=2) killed by test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n| : |\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n|\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [V30: strip() run boundary -> any non-empty line]: fix reverted: FAIL (ran=168 failures=4) killed by test_run_predicate_dash_and_blank_boundary (text='-|-\n \nx `b|c`\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n   \n-|-\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n \n-|-\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n \n:-\n')
+  fix restored: PASS (ran=168 failures=0)
+interpreter 3.9.6 finding F-B2V8-2
+fix present: PASS (ran=168 failures=0)
+mutant [V17: '-' requirement dropped]: fix reverted: FAIL (ran=168 failures=2) killed by test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n| : |\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n|\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [V30: strip() run boundary -> any non-empty line]: fix reverted: FAIL (ran=168 failures=4) killed by test_run_predicate_dash_and_blank_boundary (text='-|-\n \nx `b|c`\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n   \n-|-\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n \n-|-\n'), test_run_predicate_dash_and_blank_boundary (text='a `b|c`\n \n:-\n')
+  fix restored: PASS (ran=168 failures=0)

@@ -1,0 +1,12 @@
+interpreter 3.13.18 finding F-B2V8-1
+fix present: PASS (ran=168 failures=0)
+mutant [V29: space dropped from _DELIMITER_ROW]: fix reverted: FAIL (ran=168 failures=4) killed by test_delimiter_row_space_member (text='`b|c`\n-- |\n'), test_delimiter_row_space_member (text='a | `b|c`\n- | - | -\n'), test_delimiter_row_space_member (text='a | `b|c`\n--- | ---\n'), test_delimiter_row_space_member (text='a | `b|c`\n:- | -:\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [equivalent: tab dropped from _DELIMITER_ROW (the character whitelist refuses tab first)]: fix reverted: SURVIVED (ran=168 failures=0) killed by -
+  fix restored: PASS (ran=168 failures=0)
+interpreter 3.9.6 finding F-B2V8-1
+fix present: PASS (ran=168 failures=0)
+mutant [V29: space dropped from _DELIMITER_ROW]: fix reverted: FAIL (ran=168 failures=4) killed by test_delimiter_row_space_member (text='`b|c`\n-- |\n'), test_delimiter_row_space_member (text='a | `b|c`\n- | - | -\n'), test_delimiter_row_space_member (text='a | `b|c`\n--- | ---\n'), test_delimiter_row_space_member (text='a | `b|c`\n:- | -:\n')
+  fix restored: PASS (ran=168 failures=0)
+mutant [equivalent: tab dropped from _DELIMITER_ROW (the character whitelist refuses tab first)]: fix reverted: SURVIVED (ran=168 failures=0) killed by -
+  fix restored: PASS (ran=168 failures=0)

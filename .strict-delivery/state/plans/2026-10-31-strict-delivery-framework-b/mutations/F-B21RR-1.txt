@@ -1,0 +1,12 @@
+F-B21RR-1: sentence pin check boundaries: closers and any whitespace
+harness: fix2.py; each run in a fresh copy of tests/__init__.py, tests/prose_check.py, tests/test_playbook.py, playbook/rules.md under a private mktemp -d; command: python3 -m unittest tests.test_playbook; base of the revert: 689162e
+present   rc=0 OK 
+reverted  rc=1 FAILED (failures=275) test_sentences_split_after_closers_and_any_space,test_unpinned_sentence_behind_closers
+restored  rc=0 OK 
+mutant no closer run                  rc=1 FAILED (failures=282) killed-by=test_sentences_split,test_sentences_split_after_closers_and_any_space,test_unpinned_sentence_behind_closers
+mutant closers without _              rc=1 FAILED (failures=22) killed-by=test_sentences_split_after_closers_and_any_space,test_unpinned_sentence_behind_closers
+mutant ascii space only               rc=1 FAILED (failures=213) killed-by=test_sentences_split_after_closers_and_any_space,test_unpinned_sentence_behind_closers
+mutant full stop only                 rc=1 FAILED (failures=199) killed-by=test_sentences_split,test_sentences_split_after_closers_and_any_space,test_unpinned_sentence_any_start_or_end
+mutant terminator dropped             rc=1 FAILED (failures=296) killed-by=test_sentences_split,test_sentences_split_after_closers_and_any_space
+mutant empty kept                     rc=1 FAILED (failures=1) killed-by=test_sentences_split_after_closers_and_any_space
+mutants 6 killed 6

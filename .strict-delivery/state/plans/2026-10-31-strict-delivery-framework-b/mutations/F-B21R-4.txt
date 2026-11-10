@@ -1,0 +1,19 @@
+F-B21R-4: rule text fidelity
+harness: fix1.py; each run in a fresh copy of tests/__init__.py, tests/prose_check.py, tests/test_playbook.py, playbook/rules.md under a private mktemp -d; command: python3 -m unittest tests.test_playbook; base of the revert: f8780e7
+present   rc=0 OK 
+reverted  rc=1 FAILED (failures=24) test_every_sentence_pinned,test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses,test_unpinned_sentence_and_missing_pin,test_unpinned_sentence_any_start_or_end
+restored  rc=0 OK 
+mutant drop 'dependency edges'      rc=1 FAILED (failures=12) killed-by=test_every_sentence_pinned,test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses,test_unpinned_sentence_and_missing_pin,test_unpinned_sentence_any_start_or_end
+mutant drop 'unblock condition'     rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'parallel groups'       rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop '`breakdown/1`'         rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop '`max_concurrent`'      rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop '`streams.yml`'         rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'a pointer to a section that does not exist or holds none' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'the reviewer marks it cosmetic' rc=1 FAILED (failures=12) killed-by=test_every_sentence_pinned,test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses,test_unpinned_sentence_and_missing_pin,test_unpinned_sentence_any_start_or_end
+mutant drop 'folded into the next real edit' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop 'the handoff fields of spec §9' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop '`Task <block>.<n>` headings' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop '`<block>.<n>` task tokens' rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutant drop '`/clear`'              rc=1 FAILED (failures=3) killed-by=test_harmless_rewording_passes,test_real_file_has_no_content_problems,test_restored_spec_clauses
+mutants 13 killed 13

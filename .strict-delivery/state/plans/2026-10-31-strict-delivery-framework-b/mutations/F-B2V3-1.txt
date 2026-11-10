@@ -1,0 +1,8 @@
+F-B2V3-1: placeholder_hits fails open (class: input shape: code-span masking vs raw HTML: {backtick run inside an open tag's attribute, code span crossing a line break with another backtick run later on the closing line})
+harness: mut3.py (with fix.py, fix3.py, fix4.py, mut.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill tests.test_prompt_blocks; each row but present and restored applies one change to the fixed tree (a member's fix reverted, or a class mutant)
+present                                          rc=0 OK
+reverted: overlap rule (reproducer 1)            rc=1 FAILED (failures=2) test_placeholder_span_html_class
+reverted: paragraph pairing (reproducer 2)       rc=1 FAILED (failures=2) test_placeholder_span_html_class
+reverted: both                                   rc=1 FAILED (failures=4) test_placeholder_span_html_class
+restored                                         rc=0 OK
+mutants 3 killed 3

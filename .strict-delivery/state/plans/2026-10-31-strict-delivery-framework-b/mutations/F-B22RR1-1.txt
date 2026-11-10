@@ -1,0 +1,5 @@
+F-B22RR1-1: Q-CONV-1 (a) wording: LOW_PLATEAU and the weighted tally by hand
+harness: mut.py (with fix.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill; reverted = one member's fix text replaced by the 44edc05 text
+present                               rc=0 OK
+reverted review.md:23                 rc=1 FAILED (failures=1) test_fix_loop_low_plateau_and_tally_by_hand
+restored                              rc=0 OK

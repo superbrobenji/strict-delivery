@@ -1,0 +1,8 @@
+F-B2F1RR-2: exemptions pinned by their start only (verifier and deferral exemptions)
+harness: mut3.py (with fix.py, fix3.py, fix4.py, mut.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill tests.test_prompt_blocks; each row but present and restored applies one change to the fixed tree (a member's fix reverted, or a class mutant)
+present                                          rc=0 OK
+reverted: verifier exemption by start only       rc=1 FAILED (failures=4) test_exempt_unit_with_an_added_step_fails
+reverted: deferral exemption by start only       rc=1 FAILED (failures=1) test_deferral_class_every_unit_names_low_plateau
+mutant E2 on the fixed code (roles.md:22)        rc=1 FAILED (failures=9) test_class_every_block_end_verifier_paragraph_conditioned test_class_refuses_an_unconditioned_paragraph test_exempt_unit_with_an_added_step_fails test_verifier_non_steps_each_exempt_one_unit
+restored                                         rc=0 OK
+mutants 3 killed 3

@@ -1,0 +1,9 @@
+F-B2F-1: zero-bugs deferral statements in B2-owned files (class: zero-bugs deferral statements in B2-owned files: rules.md:11 SD-R5, review.md:19, controller.md:17)
+harness: mut2.py (with fix.py, fix2.py, mut.py); each run in a fresh copy of tests/, playbook/, skills/, docs/, gates/ under a private mktemp -d; command: python3 -m unittest tests.test_playbook tests.test_skill; each row but present and restored applies one change to the fixed tree (a member reverted or stripped, or a class mutant)
+present                                          rc=0 OK
+reverted SD-R5 (rules.md:11)                     rc=1 FAILED (failures=8) test_deferral_class_every_unit_names_low_plateau test_deferral_class_refuses_a_statement_without_low_plateau test_extended_rule_phrases test_harmless_rewording_passes test_real_file_has_no_content_problems test_sd_r5_low_plateau_exception
+reverted review.md:19 LOW_PLATEAU stripped       rc=1 FAILED (failures=5) test_deferral_class_every_unit_names_low_plateau test_deferral_class_refuses_a_statement_without_low_plateau test_review_fix_loop_zero_bugs
+reverted controller.md:17 LOW_PLATEAU stripped   rc=1 FAILED (failures=4) test_deferral_class_every_unit_names_low_plateau test_deferral_class_refuses_a_statement_without_low_plateau
+new statement without LOW_PLATEAU in SKILL.md    rc=1 FAILED (failures=10) test_all_checks_pass test_deferral_class_every_unit_names_low_plateau test_deferral_class_refuses_a_statement_without_low_plateau test_every_sentence_pinned test_harmless_rewordings_pass test_read_from_another_cwd
+restored                                         rc=0 OK
+mutants 4 killed 4

@@ -1,0 +1,37 @@
+fix round 8 per-condition mutants of tests/prose_check.py (the raw '](' and ']:' checks, the _bracket_start call and each condition inside it); each run is python -m unittest tests.test_playbook with a fresh PYTHONPYCACHEPREFIX; the file is restored after each
+
+interpreter: /usr/bin/python3 Python 3.9.6
+prose_check.py sha256 (fix present): 6cb260de42879155f28297a5e592f1b2ed3d82934a4f15896dc0c35538f4ec28
+== M1 '](' checked on the masked line: rc=1 Ran 186 tests in 8.951s | FAILED (failures=21) -> KILLED
+  killed by: FAIL: test_link_paren (WhitelistTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest); FAIL: test_raw_link_syntax_in_span (RawLinkSyntaxTest); FAIL: test_z1_reproducers (ListItemBlockStartTest)
+== M2 ']:' checked on the masked line: rc=1 Ran 186 tests in 8.711s | FAILED (failures=22) -> KILLED
+  killed by: FAIL: test_link_colon (WhitelistTest); FAIL: test_raw_link_syntax_in_span (RawLinkSyntaxTest)
+== M3 drops the _bracket_start call: rc=1 Ran 186 tests in 10.841s | FAILED (failures=132) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M4 _bracket_start strips one marker only (no nesting loop): rc=1 Ran 186 tests in 11.880s | FAILED (failures=33) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M5 _bracket_start tests the whole line (no marker strip): rc=1 Ran 186 tests in 10.308s | FAILED (failures=127) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M6 _bracket_start keeps the spaces after a marker: rc=1 Ran 186 tests in 9.949s | FAILED (failures=127) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M7 _bracket_start needs a ']' too: rc=1 Ran 186 tests in 10.146s | FAILED (failures=26) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest)
+
+interpreter: /opt/homebrew/bin/python3.13 Python 3.13.18
+prose_check.py sha256 (fix present): 6cb260de42879155f28297a5e592f1b2ed3d82934a4f15896dc0c35538f4ec28
+== M1 '](' checked on the masked line: rc=1 Ran 186 tests in 7.126s | FAILED (failures=21) -> KILLED
+  killed by: FAIL: test_link_paren (WhitelistTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest); FAIL: test_raw_link_syntax_in_span (RawLinkSyntaxTest); FAIL: test_z1_reproducers (ListItemBlockStartTest)
+== M2 ']:' checked on the masked line: rc=1 Ran 186 tests in 7.366s | FAILED (failures=22) -> KILLED
+  killed by: FAIL: test_link_colon (WhitelistTest); FAIL: test_raw_link_syntax_in_span (RawLinkSyntaxTest)
+== M3 drops the _bracket_start call: rc=1 Ran 186 tests in 6.921s | FAILED (failures=132) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M4 _bracket_start strips one marker only (no nesting loop): rc=1 Ran 186 tests in 7.072s | FAILED (failures=33) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M5 _bracket_start tests the whole line (no marker strip): rc=1 Ran 186 tests in 7.205s | FAILED (failures=127) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M6 _bracket_start keeps the spaces after a marker: rc=1 Ran 186 tests in 7.913s | FAILED (failures=127) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest); FAIL: test_no_unicode_database_read (RawLinkSyntaxTest); FAIL: test_numeric_text_same_on_every_interpreter (RawLinkSyntaxTest)
+== M7 _bracket_start needs a ']' too: rc=1 Ran 186 tests in 7.054s | FAILED (failures=26) -> KILLED
+  killed by: FAIL: test_bracket_content_start (RawLinkSyntaxTest); FAIL: test_multi_line_label (RawLinkSyntaxTest)
+
+prose_check.py sha256 after restore: 6cb260de42879155f28297a5e592f1b2ed3d82934a4f15896dc0c35538f4ec28 (same)

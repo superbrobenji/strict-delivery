@@ -1,0 +1,14 @@
+F-B21RR2-1: sentence pin check: sentence boundaries: terminator with any closer run followed with no whitespace by an uppercase letter, a Cf character, or a CJK/fullwidth terminator
+harness: mut.py; each run in a fresh copy of tests/__init__.py, tests/prose_check.py, tests/test_playbook.py, tests/test_prompt_blocks.py, tests/helpers.py, playbook/rules.md and the ten prompt blocks under a private mktemp -d; command: /usr/bin/python3 -m unittest tests.test_playbook; base: 4028845 plus the B2.2 part 1 change
+reverted = the B2.1 splitter (_BOUNDARY = re.compile(r"([.!?](?:[^\w\s]|_)*)\s+") and its sentences) put back; the new tests stay
+present                                          rc=0 OK
+reverted: old splitter                           rc=1 FAILED (failures=1662) killed-by=test_cjk_stop_splits_before_lowercase,test_no_space_boundaries,test_unpinned_sentence_with_no_space
+restored                                         rc=0 OK
+mutant: Cf not a gap                             rc=1 FAILED (failures=136) killed-by=test_no_space_boundaries,test_unpinned_sentence_with_no_space
+mutant: no capital rule                          rc=1 FAILED (failures=82) killed-by=test_no_space_boundaries,test_unpinned_sentence_with_no_space
+mutant: no titlecase                             rc=1 FAILED (failures=27) killed-by=test_unpinned_sentence_with_no_space
+mutant: no CJK-run rule                          rc=1 FAILED (failures=366) killed-by=test_cjk_stop_splits_before_lowercase,test_no_space_boundaries,test_unpinned_sentence_with_no_space
+mutant: CJK not stops                            rc=1 FAILED (failures=1041) killed-by=test_cjk_stop_splits_before_lowercase,test_no_space_boundaries,test_unpinned_sentence_with_no_space
+mutant: end of cell no boundary                  rc=1 FAILED (errors=1984) killed-by=test_cjk_stop_splits_before_lowercase,test_every_sentence_pinned,test_harmless_rewording_passes,test_no_false_split_without_space,test_no_space_boundaries,test_real_file_has_no_content_problems,test_sentences_split,test_sentences_split_after_closers_and_any_space,test_unpinned_sentence_and_missing_pin,test_unpinned_sentence_any_start_or_end,test_unpinned_sentence_behind_closers,test_unpinned_sentence_with_no_space
+mutant: gap kept in next sentence                rc=1 FAILED (failures=1035) killed-by=test_no_space_boundaries,test_sentences_split,test_sentences_split_after_closers_and_any_space,test_unpinned_sentence_and_missing_pin,test_unpinned_sentence_any_start_or_end,test_unpinned_sentence_behind_closers,test_unpinned_sentence_with_no_space
+mutants 7 killed 7
