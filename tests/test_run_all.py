@@ -115,7 +115,7 @@ class RunAllCase(GitIsolatedTestCase):
             self.addCleanup(lambda: sys.path.remove(self._modir))
         name = "tests_fakefile_%d" % next(self._n)
         with open(os.path.join(self._modir, name + ".py"), "w", encoding="utf-8") as fh:
-            fh.write(body)
+            fh.write(body.replace("@SUFFIX@", name[len("tests_"):]))   # a name that ends the module's own name
         importlib.invalidate_caches()
         self.addCleanup(lambda: sys.modules.pop(name, None))
         return name
@@ -243,6 +243,50 @@ class GateListTest(RunAllCase):
                 with self.assertRaises(getattr(builtins, exc)):
                     self.run_main(["--root", root])
 
+    def test_import_odd_baseexception_propagates(self):  # F-1: import, a BaseException subclass of the module's own
+        root = self.fixture()
+        self.all_pass()
+        name = self.file_module("class Odd(BaseException):\n    pass\nraise Odd()\n")
+        self.put(gates_main.GATES, "claims", name)
+        for call in (lambda: run_all.check(["--root", root]), lambda: self.run_main(["--root", root])):
+            with self.assertRaises(BaseException) as cm:
+                call()
+            self.assertEqual(type(cm.exception).__name__, "Odd")
+
+    def test_check_read_baseexception_propagates(self):  # F-1: reading module.check
+        root = self.fixture()
+
+        class Odd(BaseException):
+            pass
+        for exc in (KeyboardInterrupt(), GeneratorExit(), Odd("o")):
+            with self.subTest(exc=type(exc).__name__):
+                self.all_pass()
+
+                def getattr_(name, exc=exc):
+                    raise exc
+                self.fake("claims", __getattr__=getattr_)
+                with self.assertRaises(type(exc)):
+                    run_all.check(["--root", root])
+                with self.assertRaises(type(exc)):
+                    self.run_main(["--root", root])
+
+    def test_module_not_found_name_other_than_the_gate_is_import_failure(self):  # F-2
+        root = self.fixture()
+        for label, modname, dep in (("parent package absent", "nopkg_xx_f2.gate_x", None),
+                                    ("parent inside gates absent", "gates.nopkg_xx_f2.gate_x", None),
+                                    ("prefix-named dependency", None, "tests_fakefile_dep_prefix"),
+                                    ("suffix-named dependency", None, "@SUFFIX@")):
+            with self.subTest(label):
+                del self.seen[:]
+                self.all_pass()
+                if modname is None:
+                    modname = self.file_module("import %s\n" % dep)
+                self.put(gates_main.GATES, "claims", modname)
+                self.expect(["--root", root],
+                            ok_lines("schema", "register", "decisions")
+                            + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % modname
+                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+
     def test_no_check_is_missing(self):  # G4
         self.all_pass()
         mod = self.fake("claims")
@@ -299,7 +343,7 @@ class GateListTest(RunAllCase):
 
         class Odd(BaseException):
             pass
-        for exc in (KeyboardInterrupt(), Odd("o")):
+        for exc in (KeyboardInterrupt(), GeneratorExit(), Odd("o")):
             with self.subTest(exc=type(exc).__name__):
                 self.all_pass()
 
@@ -479,6 +523,36 @@ class ArgvTest(RunAllCase):
         del self.seen[:]
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": os.path.join(root, "nodir")}):
             self.expect([], input_fail("CLAUDE_PROJECT_DIR is not a directory"), 1, [])
+
+    def test_default_root_forwarded_as_repo_root_gives_it(self):  # F-3: never normalised by run_all
+        from gates.lib import result
+        self.all_pass()
+        root = self.fixture()
+        link = os.path.join(self.tmp, "link")
+        os.symlink(root, link)
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(os.path.dirname(root))
+        for label, env, _ in (("real", root, True), ("symlink", link, True), ("trailing slash", root + "/", True),
+                               ("symlink trailing slash", link + "/", True),
+                               ("relative", os.path.basename(root), True)):
+            with self.subTest(label):
+                del self.seen[:]
+                with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": env}):
+                    self.assertEqual(result.repo_root(), env)
+                    out, code = self.run_main([])
+                self.assertEqual((out, code), (PASS5, 0))
+                self.assertEqual(self.args_of(), {g: ["--root", env] for g in FIVE})
+        del self.seen[:]
+        os.chdir(root)
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "."}):
+            self.expect([], PASS5, 0, list(FIVE))
+            self.assertEqual(self.args_of(), {g: ["--root", "."] for g in FIVE})
+        del self.seen[:]
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+            self.expect([], PASS5, 0, list(FIVE))
+            self.assertEqual(self.args_of(), {g: ["--root", result.repo_root()] for g in FIVE})
 
     def test_root_repeated_refused(self):  # A4
         self.all_pass()
@@ -703,15 +777,16 @@ class Pc1Test(RunAllCase):
     def test_pc1_long_number_int_id_kept_as_the_gate_alone_renders_it(self):  # S4, int id
         from gates.lib import result
         root = self.fixture()
-        big = 10 ** 4300
-        for n in (big, big * 10):
-            with self.subTest(digits=len(str(n)) if sys.version_info < (3, 11) else "limit"):
-                line = Line("PASS", n)
+        for digits in (4300, 4301, 4302):   # F-4: the 3.11+ str() limit is 4300 digits
+            with self.subTest(digits=digits):
+                line = Line("PASS", 10 ** (digits - 1))   # an int with exactly `digits` digits
                 self.all_pass(claims=[line])
                 out, code = self.run_main(["--root", root])
                 alone = result.run_check("claims", lambda a: Result("claims", [line]), []).render(False)
                 self.assertEqual(out, ok_lines("schema", "register", "decisions") + alone + ok_lines("cites"))
                 self.assertEqual(code, 0)
+                if digits == 4300:   # renderable on both interpreters: the same digits
+                    self.assertEqual(alone, "PASS 1" + "0" * 4299 + "\n")
 
     def test_pc1_unicode_version(self):  # S5
         ch = "\U0001f6dd"
