@@ -95,7 +95,7 @@ Merged pull requests: #1-#13.
 5. Context and docs: required reads per session and role with read receipts, the generated overview (`INDEX.md`), drift checks
 6. Release 0.1.0: end-to-end tests of the three profiles, release script, changelog
 
-A few smaller follow-up blocks (for example Block 1d3) are planned in between; the plan has the full list.
+A few smaller follow-up blocks (for example Block 1d3) are registered, not yet scheduled; the plan has the full list.
 
 Target: mid-November 2026. Progress and every decision are in the ledger under
 `.strict-delivery/state/plans/`.
