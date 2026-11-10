@@ -90,6 +90,7 @@ max_depth: 5         # the session runs with CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPT
 | 1d.2 | a | PR-1d | M | C `tools/findings_cli.py`; M `__main__.py`, `producers.py`; T | P:781-783 |
 | 1d.3 | a | PR-1d | M | C `lib/batch.py`; M `tools/decisions_cli.py` (subcommand `batch`); T `test_batch.py`, `test_decisions_cli.py` | P078:963-966 |
 | 1d2.1 | a | PR-1d2 | M | C `print_table.py`, `tests/test_print_table.py`; M `result.py`, `config.py`, `schema.py`, `decisions.py`, `yamlsub.py`, `tests/test_schema_lib.py` | plan Task 1d2.1 (owner Q-RCp-2 (a)) |
+| 1d3.1 | a | PR-1d3 | set by its planning round | M `result.py`, `gitinfo.py`, `store.py` (expected) | plan Task 1d3.1 (owner DN-3 (b)); registered findings, not yet planned; its planning round sets its estimate and its place in the schedule; not in sections 4-5 until then, so no figure of this breakdown changes |
 | 2a.1 | d | PR-D | L | section 2 row `d` (2a.1 part); records migration by the session (P:1011) | P:884-892 |
 | 2a.2 | d | PR-D | M | C `claim.yml`, `claims.py`; M `gitinfo.py`; T | P:1016-1019 |
 | 2a.3 | d | PR-D | M | C `gate_claims.py`; M `__main__.py` (O3); T | P:1122-1125 |
@@ -210,7 +211,7 @@ plan: 2026-10-31-strict-delivery-framework
 max_concurrent: 25
 max_depth: 5
 done: [1a.1, 1a.2, 1a.3, 1b.1, 1b.2, 1b.3, 1c0.1, 1c0.2, 1c.1, 1c.2, 1c.3, 1d.1, 1d.2,
-       1d.3, 1d2.1, 2a.1, 2a.2, 2a.3, 2b.1, 2b.2, 2b.3, 2c.1, 2c.2, 2c.3,
+       1d.3, 1d2.1, 1d3.1, 2a.1, 2a.2, 2a.3, 2b.1, 2b.2, 2b.3, 2c.1, 2c.2, 2c.3,
        P1.1, P1.2, P1.3, P2.1, P2.2, P2.3, P3.1, P3.2, P3.3, P4.1, P4.2, P4.3,
        B1.1, B1.2, B1.3, B2.1, B2.2, B2.3, C1.1, C1.2, C2.1, C2.2]
 streams:
