@@ -1,0 +1,567 @@
+3a.1 mutation transcript: tests/test_session_store.py against gates/lib/session.py (plan P:3141-3216, domain table task-3a.1-domain.md)
+scratch runner: one mutant at a time on the worktree's gates/lib/session.py (restored after each), module tests.test_session_store
+on /usr/bin/python3 and /opt/homebrew/bin/python3.13; 130 mutants. Mutants 0-44 ran before a lone-surrogate test input was fixed
+(row E8 sibling); mutant 45 and 68 were re-run after the tests that kill them were strengthened (their blocks below are the re-runs).
+A mutant that PASSED is marked SURVIVED, re-run on both full suites (tests/test_*.py, 2300 tests), and argued at the end.
+A hang (LOCK_NB dropped) is killed by a 100 s timeout and counts as killed.
+
+fix present (HEAD files):
+  PASS expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -
+  PASS expected; python3.13: PASS (ran=70; OK) failing tests: -
+
+mutant 0 [SESSION_ID \Z -> $]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=13, skipped=1)) failing tests: test_bad_session_ids_refused, test_reset_bad_id_refused, test_session_id_pattern_literal; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=13)) failing tests: test_bad_session_ids_refused, test_reset_bad_id_refused, test_session_id_pattern_literal; new test killed it: yes
+
+mutant 1 [SESSION_ID max 128 -> 129]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=22, skipped=1)) failing tests: test_bad_session_ids_refused, test_reset_bad_id_refused, test_session_id_pattern_literal; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=22)) failing tests: test_bad_session_ids_refused, test_reset_bad_id_refused, test_session_id_pattern_literal; new test killed it: yes
+
+mutant 2 [SESSION_ID class loses '-']:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=3, skipped=1)) failing tests: test_good_session_ids_accepted, test_session_id_pattern_literal; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=3)) failing tests: test_good_session_ids_accepted, test_session_id_pattern_literal; new test killed it: yes
+
+mutant 3 [_SHA \Z -> $]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+
+mutant 4 [_SHA length 64 -> 63]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=21, errors=8, skipped=1)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_corrupt_state_fails_closed_never_resets, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_keeps_surfaced, test_round_trip_and_mode, test_state_errors_exact_lists, test_state_errors_valid_is_empty, test_unicode_version_independent, test_valid_state_in_fixture_set_is_accepted; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=23, errors=8)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_corrupt_state_fails_closed_never_resets, test_exception_group_not_written, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_keeps_surfaced, test_round_trip_and_mode, test_state_errors_exact_lists, test_state_errors_valid_is_empty, test_unicode_version_independent, test_valid_state_in_fixture_set_is_accepted; new test killed it: yes
+
+mutant 5 [_SHA accepts uppercase]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=3, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=3)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 6 [state_errors: top-level type check removed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, errors=9, skipped=1)) failing tests: test_empty_state_file_fails_closed, test_lock_released_on_every_path, test_reset_moves_corrupt_file_aside_unparsed, test_state_errors_exact_lists, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2, errors=9)) failing tests: test_empty_state_file_fails_closed, test_lock_released_on_every_path, test_reset_moves_corrupt_file_aside_unparsed, test_state_errors_exact_lists, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+
+mutant 7 [state_errors: missing top key not reported]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=8, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=8)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 8 [state_errors: schema value not checked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=3, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists, test_unreadable_message_names_recovery; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=3)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists, test_unreadable_message_names_recovery; new test killed it: yes
+
+mutant 9 [state_errors: session id not compared]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=4, errors=1, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_reset_moves_corrupt_file_aside_unparsed, test_state_errors_exact_lists, test_unreadable_message_carries_the_reason; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=4, errors=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_reset_moves_corrupt_file_aside_unparsed, test_state_errors_exact_lists, test_unreadable_message_carries_the_reason; new test killed it: yes
+
+mutant 10 [state_errors: dispatches list type unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+
+mutant 11 [state_errors: entries not checked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=43, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=43)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 12 [state_errors: surfaced list type unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 13 [state_errors: surfaced items unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=3, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=3)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 14 [state_errors: unknown top key allowed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=5, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_lock_released_on_every_path, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=5)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_lock_released_on_every_path, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 15 [_entry_errors: entry type unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+
+mutant 16 [_entry_errors: missing entry key not reported]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=12, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=12)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 17 [_entry_errors: sha unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=10, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=10)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 18 [_entry_errors: sha uses search]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 19 [_entry_errors: depth bool accepted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 20 [_entry_errors: depth floor 1 -> 0]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=4, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=4)) failing tests: test_corrupt_state_fails_closed_never_resets, test_invalid_state_not_written, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 21 [_entry_errors: worktree '' refused]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=23, errors=6, skipped=1)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_keeps_surfaced, test_round_trip_and_mode, test_state_errors_exact_lists, test_state_errors_valid_is_empty; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=25, errors=6)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_exception_group_not_written, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_keeps_surfaced, test_round_trip_and_mode, test_state_errors_exact_lists, test_state_errors_valid_is_empty; new test killed it: yes
+
+mutant 22 [_entry_errors: worktree relative accepted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 23 [_entry_errors: str fields unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=3, skipped=1)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=3)) failing tests: test_state_errors_exact_lists; new test killed it: yes
+
+mutant 24 [_entry_errors: unknown entry key allowed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=3, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=3)) failing tests: test_corrupt_state_fails_closed_never_resets, test_state_errors_exact_lists; new test killed it: yes
+
+mutant 25 [_check_id: subclass accepted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=6, skipped=1)) failing tests: test_reset_bad_id_refused, test_str_subclass_session_id_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=6)) failing tests: test_reset_bad_id_refused, test_str_subclass_session_id_refused; new test killed it: yes
+
+mutant 26 [_check_id: non-str unchecked (match decides)]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, errors=8, skipped=1)) failing tests: test_non_str_session_id_refused, test_reset_bad_id_refused, test_str_subclass_session_id_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2, errors=8)) failing tests: test_non_str_session_id_refused, test_reset_bad_id_refused, test_str_subclass_session_id_refused; new test killed it: yes
+
+mutant 27 [_check_id: pattern not applied]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=22, errors=3, skipped=1)) failing tests: test_bad_session_id_message_shows_escaped_id, test_bad_session_ids_refused, test_reset_bad_id_refused, test_unicode_version_independent; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=22, errors=3)) failing tests: test_bad_session_id_message_shows_escaped_id, test_bad_session_ids_refused, test_reset_bad_id_refused, test_unicode_version_independent; new test killed it: yes
+
+mutant 28 [_check_id: search instead of match]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=19, errors=3, skipped=1)) failing tests: test_bad_session_id_message_shows_escaped_id, test_bad_session_ids_refused, test_reset_bad_id_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=19, errors=3)) failing tests: test_bad_session_id_message_shows_escaped_id, test_bad_session_ids_refused, test_reset_bad_id_refused; new test killed it: yes
+
+mutant 29 [_plugin_data: unset read as KeyError]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=1, skipped=1)) failing tests: test_unset_plugin_data_is_unavailable; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=1)) failing tests: test_unset_plugin_data_is_unavailable; new test killed it: yes
+
+mutant 30 [_plugin_data: non-str unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=2, skipped=1)) failing tests: test_non_str_plugin_data_is_unavailable; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=2)) failing tests: test_non_str_plugin_data_is_unavailable; new test killed it: yes
+
+mutant 31 [_plugin_data: subclass refused]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=1, skipped=1)) failing tests: test_str_subclass_plugin_data_copied; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=1)) failing tests: test_str_subclass_plugin_data_copied; new test killed it: yes
+
+mutant 32 [_plugin_data: subclass not copied]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_str_subclass_plugin_data_copied; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_str_subclass_plugin_data_copied; new test killed it: yes
+
+mutant 33 [_plugin_data: NUL accepted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_nul_plugin_data_is_unavailable; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_nul_plugin_data_is_unavailable; new test killed it: yes
+
+mutant 34 [_plugin_data: relative accepted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=4, skipped=1)) failing tests: test_empty_plugin_data_is_unavailable, test_relative_plugin_data_is_unavailable; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=4)) failing tests: test_empty_plugin_data_is_unavailable, test_relative_plugin_data_is_unavailable; new test killed it: yes
+
+mutant 35 [session_dir: plain concatenation]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_session_dir_joins_sessions; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_session_dir_joins_sessions; new test killed it: yes
+
+mutant 36 [_make_private: mode 0o700 -> 0o755]:
+  FAIL expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; new test killed it: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=70; OK) failing tests: -; new test killed it: NO (SURVIVED)
+
+  full-suite re-run of the survivor:
+    FAIL expected; python3: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+
+mutant 37 [_make_private: chmod removed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=1, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=1)) failing tests: test_modes_exact_under_restrictive_umask; new test killed it: yes
+
+mutant 38 [_make_private: existing dir chmodded]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_sessions_created_under_existing_plugin_data; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_sessions_created_under_existing_plugin_data; new test killed it: yes
+
+mutant 39 [_prepare_dir: P not created]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=1, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask, test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=1)) failing tests: test_modes_exact_under_restrictive_umask, test_round_trip_and_mode; new test killed it: yes
+
+mutant 40 [_prepare_dir: S creation branch dead]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=19, skipped=1)) failing tests: test_absent_state_is_empty, test_good_session_ids_accepted, test_killed_holder_releases, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=19)) failing tests: test_absent_state_is_empty, test_good_session_ids_accepted, test_killed_holder_releases, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+
+mutant 41 [_prepare_dir: S type unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_sessions_symlink_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_sessions_symlink_refused; new test killed it: yes
+
+mutant 42 [_prepare_dir: S followed (stat for lstat)]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_sessions_symlink_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_sessions_symlink_refused; new test killed it: yes
+
+mutant 43 [_prepare_dir: S owner unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_reset_sessions_foreign_uid_still_raises, test_sessions_foreign_uid_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_reset_sessions_foreign_uid_still_raises, test_sessions_foreign_uid_refused; new test killed it: yes
+
+mutant 44 [_prepare_dir: OSError not converted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=2, skipped=1)) failing tests: test_plugin_data_file_is_unavailable, test_unencodable_plugin_data_is_unavailable; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=2)) failing tests: test_plugin_data_file_is_unavailable, test_unencodable_plugin_data_is_unavailable; new test killed it: yes
+
+mutant 45 [_prepare_dir: ValueError not converted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=1, skipped=1)) failing tests: test_unencodable_plugin_data_is_unavailable; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=1)) failing tests: test_unencodable_plugin_data_is_unavailable; new test killed it: yes
+
+mutant 46 [_acquire: O_CREAT dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=12, errors=35, skipped=1)) failing tests: test_absent_state_is_empty, test_body_error_not_written, test_body_interrupt_not_written, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_invalid_state_not_written, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path, test_valid_state_in_fixture_set_is_accepted, test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=14, errors=35)) failing tests: test_absent_state_is_empty, test_body_error_not_written, test_body_interrupt_not_written, test_exception_group_not_written, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_invalid_state_not_written, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path, test_valid_state_in_fixture_set_is_accepted, test_zero_timeout_single_try; new test killed it: yes
+
+mutant 47 [_acquire: O_NOFOLLOW dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lock_symlink_refused, test_reset_lock_symlink_still_raises; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lock_symlink_refused, test_reset_lock_symlink_still_raises; new test killed it: yes
+
+mutant 48 [_acquire: lock mode 0o600 -> 0o644]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_round_trip_and_mode; new test killed it: yes
+
+mutant 49 [_acquire: open errors not converted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=3, skipped=1)) failing tests: test_lock_directory_refused, test_lock_symlink_refused, test_reset_lock_symlink_still_raises; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=3)) failing tests: test_lock_directory_refused, test_lock_symlink_refused, test_reset_lock_symlink_still_raises; new test killed it: yes
+
+mutant 50 [_acquire: LOCK_EX -> LOCK_SH]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_nested_same_id_times_out, test_parallel_writers_lose_nothing; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_nested_same_id_times_out, test_parallel_writers_lose_nothing; new test killed it: yes
+
+mutant 51 [_acquire: LOCK_NB dropped (blocks)]:
+  FAIL expected; python3: TIMEOUT (timeout) failing tests: (hang: killed after 100 s); new test killed it: yes
+  FAIL expected; python3.13: TIMEOUT (timeout) failing tests: (hang: killed after 100 s); new test killed it: yes
+
+mutant 52 [_acquire: any flock error means held]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lock_timeout, test_parallel_writers_lose_nothing; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lock_timeout, test_parallel_writers_lose_nothing; new test killed it: yes
+
+mutant 53 [_acquire: lock error never SU (retry forever)]:
+  FAIL expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; new test killed it: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=70; OK) failing tests: -; new test killed it: NO (SURVIVED)
+
+  full-suite re-run of the survivor:
+    FAIL expected; python3: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+
+mutant 54 [_acquire: deadline subtracts timeout]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lock_timeout, test_parallel_writers_lose_nothing; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lock_timeout, test_parallel_writers_lose_nothing; new test killed it: yes
+
+mutant 55 [_acquire: timeout never fires (deadline +100)]:
+  FAIL expected; python3: TIMEOUT (timeout) failing tests: (hang: killed after 100 s); new test killed it: yes
+  FAIL expected; python3.13: TIMEOUT (timeout) failing tests: (hang: killed after 100 s); new test killed it: yes
+
+mutant 56 [_acquire: timeout 0 means 5 s]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_zero_timeout_single_try; new test killed it: yes
+
+mutant 57 [_acquire: poll sleep removed]:
+  FAIL expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; new test killed it: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=70; OK) failing tests: -; new test killed it: NO (SURVIVED)
+
+  full-suite re-run of the survivor:
+    FAIL expected; python3: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+
+mutant 58 [_acquire: fd closed on refusal removed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_zero_timeout_single_try; new test killed it: yes
+
+mutant 59 [_unreadable: rm quoting removed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+
+mutant 60 [_unreadable: recovery hint dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=7, skipped=1)) failing tests: test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=7)) failing tests: test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery; new test killed it: yes
+
+mutant 61 [_load: absent file is unreadable]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=21, skipped=1)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=21)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+
+mutant 62 [_load: other lstat errors escape]:
+  FAIL expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; new test killed it: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=70; OK) failing tests: -; new test killed it: NO (SURVIVED)
+
+  full-suite re-run of the survivor:
+    FAIL expected; python3: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+
+mutant 63 [_load: file type unchecked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, errors=1, skipped=1)) failing tests: test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2, errors=1)) failing tests: test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; new test killed it: yes
+
+mutant 64 [_load: stat for lstat (symlink followed)]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, errors=1, skipped=1)) failing tests: test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2, errors=1)) failing tests: test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; new test killed it: yes
+
+mutant 65 [_load: YamlError reason dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_unreadable_message_carries_the_reason; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_unreadable_message_carries_the_reason; new test killed it: yes
+
+mutant 66 [_load: other parse exceptions escape]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=2, skipped=1)) failing tests: test_reset_never_uses_corrupt_content; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=2)) failing tests: test_reset_never_uses_corrupt_content; new test killed it: yes
+
+mutant 67 [_load: state_errors not applied]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=7, errors=2, skipped=1)) failing tests: test_empty_state_file_fails_closed, test_lock_released_on_every_path, test_reset_moves_corrupt_file_aside_unparsed, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=7, errors=2)) failing tests: test_empty_state_file_fails_closed, test_lock_released_on_every_path, test_reset_moves_corrupt_file_aside_unparsed, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+
+mutant 68 [_load: state_errors list truncated to first]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_unreadable_message_carries_the_reason; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_unreadable_message_carries_the_reason; new test killed it: yes
+
+mutant 69 [_write: state_errors not checked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=6, errors=1, skipped=1)) failing tests: test_invalid_state_not_written, test_lock_released_on_every_path; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=6, errors=1)) failing tests: test_invalid_state_not_written, test_lock_released_on_every_path; new test killed it: yes
+
+mutant 70 [_write: EmitError escapes]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=3, skipped=1)) failing tests: test_huge_depth_same_on_both, test_lock_released_on_every_path, test_unemittable_state_not_written; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=3)) failing tests: test_huge_depth_same_on_both, test_lock_released_on_every_path, test_unemittable_state_not_written; new test killed it: yes
+
+mutant 71 [_write: tmp O_NOFOLLOW dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_tmp_symlink_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_tmp_symlink_refused; new test killed it: yes
+
+mutant 72 [_write: tmp O_TRUNC dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=1, skipped=1)) failing tests: test_leftover_tmp_replaced; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=1)) failing tests: test_leftover_tmp_replaced; new test killed it: yes
+
+mutant 73 [_write: tmp O_CREAT dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=35, skipped=1)) failing tests: test_absent_state_is_empty, test_body_error_not_written, test_body_interrupt_not_written, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_valid_state_in_fixture_set_is_accepted, test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=37)) failing tests: test_absent_state_is_empty, test_body_error_not_written, test_body_interrupt_not_written, test_exception_group_not_written, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_valid_state_in_fixture_set_is_accepted, test_zero_timeout_single_try; new test killed it: yes
+
+mutant 74 [_write: tmp mode 0o600 -> 0o644]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_round_trip_and_mode; new test killed it: yes
+
+mutant 75 [_write: fsync removed]:
+  FAIL expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; new test killed it: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=70; OK) failing tests: -; new test killed it: NO (SURVIVED)
+
+  full-suite re-run of the survivor:
+    FAIL expected; python3: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+
+mutant 76 [_write: data written to path directly, no replace]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=13, errors=9, skipped=1)) failing tests: test_good_session_ids_accepted, test_leftover_tmp_replaced, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_str_subclass_plugin_data_copied, test_unicode_version_independent; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=13, errors=9)) failing tests: test_good_session_ids_accepted, test_leftover_tmp_replaced, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_str_subclass_plugin_data_copied, test_unicode_version_independent; new test killed it: yes
+
+mutant 77 [_write: tmp written at wrong name]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_leftover_tmp_replaced, test_tmp_symlink_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_leftover_tmp_replaced, test_tmp_symlink_refused; new test killed it: yes
+
+mutant 78 [_write: OSError not converted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=1, skipped=1)) failing tests: test_tmp_symlink_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=1)) failing tests: test_tmp_symlink_refused; new test killed it: yes
+
+mutant 79 [_write: encoding utf-8 -> utf-16]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=4, errors=18, skipped=1)) failing tests: test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_unicode_version_independent; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=5, errors=18)) failing tests: test_exception_group_not_written, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_unicode_version_independent; new test killed it: yes
+
+mutant 80 [_exclusive: id checked after the directory]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=28, skipped=1)) failing tests: test_bad_session_ids_refused, test_non_str_session_id_refused, test_reset_bad_id_refused, test_str_subclass_session_id_refused; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=28)) failing tests: test_bad_session_ids_refused, test_non_str_session_id_refused, test_reset_bad_id_refused, test_str_subclass_session_id_refused; new test killed it: yes
+
+mutant 81 [_exclusive: id never checked]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=19, errors=11, skipped=1)) failing tests: test_bad_session_id_message_shows_escaped_id, test_bad_session_ids_refused, test_non_str_session_id_refused, test_reset_bad_id_refused, test_str_subclass_session_id_refused, test_unicode_version_independent; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=19, errors=11)) failing tests: test_bad_session_id_message_shows_escaped_id, test_bad_session_ids_refused, test_non_str_session_id_refused, test_reset_bad_id_refused, test_str_subclass_session_id_refused, test_unicode_version_independent; new test killed it: yes
+
+mutant 82 [_exclusive: lock released never]:
+  FAIL expected; python3: TIMEOUT (timeout) failing tests: (hang: killed after 100 s); new test killed it: yes
+  FAIL expected; python3.13: TIMEOUT (timeout) failing tests: (hang: killed after 100 s); new test killed it: yes
+
+mutant 83 [_exclusive: lock file named .lck]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=11, errors=1, skipped=1)) failing tests: test_invalid_state_not_written, test_killed_holder_releases, test_lock_directory_refused, test_lock_symlink_refused, test_lock_timeout, test_reset_keeps_surfaced, test_reset_lock_held_still_raises, test_reset_lock_symlink_still_raises, test_round_trip_and_mode, test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=11, errors=1)) failing tests: test_invalid_state_not_written, test_killed_holder_releases, test_lock_directory_refused, test_lock_symlink_refused, test_lock_timeout, test_reset_keeps_surfaced, test_reset_lock_held_still_raises, test_reset_lock_symlink_still_raises, test_round_trip_and_mode, test_zero_timeout_single_try; new test killed it: yes
+
+mutant 84 [_exclusive: state file named .yaml]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=63, errors=13, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_directory_state_refused, test_empty_state_file_fails_closed, test_good_session_ids_accepted, test_huge_depth_same_on_both, test_invalid_state_not_written, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_str_subclass_plugin_data_copied, test_symlinked_state_refused, test_tmp_symlink_refused, test_unemittable_state_not_written, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path, test_valid_state_in_fixture_set_is_accepted; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=63, errors=13)) failing tests: test_corrupt_state_fails_closed_never_resets, test_directory_state_refused, test_empty_state_file_fails_closed, test_good_session_ids_accepted, test_huge_depth_same_on_both, test_invalid_state_not_written, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_str_subclass_plugin_data_copied, test_symlinked_state_refused, test_tmp_symlink_refused, test_unemittable_state_not_written, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path, test_valid_state_in_fixture_set_is_accepted; new test killed it: yes
+
+mutant 85 [_empty: wrong schema]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, errors=29, skipped=1)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2, errors=29)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+
+mutant 86 [locked: absent file yields None]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, errors=22, skipped=1)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_huge_depth_same_on_both, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_tmp_symlink_refused, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2, errors=22)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_huge_depth_same_on_both, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_str_subclass_plugin_data_copied, test_tmp_symlink_refused, test_unicode_version_independent, test_zero_timeout_single_try; new test killed it: yes
+
+mutant 87 [locked: nothing written on clean exit]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=22, skipped=1)) failing tests: test_good_session_ids_accepted, test_huge_depth_same_on_both, test_invalid_state_not_written, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_round_trip_and_mode, test_str_subclass_plugin_data_copied, test_tmp_symlink_refused, test_unemittable_state_not_written, test_unicode_version_independent; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=22)) failing tests: test_good_session_ids_accepted, test_huge_depth_same_on_both, test_invalid_state_not_written, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_round_trip_and_mode, test_str_subclass_plugin_data_copied, test_tmp_symlink_refused, test_unemittable_state_not_written, test_unicode_version_independent; new test killed it: yes
+
+mutant 88 [locked: written on error too]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_body_error_not_written, test_body_interrupt_not_written; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=4)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_exception_group_not_written; new test killed it: yes
+
+mutant 89 [locked: unreadable file reset silently]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=48, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_empty_state_file_fails_closed, test_huge_depth_same_on_both, test_lock_released_on_every_path, test_symlinked_state_refused, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=48)) failing tests: test_corrupt_state_fails_closed_never_resets, test_empty_state_file_fails_closed, test_huge_depth_same_on_both, test_lock_released_on_every_path, test_symlinked_state_refused, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+
+mutant 90 [locked: _Unreadable escapes raw]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=49, skipped=1)) failing tests: test_corrupt_state_fails_closed_never_resets, test_directory_state_refused, test_empty_state_file_fails_closed, test_huge_depth_same_on_both, test_lock_released_on_every_path, test_symlinked_state_refused, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=49)) failing tests: test_corrupt_state_fails_closed_never_resets, test_directory_state_refused, test_empty_state_file_fails_closed, test_huge_depth_same_on_both, test_lock_released_on_every_path, test_symlinked_state_refused, test_unreadable_message_carries_the_reason, test_unreadable_message_names_recovery, test_unreadable_message_quotes_single_quote_in_path; new test killed it: yes
+
+mutant 91 [_utc_stamp: local time]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+
+mutant 92 [_utc_stamp: format drops T]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=7, skipped=1)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=7)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed; new test killed it: yes
+
+mutant 93 [_move_aside: exists for lexists]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+
+mutant 94 [_move_aside: taken name overwritten]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+
+mutant 95 [_move_aside: suffix format]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_reset_corrupt_name_taken; new test killed it: yes
+
+mutant 96 [_move_aside: rename removed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=9, skipped=1)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=9)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+
+mutant 97 [_move_aside: OSError not converted]:
+  FAIL expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; new test killed it: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=70; OK) failing tests: -; new test killed it: NO (SURVIVED)
+
+  full-suite re-run of the survivor:
+    FAIL expected; python3: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suites exit=0) failing tests: (full suites) /usr/bin/python3: Ran 2300 tests; OK (skipped=9); new test killed it: NO (SURVIVED)
+
+mutant 98 [reset: dispatches kept]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_reset_keeps_surfaced; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_reset_keeps_surfaced; new test killed it: yes
+
+mutant 99 [reset: surfaced dropped]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_reset_keeps_surfaced; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_reset_keeps_surfaced; new test killed it: yes
+
+mutant 100 [reset: absent file not initialised]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (errors=10, skipped=1)) failing tests: test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (errors=10)) failing tests: test_reset_absent_writes_empty, test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+
+mutant 101 [reset: corrupt file not moved aside]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=8, skipped=1)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=8)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+
+mutant 102 [reset: corrupt file kept as readable (no move, no write)]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=8, skipped=1)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=8)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+
+mutant 103 [reset: moved name not returned]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=8, skipped=1)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=8)) failing tests: test_reset_corrupt_name_taken, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+
+mutant 104 [reset: fresh state not written]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, errors=9, skipped=1)) failing tests: test_reset_absent_writes_empty, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1, errors=9)) failing tests: test_reset_absent_writes_empty, test_reset_keeps_surfaced, test_reset_moves_corrupt_file_aside_unparsed, test_reset_never_uses_corrupt_content; new test killed it: yes
+
+mutant 105 [reset: lock not taken]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=14, skipped=1)) failing tests: test_reset_bad_id_refused, test_reset_lock_held_still_raises, test_reset_lock_symlink_still_raises; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=14)) failing tests: test_reset_bad_id_refused, test_reset_lock_held_still_raises, test_reset_lock_symlink_still_raises; new test killed it: yes
+
+mutant 106 [prompt_sha: wrong encoding]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_prompt_sha_known_values; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_prompt_sha_known_values; new test killed it: yes
+
+mutant 107 [prompt_sha: digest not hex]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_prompt_sha_known_values; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_prompt_sha_known_values; new test killed it: yes
+
+mutant 108 [prompt_sha: sha1]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_prompt_sha_known_values; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_prompt_sha_known_values; new test killed it: yes
+
+mutant 109 [prompt_sha: errors ignored]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_prompt_sha_bad_input; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_prompt_sha_bad_input; new test killed it: yes
+
+mutant 110 [add_dispatch: key order]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_add_dispatch_defaults, test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_add_dispatch_defaults, test_round_trip_and_mode; new test killed it: yes
+
+mutant 111 [add_dispatch: worktree default]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_add_dispatch_defaults, test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_add_dispatch_defaults, test_round_trip_and_mode; new test killed it: yes
+
+mutant 112 [add_dispatch: branch default]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_add_dispatch_defaults, test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_add_dispatch_defaults, test_round_trip_and_mode; new test killed it: yes
+
+mutant 113 [end_dispatch: removes last match]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+
+mutant 114 [end_dispatch: removes all matches]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+
+mutant 115 [end_dispatch: always True]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+
+mutant 116 [end_dispatch: nothing removed]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_end_dispatch_cases; new test killed it: yes
+
+mutant 117 [live_total: off by one]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=5, skipped=1)) failing tests: test_leftover_tmp_replaced, test_live_counts, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=5)) failing tests: test_leftover_tmp_replaced, test_live_counts, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_round_trip_and_mode; new test killed it: yes
+
+mutant 118 [live_children: parent ignored]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_live_counts, test_parallel_writers_lose_nothing; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_live_counts, test_parallel_writers_lose_nothing; new test killed it: yes
+
+mutant 119 [live_children: inverted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_live_counts, test_round_trip_and_mode; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_live_counts, test_round_trip_and_mode; new test killed it: yes
+
+mutant 120 [lookup: role ignored]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+
+mutant 121 [lookup: depth ignored]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+
+mutant 122 [lookup: worktree ignored]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+
+mutant 123 [lookup: branch ignored]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+
+mutant 124 [lookup: tuple order]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=2, skipped=1)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=2)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+
+mutant 125 [lookup: sha not filtered]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_lookup_ambiguous_is_none; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_lookup_ambiguous_is_none; new test killed it: yes
+
+mutant 126 [lookup: ambiguous resolved arbitrarily]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=5, skipped=1)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=5)) failing tests: test_lookup_ambiguous_is_none, test_lookup_carries_worktree; new test killed it: yes
+
+mutant 127 [mark_surfaced: inverted]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_mark_surfaced_once; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_mark_surfaced_once; new test killed it: yes
+
+mutant 128 [mark_surfaced: not appended]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_mark_surfaced_once; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_mark_surfaced_once; new test killed it: yes
+
+mutant 129 [mark_surfaced: returns False first time]:
+  FAIL expected; python3: FAIL (ran=70; FAILED (failures=1, skipped=1)) failing tests: test_mark_surfaced_once; new test killed it: yes
+  FAIL expected; python3.13: FAIL (ran=70; FAILED (failures=1)) failing tests: test_mark_surfaced_once; new test killed it: yes
+
+survivors (argued):
+  36 _make_private mode 0o700 -> 0o755: equivalent. The mode passed to makedirs is followed at once by os.chmod(path, 0o700), so the final mode is
+     identical; the argument only narrows a window in which the directory briefly exists with a wider mode. Kept as defence in depth.
+  53 _acquire: a flock error that is not EAGAIN/EACCES (ENOLCK, EBADF) cannot be produced on a real descriptor without patching fcntl, which the
+     oracle forbids (patching only the clock, the uid and the parse failure). The branch only turns it into an immediate SessionUnavailable.
+  57 _acquire: time.sleep(0.02) between polls: removing it spins the CPU and changes no verdict or timing bound a test can state.
+  62 _load: an lstat OSError other than ENOENT on a file inside a directory whose lock was just opened cannot be provoked without patching os.lstat.
+  75 _write: os.fsync before os.replace is durability against power loss; no process-level test observes it.
+  97 _move_aside: os.rename failing after lexists said the name is free cannot be provoked without patching os.rename.
+restored, PASS expected (final run after the last mutant):
+  PASS expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; full suites /usr/bin/python3: Ran 2300 tests; OK (skipped=9)
+  PASS expected; python3.13: PASS (ran=70; OK) failing tests: -; full suites /opt/homebrew/bin/python3.13: Ran 2300 tests; OK (skipped=3)
