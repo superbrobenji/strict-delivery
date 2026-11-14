@@ -30,11 +30,11 @@ def _missing(gate: str, reason: str) -> list:
 def _absent(name: str) -> bool:
     """True when the module's file is shown to be absent. A lookup that itself raises an ``Exception`` (a parent
     that is no package, a parent that is ``None`` or fails to re-import, a ``__spec__`` of ``None``, a finder that
-    raises) cannot show it, so the caller reports the import's own failure (CR-2); a non-``Exception``
-    ``BaseException`` propagates."""
+    raises, or a ``SystemExit``, as at import) cannot show it, so the caller reports the import's own failure
+    (CR-2); any other non-``Exception`` ``BaseException`` propagates."""
     try:
         return importlib.util.find_spec(name) is None
-    except Exception:
+    except (Exception, SystemExit):
         return False
 
 

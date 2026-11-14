@@ -446,6 +446,22 @@ class GateListTest(RunAllCase):
                             + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
                 os.environ.pop("TESTS_BROKEN_PARENT", None)
 
+    def test_find_spec_systemexit_is_import_failure(self):  # G2b (v), SystemExit as in G2 and G3
+        root = self.fixture()
+        for label, args in (("SystemExit(3)", (3,)), ("SystemExit()", ())):
+            with self.subTest(label):
+                del self.seen[:]
+                self.all_pass()
+
+                def second(args=args):
+                    raise SystemExit(*args)
+                name = self.spec_finder("tests_finderexit_%d" % next(self._n), second)
+                self.put(gates_main.GATES, "claims", name)
+                self.expect(["--root", root],
+                            ok_lines("schema", "register", "decisions")
+                            + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % name
+                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+
     def assert_find_spec_baseexception_propagates(self, members):
         """G2b (v) x G12: a non-Exception BaseException raised inside ``find_spec`` propagates out of both entry
         points; stdout and stderr stay empty although the gates before it passed."""
