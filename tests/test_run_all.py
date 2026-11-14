@@ -336,13 +336,13 @@ class GateListTest(RunAllCase):
                             + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % modname
                             + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
 
-    def package_module(self, body):
+    def package_module(self, body, init=""):
         """A module ``<package>.gate_x`` as files on the scratch import path; its dotted name is returned."""
         self.file_module("")   # makes the scratch import directory
         pkg = "tests_fakepkg_%d" % next(self._n)
         os.mkdir(os.path.join(self._modir, pkg))
         with open(os.path.join(self._modir, pkg, "__init__.py"), "w", encoding="utf-8") as fh:
-            fh.write("")
+            fh.write(init)
         with open(os.path.join(self._modir, pkg, "gate_x.py"), "w", encoding="utf-8") as fh:
             fh.write(body)
         importlib.invalidate_caches()
@@ -376,6 +376,111 @@ class GateListTest(RunAllCase):
                             ok_lines("schema", "register", "decisions")
                             + "FAIL run_all.missing.claims: %s\n" % reason + ok_lines("cites"), 1,
                             ["schema", "register", "decisions", "cites"])
+
+    def spec_finder(self, name, second):
+        """A meta_path finder: the first lookup of ``name`` raises ``ModuleNotFoundError(name=name)``; the second
+        (``importlib.util.find_spec``'s) calls ``second()`` (which raises)."""
+        calls = []
+
+        class Finder:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == name:
+                    calls.append(1)
+                    if len(calls) > 1:
+                        second()
+                    raise ModuleNotFoundError("finder", name=name)
+                return None
+        finder = Finder()
+        sys.meta_path.insert(0, finder)
+        self.addCleanup(sys.meta_path.remove, finder)
+        return name
+
+    def find_spec_triggers(self):
+        """G2b (v): module names whose self-named ModuleNotFoundError is followed by an Exception from
+        ``importlib.util.find_spec``. Returns ``(label, name, before)`` where ``before`` runs just before the run."""
+        triggers = []
+        parent = self.file_module("x = 1\n")
+        triggers.append(("parent is a module, not a package", parent + ".x", lambda: None))
+        none_parent = self.package_module(
+            "import sys\nsys.modules[__name__.rpartition('.')[0]] = None\n"
+            "raise ModuleNotFoundError('x', name=__name__)\n")
+        triggers.append(("parent is None in sys.modules", none_parent, lambda: None))
+        broken = self.package_module(
+            "import os, sys\ndel sys.modules[__name__.rpartition('.')[0]]\n"
+            "os.environ['TESTS_BROKEN_PARENT'] = '1'\nraise ModuleNotFoundError('x', name=__name__)\n",
+            init="import os\nif os.environ.get('TESTS_BROKEN_PARENT'):\n    raise ValueError('broken parent')\n")
+        triggers.append(("parent's re-import raises", broken, lambda: None))
+        spec_none = "tests_specnone_%d" % next(self._n)
+
+        class SpecNoneFinder:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == spec_none:
+                    mod = types.ModuleType(spec_none)
+                    mod.__spec__ = None
+                    sys.modules[spec_none] = mod
+                    raise ModuleNotFoundError("finder", name=spec_none)
+                return None
+        finder = SpecNoneFinder()
+        sys.meta_path.insert(0, finder)
+        self.addCleanup(sys.meta_path.remove, finder)
+        self.addCleanup(sys.modules.pop, spec_none, None)
+        triggers.append(("sys.modules[name].__spec__ is None", spec_none, lambda: None))
+
+        def second():
+            raise RuntimeError("second lookup")
+        raising = self.spec_finder("tests_finderraises_%d" % next(self._n), second)
+        triggers.append(("a meta_path finder raises on the lookup", raising, lambda: None))
+        return triggers
+
+    def test_find_spec_raising_is_import_failure(self):  # G2b (v), CR-2
+        root = self.fixture()
+        for label, name, before in self.find_spec_triggers():
+            with self.subTest(label):
+                del self.seen[:]
+                self.all_pass()
+                self.put(gates_main.GATES, "claims", name)
+                before()
+                self.expect(["--root", root],
+                            ok_lines("schema", "register", "decisions")
+                            + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % name
+                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                os.environ.pop("TESTS_BROKEN_PARENT", None)
+
+    def assert_find_spec_baseexception_propagates(self, members):
+        """G2b (v) x G12: a non-Exception BaseException raised inside ``find_spec`` propagates out of both entry
+        points; stdout and stderr stay empty although the gates before it passed."""
+        root = self.fixture()
+        argv = ["--root", root]
+        entries = (("run_all.main", lambda: run_all.main(argv)),
+                   ("gates main", lambda: gates_main.main(["run_all"] + argv)))
+        for exc_name, factory in members:
+            for entry, call in entries:
+                with self.subTest(exc=exc_name, entry=entry):
+                    del self.seen[:]
+                    self.all_pass()
+
+                    def second(factory=factory):
+                        raise factory()
+                    name = self.spec_finder("tests_findernoexc_%d" % next(self._n), second)
+                    self.put(gates_main.GATES, "claims", name)
+                    out, err = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                        with self.assertRaises(BaseException) as cm:
+                            call()
+                    self.assertEqual(type(cm.exception).__name__, exc_name)
+                    self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
+                    self.assertEqual(self.called(), ["schema", "register", "decisions"])
+
+    def test_find_spec_baseexception_propagates(self):  # G2b (v), G12
+        class Odd(BaseException):
+            pass
+        self.assert_find_spec_baseexception_propagates([
+            ("KeyboardInterrupt", KeyboardInterrupt), ("GeneratorExit", GeneratorExit), ("Odd", Odd)])
+
+    @unittest.skipUnless(hasattr(builtins, "BaseExceptionGroup"), "BaseExceptionGroup present: False (Python < 3.11)")
+    def test_find_spec_base_exception_group_propagates(self):  # G2b (v), G12
+        self.assert_find_spec_baseexception_propagates([
+            ("BaseExceptionGroup", lambda: BaseExceptionGroup("g", [KeyboardInterrupt()]))])
 
     def test_no_check_is_missing(self):  # G4
         self.all_pass()
@@ -469,12 +574,13 @@ class GateListTest(RunAllCase):
                             def boom(args):
                                 raise factory()
                             self.fake("claims", boom)
-                        out = io.StringIO()
-                        with contextlib.redirect_stdout(out):
+                        out, err = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                             with self.assertRaises(BaseException) as cm:
                                 call()
                         self.assertEqual(type(cm.exception).__name__, name)
                         self.assertEqual(out.getvalue(), "")
+                        self.assertEqual(err.getvalue(), "")   # G12 (2026-11-15): stderr as well as stdout
                         self.assertEqual(self.called(), ["schema", "register", "decisions"])
 
     def test_propagation_leaves_no_partial_output(self):  # G12

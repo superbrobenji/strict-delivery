@@ -27,6 +27,17 @@ def _missing(gate: str, reason: str) -> list:
     return res.lines
 
 
+def _absent(name: str) -> bool:
+    """True when the module's file is shown to be absent. A lookup that itself raises an ``Exception`` (a parent
+    that is no package, a parent that is ``None`` or fails to re-import, a ``__spec__`` of ``None``, a finder that
+    raises) cannot show it, so the caller reports the import's own failure (CR-2); a non-``Exception``
+    ``BaseException`` propagates."""
+    try:
+        return importlib.util.find_spec(name) is None
+    except Exception:
+        return False
+
+
 def _load(gate: str):
     """``(check, None)`` or ``(None, lines)`` when the gate cannot be loaded."""
     from gates import __main__ as entry
@@ -38,7 +49,7 @@ def _load(gate: str):
     except ModuleNotFoundError as e:
         # "missing" means the file is absent (or sys.modules[name] is None); a module whose own code raised
         # ModuleNotFoundError naming itself is an import failure (F-FV-2)
-        if e.name == name and importlib.util.find_spec(name) is None:
+        if e.name == name and _absent(name):
             return None, _missing(gate, "%s.py missing" % name.replace(".", "/"))
         return None, _missing(gate, "import of %s raised %s" % (name, result._type_name(e)))
     except (Exception, SystemExit) as e:
