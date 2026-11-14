@@ -18,8 +18,9 @@ import unittest
 UNIDATA = unicodedata.unidata_version
 # SHA-256 of the bytes of gates/lib/fold_table.py, as generated once by /usr/bin/python3 (3.9.6). Re-pinned in U1 fix
 # round 1 (finding U-2): only header prose lines 5-6 changed (the casefold fallback clause); FOLD, DECOMP, CCC and
-# COMPOSE are unchanged (previous pin f324ca5445c5...).
-FILE_SHA256 = "b85be52ca8eb5cc2c703aeebf3f91ff6b04c3b4e17e320d28aaaaf47f2b6b36c"
+# COMPOSE are unchanged (previous pin f324ca5445c5...). Re-pinned again in fix round 2 (finding U-2-R1): only the
+# header sentence about DECOMP and COMPOSE and Hangul syllables changed (previous pin b85be52ca8eb...).
+FILE_SHA256 = "11c8e5c521172125ca428aa0c126c46084e50ce7c4288e469df0dc26f334df57"
 
 # The 40 code points whose str.casefold differs between Python 3.9.6 (Unicode 13.0.0) and Python 3.13 (15.1.0),
 # written out by hand: U+2C2F, U+A7C0, U+A7D0, U+A7D6, U+A7D8, U+10570..U+1057A, U+1057C..U+1058A, U+1058C..U+10592,
@@ -126,11 +127,25 @@ class ShapeTests(unittest.TestCase):
 
     def test_fold_table_header_states_the_casefold_fallback(self):  # U-2: the header's claim, read as text
         text = source().decode("ascii")
-        block = "\n".join(l for l in text.split("\n")[:70] if l.startswith("#"))
+        block = "\n".join(l for l in text.split("\n")[:74] if l.startswith("#"))
         flat = " ".join(l[1:].strip() for l in block.split("\n"))
         self.assertNotIn("falling back to the full lowercase mapping", flat)
         self.assertIn("(str.casefold is CPython's build of CaseFolding.txt statuses C and F; a code point with no C or "
                       "F entry folds to itself)", flat)
+        # U-2-R1: the DECOMP and COMPOSE sentences
+        self.assertNotIn("(Hangul syllables have none)", flat)
+        self.assertNotIn("whose decomposition it is", flat)
+        self.assertIn("DECOMP maps a code point to its canonical decomposition as `unicodedata.decomposition` gives it, "
+                      "one level; Hangul syllables are absent, since `unicodedata.decomposition` gives them none "
+                      "(their decomposition is algorithmic, Unicode section 3.12)", flat)
+        self.assertIn("COMPOSE maps a pair to the primary composite whose DECOMP entry it is (so no Hangul pair)", flat)
+
+    def test_header_claim_hangul_absent(self):  # U-2-R1: U+AC00 decomposes to U+1100 U+1161 but the table has neither
+        t = ft()
+        if UNIDATA == "13.0.0":  # the generating database gives Hangul syllables no decomposition string; 15.1 does
+            self.assertEqual(unicodedata.decomposition("가"), "")
+        self.assertNotIn(0xAC00, t.DECOMP)
+        self.assertNotIn((0x1100, 0x1161), t.COMPOSE)
 
     def test_header_claim_no_entry_folds_to_itself(self):  # U-2: U+13A0 has a lowercase mapping but no C or F entry
         from gates.lib import decisions

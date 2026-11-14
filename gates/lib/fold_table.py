@@ -61,8 +61,10 @@
 #     emit("COMPOSE", ["%s: %d" % (tup(k), compose[k]) for k in sorted(compose)])
 #
 # FOLD maps a code point to its full case fold where that differs from the code point itself; DECOMP maps a code
-# point to its canonical decomposition, one level (Hangul syllables have none); CCC maps a code point to its non-zero
-# canonical combining class; COMPOSE maps a pair to the primary composite whose decomposition it is.
+# point to its canonical decomposition as `unicodedata.decomposition` gives it, one level; Hangul syllables are
+# absent, since `unicodedata.decomposition` gives them none (their decomposition is algorithmic, Unicode section
+# 3.12); CCC maps a code point to its non-zero canonical combining class; COMPOSE maps a pair to the primary
+# composite whose DECOMP entry it is (so no Hangul pair).
 # To regenerate, run that source on a Python whose unicodedata.unidata_version is 13.0.0 and replace the four
 # assignments with its output; the rest of this file is fixed text. tests/test_fold_table.py pins the SHA-256 of
 # this file.
