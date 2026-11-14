@@ -2,8 +2,8 @@
 # Source: Python 3.9.6's str.casefold and unicodedata, Unicode 13.0.0 (/usr/bin/python3, unicodedata.unidata_version
 # 13.0.0; owner decision U1 (a) of 2026-11-10, Q-X35 (a), plan Task P2.1). The four assignments below are, verbatim,
 # the standard output of this generator, run once as `/usr/bin/python3 gen.py`. It reads the interpreter's tables
-# (str.casefold is CPython's build of CaseFolding.txt statuses C and F, falling back to the full lowercase mapping);
-# it does not read CaseFolding.txt.
+# (str.casefold is CPython's build of CaseFolding.txt statuses C and F; a code point with no C or F entry folds to
+# itself); it does not read CaseFolding.txt.
 #
 #     import unicodedata
 #     assert unicodedata.unidata_version == "13.0.0"

@@ -16,8 +16,10 @@ import unicodedata
 import unittest
 
 UNIDATA = unicodedata.unidata_version
-# SHA-256 of the bytes of gates/lib/fold_table.py, as generated once by /usr/bin/python3 (3.9.6).
-FILE_SHA256 = "f324ca5445c58bc26ca1a980449ab5d7a3329be1a2383ec0e56f903b7e55ccf4"
+# SHA-256 of the bytes of gates/lib/fold_table.py, as generated once by /usr/bin/python3 (3.9.6). Re-pinned in U1 fix
+# round 1 (finding U-2): only header prose lines 5-6 changed (the casefold fallback clause); FOLD, DECOMP, CCC and
+# COMPOSE are unchanged (previous pin f324ca5445c5...).
+FILE_SHA256 = "b85be52ca8eb5cc2c703aeebf3f91ff6b04c3b4e17e320d28aaaaf47f2b6b36c"
 
 # The 40 code points whose str.casefold differs between Python 3.9.6 (Unicode 13.0.0) and Python 3.13 (15.1.0),
 # written out by hand: U+2C2F, U+A7C0, U+A7D0, U+A7D6, U+A7D8, U+10570..U+1057A, U+1057C..U+1058A, U+1058C..U+10592,
@@ -121,6 +123,22 @@ class ShapeTests(unittest.TestCase):
         for word in ("GENERATED", "DO NOT EDIT BY HAND", "Unicode 13.0.0", "3.9.6", "/usr/bin/python3"):
             self.assertIn(word, block)
         self.assertTrue(text.startswith("# GENERATED FILE. DO NOT EDIT BY HAND.\n"))
+
+    def test_fold_table_header_states_the_casefold_fallback(self):  # U-2: the header's claim, read as text
+        text = source().decode("ascii")
+        block = "\n".join(l for l in text.split("\n")[:70] if l.startswith("#"))
+        flat = " ".join(l[1:].strip() for l in block.split("\n"))
+        self.assertNotIn("falling back to the full lowercase mapping", flat)
+        self.assertIn("(str.casefold is CPython's build of CaseFolding.txt statuses C and F; a code point with no C or "
+                      "F entry folds to itself)", flat)
+
+    def test_header_claim_no_entry_folds_to_itself(self):  # U-2: U+13A0 has a lowercase mapping but no C or F entry
+        from gates.lib import decisions
+        fold = ft().FOLD
+        self.assertNotIn(0x13A0, fold)
+        self.assertEqual(decisions._fold("Ꭰ"), "Ꭰ")
+        self.assertEqual(fold[0x41], "a")
+        self.assertEqual(decisions._fold("A"), "a")
 
     def test_fold_table_header_generator_reproduces_the_file(self):  # F5: the verbatim generator, run, is the body
         text = source().decode("ascii")
