@@ -4,13 +4,16 @@ Every test runs on real temporary directories set as CLAUDE_PLUGIN_DATA. Expecte
 not derived from the code under test. Patching is limited to the clock (R4), the uid (L6) and the parse failure (R5).
 """
 import builtins
+import fcntl
 import os
 import re
 import signal
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -127,6 +130,20 @@ class Base(unittest.TestCase):
         self.S = os.path.join(self.P, "sessions")
         self.F = os.path.join(self.S, "s1.yml")
         self.K = os.path.join(self.S, "s1.lock")
+
+    def foreign_dir_uid(self):
+        """os.fstat patched: a directory descriptor reports another uid (the sessions directory is the only one)."""
+        real = os.fstat
+
+        def fake(fd, *a, **kw):
+            st = real(fd, *a, **kw)
+            if stat.S_ISDIR(st.st_mode):
+                vals = list(st)[:10]
+                vals[4] = st.st_uid + 1
+                return os.stat_result(vals)
+            return st
+
+        return mock.patch("os.fstat", fake)
 
     def make_sessions(self):
         os.makedirs(self.S, mode=0o700)
@@ -281,31 +298,123 @@ class DirectoryTest(Base):
 
     def test_sessions_foreign_uid_refused(self):
         self.make_sessions()
-        real_lstat, real_stat = os.lstat, os.stat
-
-        def foreign(real):
-            def fake(path, *a, **kw):
-                st = real(path, *a, **kw)
-                if path == self.S:
-                    vals = list(st)[:10]
-                    vals[4] = st.st_uid + 1
-                    return os.stat_result(vals)
-                return st
-            return fake
-
-        with mock.patch("os.lstat", foreign(real_lstat)), mock.patch("os.stat", foreign(real_stat)):
+        before = fd_count()
+        with self.foreign_dir_uid():
             with self.assertRaises(SessionUnavailable) as cm:
                 enter(locked(self.env, "s1"))
         self.assertIn(self.S, str(cm.exception))
         self.assertEqual(os.listdir(self.S), [])
+        self.assertEqual(fd_count(), before)
+
+    def test_sessions_dir_swap_has_no_effect(self):
+        """L8: the swap happens right after the directory is opened and checked (the os.fstat of that descriptor)."""
+        self.put_state(state_text(surfaced="[%s]" % DEC))
+        evil = os.path.join(self.tmp, "evil")
+        moved = os.path.join(self.tmp, "moved")
+        os.mkdir(evil)
+        evil_text = state_text(surfaced="[DEC-20261101-evil]").encode()
+        write_bytes(os.path.join(evil, "s1.yml"), evil_text)
+        real, done = os.fstat, []
+
+        def hook(fd, *a, **kw):
+            st = real(fd, *a, **kw)
+            if stat.S_ISDIR(st.st_mode) and not done:
+                done.append(1)
+                os.rename(self.S, moved)
+                os.symlink(evil, self.S)
+            return st
+
+        with mock.patch("os.fstat", hook):
+            with locked(self.env, "s1") as st:
+                self.assertEqual(st["surfaced"], [DEC])
+                add_dispatch(st, SHA, "implementer", 1, "session")
+            self.assertEqual(done, [1])
+            self.assertTrue(os.path.islink(self.S))
+        self.assertEqual(sorted(os.listdir(evil)), ["s1.yml"])
+        self.assertEqual(read_bytes(os.path.join(evil, "s1.yml")), evil_text)
+        self.assertEqual(sorted(os.listdir(moved)), ["s1.lock", "s1.yml"])
+        self.assertEqual(yamlsub.load(os.path.join(moved, "s1.yml"), "m")["dispatches"], [good_entry()])
+
+    def test_spurious_enoent_on_lock_create_is_retried(self):
+        """macOS answers ENOENT to a racing create-open of the lock file: injected once, the store retries."""
+        self.make_sessions()
+        real, calls = os.open, []
+
+        def flaky(path, flags, *a, **kw):
+            if path == "s1.lock" and not calls:
+                calls.append(1)
+                raise FileNotFoundError(2, "No such file or directory", path)
+            return real(path, flags, *a, **kw)
+
+        with mock.patch("os.open", flaky):
+            enter(locked(self.env, "s1"))
+        self.assertEqual(calls, [1])
+        self.assertTrue(os.path.isfile(self.F))
+
+    def test_sessions_dir_removed_after_open_is_unavailable(self):
+        self.make_sessions()
+        real = os.fstat
+
+        def hook(fd, *a, **kw):
+            st = real(fd, *a, **kw)
+            if stat.S_ISDIR(st.st_mode) and os.path.isdir(self.S):
+                os.rmdir(self.S)
+            return st
+
+        t0 = time.monotonic()
+        with mock.patch("os.fstat", hook):
+            with self.assertRaises(SessionUnavailable) as cm:
+                enter(locked(self.env, "s1"))
+        self.assertLess(time.monotonic() - t0, 3)
+        self.assertIn("No such file or directory", str(cm.exception))
+
+    def test_sessions_dir_swap_has_no_effect_on_reset(self):
+        self.put_state(b"\xff\xfe")
+        taken = self.F + ".corrupt-20231114T221320"  # in the real directory only: the moved name must skip it
+        write_bytes(taken, b"first")
+        evil = os.path.join(self.tmp, "evil")
+        moved = os.path.join(self.tmp, "moved")
+        os.mkdir(evil)
+        real, done = os.fstat, []
+
+        def hook(fd, *a, **kw):
+            st = real(fd, *a, **kw)
+            if stat.S_ISDIR(st.st_mode) and not done:
+                done.append(1)
+                os.rename(self.S, moved)
+                os.symlink(evil, self.S)
+            return st
+
+        with mock.patch("os.fstat", hook), mock.patch.object(session, "_now", return_value=1700000000.0):
+            result = reset(self.env, "s1")
+        self.assertEqual(result, self.F + ".corrupt-20231114T221320-1")
+        self.assertEqual(os.listdir(evil), [])
+        self.assertEqual(read_bytes(os.path.join(moved, "s1.yml.corrupt-20231114T221320")), b"first")
+        self.assertEqual(sorted(os.listdir(moved)), sorted(["s1.lock", "s1.yml", os.path.basename(result),
+                                                              "s1.yml.corrupt-20231114T221320"]))
+        self.assertEqual(read_bytes(os.path.join(moved, os.path.basename(result))), b"\xff\xfe")
+        self.assertEqual(yamlsub.load(os.path.join(moved, "s1.yml"), "m"), empty("s1"))
 
     def test_modes_exact_under_restrictive_umask(self):
-        old = os.umask(0o300)
+        old = os.umask(0o022)
         self.addCleanup(os.umask, old)
-        enter(locked(self.env, "s1"))
-        os.umask(old)
-        self.assertEqual(stat.S_IMODE(os.stat(self.P).st_mode), 0o700)
-        self.assertEqual(stat.S_IMODE(os.stat(self.S).st_mode), 0o700)
+        for n, um in enumerate((0o022, 0o077, 0o277, 0o200, 0o300)):
+            with self.subTest(umask=oct(um)):
+                self.use("u%d" % n)
+                os.umask(um)
+                with locked(self.env, "s1") as st:
+                    add_dispatch(st, SHA, "implementer", 1, "session")
+                self.assertIsNone(reset(self.env, "s1"))
+                os.umask(0o022)
+                for path, want in ((self.P, 0o700), (self.S, 0o700), (self.K, 0o600), (self.F, 0o600)):
+                    self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), want, path)
+                with locked(self.env, "s1", timeout_s=0) as st:  # the next process (default umask) still works
+                    self.assertEqual(live_total(st), 0)
+                os.umask(um)
+                with locked(self.env, "s1", timeout_s=0):
+                    pass
+                os.umask(0o022)
+                self.assertEqual(stat.S_IMODE(os.stat(self.F).st_mode), 0o600)
 
     def test_existing_sessions_mode_kept(self):
         os.mkdir(self.P)
@@ -719,6 +828,189 @@ class LockTest(Base):
         self.assertEqual(live_children(final, "a"), 50)
 
 
+class OsErrorTest(Base):
+    """Rows E9, K9, W9, K10 and F-6: real filesystem conditions, never a raw OSError and never a hang."""
+
+    def alarm(self, seconds=30):
+        def boom(signum, frame):
+            raise AssertionError("hung")
+
+        old = signal.signal(signal.SIGALRM, boom)
+        signal.alarm(seconds)
+        self.addCleanup(signal.signal, signal.SIGALRM, old)
+        self.addCleanup(signal.alarm, 0)
+
+    def make_socket(self, directory, name):
+        sock = socket.socket(socket.AF_UNIX)
+        self.addCleanup(sock.close)
+        old = os.getcwd()
+        os.chdir(directory)
+        try:
+            sock.bind(name)
+        finally:
+            os.chdir(old)
+
+    def can_lock(self, path):
+        fd = os.open(path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_real_os_errors_are_unavailable(self):
+        # lstat(F) EACCES: another process holds the lock; while locked() polls, S loses its search bit
+        self.use("e1")
+        self.put_state(state_text())
+        self.addCleanup(os.chmod, self.S, 0o700)
+        proc = self.hold_lock()
+        box = {}
+
+        def run():
+            try:
+                enter(locked(self.env, "s1", timeout_s=60))
+            except BaseException as e:
+                box["error"] = e
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        time.sleep(0.5)  # locked() has opened the lock file and polls it
+        os.chmod(self.S, 0o600)
+        proc.kill()
+        proc.wait()
+        thread.join(30)
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(box.get("error"), SessionUnavailable)
+        self.assertIn("Permission denied", str(box["error"]))
+        self.assertIn(self.F, str(box["error"]))
+        os.chmod(self.S, 0o700)
+        # rename(F) EACCES: reset has to move a corrupt file aside in a directory that is no longer writable
+        self.use("e2")
+        self.put_state(b"\xff")
+        write_bytes(self.K, b"")
+        os.chmod(self.K, 0o600)
+        self.addCleanup(os.chmod, self.S, 0o700)
+        os.chmod(self.S, 0o500)
+        with self.assertRaises(SessionUnavailable) as cm:
+            reset(self.env, "s1")
+        self.assertIn("Permission denied", str(cm.exception))
+        self.assertIn(self.F, str(cm.exception))
+        os.chmod(self.S, 0o700)
+        self.assertEqual(read_bytes(self.F), b"\xff")
+        # the same reset when S has no search bit at all: the unreadable file cannot be moved aside either
+        os.chmod(self.S, 0o600)
+        with self.assertRaises(SessionUnavailable) as cm:
+            reset(self.env, "s1")
+        self.assertIn("Permission denied", str(cm.exception))
+        os.chmod(self.S, 0o700)
+        self.assertEqual(read_bytes(self.F), b"\xff")
+        # flock ENOTSUP (macOS) or a refused file kind: a FIFO as the lock file
+        self.use("e3")
+        self.make_sessions()
+        os.mkfifo(self.K)
+        self.alarm()
+        t0 = time.monotonic()
+        with self.assertRaises(SessionUnavailable) as cm:
+            enter(locked(self.env, "s1"))
+        self.assertLess(time.monotonic() - t0, 2)  # refused at once, not after the 10 s lock timeout
+        self.assertIn(self.K, str(cm.exception))
+        self.assertNotIn("held by another process", str(cm.exception))
+        self.assertFalse(os.path.lexists(self.F))
+
+    def test_lock_poll_sleeps(self):
+        self.make_sessions()
+        self.hold_lock()
+        cpu, t0 = time.process_time(), time.monotonic()
+        with self.assertRaises(SessionUnavailable):
+            enter(locked(self.env, "s1", timeout_s=2))
+        self.assertGreaterEqual(time.monotonic() - t0, 2)
+        self.assertLess(time.process_time() - cpu, 0.1)
+
+    def test_tmp_path_kinds_fail_closed(self):
+        self.alarm()
+        for kind in ("directory", "fifo", "socket"):
+            with self.subTest(kind=kind):
+                self.use("w" + kind)
+                self.make_sessions()
+                tmp = self.F + ".tmp"
+                if kind == "directory":
+                    os.mkdir(tmp)
+                elif kind == "fifo":
+                    os.mkfifo(tmp)
+                else:
+                    self.make_socket(self.S, "s1.yml.tmp")
+                before = fd_count()
+                with self.assertRaises(SessionUnavailable):
+                    with locked(self.env, "s1", timeout_s=1) as st:
+                        add_dispatch(st, SHA, "implementer", 1, "session")
+                self.assertEqual(fd_count(), before)
+                self.can_lock(self.K)
+                self.assertFalse(os.path.lexists(self.F))
+                self.assertTrue(os.path.lexists(tmp))
+
+    def test_tmp_fifo_with_reader_is_refused(self):
+        self.alarm()
+        self.make_sessions()
+        os.mkfifo(self.F + ".tmp")
+        reader = os.open(self.F + ".tmp", os.O_RDONLY | os.O_NONBLOCK)
+        self.addCleanup(os.close, reader)
+        with self.assertRaises(SessionUnavailable) as cm:
+            with locked(self.env, "s1", timeout_s=1) as st:
+                add_dispatch(st, SHA, "implementer", 1, "session")
+        self.assertIn("not a regular file", str(cm.exception))
+        self.assertFalse(os.path.lexists(self.F))
+        self.assertEqual(os.read(reader, 10), b"")  # nothing was written into the FIFO
+
+    def test_fifo_and_socket_at_state_and_lock_fail_closed(self):
+        self.alarm()
+        for kind in ("fifo", "socket"):
+            for where in ("F", "K"):
+                with self.subTest(kind=kind, where=where):
+                    self.use("%s%s" % (kind, where))
+                    self.make_sessions()
+                    path = self.F if where == "F" else self.K
+                    if kind == "fifo":
+                        os.mkfifo(path)
+                    else:
+                        self.make_socket(self.S, os.path.basename(path))
+                    before = fd_count()
+                    with self.assertRaises(SessionUnavailable):
+                        enter(locked(self.env, "s1", timeout_s=1))
+                    self.assertEqual(fd_count(), before)
+                    if where == "F":
+                        moved = reset(self.env, "s1")  # unreadable: moved aside whole, never opened
+                        self.assertTrue(os.path.lexists(moved))
+                        self.assertEqual(live_total(enter(locked(self.env, "s1"))), 0)
+
+    def test_timeout_s_domain(self):
+        for value in (0, 5):
+            with self.subTest(value=value):
+                self.use("t%d" % value)
+                enter(locked(self.env, "s1", timeout_s=value))
+                reset(self.env, "s1", timeout_s=value)
+        for n, value in enumerate((-1, -(10 ** 30), 1.5, float("nan"), float("inf"), None, True, False, "1", b"1")):
+            with self.subTest(value=value):
+                self.use("bad%d" % n)
+                with self.assertRaises(SessionUnavailable) as cm:
+                    enter(locked(self.env, "s1", timeout_s=value))
+                self.assertIn("timeout_s", str(cm.exception))
+                with self.assertRaises(SessionUnavailable):
+                    reset(self.env, "s1", timeout_s=value)
+                self.assertFalse(os.path.lexists(self.P))
+
+    def test_bad_session_id_message_exact(self):
+        tail = " is not valid (1 to 128 of A-Z a-z 0-9 _ -)"
+        for sid, shown in (("a/b", "'a/b'"), ("a\x00b", "'a\\x00b'"), ("a\nb", "'a\\nb'"),
+                           (UNASSIGNED, "'\\U0001f6dd'")):
+            with self.subTest(sid=sid):
+                with self.assertRaises(SessionUnavailable) as cm:
+                    enter(locked(self.env, sid))
+                self.assertEqual(str(cm.exception), "session id " + shown + tail)
+                with self.assertRaises(SessionUnavailable) as cm:
+                    reset(self.env, sid)
+                self.assertEqual(str(cm.exception), "session id " + shown + tail)
+
+
 class StateErrorsTest(unittest.TestCase):
     def test_state_errors_valid_is_empty(self):
         self.assertEqual(state_errors(empty("s1"), "s1"), [])
@@ -892,19 +1184,19 @@ class ResetTest(Base):
 
         marker = "# CORRUPT-MARKER\n"
         text = (marker + state_text(entries=[entry_text()], surfaced="[%s]" % DEC)).encode()
-        real_load, real_parse = yamlsub.load, yamlsub.parse
+        real_text, real_parse = yamlsub._file_text, yamlsub.parse
 
-        def load(path, shown):
-            if path == self.F:
+        def file_text(data):
+            if marker.encode() in data:
                 raise Distinct("boom")
-            return real_load(path, shown)
+            return real_text(data)
 
         def parse(t):
             if marker in t:
                 raise Distinct("boom")
             return real_parse(t)
 
-        for target, fake in (("load", load), ("parse", parse)):
+        for target, fake in (("_file_text", file_text), ("parse", parse)):
             with self.subTest(patched=target):
                 self.put_state(text)
                 with mock.patch.object(yamlsub, target, side_effect=fake):
@@ -926,20 +1218,11 @@ class ResetTest(Base):
     def test_reset_sessions_foreign_uid_still_raises(self):
         self.make_sessions()
         write_bytes(self.F, b"\xff")
-        real = os.lstat
-
-        def fake(path, *a, **kw):
-            st = real(path, *a, **kw)
-            if path == self.S:
-                vals = list(st)[:10]
-                vals[4] = st.st_uid + 1
-                return os.stat_result(vals)
-            return st
-
-        with mock.patch("os.lstat", fake), mock.patch("os.stat", fake):
+        with self.foreign_dir_uid():
             with self.assertRaises(SessionUnavailable):
                 reset(self.env, "s1")
         self.assertEqual(sorted(os.listdir(self.S)), ["s1.yml"])
+        self.assertEqual(read_bytes(self.F), b"\xff")
 
     def test_reset_lock_held_still_raises(self):
         self.put_state(b"\xff")

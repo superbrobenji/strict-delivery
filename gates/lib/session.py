@@ -27,6 +27,7 @@ _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _TOP_KEYS = ("schema", "session", "dispatches", "surfaced")
 _ENTRY_KEYS = ("sha", "role", "depth", "parent", "worktree", "branch")
 _POLL_S = 0.02
+_CREATE_TRIES = 20
 
 
 class SessionUnavailable(GateError):
@@ -158,26 +159,30 @@ def _make_private(path: str) -> None:
     os.chmod(path, 0o700)
 
 
-def _prepare_dir(env: Mapping[str, str]) -> str:
-    """Create ``P`` and ``S`` when absent; refuse a ``P`` that is no directory, an ``S`` that is a symlink, no
-    directory or owned by another uid. Returns ``S``."""
+def _open_sessions(env: Mapping[str, str]) -> tuple:
+    """Create ``P`` and ``S`` when absent, open ``S`` once (``O_DIRECTORY | O_NOFOLLOW``) and check that descriptor:
+    a directory owned by the current uid. Returns ``(descriptor, S)``; every later file call of the store goes
+    through the descriptor (``dir_fd``), so a swap of ``S`` after this point has no effect."""
     plugin = _plugin_data(env)
     sessions = os.path.join(plugin, "sessions")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
         _make_private(plugin)
         try:
-            st = os.lstat(sessions)
+            dfd = os.open(sessions, flags)
         except FileNotFoundError:
             _make_private(sessions)
-            st = os.lstat(sessions)
+            dfd = os.open(sessions, flags)
     except (OSError, ValueError) as e:
-        raise SessionUnavailable("cannot prepare the session directory %s (%s)" % (sessions, _why(e))) from None
-    if not stat.S_ISDIR(st.st_mode):  # lstat: a symlink is refused here, whatever it points to
-        raise SessionUnavailable("the session directory %s is not a real directory (a symlink, file or other)"
-                                 % sessions)
-    if st.st_uid != os.getuid():
-        raise SessionUnavailable("the session directory %s is owned by another user" % sessions)
-    return sessions
+        raise SessionUnavailable("the session directory %s is not usable, not a real directory or cannot be "
+                                 "created (%s)" % (sessions, _why(e))) from None
+    try:
+        if os.fstat(dfd).st_uid != os.getuid():
+            raise SessionUnavailable("the session directory %s is owned by another user" % sessions)
+    except BaseException:
+        os.close(dfd)
+        raise
+    return dfd, sessions
 
 
 def _why(e: Exception) -> str:
@@ -186,20 +191,35 @@ def _why(e: Exception) -> str:
 
 # ---------------------------------------------------------------- lock and files
 
-def _acquire(path: str, timeout_s: float) -> int:
-    """Open ``path`` (``O_CREAT | O_NOFOLLOW``, 0o600) and take ``flock(LOCK_EX)``, polling ``LOCK_NB`` for
-    ``timeout_s`` seconds (at least one try). Returns the descriptor; it is closed on every refusal."""
+def _check_timeout(timeout_s: object) -> None:
+    if type(timeout_s) is not int or timeout_s < 0:
+        got = safe_text(timeout_s) if type(timeout_s) is int else type(timeout_s).__name__
+        raise SessionUnavailable("timeout_s must be an int >= 0 (got %s)" % got)
+
+
+def _acquire(dfd: int, name: str, path: str, timeout_s: int) -> int:
+    """Open ``name`` in ``dfd`` (``O_CREAT | O_NOFOLLOW``, exactly 0o600, a regular file) and take
+    ``flock(LOCK_EX)``, polling ``LOCK_NB`` for ``timeout_s`` seconds (at least one try). Returns the descriptor;
+    it is closed on every refusal."""
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    try:
-        fd = os.open(path, flags, 0o600)
-    except OSError as e:
-        raise SessionUnavailable("cannot open the lock file %s (%s)" % (path, _why(e))) from None
+    for attempt in range(_CREATE_TRIES):
+        try:
+            fd = os.open(name, flags, 0o600, dir_fd=dfd)
+            break
+        except FileNotFoundError as e:
+            # macOS answers ENOENT to a create-open that races another process creating the same name in a
+            # directory reached through a descriptor (about 1 in 400 starts); the directory is held open, so retry
+            if attempt == _CREATE_TRIES - 1:
+                raise SessionUnavailable("cannot open the lock file %s (%s)" % (path, _why(e))) from None
+            time.sleep(_POLL_S / 4)
+        except OSError as e:
+            raise SessionUnavailable("cannot open the lock file %s (%s)" % (path, _why(e))) from None
     deadline = time.monotonic() + timeout_s
     try:
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return fd
+                break
             except OSError as e:
                 if e.errno not in (errno.EAGAIN, errno.EACCES):
                     raise SessionUnavailable("cannot lock %s (%s)" % (path, _why(e))) from None
@@ -207,6 +227,13 @@ def _acquire(path: str, timeout_s: float) -> int:
                 raise SessionUnavailable("the session lock %s is held by another process (waited %s s)"
                                          % (path, timeout_s))
             time.sleep(_POLL_S)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):  # a FIFO can be flocked on some systems
+                raise SessionUnavailable("the lock file %s is not a regular file" % path)
+            os.fchmod(fd, 0o600)
+        except OSError as e:
+            raise SessionUnavailable("cannot use the lock file %s (%s)" % (path, _why(e))) from None
+        return fd
     except BaseException:
         os.close(fd)
         raise
@@ -218,20 +245,35 @@ def _unreadable(path: str, reason: str) -> SessionUnavailable:
         "or as the human delete it: rm '%s'" % (path, reason, path.replace("'", "'\\''")))
 
 
-def _load(path: str, session_id: str) -> Optional[dict]:
-    """The valid state in ``path``; ``None`` when there is no file; ``_Unreadable`` for anything else."""
+def _read(dfd: int, name: str) -> bytes:
+    """The bytes of ``name`` in ``dfd``: opened ``O_NOFOLLOW | O_NONBLOCK``, so a symlink is refused and a FIFO
+    can neither block nor feed the state (a directory or a socket fail the open or the read)."""
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
     try:
-        st = os.lstat(path)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+
+def _load(dfd: int, name: str, path: str, session_id: str) -> Optional[dict]:
+    """The valid state in ``name``; ``None`` when there is no file; ``_Unreadable`` for anything else."""
+    try:
+        data = _read(dfd, name)
     except FileNotFoundError:
         return None
-    except OSError as e:
+    except OSError as e:  # a symlink (ELOOP), a directory, EACCES ...
         raise _Unreadable(_why(e)) from None
-    if not stat.S_ISREG(st.st_mode):  # lstat: a symlink is refused here, its target is never read
-        raise _Unreadable("not a regular file (a symlink, directory or other)")
     try:
-        state = yamlsub.load(path, path)
+        state = yamlsub.parse(yamlsub._file_text(data))
     except yamlsub.YamlError as e:
-        raise _Unreadable(str(e)) from None
+        raise _Unreadable(str(yamlsub.YamlError(e.line, "%s: %s" % (path, e.reason)))) from None
+    except UnicodeDecodeError:
+        raise _Unreadable(str(yamlsub.YamlError(0, "%s: not valid UTF-8" % path))) from None
     except Exception as e:  # nothing the file holds may escape as anything but "unreadable"
         raise _Unreadable(type(e).__name__) from None
     errors = state_errors(state, session_id)
@@ -240,8 +282,8 @@ def _load(path: str, session_id: str) -> Optional[dict]:
     return state
 
 
-def _write(path: str, state: object, session_id: str) -> None:
-    """Check ``state`` and write it to ``path`` through ``<path>.tmp`` and ``os.replace``."""
+def _write(dfd: int, name: str, path: str, state: object, session_id: str) -> None:
+    """Check ``state`` and write it to ``name`` through ``<name>.tmp`` and ``os.replace`` (all in ``dfd``)."""
     errors = state_errors(state, session_id)
     if errors:
         raise SessionUnavailable("the session state for %s is invalid and was not written (%s)"
@@ -250,31 +292,40 @@ def _write(path: str, state: object, session_id: str) -> None:
         data = yamlsub.emit(state).encode("utf-8")
     except (yamlsub.EmitError, UnicodeError) as e:
         raise SessionUnavailable("the session state for %s cannot be written (%s)" % (_quoted(session_id), e)) from None
-    tmp = path + ".tmp"
+    tmp = name + ".tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), 0o600)
+        fd = os.open(tmp, flags, 0o600, dir_fd=dfd)
         try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise SessionUnavailable("the temporary file %s.tmp is not a regular file" % path)
+            os.fchmod(fd, 0o600)
             view = memoryview(data)
             while view:
                 view = view[os.write(fd, view):]
             os.fsync(fd)
         finally:
             os.close(fd)
-        os.replace(tmp, path)
+        os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
     except OSError as e:
         raise SessionUnavailable("cannot write the session state file %s (%s)" % (path, _why(e))) from None
 
 
 @contextlib.contextmanager
-def _exclusive(env: Mapping[str, str], session_id: str, timeout_s: float):
-    """Validate the id, prepare the directory and hold the lock; yields the state file path."""
+def _exclusive(env: Mapping[str, str], session_id: str, timeout_s: int):
+    """Validate the arguments, open the directory and hold the lock; yields ``(dir descriptor, file name, path)``
+    of the state file."""
     _check_id(session_id)
-    sessions = _prepare_dir(env)
-    fd = _acquire(os.path.join(sessions, session_id + ".lock"), timeout_s)
+    _check_timeout(timeout_s)
+    dfd, sessions = _open_sessions(env)
     try:
-        yield os.path.join(sessions, session_id + ".yml")
+        fd = _acquire(dfd, session_id + ".lock", os.path.join(sessions, session_id + ".lock"), timeout_s)
+        try:
+            yield dfd, session_id + ".yml", os.path.join(sessions, session_id + ".yml")
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        os.close(dfd)
 
 
 def _empty(session_id: str) -> dict:
@@ -285,37 +336,43 @@ def _empty(session_id: str) -> dict:
 def locked(env: Mapping[str, str], session_id: str, timeout_s: int = 10):
     """Hold the session lock and yield the state dict; write it back on a clean exit only.
 
-    An absent file gives the empty state. An unreadable or invalid file, a held lock, a bad id or an unusable
-    directory raise ``SessionUnavailable``; nothing is reset. Any exception from the body (``BaseException``
-    included) propagates unchanged and nothing is written."""
-    with _exclusive(env, session_id, timeout_s) as path:
+    An absent file gives the empty state. An unreadable or invalid file, a held lock, a bad id or timeout or an
+    unusable directory raise ``SessionUnavailable``; nothing is reset. Any exception from the body
+    (``BaseException`` included) propagates unchanged and nothing is written."""
+    with _exclusive(env, session_id, timeout_s) as (dfd, name, path):
         try:
-            state = _load(path, session_id)
+            state = _load(dfd, name, path, session_id)
         except _Unreadable as e:
             raise _unreadable(path, e.reason) from None
         if state is None:
             state = _empty(session_id)
         yield state
-        _write(path, state, session_id)
+        _write(dfd, name, path, state, session_id)
 
 
 def _utc_stamp() -> str:
     return time.strftime("%Y%m%dT%H%M%S", time.gmtime(_now()))
 
 
-def _move_aside(path: str) -> str:
-    """Rename ``path`` (whatever it is, unparsed) to ``<path>.corrupt-<UTC stamp>``, with ``-1``, ``-2``... when
-    the name is taken; returns the new name."""
-    base = path + ".corrupt-" + _utc_stamp()
-    target, n = base, 0
-    while os.path.lexists(target):
+def _move_aside(dfd: int, name: str, path: str) -> str:
+    """Rename ``name`` (whatever it is, unparsed) to ``<name>.corrupt-<UTC stamp>``, with ``-1``, ``-2``... when
+    the name is taken; returns the new path."""
+    base = ".corrupt-" + _utc_stamp()
+    suffix, n = base, 0
+    while True:
+        try:
+            os.stat(name + suffix, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            break
+        except OSError as e:
+            raise SessionUnavailable("cannot move %s aside (%s)" % (path, _why(e))) from None
         n += 1
-        target = "%s-%d" % (base, n)
+        suffix = "%s-%d" % (base, n)
     try:
-        os.rename(path, target)
+        os.rename(name, name + suffix, src_dir_fd=dfd, dst_dir_fd=dfd)
     except OSError as e:
         raise SessionUnavailable("cannot move %s aside (%s)" % (path, _why(e))) from None
-    return target
+    return path + suffix
 
 
 def reset(env: Mapping[str, str], session_id: str, timeout_s: int = 10) -> Optional[str]:
@@ -323,16 +380,16 @@ def reset(env: Mapping[str, str], session_id: str, timeout_s: int = 10) -> Optio
     absent file gets the empty state (both return ``None``). An unreadable one is moved aside without being parsed
     further, a fresh empty state is written, and the new name is returned. A lock that cannot be taken or a bad
     directory still raises ``SessionUnavailable``."""
-    with _exclusive(env, session_id, timeout_s) as path:
+    with _exclusive(env, session_id, timeout_s) as (dfd, name, path):
         moved = None
         try:
-            state = _load(path, session_id)
+            state = _load(dfd, name, path, session_id)
         except _Unreadable:
-            state, moved = None, _move_aside(path)
+            state, moved = None, _move_aside(dfd, name, path)
         if state is None:
             state = _empty(session_id)
         state["dispatches"] = []
-        _write(path, state, session_id)
+        _write(dfd, name, path, state, session_id)
         return moved
 
 

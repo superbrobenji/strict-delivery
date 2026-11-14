@@ -565,3 +565,251 @@ survivors (argued):
 restored, PASS expected (final run after the last mutant):
   PASS expected; python3: PASS (ran=70; OK (skipped=1)) failing tests: -; full suites /usr/bin/python3: Ran 2300 tests; OK (skipped=9)
   PASS expected; python3.13: PASS (ran=70; OK) failing tests: -; full suites /opt/homebrew/bin/python3.13: Ran 2300 tests; OK (skipped=3)
+
+================================================================================
+FIX ROUND 1 (review early-3a1-review-1.md; findings F-1..F-7; table rows E9, K9, W9, K10, W10, L8, M1)
+================================================================================
+Scratch runner: one mutant at a time on gates/lib/session.py (restored after each), module tests.test_session_store (81 tests) on
+/usr/bin/python3 (3.9) and /opt/homebrew/bin/python3.13. FULL=1 runs the parallel runner (both full suites, 2311 tests) and quotes
+BOTH interpreters' result lines (F-7). The round-1 mutants above still stand for every production line this round did not change
+(their text has no counterpart left only where the line was rewritten: those are replaced by the F-1..F-6 mutants below); the module
+had 70 tests then and has 81 now (tests were only added). Mutants round 1 defined but never ran (add_dispatch order, the corrupt-name
+counter) are run below as mutants 44-46.
+
+whole-fix revert, all findings at once (session.py of e0fac0b under this round's tests):
+fix present (fix-round files):
+  PASS expected; python3: PASS (ran=81; OK (skipped=1))
+  PASS expected; python3.13: PASS (ran=81; OK)
+fix reverted (gates/lib/session.py of e0fac0b, this round's tests unchanged):
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=14, errors=7, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask, test_reset_sessions_foreign_uid_still_raises, test_sessions_dir_removed_after_open_is_unavailable, test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_sessions_foreign_uid_refused, test_spurious_enoent_on_lock_create_is_retried, test_timeout_s_domain, test_tmp_fifo_with_reader_is_refused, test_tmp_path_kinds_fail_closed
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=14, errors=7)) failing tests: test_modes_exact_under_restrictive_umask, test_reset_sessions_foreign_uid_still_raises, test_sessions_dir_removed_after_open_is_unavailable, test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_sessions_foreign_uid_refused, test_spurious_enoent_on_lock_create_is_retried, test_timeout_s_domain, test_tmp_fifo_with_reader_is_refused, test_tmp_path_kinds_fail_closed
+fix restored:
+  PASS expected; python3: PASS (ran=81; OK (skipped=1))
+  PASS expected; python3.13: PASS (ran=81; OK)
+
+---- F-1 error paths on real filesystem calls ----
+mutant 0 [F-1 _load: read OSError escapes (EACCES)]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, errors=6, skipped=1)) failing tests: test_directory_state_refused, test_fifo_and_socket_at_state_and_lock_fail_closed, test_real_os_errors_are_unavailable, test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1, errors=6)) failing tests: test_directory_state_refused, test_fifo_and_socket_at_state_and_lock_fail_closed, test_real_os_errors_are_unavailable, test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; killed: yes
+
+mutant 1 [F-1 _load: absent file is an error]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=2, errors=28, skipped=1)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_spurious_enoent_on_lock_create_is_retried, test_str_subclass_plugin_data_copied, test_timeout_s_domain, test_tmp_fifo_with_reader_is_refused, test_unicode_version_independent, test_zero_timeout_single_try; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=2, errors=28)) failing tests: test_absent_state_is_empty, test_existing_sessions_mode_kept, test_good_session_ids_accepted, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_timeout, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_absent_writes_empty, test_round_trip_and_mode, test_session_dir_touches_nothing, test_sessions_created_under_existing_plugin_data, test_spurious_enoent_on_lock_create_is_retried, test_str_subclass_plugin_data_copied, test_timeout_s_domain, test_tmp_fifo_with_reader_is_refused, test_unicode_version_independent, test_zero_timeout_single_try; killed: yes
+
+mutant 2 [F-1 _move_aside: rename OSError escapes]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=1, skipped=1)) failing tests: test_real_os_errors_are_unavailable; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=1)) failing tests: test_real_os_errors_are_unavailable; killed: yes
+
+mutant 3 [F-1 _move_aside: stat OSError escapes]:
+  FAIL expected; python3: PASS (ran=81; OK (skipped=1)) failing tests: -; killed: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=81; OK) failing tests: -; killed: NO (SURVIVED)
+  full-suite re-run of the survivor (both interpreters):
+    FAIL expected; python3: PASS (full suite exit=0) failing tests: (full suite) /usr/bin/python3: Ran 2311 tests; OK (skipped=9); killed: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suite exit=0) failing tests: (full suite) /opt/homebrew/bin/python3.13: Ran 2311 tests; OK (skipped=3); killed: NO (SURVIVED)
+
+mutant 4 [F-1 _acquire: non-EAGAIN flock error retried to timeout]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_real_os_errors_are_unavailable; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_real_os_errors_are_unavailable; killed: yes
+
+mutant 5 [F-1 _acquire: poll sleep removed]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_lock_poll_sleeps; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_lock_poll_sleeps; killed: yes
+
+mutant 6 [F-1 _acquire: lock file kind unchecked]:
+  FAIL expected; python3: PASS (ran=81; OK (skipped=1)) failing tests: -; killed: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=81; OK) failing tests: -; killed: NO (SURVIVED)
+  full-suite re-run of the survivor (both interpreters):
+    FAIL expected; python3: PASS (full suite exit=0) failing tests: (full suite) /usr/bin/python3: Ran 2311 tests; OK (skipped=9); killed: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suite exit=0) failing tests: (full suite) /opt/homebrew/bin/python3.13: Ran 2311 tests; OK (skipped=3); killed: NO (SURVIVED)
+
+mutant 7 [F-1 _acquire: fchmod OSError escapes]:
+  FAIL expected; python3: PASS (ran=81; OK (skipped=1)) failing tests: -; killed: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=81; OK) failing tests: -; killed: NO (SURVIVED)
+  full-suite re-run of the survivor (both interpreters):
+    FAIL expected; python3: PASS (full suite exit=0) failing tests: (full suite) /usr/bin/python3: Ran 2311 tests; OK (skipped=9); killed: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suite exit=0) failing tests: (full suite) /opt/homebrew/bin/python3.13: Ran 2311 tests; OK (skipped=3); killed: NO (SURVIVED)
+
+mutant 8 [F-1 _acquire: other open errors escape]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=5, skipped=1)) failing tests: test_fifo_and_socket_at_state_and_lock_fail_closed, test_lock_directory_refused, test_lock_symlink_refused, test_real_os_errors_are_unavailable, test_reset_lock_symlink_still_raises; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=5)) failing tests: test_fifo_and_socket_at_state_and_lock_fail_closed, test_lock_directory_refused, test_lock_symlink_refused, test_real_os_errors_are_unavailable, test_reset_lock_symlink_still_raises; killed: yes
+
+mutant 9 [F-1 _acquire: ENOENT on create not retried]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=1, skipped=1)) failing tests: test_spurious_enoent_on_lock_create_is_retried; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=1)) failing tests: test_spurious_enoent_on_lock_create_is_retried; killed: yes
+
+mutant 10 [F-1 _acquire: ENOENT retry never ends in SU]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=1, skipped=1)) failing tests: test_sessions_dir_removed_after_open_is_unavailable; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=1)) failing tests: test_sessions_dir_removed_after_open_is_unavailable; killed: yes
+
+mutant 11 [F-1 _acquire: ENOENT retry without pause (still correct)]:
+  FAIL expected; python3: PASS (ran=81; OK (skipped=1)) failing tests: -; killed: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=81; OK) failing tests: -; killed: NO (SURVIVED)
+  full-suite re-run of the survivor (both interpreters):
+    FAIL expected; python3: PASS (full suite exit=0) failing tests: (full suite) /usr/bin/python3: Ran 2311 tests; OK (skipped=9); killed: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suite exit=0) failing tests: (full suite) /opt/homebrew/bin/python3.13: Ran 2311 tests; OK (skipped=3); killed: NO (SURVIVED)
+
+---- F-2 path kind at <id>.yml.tmp (and at F, K) ----
+mutant 12 [F-2 _write: tmp opened blocking]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_tmp_path_kinds_fail_closed; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_tmp_path_kinds_fail_closed; killed: yes
+
+mutant 13 [F-2 _write: tmp kind unchecked]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_tmp_fifo_with_reader_is_refused; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_tmp_fifo_with_reader_is_refused; killed: yes
+
+mutant 14 [F-2 _read: state opened blocking]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_fifo_and_socket_at_state_and_lock_fail_closed; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_fifo_and_socket_at_state_and_lock_fail_closed; killed: yes
+
+mutant 15 [F-2 _read: state symlink followed]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=2, errors=1, skipped=1)) failing tests: test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=2, errors=1)) failing tests: test_reset_moves_corrupt_file_aside_unparsed, test_symlinked_state_refused, test_unreadable_message_names_recovery; killed: yes
+
+---- F-3 timeout_s type/value ----
+mutant 16 [F-3 _check_timeout: bool accepted]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=2, skipped=1)) failing tests: test_timeout_s_domain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=2)) failing tests: test_timeout_s_domain; killed: yes
+
+mutant 17 [F-3 _check_timeout: negative accepted]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=2, skipped=1)) failing tests: test_timeout_s_domain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=2)) failing tests: test_timeout_s_domain; killed: yes
+
+mutant 18 [F-3 _check_timeout: float accepted]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=3, skipped=1)) failing tests: test_timeout_s_domain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=3)) failing tests: test_timeout_s_domain; killed: yes
+
+mutant 19 [F-3 _check_timeout: zero refused]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=15, skipped=1)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_killed_holder_releases, test_lock_released_on_every_path, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_timeout_s_domain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=17)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_exception_group_not_written, test_killed_holder_releases, test_lock_released_on_every_path, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_timeout_s_domain; killed: yes
+
+mutant 20 [F-3 _exclusive: timeout not checked]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=7, errors=3, skipped=1)) failing tests: test_timeout_s_domain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=7, errors=3)) failing tests: test_timeout_s_domain; killed: yes
+
+mutant 21 [F-3 _exclusive: timeout checked after the directory]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=10, skipped=1)) failing tests: test_timeout_s_domain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=10)) failing tests: test_timeout_s_domain; killed: yes
+
+mutant 22 [F-3 _check_timeout: message names no parameter]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=10, skipped=1)) failing tests: test_timeout_s_domain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=10)) failing tests: test_timeout_s_domain; killed: yes
+
+---- F-4 umask at file creation ----
+mutant 23 [F-4 _acquire: lock fchmod removed]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=3, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=3)) failing tests: test_modes_exact_under_restrictive_umask; killed: yes
+
+mutant 24 [F-4 _acquire: lock fchmod 0o644]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=6, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask, test_round_trip_and_mode; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=6)) failing tests: test_modes_exact_under_restrictive_umask, test_round_trip_and_mode; killed: yes
+
+mutant 25 [F-4 _write: tmp fchmod removed]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=3, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=3)) failing tests: test_modes_exact_under_restrictive_umask; killed: yes
+
+mutant 26 [F-4 _write: tmp fchmod 0o644]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=6, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask, test_round_trip_and_mode; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=6)) failing tests: test_modes_exact_under_restrictive_umask, test_round_trip_and_mode; killed: yes
+
+mutant 27 [F-4 _make_private: chmod removed]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=3, skipped=1)) failing tests: test_modes_exact_under_restrictive_umask; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=3)) failing tests: test_modes_exact_under_restrictive_umask; killed: yes
+
+---- F-5 identity of the sessions directory ----
+mutant 28 [F-5 _open_sessions: O_NOFOLLOW dropped]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_sessions_symlink_refused; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_sessions_symlink_refused; killed: yes
+
+mutant 29 [F-5 _open_sessions: O_DIRECTORY dropped]:
+  FAIL expected; python3: PASS (ran=81; OK (skipped=1)) failing tests: -; killed: NO (SURVIVED)
+  FAIL expected; python3.13: PASS (ran=81; OK) failing tests: -; killed: NO (SURVIVED)
+  full-suite re-run of the survivor (both interpreters):
+    FAIL expected; python3: PASS (full suite exit=0) failing tests: (full suite) /usr/bin/python3: Ran 2311 tests; OK (skipped=9); killed: NO (SURVIVED)
+    FAIL expected; python3.13: PASS (full suite exit=0) failing tests: (full suite) /opt/homebrew/bin/python3.13: Ran 2311 tests; OK (skipped=3); killed: NO (SURVIVED)
+
+mutant 30 [F-5 _open_sessions: owner unchecked]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=4, errors=1, skipped=1)) failing tests: test_reset_sessions_foreign_uid_still_raises, test_sessions_dir_removed_after_open_is_unavailable, test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_sessions_foreign_uid_refused; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=4, errors=1)) failing tests: test_reset_sessions_foreign_uid_still_raises, test_sessions_dir_removed_after_open_is_unavailable, test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_sessions_foreign_uid_refused; killed: yes
+
+mutant 31 [F-5 _open_sessions: owner read from the path]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=4, errors=1, skipped=1)) failing tests: test_reset_sessions_foreign_uid_still_raises, test_sessions_dir_removed_after_open_is_unavailable, test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_sessions_foreign_uid_refused; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=4, errors=1)) failing tests: test_reset_sessions_foreign_uid_still_raises, test_sessions_dir_removed_after_open_is_unavailable, test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_sessions_foreign_uid_refused; killed: yes
+
+mutant 32 [F-5 _open_sessions: open errors escape]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=4, skipped=1)) failing tests: test_plugin_data_file_is_unavailable, test_sessions_file_refused, test_sessions_symlink_refused, test_unencodable_plugin_data_is_unavailable; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=4)) failing tests: test_plugin_data_file_is_unavailable, test_sessions_file_refused, test_sessions_symlink_refused, test_unencodable_plugin_data_is_unavailable; killed: yes
+
+mutant 33 [F-5 _open_sessions: ValueError escapes]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=1, skipped=1)) failing tests: test_unencodable_plugin_data_is_unavailable; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=1)) failing tests: test_unencodable_plugin_data_is_unavailable; killed: yes
+
+mutant 34 [F-5 _open_sessions: descriptor leaked on refusal]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_sessions_foreign_uid_refused; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_sessions_foreign_uid_refused; killed: yes
+
+mutant 35 [F-5 _acquire: lock opened by path]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=3, skipped=1)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_spurious_enoent_on_lock_create_is_retried; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=3)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset, test_spurious_enoent_on_lock_create_is_retried; killed: yes
+
+mutant 36 [F-5 _read: state opened by path (all of it)]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, errors=1, skipped=1)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1, errors=1)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+
+mutant 37 [F-5 _write: tmp opened by path]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=2, skipped=1)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=2)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+
+mutant 38 [F-5 _write: replace by path]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=2, skipped=1)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=2)) failing tests: test_sessions_dir_swap_has_no_effect, test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+
+mutant 39 [F-5 _move_aside: stat by path]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+
+mutant 40 [F-5 _move_aside: rename by path]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (errors=1, skipped=1)) failing tests: test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (errors=1)) failing tests: test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+
+---- F-6 message rendering of a refused id ----
+mutant 41 [F-6 _quoted: built-in repr]:
+  FAIL expected; python3: PASS (ran=81; OK (skipped=1)) failing tests: -; killed: NO (SURVIVED)
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=2)) failing tests: test_bad_session_id_message_exact, test_unicode_version_independent; killed: yes
+  full-suite re-run of the survivor (both interpreters):
+    FAIL expected; python3: FAIL (full suite exit=1) failing tests: (full suite) /usr/bin/python3: Ran 2311 tests; OK (skipped=9); killed: yes
+    FAIL expected; python3.13: FAIL (full suite exit=1) failing tests: (full suite) /opt/homebrew/bin/python3.13: Ran 2311 tests; FAILED (skipped=3); killed: yes
+
+mutant 42 [F-6 _quoted: no quotes]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=11, skipped=1)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_state_errors_exact_lists, test_unicode_version_independent, test_unreadable_message_carries_the_reason; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=11)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_state_errors_exact_lists, test_unicode_version_independent, test_unreadable_message_carries_the_reason; killed: yes
+
+mutant 43 [F-6 _check_id: message names no id]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=6, skipped=1)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_unicode_version_independent; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=6)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_unicode_version_independent; killed: yes
+
+---- F-7 / round-1 mutants never run ----
+mutant 44 [R1 add_dispatch: appended at the front]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=2, skipped=1)) failing tests: test_add_dispatch_defaults, test_end_dispatch_cases; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=2)) failing tests: test_add_dispatch_defaults, test_end_dispatch_cases; killed: yes
+
+mutant 45 [R1 _move_aside: counter step 2]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_reset_corrupt_name_taken; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_reset_corrupt_name_taken; killed: yes
+
+mutant 46 [R1 _move_aside: counter starts at 1 (name -1 never tried first)]:
+  FAIL expected; python3: FAIL (ran=81; FAILED (failures=1, skipped=1)) failing tests: test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+  FAIL expected; python3.13: FAIL (ran=81; FAILED (failures=1)) failing tests: test_sessions_dir_swap_has_no_effect_on_reset; killed: yes
+
+survivors, argued (each re-run on both full suites above: 2311 tests, 3.9 OK (skipped=9), 3.13 OK (skipped=3)):
+  3  _move_aside: OSError from the stat of the candidate name. The only real EACCES that reaches it (S without the search bit) is pre-empted
+     one step earlier: the lock file is opened through the same directory descriptor and fails first (test_real_os_errors_are_unavailable,
+     third case, pins that). No other real condition makes stat of a fresh name fail.
+  6  _acquire: lock file kind check after flock. A FIFO as the lock file never reaches it on macOS (flock answers ENOTSUP, killed by mutant 4);
+     on Linux flock succeeds on a FIFO and test_fifo_and_socket_at_state_and_lock_fail_closed would kill this mutant there. Not killable on this host.
+  7  _acquire: OSError from fchmod on the lock descriptor: fchmod on a file this process just created or owns cannot fail without patching.
+  11 _acquire: the 5 ms pause between create-open retries: removing it changes timing only, no verdict.
+  29 _open_sessions: O_DIRECTORY dropped: equivalent. A regular file at S is opened, then the lock open in that descriptor fails ENOTSUP/ENOTDIR and
+     raises the same SessionUnavailable (test_sessions_file_refused passes either way).
+  41 _quoted built-in repr: killed on python3.13 only (test_bad_session_id_message_exact, test_unicode_version_independent); on 3.9 repr and safe_text
+     print the same text for the three pinned ids (U+1F6DD is unassigned in UCD 13). That is the I2/V2 conflict itself.
+  Round-1 survivors now: 36 (makedirs mode, equivalent: chmod follows) and 75 (fsync) stay; 53, 57, 62 and 97 are killed by mutants 4, 5, 0 and 2.
