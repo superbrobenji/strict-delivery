@@ -29,6 +29,23 @@ CONFIG = ".strict-delivery/config.yml"
 UNSET = object()
 HAS_EG = hasattr(builtins, "ExceptionGroup")
 PASS5 = "".join("PASS %s.ok\n" % g for g in FIVE)
+# the 31 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
+REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\n"
+             "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\n"
+             "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
+             "PASS register.evidence\nPASS register.epic\nPASS register.report\n"
+             "PASS decisions.schema\nPASS decisions.store\nPASS decisions.base\nPASS decisions.landed\n"
+             "PASS decisions.refs\nPASS decisions.open-ref\nPASS decisions.scan\n"
+             "PASS claims.schema\nPASS claims.store\nPASS claims.document\nPASS claims.stale\nPASS claims.base\n"
+             "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n")
+# B6: the values of the class "starts with a dash (or is a control)"; the last two are the table's controls
+DASH_VALUES = ("-r", "-x", "-h", "--root", "--base", "--json", "--x=y", "-", "--", "-1", "^x")
+
+
+def gate_args_double_dash_value():
+    """What the shared gate parser stores for ``--root=--`` on this interpreter: ``'--'`` (3.13) or ``[]`` (3.9)."""
+    from gates.lib import result
+    return result.gate_args("probe").parse_args(["--root=--"]).root
 
 
 def ok_lines(*gates):
@@ -127,9 +144,11 @@ class RunAllCase(GitIsolatedTestCase):
             code = run_all.main(argv)
         return out.getvalue(), code
 
-    def sub(self, argv, command=("run_all",)):
-        p = subprocess.run([sys.executable, "-m", "gates"] + list(command) + list(argv), cwd=REPO,
-                           env=dict(os.environ), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    def sub(self, argv, command=("run_all",), cwd=REPO, env=None):
+        full = dict(os.environ, PYTHONPATH=REPO)
+        full.update(env or {})
+        p = subprocess.run([sys.executable, "-m", "gates"] + list(command) + list(argv), cwd=cwd,
+                           env=full, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return p.stdout.decode("utf-8"), p.returncode
 
     def expect(self, argv, text, code, called=None):
@@ -317,6 +336,47 @@ class GateListTest(RunAllCase):
                             + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % modname
                             + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
 
+    def package_module(self, body):
+        """A module ``<package>.gate_x`` as files on the scratch import path; its dotted name is returned."""
+        self.file_module("")   # makes the scratch import directory
+        pkg = "tests_fakepkg_%d" % next(self._n)
+        os.mkdir(os.path.join(self._modir, pkg))
+        with open(os.path.join(self._modir, pkg, "__init__.py"), "w", encoding="utf-8") as fh:
+            fh.write("")
+        with open(os.path.join(self._modir, pkg, "gate_x.py"), "w", encoding="utf-8") as fh:
+            fh.write(body)
+        importlib.invalidate_caches()
+        self.addCleanup(lambda: [sys.modules.pop(k, None) for k in (pkg, pkg + ".gate_x")])
+        return pkg + ".gate_x"
+
+    def test_self_named_module_not_found_in_existing_module(self):  # G2b
+        root = self.fixture()
+        own = "raise ModuleNotFoundError('own body', name=__name__)\n"
+        halted = self.file_module("x = 1\n")
+        halted_pkg = self.package_module("x = 1\n")
+        cases = [   # (label, module name, what to do first, expected reason)
+            ("(i) file absent", "tests_absent_gate_xx", None, "tests_absent_gate_xx.py missing"),
+            ("(i) file absent, dotted", "gates.gate_nosuch_yy", None, "gates/gate_nosuch_yy.py missing"),
+            ("(ii) own body raises, naming itself", self.file_module(own), "raise", "raised"),
+            ("(ii) own body raises, dotted", self.package_module(own), "raise", "raised"),
+            ("(iv) sys.modules None, file absent", "tests_none_gate_xx", "none", "tests_none_gate_xx.py missing"),
+            ("(iv) sys.modules None, file present", halted, "none", "%s.py missing" % halted),
+            ("(iv) sys.modules None, dotted file present", halted_pkg, "none",
+             "%s.py missing" % halted_pkg.replace(".", "/")),
+        ]
+        for label, name, how, why in cases:
+            with self.subTest(label):
+                del self.seen[:]
+                self.all_pass()
+                if how == "none":
+                    self.put(sys.modules, name, None)
+                reason = "import of %s raised ModuleNotFoundError" % name if why == "raised" else why
+                self.put(gates_main.GATES, "claims", name)
+                self.expect(["--root", root],
+                            ok_lines("schema", "register", "decisions")
+                            + "FAIL run_all.missing.claims: %s\n" % reason + ok_lines("cites"), 1,
+                            ["schema", "register", "decisions", "cites"])
+
     def test_no_check_is_missing(self):  # G4
         self.all_pass()
         mod = self.fake("claims")
@@ -385,6 +445,52 @@ class GateListTest(RunAllCase):
                 with self.assertRaises(type(exc)):
                     self.run_main(["--root", root])
 
+    def assert_propagates_without_output(self, members):
+        """G12: for each ``(name, factory, import_body)`` and each site (raised at import, raised reading ``check``,
+        raised by ``check``) and each entry point, the exception propagates and stdout is exactly empty, although
+        the gates before the raising one have passed."""
+        root = self.fixture()
+        argv = ["--root", root]
+        entries = (("run_all.main", lambda: run_all.main(argv)),
+                   ("gates main", lambda: gates_main.main(["run_all"] + argv)))
+        for name, factory, import_body in members:
+            for site in ("import", "read", "call"):
+                for entry, call in entries:
+                    with self.subTest(exc=name, site=site, entry=entry):
+                        del self.seen[:]
+                        self.all_pass()
+                        if site == "import":
+                            self.put(gates_main.GATES, "claims", self.file_module(import_body))
+                        elif site == "read":
+                            def getattr_(attr):
+                                raise factory()
+                            self.fake("claims", __getattr__=getattr_)
+                        else:
+                            def boom(args):
+                                raise factory()
+                            self.fake("claims", boom)
+                        out = io.StringIO()
+                        with contextlib.redirect_stdout(out):
+                            with self.assertRaises(BaseException) as cm:
+                                call()
+                        self.assertEqual(type(cm.exception).__name__, name)
+                        self.assertEqual(out.getvalue(), "")
+                        self.assertEqual(self.called(), ["schema", "register", "decisions"])
+
+    def test_propagation_leaves_no_partial_output(self):  # G12
+        class Odd(BaseException):
+            pass
+        self.assert_propagates_without_output([
+            ("KeyboardInterrupt", KeyboardInterrupt, "raise KeyboardInterrupt()\n"),
+            ("GeneratorExit", GeneratorExit, "raise GeneratorExit()\n"),
+            ("Odd", Odd, "class Odd(BaseException):\n    pass\nraise Odd()\n")])
+
+    @unittest.skipUnless(hasattr(builtins, "BaseExceptionGroup"), "BaseExceptionGroup present: False (Python < 3.11)")
+    def test_propagation_leaves_no_partial_output_base_exception_group(self):  # G12
+        self.assert_propagates_without_output([
+            ("BaseExceptionGroup", lambda: BaseExceptionGroup("g", [KeyboardInterrupt()]),
+             "raise BaseExceptionGroup('g', [KeyboardInterrupt()])\n")])
+
     def test_empty_result_fails(self):  # G8
         self.all_pass()
         self.fake("claims", lambda args: Result("claims", []))
@@ -439,7 +545,7 @@ class GateListTest(RunAllCase):
                 self.run_main(["--root", root, "--base", "x"])
                 got = dict(self.seen)
                 for g in FIVE:
-                    want = ["--root", root] + (["--base", "x"] if g in BASE_ONES else [])
+                    want = ["--root=" + root] + (["--base=x"] if g in BASE_ONES else [])
                     self.assertEqual(got[g], want, g)
 
 
@@ -450,30 +556,31 @@ class BaseTest(RunAllCase):
         self.run_main(["--root", root, "--base", "x"])
         got = self.args_of()
         for g in BASE_ONES:
-            self.assertEqual(got[g], ["--root", root, "--base", "x"], g)
-        self.assertEqual(got["schema"], ["--root", root])
-        self.assertEqual(got["cites"], ["--root", root])
+            self.assertEqual(got[g], ["--root=" + root, "--base=x"], g)
+        self.assertEqual(got["schema"], ["--root=" + root])
+        self.assertEqual(got["cites"], ["--root=" + root])
 
     def test_no_base_not_forwarded(self):  # B2
         self.all_pass()
         root = self.fixture()
         self.run_main(["--root", root])
-        self.assertEqual(self.args_of(), {g: ["--root", root] for g in FIVE})
+        self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in FIVE})
 
     def test_base_forwarded_exactly(self):  # B3
         self.all_pass()
         root = self.fixture()
         for argv, value in ((["--base", ""], ""), (["--base", " x "], " x "), (["--base=-x"], "-x"),
-                            (["--base", "main~1"], "main~1"), (["--base", "\U0001f6dd"], "\U0001f6dd")):
+                            (["--base", "main~1"], "main~1"), (["--base", "\U0001f6dd"], "\U0001f6dd"),
+                            (["--base", "a=b"], "a=b"), (["--base=a=b"], "a=b")):
             with self.subTest(value=value):
                 del self.seen[:]
                 self.run_main(["--root", root] + argv)
                 got = self.args_of()
                 for g in BASE_ONES:
-                    self.assertEqual(got[g], ["--root", root, "--base", value], g)
-                    self.assertIs(type(got[g][3]), str)
-                self.assertEqual(got["schema"], ["--root", root])
-                self.assertEqual(got["cites"], ["--root", root])
+                    self.assertEqual(got[g], ["--root=" + root, "--base=" + value], g)
+                    self.assertIs(type(got[g][1]), str)
+                self.assertEqual(got["schema"], ["--root=" + root])
+                self.assertEqual(got["cites"], ["--root=" + root])
 
     def test_absent_base_ref_real_gates(self):  # B4
         root = self.fixture()
@@ -497,6 +604,83 @@ class BaseTest(RunAllCase):
                     input_fail("invalid arguments: --base given more than once"), 1, [])
         self.expect(["--root", root, "--base=a", "--base", "b"],
                     input_fail("invalid arguments: --base given more than once"), 1, [])
+
+    def chdir_to_parent_with_repo_named(self, value):
+        """A valid strict fixture repository whose directory is named ``value``, in a fresh parent; the cwd becomes
+        the parent (restored after the test). Returns the parent."""
+        parent = os.path.join(self.tmp, "parent%d" % next(self._dirs))
+        os.mkdir(parent)
+        repo = os.path.join(parent, value)
+        os.mkdir(repo)
+        make_repo(repo, dict(minimal_config(), profile="strict"))
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(parent)
+        return parent
+
+    def alone_in_process(self, gate, argv, env=None):
+        """``python3 -m gates check <gate> <argv>`` through ``gates.__main__.main`` (the same entry, no new process)."""
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, env or {}), contextlib.redirect_stdout(buf):
+            rc = gates_main.main(["check", gate] + list(argv))
+        return buf.getvalue(), rc
+
+    def skip_double_dash_where_argparse_stores_a_list(self, value):
+        """B6 member ``--``: ``--opt=--`` gives ``[]`` (not ``'--'``) on Python < 3.13's argparse, in every gate's
+        own parser (unrelated finding U-FR-1); skipped there with that reason."""
+        if value == "--" and gate_args_double_dash_value() != "--":
+            self.skipTest("argparse of this interpreter stores %r for --root=-- (unrelated finding U-FR-1)"
+                          % (gate_args_double_dash_value(),))
+
+    def test_dash_leading_root_forwarded_as_one_token(self):  # B6, --root
+        for value in DASH_VALUES:
+            with self.subTest(value=value):
+                self.skip_double_dash_where_argparse_stores_a_list(value)
+                parent = self.chdir_to_parent_with_repo_named(value)
+                for how in ("given", "env"):
+                    with self.subTest(how=how):
+                        if how == "given":
+                            argv, env = ["--root=" + value], {}
+                        else:
+                            argv, env = [], {"CLAUDE_PROJECT_DIR": value}
+                        with mock.patch.dict(os.environ, env):
+                            out, code = self.run_main(argv)
+                        alone = ""
+                        for g in FIVE:
+                            text, rc = self.alone_in_process(g, argv, env)
+                            self.assertEqual(rc, 0, g)
+                            alone += text
+                        self.assertEqual(alone, REAL_PASS)
+                        # one real `python3 -m gates check` process, the path the sub-gate's argv really takes
+                        text, rc = self.sub(argv, command=("check", "schema"), cwd=parent, env=env)
+                        self.assertEqual((text, rc), (alone.split("PASS register.")[0], 0))
+                        self.assertEqual(out, alone)
+                        self.assertEqual(code, 0)
+                        self.assertNotIn("expected one argument", out)
+
+    def test_dash_leading_base_forwarded_as_one_token(self):  # B6, --base
+        root = self.fixture()
+        schema = "".join(ln + "\n" for ln in REAL_PASS.splitlines() if ln.startswith("PASS schema."))
+        cites = "".join(ln + "\n" for ln in REAL_PASS.splitlines() if ln.startswith("PASS cites."))
+        for value in DASH_VALUES:
+            with self.subTest(value=value):
+                self.skip_double_dash_where_argparse_stores_a_list(value)
+                why = "ref must not start with '%s'" % ("^" if value.startswith("^") else "-")   # spec 13, spec:648
+                want = (schema + "".join("FAIL %s.input: %s\n" % (g, why) for g in ("register", "decisions", "claims"))
+                        + cites)
+                out, code = self.run_main(["--root", root, "--base=" + value])
+                self.assertEqual(out, want)
+                self.assertEqual(code, 1)
+                self.assertNotIn("expected one argument", out)
+                alone = ""
+                for g in FIVE:
+                    text, rc = self.alone_in_process(
+                        g, ["--root", root] + (["--base=" + value] if g in BASE_ONES else []))
+                    alone += text
+                self.assertEqual(out, alone)
+                text, rc = self.sub(["--root", root, "--base=" + value], command=("check", "decisions"))
+                self.assertEqual((text, rc), ("FAIL decisions.input: %s\n" % why, 1))
+
 
 
 class ArgvTest(RunAllCase):
@@ -538,7 +722,7 @@ class ArgvTest(RunAllCase):
         root = self.fixture()
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": root}):
             self.expect([], PASS5, 0, list(FIVE))
-        self.assertEqual(self.args_of(), {g: ["--root", root] for g in FIVE})
+        self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in FIVE})
         del self.seen[:]
         cwd = os.getcwd()
         self.addCleanup(os.chdir, cwd)
@@ -549,7 +733,7 @@ class ArgvTest(RunAllCase):
                 os.environ.pop("CLAUDE_PROJECT_DIR", None)
                 with mock.patch.dict(os.environ, {} if env is None else {"CLAUDE_PROJECT_DIR": env}):
                     self.expect([], PASS5, 0, list(FIVE))
-                self.assertEqual(self.args_of(), {g: ["--root", root] for g in FIVE})
+                self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in FIVE})
         del self.seen[:]
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": os.path.join(root, "nodir")}):
             self.expect([], input_fail("CLAUDE_PROJECT_DIR is not a directory"), 1, [])
@@ -572,17 +756,17 @@ class ArgvTest(RunAllCase):
                     self.assertEqual(result.repo_root(), env)
                     out, code = self.run_main([])
                 self.assertEqual((out, code), (PASS5, 0))
-                self.assertEqual(self.args_of(), {g: ["--root", env] for g in FIVE})
+                self.assertEqual(self.args_of(), {g: ["--root=" + env] for g in FIVE})
         del self.seen[:]
         os.chdir(root)
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "."}):
             self.expect([], PASS5, 0, list(FIVE))
-            self.assertEqual(self.args_of(), {g: ["--root", "."] for g in FIVE})
+            self.assertEqual(self.args_of(), {g: ["--root=."] for g in FIVE})
         del self.seen[:]
         with mock.patch.dict(os.environ, {}):
             os.environ.pop("CLAUDE_PROJECT_DIR", None)
             self.expect([], PASS5, 0, list(FIVE))
-            self.assertEqual(self.args_of(), {g: ["--root", result.repo_root()] for g in FIVE})
+            self.assertEqual(self.args_of(), {g: ["--root=" + result.repo_root()] for g in FIVE})
 
     def test_root_repeated_refused(self):  # A4
         self.all_pass()
@@ -603,7 +787,7 @@ class ArgvTest(RunAllCase):
                 if verdict == "ok":
                     self.assertEqual(out, PASS5)
                     self.assertEqual(code, 0)
-                    self.assertEqual(self.args_of(), {g: ["--root", path] for g in FIVE})
+                    self.assertEqual(self.args_of(), {g: ["--root=" + path] for g in FIVE})
                 else:
                     self.assertEqual(out, input_fail(verdict))
                     self.assertEqual(code, 1)
@@ -831,15 +1015,15 @@ class Pc1Test(RunAllCase):
         make_repo(root, minimal_config())
         out, code = self.run_main(["--root", root, "--base", ch])
         self.assertEqual(out, "FAIL schema.%s: r%s\nPASS register.ok\nFAIL decisions.echo: %s\nPASS claims.ok\n"
-                              "PASS cites.ok\n" % (esc, esc, esc))
+                              "PASS cites.ok\n" % (esc, esc, "--base=" + esc))
         self.assertEqual(code, 1)
         out, code = self.run_main(["--root", root])
         self.assertEqual(out, "FAIL schema.%s: r%s\nPASS register.ok\nFAIL decisions.echo: %s\nPASS claims.ok\n"
-                              "PASS cites.ok\n" % (esc, esc, root.replace(ch, esc)))
+                              "PASS cites.ok\n" % (esc, esc, "--root=" + root.replace(ch, esc)))
         out, code = self.run_main(["--json", "--root", root, "--base", ch])
         got = json.loads(out)["lines"]
         self.assertEqual((got[0]["id"], got[0]["reason"]), ("schema." + ch, "r" + ch))
-        self.assertEqual(got[2]["reason"], ch)
+        self.assertEqual(got[2]["reason"], "--base=" + ch)
 
     @unittest.skipUnless(hasattr(builtins, "BaseExceptionGroup"), "BaseExceptionGroup present: False (Python < 3.11)")
     def test_pc1_base_exception_group_propagates(self):  # S6

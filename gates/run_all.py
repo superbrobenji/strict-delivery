@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 
 from gates.lib import config, result
 
@@ -35,7 +36,9 @@ def _load(gate: str):
     try:
         module = importlib.import_module(name)
     except ModuleNotFoundError as e:
-        if e.name == name:
+        # "missing" means the file is absent (or sys.modules[name] is None); a module whose own code raised
+        # ModuleNotFoundError naming itself is an import failure (F-FV-2)
+        if e.name == name and importlib.util.find_spec(name) is None:
             return None, _missing(gate, "%s.py missing" % name.replace(".", "/"))
         return None, _missing(gate, "import of %s raised %s" % (name, result._type_name(e)))
     except (Exception, SystemExit) as e:
@@ -59,9 +62,10 @@ def check(args: list) -> result.Result:
     for gate in PROFILE_GATES[cfg["profile"]]:
         fn, lines = _load(gate)
         if fn is not None:
-            gate_args = ["--root", root]
+            # one token per option: a value starting with "-" is then never read as an option (F-FV-1)
+            gate_args = ["--root=" + root]
             if gate in BASE_GATES and ns.base is not None:
-                gate_args += ["--base", ns.base]
+                gate_args.append("--base=" + ns.base)
             lines = result.run_check(gate, fn, gate_args).lines
         res.lines.extend(lines)
     return res
