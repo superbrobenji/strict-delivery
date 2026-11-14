@@ -286,41 +286,35 @@ max_depth: 5
 done: [1a.1, 1a.2, 1a.3, 1b.1, 1b.2, 1b.3, 1c0.1, 1c0.2, 1c.1, 1c.2, 1c.3, 1d.1, 1d.2,
        1d.3, 1d2.1, 1d3.1, 2a.1, 2a.2, 2a.3, 2b.1, 2b.2, 2b.3, 2c.1, 2c.2, 2c.3,
        P1.1, P1.2, P1.3, P2.1, P2.2, P2.3, P3.1, P3.2, P3.3, P4.1, P4.2, P4.3,
-       B1.1, B1.2, B1.3, B2.1, B2.2, B2.3, C1.1, C1.2, C2.1, C2.2]
-streams:
+       B1.1, B1.2, B1.3, B2.1, B2.2, B2.3, C1.1, C1.2, C2.1, C2.2, F1, U1, TO.1]
+streams:   # revision 6: seven streams (Q-SPD-1 (a)). Tasks merged before registration (3a.1, 3b.1, 3d.1, 4c.1, 4c.2, 6E.3 and any other task whose PR has merged by then) go into `done` at registration; ownership before registration is section 2's table, hand-checked
   - {id: residual, residual: true, period: {from: program-start, until: program-close},
-     tasks: [R1.1, R2.1, R2.2, R2.3, R3.1, R3.2, R4.1, R5.1],
-     unblock: "R1.1 at program start; R1 PR first (docs needs it); R2.1 after merged:context and merged:package; R2.2 after merged:docs; R2.3 after merged:evidence; R3.x after merged:context, merged:runtime, merged:tools, merged:bash; R4.1 after merged:evidence, merged:rules4 (P078:5329); R5.1 (the interim-skill removal, Q-BRV-1 (a)) at the plugin enable point: after merged:runtime and merged:package, once the owner's enablement is ledgered (Q-PLG-1 (a); P078:3091, P078:3787-3788)"}
-  - {id: runtime, period: {from: program-start, until: merged:runtime}, paths: [P:2550 row], tasks: [3a.1, 3a.2],
-     unblock: "at program start; 3a.2 after M1-M10"}
+     tasks: [R5.1],
+     unblock: "R5.1 (the interim-skill removal, Q-BRV-1 (a)) after merged:runtime, merged:package and merged:hooks, once the owner's enablement of the plugin is ledgered after PR-hooks and after every live branch has updated from main (Q-PLP-4 (a)); PR-residual/R5 is the first program merge after the enablement, amending Q-BRV-3 (a) (45.0 h from t = 0 at the earliest; P078:3091, P078:3787-3788)"}
   - {id: package, period: {from: program-start, until: merged:package}, paths: [P:2553 row without the 3d.2 paths], tasks: [3d.1],
-     unblock: "at program start; PR after Rq-4-1 has landed"}
-  - {id: bash, period: {from: program-start, until: merged:bash}, paths: [P:2551 row], tasks: [3b.1, 3b.2, 3b.3],
-     unblock: "3b.1 at program start; 3b.2 after merged:runtime and merged:package"}
-  - {id: tools, period: {from: merged:package, until: merged:tools}, paths: [P:2552 row], tasks: [3c.1, 3c.2],
-     unblock: "after merged:runtime and merged:package"}
-  - {id: cfg4, period: {from: program-start, until: merged:cfg4},
-     paths: [P:3377 row, playbook/decisions.md, skills/strict-delivery/SKILL.md, tests/test_skill.py],   # last three by the Q-BD-8 (a) stream-ownership decision
-     tasks: [4a.1, 4a.2, 4a.3], unblock: "4a.1 at program start; 4a.2 after merged:package"}
-  - {id: rules4, period: {from: merged:cfg4, until: merged:rules4}, paths: [P:3378 row], tasks: [4b.1, 4b.2],
-     unblock: "after merged:cfg4"}
-  - {id: init4, period: {from: program-start, until: merged:init4},
-     paths: [P:3379 row,
-             {path: gates/__main__.py, from: merged:residual/R2}, {path: gates/producers.py, from: merged:residual/R2},
-             {path: gates/run_all.py, from: merged:residual/R2}, {path: tests/test_run_all.py, from: merged:residual/R2},
-             {path: CLAUDE.md, from: merged:residual/R2}, {path: .gitignore, from: merged:residual/R2}],   # Q-BD-8 (a); windows: Q-BDr2-1
-     tasks: [4c.1, 4c.2, 4d.1, 4d.2, 4d.3, 4e.1, 4e.2, 4e.3],
-     unblock: "4c after M-B4-1; 4d after merged:cfg4 and merged:package; the Rq-4-2, Rq-4-5, Rq-4-3 commits at the end of 4e.3 after merged:residual/R2 (window start); the Rq-4-5 commit also removes the interim CLAUDE.md text of Task 1c0.2 (P078:3846)"}
-  - {id: context, period: {from: program-start, until: merged:context}, paths: [P:4366-4489 Files], tasks: [5a.1, 5a.2, 5a.3],
-     unblock: "at program start"}
-  - {id: docs, period: {from: program-start, until: merged:docs}, paths: [P:4551, P:4608, P:4665, P:4730 Files], tasks: [5b.1, 5b.2, 5c.1, 5c.2],
-     unblock: "at program start (Rq-5-4 is on main from P3.2); the 5c end after merged:residual/R1 (Rq-5-5)"}
-  - {id: evidence, period: {from: program-start, until: merged:evidence}, paths: [P:4812 row], tasks: [6E.1, 6E.2, 6E.3],
-     unblock: "at program start"}
-  - {id: checkpoint, period: {from: program-start, until: merged:checkpoint}, paths: [P:4813 row], tasks: [6K.1, 6K.2],
-     unblock: "at program start; 6K.2 after merged:runtime (worktrees.same_repository, P078:5807)"}
-  - {id: release, period: {from: merged:init4, until: program-close}, paths: [P:4814 row incl. the version sites], tasks: [6R.1, 6R.2, 6R.3],
-     unblock: "after every other stream and residual R2, R3 and R4 have merged (P:4799; P078:5309); the version sites by the `stream-ownership` decision, asked and answered before `program create` (owner answer Q-F80W-13 (a)), so their windows are in this record from `create`"}
+     unblock: "3d.1 after PR-2b1 (it consumes run_all.check; its registry lines are hunk-scoped until PR-P3, Q-PLP-1 (a)); PR after Rq-4-1 has landed; the first program merge (7.25 h from t = 0)"}
+  - {id: runtime, period: {from: program-start, until: merged:runtime}, paths: [P:2550 row], tasks: [3a.1, 3a.2],
+     unblock: "3a.1 at t = 0 (starts now, L:814); 3a.2 after PR-P2 and M1-M10 (it consumes programs.live_programs, gitinfo.current_branch and checkpoints.parse_handoff); the PR merges U + T after PR-P4 (34.0 h)"}
+  - {id: hooks, period: {from: program-start, until: merged:hooks},
+     paths: [P:2551 row, P:2552 row, P:4366-4489 Files,
+             {path: gates/hooks/post_read.py, from: merged:runtime}, {path: gates/hooks/session_start.py, from: merged:runtime},
+             {path: tests/test_hook_entry.py, from: merged:runtime}, {path: tests/test_hook_session_start.py, from: merged:runtime},   # Q-SPD-2
+             gates/lib/gitinfo.py, gates/tools/githooks.py],   # whole files from PR-P3, i.e. from program-start: Q-PLP-1 (a), section 2's table
+     tasks: [3b.1, 3b.2, 3b.3, 3c.1, 3c.2, 5a.1, 5a.2, 5a.3, R3.1, R3.2],
+     unblock: "3b.1 at t = 0 (starts now, L:814); 5a after PR-P2 (5a.1 consumes programs.load_program and dispatch.ROLES); 3b.2 after merged:runtime and merged:package, its gitinfo.py and githooks.py edits after PR-P3; 3b.3 after PR-P3 (merge.agent_may_merge); 3c.1 after merged:runtime and merged:package; 3c.2 after PR-P4 and PR-P2 (gate_dispatch, programs.live_programs); R3 after the 3b, 3c and 5a ends in the stream branch"}
+  - {id: records, period: {from: program-start, until: merged:records},
+     paths: [P:4551, P:4608, P:4665, P:4730 Files, P:4812 row, P:4813 row,
+             skills/strict-delivery/prompts/program_controller.md, tests/test_prompt_blocks.py, tests/prose_check.py],   # Q-SPD-2; R1.1's files from PR-P4 (Q-PLP-1 (a), section 2's table)
+     tasks: [R1.1, 5b.1, 5b.2, 5c.1, 5c.2, 6E.1, 6E.2, 6E.3, 6K.1, 6K.2],
+     unblock: "6E.3 after PR-2c3 (escape_cost is declared in config/2 by 2c.2); 6E.1 and 6K.1 after PR-P1; R1.1 after PR-P4 (program_controller.md is created by P4.3); 5b and 5c after PR-P3 (Rq-5-4 is on main from P3.2); 6K.2 after merged:runtime and PR-P3 (worktrees.same_repository, P078:5807); the 5c end after the R1 end in the stream branch (Rq-5-5)"}
+  - {id: config, period: {from: program-start, until: merged:config},
+     paths: [P:3377 row, playbook/decisions.md, skills/strict-delivery/SKILL.md, tests/test_skill.py,   # last three by the Q-BD-8 (a) stream-ownership decision
+             P:3378 row, P:3379 row, CLAUDE.md, .gitignore,
+             gates/__main__.py, gates/producers.py, gates/run_all.py, tests/test_run_all.py],   # whole files from PR-P3, i.e. from program-start (Q-PLP-1 (a) with Q-SPD-2 (a); replaces residual's window and Q-BD-8 (a)'s merged:residual/R2; not S1's merged:package or program-start windows for CLAUDE.md and .gitignore)
+     tasks: [4a.1, 4a.2, 4a.3, 4b.1, 4b.2, 4c.1, 4c.2, 4d.1, 4d.2, 4d.3, 4e.1, 4e.2, 4e.3, R2.1, R2.2, R2.3, R4.1],
+     unblock: "4c.1 at t = 0 once M-B4-1 is measured, 4c.2 after 4c.1 (prose_check.FORBIDDEN rows are on main since PR-B2); 4a.1 after PR-P2; 4a.2 after 4a.1, merged:package and PR-2c3; 4a.3 after 4a.2 and PR-2c3; 4b.1 after 4a.2; 4b.2 after 4a.3 and PR-P4; 4d.1 and 4d.3 after PR-P3 (merge.MODES), the 4a end and the 4c end; with Q-SPD-3 (a) sub-block 4a is 4a.1-4a.2 and 4b is 4a.3, 4b.1, 4b.2; R2.1 after merged:hooks and merged:package, then R2.2 and R2.3 serially after merged:records (all three edit gates/__main__.py); R4.1 after the 4b end and merged:records (P078:5329); the Rq-4-2, Rq-4-5, Rq-4-3 commits at the end of 4e.3 after the R2 end (order P:3362); the Rq-4-5 commit also removes the interim CLAUDE.md text of Task 1c0.2 (P078:3846)"}
+  - {id: release, period: {from: merged:config, until: program-close}, paths: [P:4814 row incl. the version sites], tasks: [6R.1, 6R.2, 6R.3],
+     unblock: "after every other stream has merged (P:4799; P078:5309); the version sites by the `stream-ownership` decision, asked and answered before `program create` (owner answer Q-F80W-13 (a)), so their windows are in this record from `create`"}
 edges:   # task -> task only
   - {from: 3a.1, to: 3a.2}        # P:2697
   - {from: 3b.1, to: 3b.2}        # P:2891
@@ -374,57 +368,66 @@ edges:   # task -> task only
   - {from: R4.1, to: 6R.1}        # Task 6R.1 waits for Block R4 P078:6191
   - {from: 6R.1, to: 6R.2}
   - {from: 6R.2, to: 6R.3}
-groups:   # antichains, each within 25 tasks
-  - {id: g-start, tasks: [3a.1, 3d.1, 3b.1, 4a.1, 4c.1, 6K.1, 5a.1, R1.1, 6E.1, 6E.3]}
-  - {id: g-mid, tasks: [3a.2, 4a.2, 4c.2, 5a.2, 6E.2]}        # 6K.2 moved to g-hooks: edge 3a.2 -> 6K.2
-  - {id: g-hooks, tasks: [3b.2, 3c.1, 3c.2, 4a.3, 5b.1, 5c.1, 6K.2]}
+groups:   # revision 6: antichains, each within 25 tasks; formed per window of the revision-6 timeline (section 6.2) by the window in which a task starts, a task joining the first group of its window that holds no task it is ordered against (an edge, direct or through other edges); recomputed from the revision-6 timeline, not copied from revision 5
+  - {id: g-w1a, tasks: [3a.1, 3b.1, 4c.1]}                  # 0 to 3.0
+  - {id: g-w1b, tasks: [4c.2]}                              # 0 to 3.0, after 4c.1
+  - {id: g-w2a, tasks: [3d.1]}                              # 3.0 to 10.75
+  - {id: g-w3a, tasks: [6E.3, 6E.1, 6K.1]}                  # 10.75 to 27.5
+  - {id: g-w3b, tasks: [6E.2]}
+  - {id: g-w4a, tasks: [3a.2, 4a.1, 5a.1, R1.1]}            # 27.5 to 36.0
+  - {id: g-w4b, tasks: [4a.2, 5a.2, 3b.2]}
+  - {id: g-w4c, tasks: [4a.3, 4b.1, 5a.3]}
+  - {id: g-w4d, tasks: [4b.2]}
+  - {id: g-w5a, tasks: [4d.1, 5b.1, 5c.1, 3b.3, 3c.1, 3c.2, R5.1, 6K.2, R3.1]}   # 36.0 to 44.25
+  - {id: g-w5b, tasks: [5b.2, 5c.2, 4d.2, R3.2]}
+  - {id: g-w5c, tasks: [4d.3]}
+  - {id: g-w6a, tasks: [4e.1, R2.1, R2.2, R4.1, R2.3]}      # 44.25 to 55.0 (R2.1-R2.3 and R4.1 are the plan's tasks; R2.1 to R2.3 run serially, Decision 8 of the launch plan)
+  - {id: g-w6b, tasks: [4e.2]}
+  - {id: g-w6c, tasks: [4e.3]}
+  - {id: g-w7a, tasks: [6R.1]}                              # 55.0 to 61.5
+  - {id: g-w7b, tasks: [6R.2]}
+  - {id: g-w7c, tasks: [6R.3]}
 ```
 `R1.1`..`R3.2` are new plan tasks (plan section "Stream `residual`"). They are written here as the record must name them. `R4.1` is plan Task R4.1 (P078:6156) and `R5.1` plan Task R5.1 (owner answer Q-BRV-1 (a)), both added by the session-resume revision (revision 3). Revision 6 (owner 2026-11-10, schedule cut 2): R1.1 runs in stream `records`, R2.x and R4.1 in `config` and R3.x in `hooks`, with their sub-block ids kept; `residual` keeps R5.1 and its residual ownership.
 
 ### 6.1 Program PRs and unblock conditions
 
-| PR | starts | merges after | timeline (from S = 56.0; each PR's U follows the last earlier merge and precedes its E, P078:6251, P:5560) | merged |
+Revision 6: one row per program PR, in the merge-queue order, in h from t = 0 (PR-1d2's merge, 2ab84d6; there is no S). Each figure is the launch plan's less 3.75 h, except the t = 0 starters (3a.1 and 3b.1 0-2.0, 4c 0-4.5 with its end to 5.5, L:814). The clean update (line U of section 1) applies: a queued PR's U is 0.25 h and, after the final review, re-runs only the gates; R is 1.0 h (hooks 1.25, records 1.5, config 2.0 for more sub-blocks) and T 0.5 h. The merge-queue order is: PR-B2, PR-1d2 (t = 0), PR-2b1 3.0, PR-unicode 3.75, PR-docs6 4.5, PR-package 7.25, PR-2b-rest 8.75, PR-2c3 10.75, PR-2c1 12.75, PR-tests 13.5, PR-P1 18.75, PR-P2 27.5, PR-P4 33.25, PR-runtime 34.0, PR-P3 36.0, PR-hooks 44.25, PR-records 45.5, PR-residual/R5 as the first merge after the enablement (45.0 at the earliest; its place against PR-records is set by when the owner enables the plugin), PR-config 55.0, PR-release 61.5. The streams run unregistered until the program is registered after PR-P3 (about 40.25 h, section 4).
+
+| PR | starts | merges after | timeline (h from t = 0) | merged |
 |---|---|---|---|---|
-| PR-residual/R1 (event merged:residual/R1) (R1.1, Rq-5-5 prose) | S | — | S, 1 h, E | S+2.5 |
-| PR-package (3d.1, Rq-4-1) | S | Rq-4-1 landed (P:3359) | 2 h + 0.5; U after PR-residual/R1 (S+2.5); E | **S+4.25** |
-| PR-runtime | S | — | 3a.1 2 h, 3a.2 3 h; U after PR-package; E | **S+6.75** |
-| PR-residual/R5 (event merged:residual/R5) (R5.1, the interim-skill removal, Q-BRV-1 (a)) | the enable point: PR-runtime (S+6.75) and PR-package merged, the enablement ledgered | PR-runtime, PR-package | R5.1 (S) S+6.75 to S+7.75; U after PR-runtime (residual's branch is cut at program start, and PR-residual/R1, PR-package and PR-runtime merge after it); E | **S+9.5** |
-| PR-cfg4 | S | PR-package | 4a.1 to S+2; 4a.2 S+4.5 to S+6.5; 4a.3 + decisions.md row 2.5 h to S+9.0; U after PR-residual/R5; E | **S+11.25** |
-| PR-context | S | — | 6 h (to S+6); U after PR-cfg4; E | **S+13.0** |
-| PR-evidence | S+4.25 (wave cap) | — | (6E.1, 6E.2) \|\| 6E.3, 4 h; group merge 0.5 (to S+8.75); U after PR-context; E | **S+14.75** |
-| PR-bash | S | PR-runtime, PR-package | 3b.1 to S+2; 3b.2 S+7.0 to S+10.0; 3b.3 to S+12.0; U after PR-evidence; E | **S+16.5** |
-| PR-rules4 | S+11.5 | PR-cfg4 | 4 h (to S+15.5); U after PR-bash; E | **S+18.25** |
-| PR-tools | S+7.0 | PR-runtime, PR-package | 2 h (to S+9.0); U after PR-rules4; E | **S+20.0** |
-| PR-checkpoint | S+2.5 (PW1) | PR-runtime (6K.2, edge 3a.2 -> 6K.2) | 6K.1 S+2.5 to S+4.5; 6K.2 S+8.25 (wave cap) to S+10.25; U after PR-tools; E | **S+21.75** |
-| PR-docs | S+10.25 (wave cap) | PR-residual/R1 (event merged:residual/R1) | two groups of 4 h; 0.5 (to S+14.75); U after PR-checkpoint; E | **S+23.5** |
-| PR-residual/R3 (R3.1, R3.2) | S+20.0 (merged:tools) | PR-context, -runtime, -tools, -bash | 2 h (to S+22.0); U after PR-docs; E | **S+25.25** |
-| PR-residual/R2 (R2.1-R2.3) | S+23.5 | PR-package, -context, -docs, -evidence | 1 h (parallel, to S+24.5); U after PR-residual/R3; E | **S+27.0** |
-| PR-residual/R4 (event merged:residual/R4) (R4.1, Rq-6-5) | S+18.25 | PR-evidence, PR-rules4 (P078:5329) | 2 h (to S+20.25); U after PR-residual/R2; E | **S+28.75** |
-| PR-init4 | S | PR-cfg4, PR-package; registry window after merged:residual/R2 | 4c to S+4, sub-end S+5; 4d from S+11.5: 4d.1 to S+14.5, 4d.2 to S+16.5, 4d.3 to S+18.5, sub-end S+19.5; 4e.1 to S+22.5, 4e.2 to S+24.5, 4e.3 to S+26.5; after merged:residual/R2 (S+27.0) a U, then the Rq-4-2, Rq-4-5, Rq-4-3 commits 1 h to S+28.25 (order P:3362); U after PR-residual/R4; E | **S+30.5** |
-| PR-release | after all of the above | all | 6R.1 to S+32.5; 6R.2 to S+34.5; E to S+36.0; 6R.3 (tag on the owner's word) | **S+37.0** |
+| PR-package (3d.1, Rq-4-1) | 3.25, after PR-2b1 (Q-PLP-1 (a)) | PR-2b1, PR-docs6 | 3d.1 and Rq-4-1 3.25-5.75; R 1.0; T 0.5 (first program merge) | **7.25** |
+| PR-runtime (3a.1, 3a.2) | 0 (3a.1) | PR-P4 | 3a.1 0-2.0; 3a.2 27.75-30.75 after PR-P2 (27.5) and M1-M10; the PR waits for PR-P4 (33.25); U + T 0.75 | **34.0** |
+| PR-hooks (3b, 3c, 5a, R3) | 0 (3b.1) | PR-runtime, PR-package (3b.2, 3c); PR-P3 (3b.3) | 3b.1 0-2.0; 5a 27.75-33.75, end 34.75; 3b.2 34.25-37.25 (its gitinfo and githooks part after PR-P3, 36.0); 3b.3 37.25-39.25; 3b end 40.25; 3c 37.25-39.25, end 40.25; R3 40.25-42.25; U 0.25; R 1.25 h; T 0.5 | **44.25** |
+| PR-records (R1, 5b, 5c, 6E, 6K) | 10.75 (6E.3, after PR-2c3) | PR-runtime (6K.2) | 6E.3 11.0-13.0; 6E.1 and 6E.2 19.0-23.0, 6E end 24.0; 6K.1 19.0-21.0; R1.1 33.5-34.5, R1 end 35.5; 5b and 5c 36.25-40.25, ends 41.25; 6K.2 40.25-42.25 (wave cap), 6K end 43.25; U 0.25; R 1.5 h; T 0.5 | **45.5** |
+| PR-residual/R5 (R5.1, Q-BRV-1 (a)) | about 37.25 (after PR-P3) | PR-runtime, PR-package, PR-hooks and the enablement (Q-PLP-4 (a)) | R5.1 about 37.25-38.25; the PR waits for the enablement, which the owner gives after PR-hooks and every live branch's update; it is the first program merge after it, amending Q-BRV-3 (a) | **45.0 at the earliest** |
+| PR-config (4a-4e, R2, R4) | 0 (4c.1, after M-B4-1) | PR-package (4a.2), PR-2c3 (4a.2, 4a.3), PR-hooks (R2.1), PR-records (R2.2, R2.3, R4.1) | 4c 0-4.5, end 5.5; 4a.1 27.75-29.75; 4a.2 29.75-31.75; 4a end 32.75; 4a.3 and 4b.1 31.75-34.25; 4b.2 34.25-36.25; 4b end 37.25; 4d 36.25-43.25, end 44.25; 4e 44.25-51.25; R2.1 44.5-45.5; R2.2, R2.3 serial 45.75-47.75; R2 end 48.75; R4.1 45.75-47.75, end 48.75; Rq commits 51.25-52.25; U 0.25; R 2.0 h; T 0.5 | **55.0** |
+| PR-release (6R) | after all of the above | all | 6R.1 55.25-57.25; 6R.2 57.25-59.25; E 1.5 to 60.75; 6R.3 (tag on the owner's word) 0.75 h | **61.5** |
 
-### 6.2 Program waves (cap 25; review F-BDr-9; revision 3)
+### 6.2 Program waves (cap 25; review F-BDr-9; revision 6)
 
-Each count is the peak of the agents live in the window: 1 per stream controller and group sub-controller (a stream waiting in the merge queue keeps its controller), 2 per active task and per PR end (its U and E). The intervals were listed in the revision-3 working draft (git-ignored, so not a cite) and summed by script; the peaks are the ones ledgered at L:558.
-
+Each count is the peak of the agents live in the window: 1 per stream controller and per group sub-controller (a stream waiting for a merge is stopped and counts 0), 2 per active task, per sub-block end and per PR end, streams `a` and `b` and the other pre-program work as in section 4 (revision 6). The windows are the launch plan's, less 3.75 h. The first window is recounted with the t = 0 starters (L:814); the later counts are the launch plan's (the peaks it counted, with the same rule) and are not recounted here, since no interval after PR-2c3's merge changes.
 | wave | window | what runs | agents (peak) |
 |---|---|---|---|
-| PW1 | S to S+4.25 | controllers of runtime, package, bash, cfg4, init4, context, residual, checkpoint (from S+2.5); 3a.x, 3d.1, 3b.1, 4a.1, 4c.x and the 4c end, 5a.x, R1.1 and the R1 end, 6K.1, the package end; 1 PC1 drafter to S+4 | **22** |
-| PW2 | S+4.25 to S+9.5 | evidence (from S+4.25) + loopstats group, tools (from S+6.75); 3a.2 and the runtime end, 4a.2, 4a.3, 5a.x, 6E.x, 3b.2, 3c.x, R5.1 and the R5 end, 6K.2 from S+8.25 | **23** (at S+7) |
-| PW3 | S+9.5 to S+16.5 | docs (from S+10.25) + 2 groups, rules4 (from S+11.25); the cfg4, context, evidence and bash ends one after another; 3b.3, 4b.x, 4d.x, 5b.x, 5c.x | **23** (at S+11.5) |
-| PW4 | S+16.5 to S+23.5 | the rules4, tools, checkpoint and docs ends; R4.1, R3.1 and R3.2; 4d.x, 4e.x | **14** (at S+20.0, where R4.1 overlaps R3.1 and R3.2) |
-| PW5 | S+23.5 to S+30.5 | R2.x; the R3, R2, R4 and init4 ends; 4e.x, the Rq commits | 12 |
-| PW6 | S+30.5 to S+37.0 | release = 1 | 6R.x = 2, 3 |
+| PW1 | 0 to 3.0 | stream a 6 (controller 1, G0's end 2, G3 sub-controller 1, F1 2); stream b 3 (L:814); PR-docs6 4 (plan and breakdown tasks, 2 each); runtime 4 (controller, 3a group, 3a.1); hooks 4 (controller, 3b group, 3b.1); config 4 (controller, 4c group, 4c.1) | **25** |
+| PW2 | 3.0 to 10.75 | stream a 7 (controller, groups X and Y, their four task agents); G3's end 3; stream b 3; PR-docs6's end 2 (to 4.5); package 3 (controller, 3d.1); config's 4c.2 and end 4 (to 5.5) | **22** |
+| PW3 | 10.75 to 27.5 | stream a up to 7 (2c.1, then P1, then P2); records up to 10 (6E.3, then 6E.1, 6E.2, 6K.1); PR-tests 3 (sub-controller, TO.1) | **20** |
+| PW4 | 27.5 to 36.0 | stream a (P3, P4 and their ends) 7; runtime 4 (3a.2); hooks (5a, then 3b.2) 4-6; config (4a, then 4b with two siblings) 4-7; records (R1) 4 | **24** (at about 33.25, the launch plan's 37.0 less 3.75) |
+| PW5 | 36.0 to 44.25 | hooks (3b, 3c two groups) 10; records (5b, 5c, then 6K) 7-10; config (4d) 4; residual 3; registration from 40.25 at 2 | **24** |
+| PW6 | 44.25 to 55.0 | config (4e, R2, R4, end) up to 10; the hooks and records ends 2-3 | **13** |
+| PW7 | 55.0 to 61.5 | release = 1 | 6R.x = 2, 3 |
 
-All waves are at or under the measured 25 and leave at least 2 slots. Launches past the limit are refused, not queued (P:862). Evidence starts at S+4.25, after the package end, and 6K.2 at S+8.25, after the 6E groups: either earlier would bring PW1 or PW2 to 24 or 25.
+All waves are at or under the measured 25; PW1 is at it with the t = 0 starters, so no stream or task may be added to the first window. Launches past the limit are refused, not queued (P:862). If PR-docs6's two tasks are counted with a controller (5 instead of 4), PW1 is 26 and one of the t = 0 starters (4c.1, which waits for M-B4-1 in any case, L:814) starts later; the 25 is the count under the stated rule.
 
-The program end is set by the merge queue (revision 3): every stream branch is cut at program start, except `tools`, `rules4` and `release`, which cut theirs when they start, after `merged:package`, `merged:cfg4` and `merged:init4`, and each `residual` sub-block's group branch, cut from `main` when the sub-block starts and merged into `residual/main` after that branch's update from `main` (plan Process and section Stream `residual`, owner answer Q-F80W-12 (a): a commit is judged at the merges that are its ancestors), so each PR's update after the merge before it restarts its final review (P078:6251, P:5560). PR-residual/R5 is no exception: its branch is cut at program start too, so it updates after PR-runtime and merges at max(S+7.75, S+6.75) + 1.75 = S+9.5. From PR-residual/R5 (S+9.5) on, each merge follows the one before by U + E = 1.75 h, so PR-init4 merges at S+9.5 + 12 x 1.75 = S+30.5. Docs, evidence, checkpoint and tools wait in the queue with their work done. Tasks do wait on those merges: by residual's `unblock`, R3.x starts after merged:tools (S+20.0), R2.2 after merged:docs (S+23.5), R2.3 and R4.1 after merged:evidence; release starts after every other stream has merged, checkpoint and evidence included. In this order none of these waits sets a merge time: R3 merges at max(S+22.0, S+23.5) + 1.75 = S+25.25 and R2 at max(S+24.5, S+25.25) + 1.75 = S+27.0, each paced by the merge before it. A reorder that merges docs, evidence or tools later delays R2.x, R3.x or R4.1, and through R2 the Rq commits of init4.
+The program end is set by one chain, not by the merge queue: PR-2b1 (3.0) -> PR-2b-rest (8.75) -> PR-2c3 (10.75) -> PR-P1 (18.75) -> PR-P2 (27.5) -> PR-P3 (36.0) -> 4d.1-4d.3 and the 4d end (44.25) -> 4e.1-4e.3 (51.25) -> the Rq commits (52.25) -> PR-config (55.0) -> 6R.1, 6R.2, PR-release, 6R.3 (61.5), about 61.5 h from t = 0. The other chains have slack: R2 ends at 48.75, 2.5 h before the Rq commits start at 51.25; PR-runtime, PR-residual/R5 and PR-package are off the path; registration (about 2 h from about 40.25) and PR-unicode, PR-docs6 and PR-tests are off it. The hooks and records PRs merge at 44.25 and 45.5, before the Rq commits. The plugin is enabled after PR-hooks and every live branch's update (Q-PLP-4 (a)).
 
 ---
 
 ## 7. Critical path and estimate (draft's unit costs)
 
-**PR-1c0 (2.5) -> the docs-only PR's tail (3.75) -> B2.1-B2.3 / PR-B2 (12.0) -> PR-1d's U and E (13.75) -> 2a.3's `GATES["claims"]` commit (O3) -> PR-D (15.5) -> 2b.1-2b.3 -> PR-2b (23.25) -> 2c.2 -> 2c.3 -> PR-2c (29.75) -> P1 (37.25) -> P2 with P2.1 at L + 1 h (45.75) -> P3 with Rq-5-4 (54.0) -> setup (56.0) -> 3a.1, 3a.2 / PR-runtime (S+6.75) -> R5.1 / PR-residual/R5 (S+9.5) -> the merge queue, each merge U + E after the one before: PR-cfg4 (S+11.25), -context, -evidence, -bash, -rules4, -tools, -checkpoint, -docs, PR-residual/R3, /R2, /R4, PR-init4 (S+30.5) -> 6R.1, 6R.2, PR-release, 6R.3 (S+37.0) ≈ 93.0 working hours.**
+**Revision 6 (2026-11-14, t = 0 at PR-1d2's merge, 2ab84d6; cuts 1 and 2; sub-block 4a split by Q-SPD-3 (a); Task 2c.3 pulled forward; Q-PLP-1 (a), -3 (a), -4 (a), -5 (a)): PR-2b1 (3.0) -> 2c.2 -> 2c.3 (8.25) and 2b.2, 2b.3 / PR-2b-rest (8.75) -> PR-2c3 (10.75) -> P1 (18.75) -> P2 with P2.1 at L + 1 h (27.5) -> P3 with Rq-5-4 (36.0) -> 4d.1-4d.3 and the 4d end (44.25) -> 4e.1-4e.3 (51.25) -> the Rq commits (52.25) -> PR-config (55.0) -> 6R.1, 6R.2, PR-release, 6R.3 (61.5) ≈ 61.5 working hours from t = 0. Revision 5's path (93.0 h from 2026-11-02) is kept below as history.**
+
+**Revision 5: PR-1c0 (2.5) -> the docs-only PR's tail (3.75) -> B2.1-B2.3 / PR-B2 (12.0) -> PR-1d's U and E (13.75) -> 2a.3's `GATES["claims"]` commit (O3) -> PR-D (15.5) -> 2b.1-2b.3 -> PR-2b (23.25) -> 2c.2 -> 2c.3 -> PR-2c (29.75) -> P1 (37.25) -> P2 with P2.1 at L + 1 h (45.75) -> P3 with Rq-5-4 (54.0) -> setup (56.0) -> 3a.1, 3a.2 / PR-runtime (S+6.75) -> R5.1 / PR-residual/R5 (S+9.5) -> the merge queue, each merge U + E after the one before: PR-cfg4 (S+11.25), -context, -evidence, -bash, -rules4, -tools, -checkpoint, -docs, PR-residual/R3, /R2, /R4, PR-init4 (S+30.5) -> 6R.1, 6R.2, PR-release, 6R.3 (S+37.0) ≈ 93.0 working hours.**
 
 - Against revision 1 (80 h): +6.75 h. The added time comes from the L:387/L:389 waits, E09 (including 0.5 h for the store.py window, R2:F-BDr2-3) and E15, and is offset by Q-BD-8 (a) (no A-R6 PR, −2.25 h) and by folding 3d.2.
 - The review's corrected figure was 90.75 h with D's old scope, and 87.25 h under its Q-BDr-1 (a). The review re-checked 86.25 h (review 2); the store.py window adds 0.5 h, giving 86.75 h. The remaining 0.5 h below the review's 87.25 h comes from 1c.3 running alongside 1c.2 in a group worktree. It is my scheduling choice; without it the path is 87.75 h.
