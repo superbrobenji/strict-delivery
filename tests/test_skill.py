@@ -27,9 +27,13 @@ PRECEDENCE_KEYS = ["CLAUDE.md", "skill and prompt blocks", "project playbook", "
 CLASS_LINE = "Default owner-only classes: "
 SKILL_PHRASES = {   # heading -> key phrases (case-insensitive), each from the source cited on its line (plan Task B2.3)
     "Verification method": ["directly", "by contradiction", "record both commands",
-                            "input-domain table", "independent expected value"],                     # spec 8; Q-SDDT-5
+                            "input-domain table", "independent expected value",
+                            "version differences"],                                                  # spec 8; Q-SDDT-5; G3
+    "Decision classes": ["small point", "owner delegation", "when unsure"],                          # spec 7.1; G1, F-2
+    "Roles and tiers": ["explicitly", "never inherits"],                                             # spec 10; G2
     "Pipeline and gates": ["`python3 -m gates run_all`", "all-green", "pull request", "owner's approval"],  # spec 8
-    "Continuation": ["handoff", "80 %", "Nothing continues from inherited memory", "handoff is complete", "TaskStop"],
+    "Continuation": ["handoff", "80 %", "Nothing continues from inherited memory", "handoff is complete", "TaskStop",
+                     "never ends its turn", "handback"],                                             # spec 10; G4
     "Owner questions": ["search before asking", "recommended option", "Also open", "`decisions batch --since`",
                         "`source`"],                                                                  # spec 7.1
     "Change kinds": ["superpowers:brainstorming", "superpowers:writing-plans",
@@ -45,15 +49,17 @@ SKILL_PHRASES = {   # heading -> key phrases (case-insensitive), each from the s
 PINS = {
     "When it applies": ["start of every session", "before every change", "`playbook/`"],
     "Precedence": ["highest first"] + PRECEDENCE_KEYS + ["the higher layer wins"],
-    "Roles and tiers": ["`playbook/roles.md`", "names a tier, never a model", "workers never dispatch"],
+    "Roles and tiers": ["`playbook/roles.md`", "names a tier, never a model", "workers never dispatch",
+                        "never inherits its dispatcher's model"],                                  # G2
     "Decision classes": ["always the owner's", "`decision_classes.owner_only`", CLASS_LINE.strip(),
-                         "`playbook/decisions.md`", "only inside an approved plan"],
+                         "`playbook/decisions.md`", "only inside an approved plan",
+                         "The one exception is a small point", "The owner keeps work added or removed"],  # G1, F-2
     "Owner questions": ["search before asking", "found answered", "id, class, the question, the recommended option "
                         "with its cost, every alternative with its cost, effect, topics and `applies_to`",
                         "`model-policy`", "one batch", "restarts as soon as every question with its `source`",
                         "only the session writes decision records"],
     "Verification method": ["by contradiction", "no executable check", "input-domain table", "`playbook/review.md`",
-                            "Input domains"],
+                            "Input domains", "known version differences"],                          # G3
     "Change kinds": ["superpowers:brainstorming", "dispatches no writer"],
     "Pipeline and gates": ["register row", "final verifier", "`python3 -m gates run_all`", "owner's approval",
                            "where the profile enables it (strict), a top-tier final verifier"],   # F-B23R-1; spec 12
@@ -63,7 +69,8 @@ PINS = {
     "Continuation": ["Continuation is automatic", "Nothing continues from inherited memory", "`block.max_tasks`",
                      "handoff is complete", "`git status --porcelain --untracked-files=all`", "handoff field check",
                      "background-job check", "bounded timeout", "own command line", "completion record",
-                     "waiting on its own background work", "Handoffs and continuation"],
+                     "waiting on its own background work", "Handoffs and continuation",
+                     "never ends its turn while a child", "its handback arrives"],                  # G4
     "Document locations": ["`docs/strict-delivery/specs/`", "override"],
     "Judgment, not gated": ["`judgment`", "`rule-override`"],
 }
@@ -217,11 +224,48 @@ def check_judgment(t):                           # JG2: rule ids named, if any, 
     need(ids in (set(), judgment_ids()), "judgment: ids %r" % sorted(ids))
 
 
+SMALL_POINT = ("The one exception is a small point inside the plan's intent: a question of format, syntax, bytes or "
+               "whitespace, wording, layout, naming, test detail, a test-helper contract or an error-return shape is "
+               "not asked; the controller decides it, taking the option it would recommend, and ledgers it as "
+               "`Decision (owner delegation): what -- why -- cost if wrong`, outside `rulings.max_per_block`.")
+OWNER_KEEPS = ("The owner keeps work added or removed, plan and spec changes, architecture choices, framework or "
+               "process changes, agent models and costs, merge-blocking risk, and anything irreversible or otherwise "
+               "important; when unsure, the controller asks.")
+EXPLICIT_MODEL = "The dispatch call passes that model explicitly; a dispatch never inherits its dispatcher's model."
+VERSION_ROWS = ("Every input-domain table carries rows for the known version differences of the project's own stack "
+                "and runtime, each run on every runtime the project supports.")
+NO_LIVE_CHILD = ("A controller never ends its turn while a child or a background job it started still runs: it waits "
+                 "inside its turn, in the foreground, and returns only after every child has handed back.")
+FINISHED = ("A child has finished only when its handback arrives, never because its report file already holds a "
+            "status line.")
+DIRECTIVES = (   # (id, section, the line they follow (its start), the lines that follow it, one line each)
+    ("G1", "Decision classes", "A controller rules only inside an approved plan,", (SMALL_POINT, OWNER_KEEPS)),
+    ("G2", "Roles and tiers", "Every dispatch carries its role's prompt block", (EXPLICIT_MODEL,)),
+    ("G3", "Verification method", "The input-domain method, stated in full", (VERSION_ROWS,)),
+    ("G4", "Continuation", "Before a controller ledgers a child's result", (NO_LIVE_CHILD, FINISHED)),
+)
+DIRECTIVE_TOKENS = (("Decision classes", "owner delegation"), ("Decision classes", "when unsure"),
+                    ("Roles and tiers", "never inherits"), ("Verification method", "version differences"),
+                    ("Continuation", "handed back"), ("Continuation", "handback"))
+
+
+def check_directives(t):                         # Task B3 G1-G4: each sentence once, on its own line, after its anchor
+    for ident, h, start, lines in DIRECTIVES:
+        body = section(t, h)
+        found = [l for l in body.split("\n") if l.startswith(start)]
+        need(len(found) == 1, "directives: %s anchor lines: %d" % (ident, len(found)))
+        need("\n\n".join((found[0],) + lines) in body, "directives: %s not after its anchor, one line each" % ident)
+        for s in lines:
+            need(t.count(s) == 1, "directives: %s %r occurs %d times" % (ident, s[:40], t.count(s)))
+    for h, token in DIRECTIVE_TOKENS:
+        need(pc.whole_token(token, section(t, h)), "directives: %s lacks token %r" % (h, token))
+
+
 CHECKS = (("front-matter", check_front_matter), ("title", check_title), ("headings", check_headings),
           ("precedence", check_precedence), ("roles", check_roles), ("classes", check_classes),
           ("search", check_search), ("phrases", check_phrases), ("pins", check_pins),
           ("forbidden", check_forbidden), ("placeholders", check_placeholders), ("links", check_links),
-          ("judgment", check_judgment))
+          ("judgment", check_judgment), ("directives", check_directives))
 
 
 def failed(raw):
@@ -364,6 +408,12 @@ TEXT_MUTANTS = (   # (row, old, new, check that refuses it); each applied once t
     ("DL3", "`playbook/review.md`", "`playbook/review.md#input-domains`", "links"),
     ("JG2", "`judgment` have no gate", "`judgment` (SD-R5) have no gate", "judgment"),
     ("JG2", "`judgment` have no gate", "`judgment` (SD-R12) have no gate", "judgment"),
+    ("G1", "a small point inside", "a minor point inside", "pins"),                    # F-2: the threshold sentence
+    ("G1", "The owner keeps work added or removed", "The owner keeps work", "pins"),
+    ("G2", "never inherits its dispatcher's model", "may inherit its dispatcher's model", "pins"),
+    ("G3", "known version differences", "known differences", "pins"),
+    ("G4", "its handback arrives", "its report arrives", "pins"),
+    ("G4", "never ends its turn while a child", "may end its turn while a child", "pins"),
 )
 BYTE_MUTANTS = (   # HD2 (Q-B23v2-2 (a)): (old, new); each refused by byte_problems
     (b"section", "§".encode("utf-8")), (b"never a model", "never — a model".encode("utf-8")),
@@ -382,6 +432,10 @@ ACCEPTED = (   # (row, old, new, check that accepts it)
 HARMLESS = (   # unpinned rewordings: every check passes (stream rule: a harmless rewording never fails the suite)
     ("within the configured depth and concurrency limits", "inside the configured depth and concurrency limits"),
     ("A question found answered is cited, not asked.", "A question found answered is cited and not asked."),
+    ("ledgers each ruling as", "records each ruling as"),                      # the anchor lines of G1-G4, an unpinned word
+    ("maps each tier to a model", "maps every tier to a model"),
+    ("an implementer lists every unstated behaviour", "an implementer lists each unstated behaviour"),
+    ("it lists the child's background job ids", "it reads the child's background job ids"),
 )
 
 
@@ -490,6 +544,130 @@ class SkillMutantTest(unittest.TestCase):
     def test_failed_reports_short_file(self):
         self.assertIn("front-matter", failed(b"---\n"))
         self.assertIn("bytes", failed(b"---"))
+
+
+class SkillDirectiveTest(unittest.TestCase):
+    """Task B3 G1-G4 (G1 closes F-2): the new lines, in place, once, whole tokens, and the input-domain rows 1-14."""
+
+    def test_new_lines_in_place_on_disk(self):                    # rows 1, 3, 4, 5, 10
+        check_directives(read(SKILL))
+        self.assertEqual(failed(read_bytes(SKILL)), [])
+
+    def test_deleted_line_refused_by_the_pin_and_the_placement(self):   # row 1; F-2 for G1
+        t = read(SKILL)
+        for ident, h, start, lines in DIRECTIVES:
+            for s in lines:
+                with self.subTest(id=ident, line=s[:30]):
+                    got = failed(changed(t, "\n\n" + s, "").encode("utf-8"))
+                    self.assertIn("directives", got)
+                    self.assertIn("pins", got)
+
+    def test_moved_to_another_section_refused(self):              # row 2
+        t = read(SKILL)
+        for ident, h, start, lines in DIRECTIVES:
+            for s in lines:
+                with self.subTest(id=ident, line=s[:30]):
+                    gone = changed(t, "\n\n" + s, "")
+                    moved = in_section(gone, "Document locations", lambda b: b.rstrip("\n") + "\n\n" + s + "\n")
+                    self.assertIn("directives", failed(moved.encode("utf-8")))
+
+    def test_misplaced_refused(self):                             # row 3: first, glued to a line, reordered
+        t = read(SKILL)
+        for ident, h, start, lines in DIRECTIVES:
+            anchor = [l for l in section(t, h).split("\n") if l.startswith(start)][0]
+            chain = "\n\n".join(lines)
+            with self.subTest(id=ident, case="before the anchor"):
+                bad = changed(t, anchor + "\n\n" + chain, chain + "\n\n" + anchor)
+                self.assertIn("directives", failed(bad.encode("utf-8")))
+            with self.subTest(id=ident, case="glued to the anchor line"):
+                bad = changed(t, anchor + "\n\n" + lines[0], anchor + " " + lines[0])
+                self.assertIn("directives", failed(bad.encode("utf-8")))
+            if len(lines) == 2:
+                with self.subTest(id=ident, case="reordered"):
+                    bad = changed(t, chain, lines[1] + "\n\n" + lines[0])
+                    self.assertIn("directives", failed(bad.encode("utf-8")))
+                with self.subTest(id=ident, case="glued between"):
+                    bad = changed(t, chain, lines[0] + " " + lines[1])
+                    self.assertIn("directives", failed(bad.encode("utf-8")))
+
+    def test_twice_refused(self):                                 # row 4
+        t = read(SKILL)
+        for ident, h, start, lines in DIRECTIVES:
+            for s in lines:
+                with self.subTest(id=ident, line=s[:30]):
+                    bad = changed(t, s, s + "\n\n" + s)
+                    self.assertIn("directives", failed(bad.encode("utf-8")))
+
+    def test_whole_tokens_joined_or_recased_refused(self):        # row 5
+        t = read(SKILL)
+        for h, token in DIRECTIVE_TOKENS:
+            for name, new in (("joined before", "x" + token), ("joined after", token + "x"), ("case", token.upper())):
+                with self.subTest(heading=h, token=token, case=name):
+                    bad = in_section(t, h, lambda b: b.replace(token, new))
+                    self.assertIn("directives", failed(bad.encode("utf-8")))
+
+    def test_unpinned_line_after_a_new_line_refused(self):        # row 10
+        t = read(SKILL)
+        for ident, h, start, lines in DIRECTIVES:
+            with self.subTest(id=ident):
+                bad = changed(t, lines[-1], lines[-1] + "\n\nAlso do the opposite.")
+                self.assertIn("pins", failed(bad.encode("utf-8")))
+
+    def test_phrase_table_names_the_new_phrases(self):            # row 1: the key phrases of G1-G4 are in SKILL_PHRASES
+        for h, want in (("Decision classes", ["small point", "owner delegation", "when unsure"]),
+                        ("Roles and tiers", ["explicitly", "never inherits"]),
+                        ("Verification method", ["version differences"]),
+                        ("Continuation", ["never ends its turn", "handback"])):
+            for s in want:
+                with self.subTest(heading=h, phrase=s):
+                    self.assertIn(s, SKILL_PHRASES[h])
+                    self.assertIn(s.lower(), section(read(SKILL), h).lower())
+
+    def test_new_lines_join_no_class(self):                       # row 10: no verifier-step or deferral member
+        from tests.test_playbook import _DEFERRAL, _VERIFIER, verifier_step_problems
+        for ident, h, start, lines in DIRECTIVES:
+            for s in lines:
+                s.encode("ascii")
+                self.assertIsNone(_VERIFIER.search(s), s)
+                self.assertIsNone(_DEFERRAL.search(s), s)
+        self.assertEqual(verifier_step_problems(read(SKILL), SKILL), [])
+
+    def test_forbidden_string_in_a_new_line_refused(self):        # row 9
+        t = read(SKILL)
+        for name, sample in (("model-name", "use Opus"), ("owner-handle", "ask superbrobenji"),
+                             ("row-id", "row X9-ABC-1")):
+            for ident, h, start, lines in DIRECTIVES:
+                with self.subTest(id=ident, sample=sample):
+                    bad = changed(t, lines[0], lines[0] + " " + sample)
+                    self.assertIn("forbidden", failed(bad.encode("utf-8")))
+                    self.assertIn(name, [x[0] for x in forbidden_hits(bad)])
+
+    def test_control_and_non_ascii_bytes_in_a_new_line_refused(self):   # row 8
+        raw = read_bytes(SKILL)
+        for ident, h, start, lines in DIRECTIVES:
+            s = lines[0].encode("ascii")
+            for name, new in (("cr", s + b"\r"), ("tab", s + b"\t"), ("non-ascii", s.replace(b"e", "é".encode("utf-8"), 1))):
+                with self.subTest(id=ident, case=name):
+                    self.assertTrue(byte_problems(raw.replace(s, new, 1)))
+
+    def test_digit_runs_refused_the_same(self):                   # row 13 (no int() on text)
+        t = read(SKILL)
+        for n in (4300, 4301):
+            with self.subTest(digits=n):
+                bad = in_section(t, "Decision classes", lambda b: b.rstrip("\n") + "\n\n" + "9" * n + "\n" + b[len(b.rstrip("\n")) + 1:])
+                self.assertIn("pins", failed(bad.encode("utf-8")))
+                glued = changed(t, SMALL_POINT, SMALL_POINT + " " + "9" * n)
+                self.assertIn("directives", failed(glued.encode("utf-8")))
+
+    def test_unassigned_code_point_refused_by_the_character_check(self):   # row 14 (U+2C2F: Cn on 3.9, Ll on 3.13)
+        t = read(SKILL)
+        c = chr(0x2C2F)
+        for ident, h, start, lines in DIRECTIVES:
+            with self.subTest(id=ident):
+                bad = changed(t, lines[0], lines[0].replace("e", c, 1)).encode("utf-8")
+                got = failed(bad)
+                self.assertIn("bytes", got)
+                self.assertIn("directives", got)
 
 
 if __name__ == "__main__":
