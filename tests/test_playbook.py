@@ -2698,6 +2698,18 @@ B3_MISMATCH_ANCHOR = "any other mismatch, plan-vs-code included, is an owner que
 B3_MISMATCH_TAIL = ", except a small point that `playbook/decisions.md` (\"Asking\") lets the controller decide."
 
 
+# B3 review R1-1: the Plan format paragraph of playbook/sessions.md states the same input-domain table rule.
+B3_PLAN_ANCHOR = "The implementer fills `test`, and a row with no test is a finding."
+B3_PLAN_VERDICT = ("Each verdict is marked as settled by the spec or plan, as an owner question, as a controller "
+                   "ruling, or as a small point the controller decided under `playbook/decisions.md` (\"Asking\"); a "
+                   "controller row goes to the reviewer as a ruling with one line of why.")
+B3_PLAN_VERDICT_KEEPS = (   # the invariants of the replaced sentence, plus the new kind
+    "Each verdict is marked as", "settled by the spec or plan", "as an owner question", "as a controller ruling",
+    "as a small point the controller decided under `playbook/decisions.md` (\"Asking\")",
+    "a controller row goes to the reviewer as a ruling with one line of why.")
+B3_PLAN_NEXT = "The table's sections are: Oracle,"
+
+
 def b3_unit(body, start):
     """The one non-empty line of a section body that starts with `start`; ValueError unless exactly one."""
     found = [l for l in body.split("\n") if l.startswith(start)]
@@ -2717,6 +2729,10 @@ B3_ENTRIES = (   # (id, file, section, the line the sentences sit in (its start)
      B3_ROLES_MODEL, " ", B3_ROLES_AFTER),
     ("E2", "playbook/roles.md", "Report contract", "Every report starts with", (B3_NO_LIVE_CHILD, B3_FINISHED),
      B3_ROLES_RETURN, " ", None),
+    ("R1a", "playbook/sessions.md", "Plan format", "Every task whose interface takes", (B3_VERSION_ROWS,),
+     B3_PLAN_ANCHOR, " ", "Each verdict is marked as settled by the spec or plan,"),
+    ("R1b", "playbook/sessions.md", "Plan format", "Every task whose interface takes", (B3_PLAN_VERDICT,),
+     B3_VERSION_ROWS, " ", B3_PLAN_NEXT),
 )
 B3_TOKENS = (   # (file, section, line start, whole token): case-sensitive
     ("playbook/review.md", "Input domains", "1. Every task whose interface", "version differences"),
@@ -2725,6 +2741,8 @@ B3_TOKENS = (   # (file, section, line start, whole token): case-sensitive
     ("playbook/roles.md", "Dispatch contract", "A dispatch prompt carries", "never inherits"),
     ("playbook/roles.md", "Report contract", "Every report starts with", "handed back"),
     ("playbook/roles.md", "Report contract", "Every report starts with", "handback"),
+    ("playbook/sessions.md", "Plan format", "Every task whose interface takes", "version differences"),
+    ("playbook/sessions.md", "Plan format", "Every task whose interface takes", "small point"),
 )
 B3_HARMLESS = (   # (file, section, line start, old, new): an unpinned phrase elsewhere in the unit
     ("playbook/review.md", "Input domains", "1. Every task whose interface", "sections per producer",
@@ -2734,6 +2752,8 @@ B3_HARMLESS = (   # (file, section, line start, old, new): an unpinned phrase el
      "A fork dispatch is rejected."),
     ("playbook/roles.md", "Report contract", "Every report starts with", "the first of DENIED",
      "the first value of DENIED"),
+    ("playbook/sessions.md", "Plan format", "Every task whose interface takes", "one row per parameter",
+     "one row for each parameter"),
 )
 
 
@@ -2805,7 +2825,7 @@ class OwnerDirectivePlaybookTest(unittest.TestCase):
 
     def test_moved_to_another_section_refused(self):              # row 2
         other = {"playbook/review.md": "Small re-review", "playbook/decisions.md": "Answering",
-                 "playbook/roles.md": "Budget cap"}
+                 "playbook/roles.md": "Budget cap", "playbook/sessions.md": "Commits"}
         for entry in B3_ENTRIES:
             ident, rel, heading, start, sentences, anchor, sep, follow = entry
             for s in sentences:
@@ -2889,6 +2909,27 @@ class OwnerDirectivePlaybookTest(unittest.TestCase):
                     self.assertIsNone(_DEFERRAL.search(s), s)
         for rel in {e[1] for e in B3_ENTRIES}:                    # the files' class members are the hand-listed ones
             self.assertEqual(verifier_step_problems(read(rel), rel), [])
+
+    def test_plan_format_verdict_sentence_keeps_its_invariants(self):   # R1-1: the replaced sentence's invariants
+        t = read("playbook/sessions.md")
+        unit = b3_unit(pc.section(t, "Plan format"), "Every task whose interface takes")
+        self.assertEqual(unit.count(B3_PLAN_VERDICT), 1)
+        self.assertNotIn("as an owner question, or as a controller ruling;", unit)    # the old wording is gone
+        for phrase in B3_PLAN_VERDICT_KEEPS:                       # three verdict kinds, the new kind, the ruling line
+            with self.subTest(phrase=phrase[:40]):
+                self.assertIn(phrase, B3_PLAN_VERDICT)
+                bad = b3_in_section(t, "Plan format", lambda b: b.replace(phrase, "zzz", 1))
+                self.assertTrue(b3_problems(bad, B3_ENTRIES[-1]))
+
+    def test_plan_format_digit_runs_refused_the_same(self):        # row 13 (no int() on text), R1 sentences
+        for entry in B3_ENTRIES[-2:]:
+            for n in (4300, 4301):
+                with self.subTest(id=entry[0], digits=n):
+                    s = entry[4][-1]
+                    bad = b3_in_section(read("playbook/sessions.md"), "Plan format",
+                                        lambda b: b.replace(s, s + "9" * n, 1))
+                    self.assertTrue(b3_problems(bad, entry))
+                    self.assertEqual(pc.char_refusals(bad), [])
 
     def test_forbidden_strings_in_new_sentence_refused(self):     # row 9
         for entry in B3_ENTRIES:

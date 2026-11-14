@@ -120,3 +120,39 @@ mutant FAIL SKILL_PHRASES row dropped (test side) python3.13                   r
 restored PASS [SkillDirectiveTest,SkillFileTest] python3                      rc=0 OK
 restored PASS [SkillDirectiveTest,SkillFileTest] python3.13                   rc=0 OK
 mutants 13 killed 13
+
+## fix round 1, finding R1-1: playbook/sessions.md Plan format (tests.test_playbook.OwnerDirectivePlaybookTest)
+harness: as above, scratch worktree of the round-1 head 4e4a0b2 plus the change
+R1: scratch worktree /var/folders/54/hnpyck115hq30qmdwvvcyl_h0000gn/T/tmp.zBtbmISV2d/wt at 4e4a0b2
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest <targeted classes>
+present PASS [OwnerDirectivePlaybookTest]    python3                      rc=0 OK
+present PASS [OwnerDirectivePlaybookTest]    python3.13                   rc=0 OK
+mutant FAIL R1a delete version rows          python3                      rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1a delete version rows          python3.13                   rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b delete verdict sentence      python3                      rc=1 FAILED (failures=20) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b delete verdict sentence      python3.13                   rc=1 FAILED (failures=20) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1a moved after the verdict      python3                      rc=1 FAILED (failures=7) test_harmless_rewording_passes,test_misplaced_refused,test_new_sentences_in_place_on_disk
+mutant FAIL R1a moved after the verdict      python3.13                   rc=1 FAILED (failures=7) test_harmless_rewording_passes,test_misplaced_refused,test_new_sentences_in_place_on_disk
+mutant FAIL R1a twice                        python3                      rc=1 FAILED (failures=3) test_deleted_sentence_refused_naming_the_unit,test_harmless_rewording_passes,test_new_sentences_in_place_on_disk
+mutant FAIL R1a twice                        python3.13                   rc=1 FAILED (failures=3) test_deleted_sentence_refused_naming_the_unit,test_harmless_rewording_passes,test_new_sentences_in_place_on_disk
+mutant FAIL R1a glued                        python3                      rc=1 FAILED (failures=5) test_deleted_sentence_refused_naming_the_unit,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL R1a glued                        python3.13                   rc=1 FAILED (failures=5) test_deleted_sentence_refused_naming_the_unit,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL R1a token version differences    python3                      rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1a token version differences    python3.13                   rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b token small point            python3                      rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b token small point            python3.13                   rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b new kind dropped             python3                      rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b new kind dropped             python3.13                   rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b owner question kind dropped  python3                      rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b owner question kind dropped  python3.13                   rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b controller ruling kind dropped python3                      rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b controller ruling kind dropped python3.13                   rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b settled kind dropped         python3                      rc=1 FAILED (failures=15) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b settled kind dropped         python3.13                   rc=1 FAILED (failures=15) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b ruling line dropped          python3                      rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b ruling line dropped          python3.13                   rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b old wording restored         python3                      rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL R1b old wording restored         python3.13                   rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+restored PASS [OwnerDirectivePlaybookTest]   python3                      rc=0 OK
+restored PASS [OwnerDirectivePlaybookTest]   python3.13                   rc=0 OK
+mutants 13 killed 13
