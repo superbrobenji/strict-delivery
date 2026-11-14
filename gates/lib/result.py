@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import builtins
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -83,8 +85,137 @@ class Result:
         return "".join(out)
 
 
+def _frozen_repr(x: object) -> str:
+    """``repr`` of a ``str`` as /usr/bin/python3 3.9.6 (Unicode 13.0.0) prints it, on every interpreter (spec section
+    14; owner F1 rule E1): quote ``"`` when the text holds ``'`` and no ``"``, else ``'``; a backslash and the chosen
+    quote are escaped; TAB, LF, CR are ``\\t``, ``\\n``, ``\\r``; every other character that ``print_table.is_printable``
+    refuses is ``\\xNN``, ``\\uNNNN`` or ``\\UNNNNNNNN`` in lower-case hex; the rest is raw. A ``str`` subclass is read
+    through ``str.__str__`` (Q-1C0FIN2-R1 (a)); a value that is not a ``str`` (a converted value, never argv text) is
+    ``repr(x)``, as 3.9.6 prints it."""
+    if not issubclass(type(x), str):
+        return repr(x)
+    text = _exact(x)
+    quote = '"' if "'" in text and '"' not in text else "'"
+    out = [quote]
+    for c in text:
+        if c == "\\" or c == quote:
+            out.append("\\" + c)
+        elif c == "\t":
+            out.append("\\t")
+        elif c == "\n":
+            out.append("\\n")
+        elif c == "\r":
+            out.append("\\r")
+        elif print_table.is_printable(c):
+            out.append(c)
+        elif ord(c) <= 0xFF:
+            out.append("\\x%02x" % ord(c))
+        elif ord(c) <= 0xFFFF:
+            out.append("\\u%04x" % ord(c))
+        else:
+            out.append("\\U%08x" % ord(c))
+    out.append(quote)
+    return "".join(out)
+
+
+class _Shown:
+    """A value whose ``repr`` is fixed text, so an argparse message template keeps its ``%r`` (and its translation)."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __repr__(self) -> str:
+        return self.text
+
+
+class _UsageFormatter(argparse.HelpFormatter):
+    """Usage wrapped as 3.9.6 wraps it (owner F1 rule E4): the usage text is cut into parts by a regular expression, so
+    an option stays apart from its metavar; 3.13 keeps them together, which changes every usage line."""
+
+    def _format_usage(self, usage, actions, groups, prefix):
+        if prefix is None:
+            prefix = argparse._("usage: ")
+        if usage is not None:
+            usage = usage % dict(prog=self._prog)
+        elif not actions:
+            usage = "%(prog)s" % dict(prog=self._prog)
+        else:
+            prog = "%(prog)s" % dict(prog=self._prog)
+            optionals = []
+            positionals = []
+            for action in actions:
+                if action.option_strings:
+                    optionals.append(action)
+                else:
+                    positionals.append(action)
+            format = self._format_actions_usage
+            action_usage = format(optionals + positionals, groups)
+            usage = " ".join([s for s in [prog, action_usage] if s])
+            text_width = self._width - self._current_indent
+            if len(prefix) + len(usage) > text_width:
+                part_regexp = r"\(.*?\)+(?=\s|$)|" r"\[.*?\]+(?=\s|$)|" r"\S+"
+                opt_usage = format(optionals, groups)
+                pos_usage = format(positionals, groups)
+                opt_parts = re.findall(part_regexp, opt_usage)
+                pos_parts = re.findall(part_regexp, pos_usage)
+                assert " ".join(opt_parts) == opt_usage
+                assert " ".join(pos_parts) == pos_usage
+
+                def get_lines(parts, indent, prefix=None):
+                    lines = []
+                    line = []
+                    if prefix is not None:
+                        line_len = len(prefix) - 1
+                    else:
+                        line_len = len(indent) - 1
+                    for part in parts:
+                        if line_len + 1 + len(part) > text_width and line:
+                            lines.append(indent + " ".join(line))
+                            line = []
+                            line_len = len(indent) - 1
+                        line.append(part)
+                        line_len += len(part) + 1
+                    if line:
+                        lines.append(indent + " ".join(line))
+                    if prefix is not None:
+                        lines[0] = lines[0][len(indent):]
+                    return lines
+
+                if len(prefix) + len(prog) <= 0.75 * text_width:
+                    indent = " " * (len(prefix) + len(prog) + 1)
+                    if opt_parts:
+                        lines = get_lines([prog] + opt_parts, indent, prefix)
+                        lines.extend(get_lines(pos_parts, indent))
+                    elif pos_parts:
+                        lines = get_lines([prog] + pos_parts, indent, prefix)
+                    else:
+                        lines = [prog]
+                else:
+                    indent = " " * len(prefix)
+                    parts = opt_parts + pos_parts
+                    lines = get_lines(parts, indent)
+                    if len(lines) > 1:
+                        lines = []
+                        lines.extend(get_lines(opt_parts, indent))
+                        lines.extend(get_lines(pos_parts, indent))
+                    lines = [prog] + lines
+                usage = "\n".join(lines)
+        return "%s%s\n\n" % (prefix, usage)
+
+
+_IGNORED = argparse._("ignored explicit argument %r")
+
+
 class _GateParser(argparse.ArgumentParser):
-    """Help and usage errors go to stderr and become GateError, never SystemExit."""
+    """Help and usage errors go to stderr and become GateError, never SystemExit. Every error text built from argv
+    is the one 3.9.6 builds, whatever the interpreter (spec section 14; owner F1 rules E1-E5): the repr of argv text is
+    ``_frozen_repr``, a single-dash combination such as ``-ha`` is an ignored explicit argument, usage wraps as 3.9.6
+    wraps it, an ambiguous option is reported when the arguments are scanned, and a leading ``--`` is the subcommand's
+    first value."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("formatter_class", _UsageFormatter)
+        super().__init__(*args, **kwargs)
 
     def print_help(self, file=None) -> None:
         super().print_help(sys.stderr if file is None else file)
@@ -100,6 +231,101 @@ class _GateParser(argparse.ArgumentParser):
         self.print_usage(sys.stderr)
         sys.stderr.write("%s: error: %s\n" % (self.prog, message))
         raise GateError("invalid arguments: %s" % message)
+
+    def _check_value(self, action, value):
+        if action.choices is not None and value not in action.choices:
+            args = {"value": _Shown(_frozen_repr(value)),
+                    "choices": ", ".join(_frozen_repr(c) for c in action.choices)}
+            msg = argparse._("invalid choice: %(value)r (choose from %(choices)s)")
+            raise argparse.ArgumentError(action, msg % args)
+
+    def _get_value(self, action, arg_string):
+        type_func = self._registry_get("type", action.type, action.type)
+        if not callable(type_func):
+            raise argparse.ArgumentError(action, argparse._("%r is not callable") % type_func)
+        try:
+            return type_func(arg_string)
+        except argparse.ArgumentTypeError as err:
+            raise argparse.ArgumentError(action, str(err))
+        except (TypeError, ValueError):
+            name = getattr(action.type, "__name__", repr(action.type))
+            args = {"type": name, "value": _Shown(_frozen_repr(arg_string))}
+            raise argparse.ArgumentError(action, argparse._("invalid %(type)s value: %(value)r") % args)
+
+    def _parse_optional(self, arg_string):
+        combined = self._short_flag_combination(arg_string)
+        if combined is not None:
+            return combined
+        found = super()._parse_optional(arg_string)
+        if isinstance(found, list) and len(found) > 1:  # 3.12+ reports an ambiguous option when it is consumed
+            options = ", ".join(t[1] for t in found)
+            self.error(argparse._("ambiguous option: %(option)s could match %(matches)s")
+                       % {"option": arg_string, "matches": options})
+        return found
+
+    def _short_flag_combination(self, arg_string):
+        """Rule E3 for ``-h<rest>`` (today's only zero-argument single-dash option): the running interpreter's own
+        ``_parse_optional`` shape for it, or None for any other argument. ``rest`` loses one leading ``=`` and then every
+        leading ``h``; nothing left is the help, ``-h=`` alone and anything else is an ignored explicit argument, which
+        the long form ``--help`` makes argparse raise on every interpreter (3.9.6 crashes on ``-h=``, 3.12+ shows the
+        help for ``-ha``). A flag with no long alias keeps the interpreter's own handling."""
+        actions = self._option_string_actions
+        action = actions.get(arg_string[:2]) if len(arg_string) > 2 else None
+        if action is None or action.nargs != 0:
+            return None
+        long_option = next((o for o in action.option_strings if o[1] in self.prefix_chars), None)
+        if long_option is None:
+            return None
+        rest = arg_string[2:]
+        if rest.startswith("="):
+            rest = rest[1:]
+            if rest == "":
+                return self._explicit_hit(arg_string[:2], action, long_option, "")
+        while rest.startswith(arg_string[1]):
+            rest = rest[1:]
+        if rest == "":
+            return super()._parse_optional(arg_string[:2])
+        return self._explicit_hit(arg_string[:2], action, long_option, rest)
+
+    def _explicit_hit(self, short_option, action, long_option, explicit_arg):
+        exact = super()._parse_optional(short_option)  # the shape of this interpreter
+        if isinstance(exact, list):
+            return [(action, long_option, "", explicit_arg)]
+        return action, long_option, explicit_arg
+
+    def _parse_known_args(self, arg_strings, namespace, *rest):
+        try:
+            return super()._parse_known_args(self._subcommand_dashes(arg_strings), namespace, *rest)
+        except argparse.ArgumentError as e:
+            e.message = self._frozen_ignored(e.message)
+            raise
+
+    def _subcommand_dashes(self, arg_strings):
+        """A leading ``--`` before the subcommand is the subparser action's first value on 3.9.6 (invalid choice
+        ``'--'``) and dropped on 3.12+; doubling it gives 3.9.6's value on both."""
+        positionals = self._get_positional_actions()
+        if not positionals or positionals[0].nargs != argparse.PARSER or "--" not in arg_strings:
+            return arg_strings
+        first = arg_strings.index("--")
+        if first == len(arg_strings) - 1:
+            return arg_strings
+        for a in arg_strings[:first]:
+            if self._parse_optional(a) is None:
+                return arg_strings
+        return arg_strings[:first + 1] + ["--"] + arg_strings[first + 1:]
+
+    def _frozen_ignored(self, message: str) -> str:
+        """argparse's ``ignored explicit argument %r`` carries the interpreter's repr; re-render it with ``_frozen_repr``."""
+        head, _, tail = _IGNORED.partition("%r")
+        if not (message.startswith(head) and message.endswith(tail)):
+            return message
+        try:
+            value = ast.literal_eval(message[len(head):len(message) - len(tail)])
+        except (ValueError, SyntaxError):
+            return message
+        if not issubclass(type(value), str):
+            return message
+        return _IGNORED % _Shown(_frozen_repr(value))
 
 
 class _Once(argparse.Action):
