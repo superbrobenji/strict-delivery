@@ -28,7 +28,7 @@ _UNBALANCED = "unbalanced quote"
 _COMMAND_RESERVED = frozenset(("case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if",
                                "in", "select", "then", "time", "until", "while", "repeat", "foreach", "end",
                                "nocorrect", "noglob", "declare", "export", "float", "integer", "local", "readonly",
-                               "typeset", "-"))
+                               "typeset", "-", "builtin", "command", "exec"))
 _RUN = re.compile("[^ \t\n\\\\'\"|&;<>()$`]+")  # a run of ordinary word characters
 _SIMPLE = re.compile("[0-9A-Za-z_]+\\Z")  # a word with nothing special in it
 _WHOLE = re.compile("[0-9A-Za-z_]+(?![^ \t\n])")  # a plain word that ends at whitespace or the end
@@ -185,6 +185,19 @@ def _assign_head(chars):
     return None
 
 
+def _digits_assign(chars):
+    """True when the word starts with unquoted digits and then an unquoted ``=`` or ``+=`` (zsh: a positional-parameter
+    assignment, which bash does not take as one)."""
+    k = 0
+    while k < len(chars) and not chars[k][1] and chars[k][0] in "0123456789":
+        k += 1
+    if k == 0:
+        return False
+    if k < len(chars) and not chars[k][1] and chars[k][0] == "+":
+        k += 1
+    return k < len(chars) and not chars[k][1] and chars[k][0] == "="
+
+
 def _brace_pos(chars):
     """Position of an unquoted ``{`` that has an unquoted ``,`` or ``..`` and then an unquoted ``}``, else -1."""
     opened = -1
@@ -238,8 +251,8 @@ def _word_reason(chars, pos, flat):
     if head is not None:
         k = head[2]
         for m in range(k, len(chars)):
-            if m == k or (not chars[m - 1][1] and chars[m - 1][0] == ":"):
-                if not chars[m][1] and chars[m][0] == "~":
+            if m == k or chars[m - 1][0] == ":":  # a quoted colon counts too in zsh
+                if not chars[m][1] and chars[m][0] in "~=":  # tilde, and zsh EQUALS
                     return chars[m][2], "expansion"
     return None
 
@@ -274,10 +287,14 @@ def scan(text: str) -> Scan:
     for tok in toks[main:]:
         if tok[0] != "w":
             break
-        head = _assign_head(_chars(tok))
+        chars = _chars(tok)
+        head = _assign_head(chars)
         if head is None:
-            # The first word that is no assignment is the command word: a shell keyword there starts a construct.
-            if tok[3] in _COMMAND_RESERVED and _unquoted(tok):
+            # The first word that is no assignment is the command word: a shell keyword there starts a construct,
+            # a zsh `%job` word resumes a job, and zsh takes `1=x` (digits for a name) as an assignment too.
+            if _digits_assign(chars):
+                found.append((tok[2], "expansion"))
+            elif (tok[3] in _COMMAND_RESERVED and _unquoted(tok)) or (tok[3].startswith("%") and not chars[0][1]):
                 found.append((tok[2], "reserved word"))
             break
         if head[1]:

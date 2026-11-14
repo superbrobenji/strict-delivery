@@ -270,8 +270,8 @@ class WordTest(ScanCase):
 
     def test_reserved_words_in_command_position(self):  # W8
         words = ("case coproc do done elif else esac fi for function if in select then time until while repeat foreach "
-                 "end nocorrect noglob declare export float integer local readonly typeset -").split()
-        self.assertEqual(len(words), 30)
+                 "end nocorrect noglob declare export float integer local readonly typeset - builtin command exec").split()
+        self.assertEqual(len(words), 33)
         for w in words:
             self.many([
                 (w + " git commit", NP("reserved word")),
@@ -310,9 +310,115 @@ class WordTest(ScanCase):
             ("git commit -m '=x'", P(("git", "commit", "-m", "=x"))),
             ("git commit -m \\=x", P(("git", "commit", "-m", "=x"))),
             ("git commit -m a=b", P(("git", "commit", "-m", "a=b"))),
-            ("A==1 git", P(("git",), (("A", "=1"),))),
+            ("A==1 git", NP("expansion")),  # superseded by G12
             ("git commit --m=x", P(("git", "commit", "--m=x"))),
             ("=x '='", NP("expansion")),
+            # G12: zsh EQUALS at the start of an assignment value and after a colon in it (the colon may be quoted)
+            ("A==python3 git", NP("expansion")),
+            ("A=a:=python3 git", NP("expansion")),
+            ("A=a\\:=x git", NP("expansion")),
+            ("A=a':'=x git", NP("expansion")),
+            ("A='=x' git", P(("git",), (("A", "=x"),))),
+            ("A=\\=x git", P(("git",), (("A", "=x"),))),
+            ("A=a=b git", P(("git",), (("A", "a=b"),))),
+            ("A=a:'=x' git", P(("git",), (("A", "a:=x"),))),
+            ("A=a:\\=x git", P(("git",), (("A", "a:=x"),))),
+            ("A=a\\:~/b git", NP("expansion")),
+            ("A=a':'~/b git", NP("expansion")),
+            ('A=a":"~/b git', NP("expansion")),
+            ("A=a:'~'/b git", P(("git",), (("A", "a:~/b"),))),
+            ("git B==x", NP("expansion")),
+        ])
+
+    def test_zsh_sweep(self):  # Z1: zsh 5.9 default options; each verdict probed in zsh (see the fix-2 report)
+        self.many([
+            # zshexpn HISTORY EXPANSION (41-): interactive only; a non-interactive zsh passes the text unchanged
+            ("echo !!", P(("echo", "!!"))),
+            ("echo !$", NP("expansion")),
+            ("echo a!b", P(("echo", "a!b"))),
+            ("echo \\!x", P(("echo", "!x"))),
+            ('echo "\\!"', P(("echo", "\\!"))),
+            # zshexpn PROCESS SUBSTITUTION (358-): <(..) >(..) =(..)
+            ("cat <(a)", NP("substitution")),
+            ("tee >(a)", NP("substitution")),
+            ("cat =(a)", NP("expansion")),
+            # zshexpn PARAMETER EXPANSION (471-), COMMAND SUBSTITUTION (1578-), ARITHMETIC EXPANSION (1594-)
+            ("echo $x", NP("expansion")),
+            ("echo ${x}", NP("expansion")),
+            ("echo $[1+1]", NP("expansion")),
+            ("echo $((1))", NP("substitution")),
+            ("echo $(a)", NP("substitution")),
+            ("echo `a`", NP("substitution")),
+            # zshexpn BRACE EXPANSION (1600-)
+            ("echo x{a,b}y", NP("expansion")),
+            ("echo {1..3}", NP("expansion")),
+            ("echo {a..c}", NP("expansion")),
+            ("echo {1..10..2}", NP("expansion")),
+            ("echo {a}", P(("echo", "{a}"))),
+            ("echo {}", P(("echo", "{}"))),
+            # zshexpn FILENAME EXPANSION (1655-): ~, ~+, ~-, ~name, ~[dyn], =cmd (1785), assignments (1790-)
+            ("echo ~", NP("expansion")),
+            ("echo ~+", NP("expansion")),
+            ("echo ~-", NP("expansion")),
+            ("echo ~root", NP("expansion")),
+            ("echo ~[x]", NP("expansion")),
+            ("echo =ls", NP("expansion")),
+            ("echo a~b", P(("echo", "a~b"))),
+            # zshexpn FILENAME GENERATION (1805-): * ? [..] qualifiers, <n-m>, (a|b)
+            ("echo *", NP("expansion")),
+            ("echo a?", NP("expansion")),
+            ("echo [a]", NP("expansion")),
+            ("echo *(.)", NP("expansion")),
+            ("echo <1-3>", NP("redirection")),
+            ("echo (a|b)", NP("grouping")),
+            # zshmisc SIMPLE COMMANDS & PIPELINES (6-70): | |& && || ; & &| &! newline
+            ("a &|", NP("operator &")),
+            ("a &!", NP("operator &")),
+            ("a |& b", NP("operator |")),
+            ("a ;& b", NP("operator ;")),
+            ("a ;| b", NP("operator ;")),
+            # zshmisc REDIRECTION (603-), MULTIOS (793-), REDIRECTIONS WITH NO COMMAND (898-)
+            ("a {fd}>f", NP("redirection")),
+            ("a >! f", NP("redirection")),
+            ("a >>& f", NP("redirection")),
+            ("a >&| f", NP("redirection")),
+            ("< f", NP("redirection")),
+            # zshmisc COMPLEX COMMANDS (128-), ALTERNATE FORMS (329-), RESERVED WORDS (398-): keywords, groups
+            ("if a; then b; fi", NP("reserved word")),
+            ("for i in a; do b; done", NP("reserved word")),
+            ("repeat 3 a", NP("reserved word")),
+            ("foreach i (a); b; end", NP("reserved word")),
+            ("coproc a", NP("reserved word")),
+            ("[[ a ]]", NP("reserved word")),
+            ("(( 1 ))", NP("grouping")),
+            ("f() { a; }", NP("grouping")),
+            ("A=(1 2) a", NP("grouping")),
+            ("A[1]=x a", NP("expansion")),
+            # zshmisc JOBS (1307-): a command word starting with % resumes a job
+            ("%1", NP("reserved word")),
+            ("%+ x", NP("reserved word")),
+            ("A=1 %%", NP("reserved word")),
+            ("cd /w && %1", NP("reserved word")),
+            ("git log %1", P(("git", "log", "%1"))),
+            ("'%1' x", P(("%1", "x"))),
+            ("\\%1 x", P(("%1", "x"))),
+            ("A=%1 git", P(("git",), (("A", "%1"),))),
+            # zshparam: digits are a valid parameter name, so `1=x` is an assignment in zsh (not in bash)
+            ("1=x git", NP("expansion")),
+            ("0=v git", NP("expansion")),
+            ("10+=v git", NP("expansion")),
+            ("A=1 2=x git", NP("expansion")),
+            ("cd /w && 1=x git", NP("expansion")),
+            ("1A=x git", P(("1A=x", "git"))),
+            ("git 1=x", P(("git", "1=x"))),
+            ("'1'=x git", P(("1=x", "git"))),
+            ("1\\=x git", P(("1=x", "git"))),
+            ("1 git", P(("1", "git"))),
+            ("+=x git", P(("+=x", "git"))),
+            ("1'+'=x git", P(("1+=x", "git"))),
+            ("x%1 git", P(("x%1", "git"))),
+            ("A=1 x%1 git", P(("x%1", "git"), (("A", "1"),))),
+            ("12 x", P(("12", "x"))),
         ])
 
     def test_comments(self):  # W4, W5

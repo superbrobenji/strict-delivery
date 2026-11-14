@@ -648,3 +648,97 @@ restored file:
   PASS expected; python3.13: PASS (ran=34; OK) failing tests: -; killed: no
 
 survivors: none
+
+=== fix round 2 (F3, F4, Z1) ===
+3b.1 mutation transcript: tests/test_shellscan.py against gates/lib/shellscan.py (plan P:3356-3416)
+module tests.test_shellscan on /usr/bin/python3 and /opt/homebrew/bin/python3.13
+
+fix present (unmutated file):
+  PASS expected; python3: PASS (ran=35; OK) failing tests: -; killed: no
+  PASS expected; python3.13: PASS (ran=35; OK) failing tests: -; killed: no
+
+mutant [F3-revert F3 fix reverted: EQUALS in assignment values not expanded]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=6)) failing tests: test_equals_expansion_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=6)) failing tests: test_equals_expansion_not_plain; killed: yes
+
+mutant [F3-b value-EQUALS ignores quoting]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=7)) failing tests: test_equals_expansion_not_plain, test_tilde_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=7)) failing tests: test_equals_expansion_not_plain, test_tilde_not_plain; killed: yes
+
+mutant [F3-c only a leading = (not after a colon)]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=7)) failing tests: test_equals_expansion_not_plain, test_tilde_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=7)) failing tests: test_equals_expansion_not_plain, test_tilde_not_plain; killed: yes
+
+mutant [F3-d a quoted colon no longer counts]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=5)) failing tests: test_equals_expansion_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=5)) failing tests: test_equals_expansion_not_plain; killed: yes
+
+mutant [F3-e only = after the colon, tilde at the start only]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=7)) failing tests: test_equals_expansion_not_plain, test_tilde_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=7)) failing tests: test_equals_expansion_not_plain, test_tilde_not_plain; killed: yes
+
+mutant [F4-revert-builtin F4: builtin not a command-word keyword]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F4-revert-command F4: command not a command-word keyword]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F4-revert-exec F4: exec not a command-word keyword]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [Z1-pct-revert Z1: %job command word not refused]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=4)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=4)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-pct-b Z1: % anywhere in the word]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=2)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=2)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-pct-c Z1: quoted % counted]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=2)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=2)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-revert Z1: digit-name assignment not refused]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=5)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=5)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-b Z1: reason text]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=5)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=5)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-c Z1: digit 0 not a digit]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=2)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=2)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-d Z1: quoted digits counted]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-e Z1: no digits needed]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-f Z1: += not accepted]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-g Z1: quoted = counted]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-h Z1: quoted + counted]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=1)) failing tests: test_zsh_sweep; killed: yes
+
+mutant [Z1-dig-i Z1: digit assignment checked after the break (command word ignored)]:
+  FAIL expected; python3: FAIL (ran=35; FAILED (failures=5)) failing tests: test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=35; FAILED (failures=5)) failing tests: test_zsh_sweep; killed: yes
+
+restored file:
+  PASS expected; python3: PASS (ran=35; OK) failing tests: -; killed: no
+  PASS expected; python3.13: PASS (ran=35; OK) failing tests: -; killed: no
+
+survivors: none
