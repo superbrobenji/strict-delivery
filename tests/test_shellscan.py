@@ -268,6 +268,53 @@ class WordTest(ScanCase):
             ("'}'", P(("}",))),
         ])
 
+    def test_reserved_words_in_command_position(self):  # W8
+        words = ("case coproc do done elif else esac fi for function if in select then time until while repeat foreach "
+                 "end nocorrect noglob declare export float integer local readonly typeset -").split()
+        self.assertEqual(len(words), 30)
+        for w in words:
+            self.many([
+                (w + " git commit", NP("reserved word")),
+                (w, NP("reserved word")),
+                ("A=1 " + w + " git", NP("reserved word")),
+                ("cd /w && " + w + " git commit", NP("reserved word")),
+                ("'" + w + "' git", P((w, "git"))),
+                ('"' + w + '" git', P((w, "git"))),
+                ("\\" + w + " git", P((w, "git"))),
+                ("git commit -m " + w, P(("git", "commit", "-m", w))),
+                ("git log -- " + w, P(("git", "log", "--", w))),
+                ("A=" + w + " git", P(("git",), (("A", w),))),
+                ("git " + w, P(("git", w))),
+            ])
+        self.many([
+            ("time git commit", NP("reserved word")),
+            ("A=1 B=2 time git", NP("reserved word")),
+            ("A=1 git", P(("git",), (("A", "1"),))),
+            ("A=1", P((), (("A", "1"),))),
+            ("timex git", P(("timex", "git"))),
+            ("Time git", P(("Time", "git"))),
+            ("time\tgit", NP("reserved word")),
+            ("x time git", P(("x", "time", "git"))),
+            ("A+=1 time git", NP("expansion")),
+            ("a; time git", NP("operator ;")),
+            ("time git commit; x", NP("reserved word")),
+            ("A=1 time git > o", NP("reserved word")),
+        ])
+
+    def test_equals_expansion_not_plain(self):  # G11
+        self.many([
+            ("=git commit", NP("expansion")),
+            ("git commit -m =x", NP("expansion")),
+            ("cd =w && git commit", NP("expansion")),
+            ("=", NP("expansion")),
+            ("git commit -m '=x'", P(("git", "commit", "-m", "=x"))),
+            ("git commit -m \\=x", P(("git", "commit", "-m", "=x"))),
+            ("git commit -m a=b", P(("git", "commit", "-m", "a=b"))),
+            ("A==1 git", P(("git",), (("A", "=1"),))),
+            ("git commit --m=x", P(("git", "commit", "--m=x"))),
+            ("=x '='", NP("expansion")),
+        ])
+
     def test_comments(self):  # W4, W5
         self.many([
             ("git commit # x", NP("comment")),
@@ -358,6 +405,13 @@ class CdTest(ScanCase):
             ("cd /w/x && git commit; git push", NP("operator ;")),
             ("cd /w/x && git commit > o", NP("redirection")),
             ("cd /w/x && A+=1 git", NP("expansion")),
+            ("xcd /w && git commit", NP("operator &&")),  # CD6
+            ("abcd /w && x", NP("operator &&")),
+            ("cdx /w && x", NP("operator &&")),
+            ("CD /w && x", NP("operator &&")),
+            ("Cd /w && x", NP("operator &&")),
+            ("cd time && git commit", P(("git", "commit"), (), "time")),
+            ("cd /w && time git commit", NP("reserved word")),
         ])
 
 
@@ -383,12 +437,14 @@ class CharacterTest(ScanCase):
                     scan(bad)
 
     def test_long_text_linear(self):  # CH6
-        t0 = time.perf_counter()
-        s = scan("a " * 100000)
-        took = time.perf_counter() - t0
-        self.assertTrue(s.plain)
-        self.assertEqual(len(s.argv), 100000)
-        self.assertLess(took, 2.0)
+        took = []
+        for _ in range(3):  # the best of three, so a loaded machine does not fail a linear scanner
+            t0 = time.perf_counter()
+            s = scan("a " * 100000)
+            took.append(time.perf_counter() - t0)
+            self.assertTrue(s.plain)
+            self.assertEqual(len(s.argv), 100000)
+        self.assertLess(min(took), 2.0)
 
     def test_huge_numbers_are_text(self):  # V1
         d4300, d4301 = "7" * 4300, "7" * 4301

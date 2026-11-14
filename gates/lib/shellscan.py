@@ -24,6 +24,11 @@ _OPS = frozenset(("&&", "||", ";;", "|&", "&>", "<<", "<>", "<&", ">>", ">&", ">
 _OP_REASON = {";": "operator ;", ";;": "operator ;", "&&": "operator &&", "||": "operator ||", "|": "operator |",
               "|&": "operator |", "&": "operator &", "(": "grouping", ")": "grouping", "\n": "operator newline"}
 _UNBALANCED = "unbalanced quote"
+# Keywords of bash and zsh (the union, fail closed) that change what the command word means.
+_COMMAND_RESERVED = frozenset(("case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if",
+                               "in", "select", "then", "time", "until", "while", "repeat", "foreach", "end",
+                               "nocorrect", "noglob", "declare", "export", "float", "integer", "local", "readonly",
+                               "typeset", "-"))
 _RUN = re.compile("[^ \t\n\\\\'\"|&;<>()$`]+")  # a run of ordinary word characters
 _SIMPLE = re.compile("[0-9A-Za-z_]+\\Z")  # a word with nothing special in it
 _WHOLE = re.compile("[0-9A-Za-z_]+(?![^ \t\n])")  # a plain word that ends at whitespace or the end
@@ -227,6 +232,8 @@ def _word_reason(chars, pos, flat):
         return brace, "expansion"
     if not chars[0][1] and chars[0][0] == "~":
         return chars[0][2], "expansion"
+    if not chars[0][1] and chars[0][0] == "=":  # zsh EQUALS: `=git` is the path of git
+        return chars[0][2], "expansion"
     head = _assign_head(chars)
     if head is not None:
         k = head[2]
@@ -269,6 +276,9 @@ def scan(text: str) -> Scan:
             break
         head = _assign_head(_chars(tok))
         if head is None:
+            # The first word that is no assignment is the command word: a shell keyword there starts a construct.
+            if tok[3] in _COMMAND_RESERVED and _unquoted(tok):
+                found.append((tok[2], "reserved word"))
             break
         if head[1]:
             found.append((tok[2], "expansion"))
