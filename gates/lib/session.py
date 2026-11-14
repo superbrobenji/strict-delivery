@@ -246,10 +246,12 @@ def _unreadable(path: str, reason: str) -> SessionUnavailable:
 
 
 def _read(dfd: int, name: str) -> bytes:
-    """The bytes of ``name`` in ``dfd``: opened ``O_NOFOLLOW | O_NONBLOCK``, so a symlink is refused and a FIFO
-    can neither block nor feed the state (a directory or a socket fail the open or the read)."""
+    """The bytes of ``name`` in ``dfd``: opened ``O_NOFOLLOW | O_NONBLOCK`` (a symlink is refused, a FIFO cannot
+    block the open), then ``fstat`` must say regular file, so a FIFO, directory or socket never feeds the state."""
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise _Unreadable("not a regular file (a FIFO, directory or other kind)")
         chunks = []
         while True:
             chunk = os.read(fd, 1 << 16)

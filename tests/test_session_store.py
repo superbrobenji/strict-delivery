@@ -872,9 +872,13 @@ class OsErrorTest(Base):
             except BaseException as e:
                 box["error"] = e
 
+        fds = fd_count()
         thread = threading.Thread(target=run)
         thread.start()
-        time.sleep(0.5)  # locked() has opened the lock file and polls it
+        deadline = time.monotonic() + 30
+        while fd_count() < fds + 2 and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)  # bounded wait for the thread's two descriptors: the directory and the lock file
+        self.assertGreaterEqual(fd_count(), fds + 2)
         os.chmod(self.S, 0o600)
         proc.kill()
         proc.wait()
@@ -961,6 +965,49 @@ class OsErrorTest(Base):
         self.assertFalse(os.path.lexists(self.F))
         self.assertEqual(os.read(reader, 10), b"")  # nothing was written into the FIFO
 
+    def test_fifo_fed_by_a_writer_is_not_state(self):
+        """R2-1: a FIFO at F with a valid state queued and a writer present must not be read as the state."""
+        self.alarm()
+        self.make_sessions()
+        os.mkfifo(self.F)
+        writer = os.open(self.F, os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, writer)
+        os.write(writer, state_text(surfaced="[%s]" % DEC).encode())
+        with self.assertRaises(SessionUnavailable) as cm:
+            enter(locked(self.env, "s1", timeout_s=1))
+        self.assertIn("not a regular file", str(cm.exception))
+        self.assertTrue(stat.S_ISFIFO(os.lstat(self.F).st_mode))
+        moved = reset(self.env, "s1")  # unreadable: moved aside whole, its content never reaches the new state
+        self.assertTrue(stat.S_ISFIFO(os.lstat(moved).st_mode))
+        self.assertEqual(enter(locked(self.env, "s1"))["surfaced"], [])
+
+    def test_sessions_path_kinds_fail_closed(self):
+        """R2-2: a FIFO or a socket at S (and at P) is refused at once, never opened blocking."""
+        self.alarm()
+        for kind in ("fifo", "socket"):
+            for where in ("S", "P"):
+                with self.subTest(kind=kind, where=where):
+                    self.use("%s%s" % (kind, where))
+                    if where == "S":
+                        os.makedirs(self.P)
+                        path, parent, name = self.S, self.P, "sessions"
+                    else:
+                        path, parent, name = self.P, self.tmp, os.path.basename(self.P)
+                    if kind == "fifo":
+                        os.mkfifo(path)
+                    else:
+                        self.make_socket(parent, name)
+                    before = fd_count()
+                    t0 = time.monotonic()
+                    with self.assertRaises(SessionUnavailable):
+                        enter(locked(self.env, "s1", timeout_s=1))
+                    with self.assertRaises(SessionUnavailable):
+                        reset(self.env, "s1", timeout_s=1)
+                    self.assertLess(time.monotonic() - t0, 3)
+                    self.assertEqual(fd_count(), before)
+                    mode = os.lstat(path).st_mode
+                    self.assertTrue(stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode))
+
     def test_fifo_and_socket_at_state_and_lock_fail_closed(self):
         self.alarm()
         for kind in ("fifo", "socket"):
@@ -1001,7 +1048,7 @@ class OsErrorTest(Base):
     def test_bad_session_id_message_exact(self):
         tail = " is not valid (1 to 128 of A-Z a-z 0-9 _ -)"
         for sid, shown in (("a/b", "'a/b'"), ("a\x00b", "'a\\x00b'"), ("a\nb", "'a\\nb'"),
-                           (UNASSIGNED, "'\\U0001f6dd'")):
+                           ("a'b", "'a'b'"), ('a"b', "'a\"b'"), (UNASSIGNED, "'\\U0001f6dd'")):
             with self.subTest(sid=sid):
                 with self.assertRaises(SessionUnavailable) as cm:
                     enter(locked(self.env, sid))

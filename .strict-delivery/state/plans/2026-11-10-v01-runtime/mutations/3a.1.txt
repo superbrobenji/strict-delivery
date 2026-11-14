@@ -813,3 +813,56 @@ survivors, argued (each re-run on both full suites above: 2311 tests, 3.9 OK (sk
   41 _quoted built-in repr: killed on python3.13 only (test_bad_session_id_message_exact, test_unicode_version_independent); on 3.9 repr and safe_text
      print the same text for the three pinned ids (U+1F6DD is unassigned in UCD 13). That is the I2/V2 conflict itself.
   Round-1 survivors now: 36 (makedirs mode, equivalent: chmod follows) and 75 (fsync) stay; 53, 57, 62 and 97 are killed by mutants 4, 5, 0 and 2.
+
+================================================================================
+FIX ROUND 2 (review early-3a1-review-2.md; R2-1..R2-4; R2-5 is the controller's)
+================================================================================
+Scratch runner as in round 1 (one mutant at a time, session.py restored after each), module tests.test_session_store (83 tests) on
+/usr/bin/python3 (3.9) and /opt/homebrew/bin/python3.13. Red first: with the new tests and the round-1 session.py, only
+test_fifo_fed_by_a_writer_is_not_state failed (R2-1); the R2-2 and R2-3 tests passed at once (code right, tests missing).
+Mutant 2 below is spelled "disabled" and is the same as mutant 0 (named in error as a path check; kept as run, not counted twice).
+Correction of round 1: the survivor-41 line `FAIL (full suite exit=1) ... /usr/bin/python3: Ran 2311 tests; OK (skipped=9); killed: yes`
+meant 3.13 failed and 3.9 passed; with the id a'b the mutant is killed on BOTH interpreters (mutant 5). Survivor 29 is not equivalent:
+a FIFO at S hangs the open (mutant 3 is killed by test_sessions_path_kinds_fail_closed; without O_DIRECTORY the alarm fires).
+R2-4 has no production change: test_real_os_errors_are_unavailable now waits (bounded 30 s) until the thread's two descriptors
+(directory and lock file) exist in /dev/fd, then chmods; nothing to mutate, and the round-2 reviewer probe sleepsync.py no longer applies.
+
+fix present (fix-round-2 files):
+  PASS expected; python3: PASS (ran=83; OK (skipped=1))
+  PASS expected; python3.13: PASS (ran=83; OK)
+
+mutant 0 [R2-1 _read: fstat kind check removed]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=1, skipped=1)) failing tests: test_fifo_fed_by_a_writer_is_not_state; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=1)) failing tests: test_fifo_fed_by_a_writer_is_not_state; killed: yes
+
+mutant 1 [R2-1 _read: kind check inverted (regular refused)]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=9, errors=13, skipped=1)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_fifo_and_socket_at_state_and_lock_fail_closed, test_fifo_fed_by_a_writer_is_not_state, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_keeps_surfaced, test_round_trip_and_mode, test_sessions_dir_swap_has_no_effect, test_unicode_version_independent, test_unreadable_message_carries_the_reason, test_valid_state_in_fixture_set_is_accepted; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=11, errors=13)) failing tests: test_body_error_not_written, test_body_interrupt_not_written, test_exception_group_not_written, test_fifo_and_socket_at_state_and_lock_fail_closed, test_fifo_fed_by_a_writer_is_not_state, test_killed_holder_releases, test_leftover_tmp_replaced, test_lock_released_on_every_path, test_modes_exact_under_restrictive_umask, test_nested_same_id_times_out, test_parallel_writers_lose_nothing, test_plugin_data_symlink_dir_accepted, test_reset_keeps_surfaced, test_round_trip_and_mode, test_sessions_dir_swap_has_no_effect, test_unicode_version_independent, test_unreadable_message_carries_the_reason, test_valid_state_in_fixture_set_is_accepted; killed: yes
+
+mutant 2 [R2-1 _read: check made on the path (lstat) instead of the descriptor]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=1, skipped=1)) failing tests: test_fifo_fed_by_a_writer_is_not_state; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=1)) failing tests: test_fifo_fed_by_a_writer_is_not_state; killed: yes
+
+mutant 3 [R2-2 _open_sessions: O_DIRECTORY dropped (round-2 name for survivor 29)]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=1, skipped=1)) failing tests: test_sessions_path_kinds_fail_closed; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=1)) failing tests: test_sessions_path_kinds_fail_closed; killed: yes
+
+mutant 4 [R2-2 _open_sessions: opened blocking on a FIFO (O_NONBLOCK added is not needed; O_DIRECTORY and O_NOFOLLOW both dropped)]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=2, skipped=1)) failing tests: test_sessions_path_kinds_fail_closed, test_sessions_symlink_refused; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=2)) failing tests: test_sessions_path_kinds_fail_closed, test_sessions_symlink_refused; killed: yes
+
+mutant 5 [R2-3 _quoted: built-in repr]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=1, skipped=1)) failing tests: test_bad_session_id_message_exact; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=3)) failing tests: test_bad_session_id_message_exact, test_unicode_version_independent; killed: yes
+
+mutant 6 [R2-3 _quoted: double quotes]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=13, skipped=1)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_state_errors_exact_lists, test_unicode_version_independent, test_unreadable_message_carries_the_reason; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=13)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_state_errors_exact_lists, test_unicode_version_independent, test_unreadable_message_carries_the_reason; killed: yes
+
+mutant 7 [R2-3 _quoted: no quotes]:
+  FAIL expected; python3: FAIL (ran=83; FAILED (failures=13, skipped=1)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_state_errors_exact_lists, test_unicode_version_independent, test_unreadable_message_carries_the_reason; killed: yes
+  FAIL expected; python3.13: FAIL (ran=83; FAILED (failures=13)) failing tests: test_bad_session_id_message_exact, test_bad_session_id_message_shows_escaped_id, test_state_errors_exact_lists, test_unicode_version_independent, test_unreadable_message_carries_the_reason; killed: yes
+
+fix restored:
+  PASS expected; python3: PASS (ran=83; OK (skipped=1))
+  PASS expected; python3.13: PASS (ran=83; OK)
