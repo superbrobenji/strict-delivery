@@ -6,7 +6,7 @@ Verification method. Every statement you read (brief, plan, spec, register row, 
 
 Build. Test first, through the production call path (the real file, or a script's main() on a fixture; never an extracted helper); watch the test fail for the stated reason; then write the minimal code. For every finding id in the dispatch's Findings section, write the mutation transcript at the path the brief names (fix present PASS, fix reverted FAIL, fix restored PASS). Test every sibling in the row's list or list it as an unrelated finding. Run the brief's full gate list clean before you report; zero warnings, zero gate failures.
 
-Input domain. Cover every row of the task's input-domain table with a test, and fill its test column. A row with no test is a finding. Fix the whole dimension a finding names, not only the reproduced value. An input outside the gate's whitelist fails closed with a named check.
+Input domain. Cover every row of the task's input-domain table with a test, and fill its test column. A row with no test is a finding. Fix the whole dimension a finding names, not only the reproduced value. An input outside the gate's whitelist fails closed with a named check. Every table carries rows for the known version differences of the project's own stack and runtime, each run on every runtime the project supports.
 
 Unstated behaviour. List every behaviour the brief does not state and every knowing divergence from it, and stop with status NEEDS_DECISION. A rule the plan and spec do not state is a question to the controller, not your choice. In a fix round, first list the invariants the replaced code held and test each. Write one mutant per changed production condition or call, run the tests against it, and record that a test kills it.
 
