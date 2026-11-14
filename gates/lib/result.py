@@ -205,6 +205,26 @@ class _UsageFormatter(argparse.HelpFormatter):
 
 _IGNORED = argparse._("ignored explicit argument %r")
 
+# Rule E7: argparse tells a negative number (a positional text such as ``-5``) from an option with a regular
+# expression whose ``\d`` follows the interpreter's Unicode data. The digits are frozen at those of 3.9.6 (Unicode
+# 13.0.0: 650 code points, the decimal digits, general category Nd), so ``-`` and a digit assigned later is an unknown
+# option on every interpreter.
+_DIGIT_RANGES = (
+    (0x30, 0x39), (0x660, 0x669), (0x6F0, 0x6F9), (0x7C0, 0x7C9), (0x966, 0x96F), (0x9E6, 0x9EF), (0xA66, 0xA6F),
+    (0xAE6, 0xAEF), (0xB66, 0xB6F), (0xBE6, 0xBEF), (0xC66, 0xC6F), (0xCE6, 0xCEF), (0xD66, 0xD6F), (0xDE6, 0xDEF),
+    (0xE50, 0xE59), (0xED0, 0xED9), (0xF20, 0xF29), (0x1040, 0x1049), (0x1090, 0x1099), (0x17E0, 0x17E9),
+    (0x1810, 0x1819), (0x1946, 0x194F), (0x19D0, 0x19D9), (0x1A80, 0x1A89), (0x1A90, 0x1A99), (0x1B50, 0x1B59),
+    (0x1BB0, 0x1BB9), (0x1C40, 0x1C49), (0x1C50, 0x1C59), (0xA620, 0xA629), (0xA8D0, 0xA8D9), (0xA900, 0xA909),
+    (0xA9D0, 0xA9D9), (0xA9F0, 0xA9F9), (0xAA50, 0xAA59), (0xABF0, 0xABF9), (0xFF10, 0xFF19), (0x104A0, 0x104A9),
+    (0x10D30, 0x10D39), (0x11066, 0x1106F), (0x110F0, 0x110F9), (0x11136, 0x1113F), (0x111D0, 0x111D9),
+    (0x112F0, 0x112F9), (0x11450, 0x11459), (0x114D0, 0x114D9), (0x11650, 0x11659), (0x116C0, 0x116C9),
+    (0x11730, 0x11739), (0x118E0, 0x118E9), (0x11950, 0x11959), (0x11C50, 0x11C59), (0x11D50, 0x11D59),
+    (0x11DA0, 0x11DA9), (0x16A60, 0x16A69), (0x16B50, 0x16B59), (0x1D7CE, 0x1D7FF), (0x1E140, 0x1E149),
+    (0x1E2F0, 0x1E2F9), (0x1E950, 0x1E959), (0x1FBF0, 0x1FBF9),
+)
+_DIGIT = "[" + "".join("%s-%s" % (chr(lo), chr(hi)) for lo, hi in _DIGIT_RANGES) + "]"
+_NEGATIVE_NUMBER = re.compile(r"^-%(d)s+$|^-%(d)s*\.%(d)s+$" % {"d": _DIGIT})  # argparse's pattern, with its ``\d`` frozen
+
 
 class _GateParser(argparse.ArgumentParser):
     """Help and usage errors go to stderr and become GateError, never SystemExit. Every error text built from argv
@@ -216,6 +236,17 @@ class _GateParser(argparse.ArgumentParser):
     def __init__(self, *args, **kwargs) -> None:
         kwargs.setdefault("formatter_class", _UsageFormatter)
         super().__init__(*args, **kwargs)
+        self._negative_number_matcher = _NEGATIVE_NUMBER  # E7; the groups, which register the options, get it below
+
+    def add_argument_group(self, *args, **kwargs):
+        group = super().add_argument_group(*args, **kwargs)
+        group._negative_number_matcher = _NEGATIVE_NUMBER
+        return group
+
+    def add_mutually_exclusive_group(self, **kwargs):
+        group = super().add_mutually_exclusive_group(**kwargs)
+        group._negative_number_matcher = _NEGATIVE_NUMBER
+        return group
 
     def print_help(self, file=None) -> None:
         super().print_help(sys.stderr if file is None else file)
@@ -257,11 +288,27 @@ class _GateParser(argparse.ArgumentParser):
         if combined is not None:
             return combined
         found = super()._parse_optional(arg_string)
+        if isinstance(found, list):  # 3.12+: the text before `=` of a single-dash argument is a prefix to match
+            found = self._without_prefix_matches(arg_string, found)
         if isinstance(found, list) and len(found) > 1:  # 3.12+ reports an ambiguous option when it is consumed
             options = ", ".join(t[1] for t in found)
             self.error(argparse._("ambiguous option: %(option)s could match %(matches)s")
                        % {"option": arg_string, "matches": options})
         return found
+
+    def _without_prefix_matches(self, arg_string, found):
+        """Rule E6. For a single-dash argument with an ``=`` (``-=x``, ``-ab=x``) 3.12+ also matches the text before the
+        ``=`` as a prefix of the option strings, so ``-=x`` could match every option; 3.9.6 matches the whole argument,
+        which no option string starts with. Only the option named by the first two characters (``-a`` in ``-ab=x``) and an
+        exact option before the ``=`` are kept; if nothing is left the argument is an unknown option, or a positional
+        text when it holds a space (a negative number holds no ``=``)."""
+        if len(arg_string) < 2 or arg_string[1] in self.prefix_chars or "=" not in arg_string:
+            return found
+        wanted = (arg_string[:2], arg_string.partition("=")[0])
+        kept = [t for t in found if t[1] in wanted]
+        if kept:
+            return kept
+        return None if " " in arg_string else [(None, arg_string, None, None)]
 
     def _short_flag_combination(self, arg_string):
         """Rule E3 for ``-h<rest>`` (today's only zero-argument single-dash option): the running interpreter's own

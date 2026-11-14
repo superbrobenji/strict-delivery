@@ -254,6 +254,61 @@ class TestEveryParser(CommandLineCase):
                                   golden(p, p.errkey, m + raw, m + rawf)))
         self.expect_cases(cases)
 
+    def test_equals_after_one_dash(self):  # F-1, E6: `-=<text>` is an unknown option on every interpreter (3.9.6's form)
+        req = "the following arguments are required: {new,move}"
+        cases = []
+        for p in PARSERS:
+            for arg in ["-=", "-=a", "-==", "-=-", "-=--", "-=h", "-=--root"]:
+                cases.append((p, arg, [arg.encode()], arg, arg))
+            for t in TEXTS:
+                cases.append((p, "-=" + t.name, [b"-=" + t.argv()], "-=" + t.raw, "-=" + t.rawf))
+            if p.positional_extras:  # with a space it is a positional text, which the parsers with only extras report
+                for arg in ["-= x", "-=a b"]:
+                    cases.append((p, arg, [arg.encode()], arg, arg))
+        out = []
+        for p, label, tail, raw, rawf in cases:
+            if p.valid is None:  # `findings`: the unknown option is dropped, the subcommand is missing; a text with a space is its value
+                if " " in raw:
+                    m = "argument {new,move}: invalid choice: %s (choose from 'new', 'move')" % ("'" + raw + "'")
+                    want = golden(p, "findings", m, m)
+                else:
+                    want = golden(p, "findings", req, req)
+                argv = p.words + tail
+            else:
+                m = "unrecognized arguments: "
+                want = golden(p, p.errkey, m + raw, m + rawf)
+                argv = p.words + p.valid + tail
+            out.append(("%s %s" % (p.key, label), argv, "80", want))
+        self.expect_cases(out)
+
+    def test_equals_after_one_dash_after_subcommand_and_double_dash_control(self):  # F-1: position and the `--=` control
+        n = BY_KEY["findings new"]
+        m = "unrecognized arguments: -=a"
+        cases = [("findings new <valid> -=a", n.words + NEW + ["-=a"], "80", golden(n, "findings", m, m))]
+        d = BY_KEY["decisions decide"]
+        # `--=a` is a prefix of every long option on both interpreters: ambiguous in the order argparse lists them
+        m = "ambiguous option: --=a could match --help, --root, --answer, --rule, --landed-in"
+        cases.append(("decisions decide --=a", d.words + ["--=a"], "80", golden(d, "decisions decide", m, m)))
+        self.expect_cases(cases)
+
+    def test_negative_number_digits_assigned_after_unicode_13(self):  # F-2, E7: `-<digit>` of Unicode 14-15 is no number
+        req = "the following arguments are required: {new,move}"
+        f, fi = BY_KEY["findings"], BY_KEY["decisions find"]
+        digits = ["\U00011f50", "\U00011f59", "\U00016ac0", "\U00016ac9", "\U0001e4f0", "\U0001e4f9"]
+        cases = []
+        for d in digits:
+            for label, arg in (("-D", "-" + d), ("-.D", "-." + d), ("-1D", "-1" + d), ("-D.5", "-" + d + ".5"),
+                               ("-DD", "-" + d + d)):
+                u = "unrecognized arguments: " + arg
+                cases.append(("findings %s U+%04X" % (label, ord(d)), ["findings", arg], "80", golden(f, "findings", req, req)))
+                cases.append(("decisions find %s U+%04X" % (label, ord(d)), ["decisions", "find", arg], "80",
+                              golden(fi, "decisions find", u, u)))
+        # controls: a digit that Unicode 13 has (and ASCII) makes a negative number, so a positional text
+        for arg in ("-5", "-1.5", "-.5", "-\u0663", "-\u0663.\u0664"):
+            m = "argument {new,move}: invalid choice: %s (choose from 'new', 'move')" % ("'" + arg + "'")
+            cases.append(("findings control %s" % arg, ["findings", arg], "80", golden(f, "findings", m, m)))
+        self.expect_cases(cases)
+
     def test_ambiguous(self):  # M4
         rows = [("decisions decide", "--r=", "--root, --rule"), ("decisions ask", "--p=", "--plan, --program"),
                 ("findings move", "--pin=", "--pin-test, --pin-transcript")]
@@ -685,6 +740,75 @@ class TestParserUnit(unittest.TestCase):
                 self.assertIs(cm.exception, exc)
         self.assertEqual(group is None, sys.version_info < (3, 11))
 
+
+    def test_equals_after_one_dash_is_no_abbreviation(self):  # F-1, E6: 3.9.6 never prefix-matches the text before `=`
+        def parser(*options):
+            p = _GateParser(prog="p")
+            for o in options:
+                p.add_argument(o, action="store_true")
+            return p
+
+        for arg in ("-=x", "-=", "-ab=x", "-a=x", "-ab=="):
+            with self.subTest(arg):
+                m = "unrecognized arguments: " + arg
+                self.assertEqual(self.parse(parser("-abc"), [arg]), ("invalid arguments: " + m, "usage: p [-h] [-abc]\np: error: " + m + "\n"))
+        # an option that is the first two characters keeps its argument, and `-abc` is not matched as well
+        p = _GateParser(prog="p")
+        p.add_argument("-a")
+        p.add_argument("-abc", action="store_true")
+        ns = p.parse_args(["-ab=x"])
+        self.assertEqual((ns.a, ns.abc), ("b=x", False))
+        # the abbreviation without an `=`, and an option named in full before the `=`, are matched as before
+        p = _GateParser(prog="p")
+        p.add_argument("-abc", action="store_true")
+        self.assertTrue(p.parse_args(["-ab"]).abc)
+        p = _GateParser(prog="p")
+        p.add_argument("-abc")
+        self.assertEqual(p.parse_args(["-abc=v"]).abc, "v")
+        p = _GateParser(prog="p")  # an option string of one character is matched exactly
+        p.add_argument("-", action="store_true", dest="d")
+        self.assertTrue(p.parse_args(["-"]).d)
+        # with a space it is a positional text, as everywhere
+        p = _GateParser(prog="p")
+        p.add_argument("x", nargs="?")
+        self.assertEqual(p.parse_args(["-= x"]).x, "-= x")
+
+    def test_negative_number_matcher_is_unicode_13(self):  # F-2, E7: the digits of Unicode 13.0.0, on every interpreter
+        m = result._NEGATIVE_NUMBER
+        digits = [c for c in range(0x110000) if m.match("-" + chr(c))]
+        self.assertEqual(len(digits), 650)
+        self.assertEqual(hashlib.sha256(",".join(map(str, digits)).encode()).hexdigest(), DIGITS_SHA256_39)
+        for text, want in (("-5", True), ("-1.5", True), ("-.5", True), ("-٣", True), ("-", False), ("-.", False),
+                           ("-1.", False), ("-5\n", True), ("-.5\n", True), ("-5\n\n", False), ("5", False), ("--5", False), ("-\U0001e4f0", False), ("-1.\U00011f50", False)):
+            self.assertEqual(bool(m.match(text)), want, text)
+        if sys.version_info < (3, 10):  # on 3.9.6 it is exactly what `\d` means
+            import re
+            self.assertEqual(digits, [c for c in range(0x110000) if re.match(r"\d", chr(c))])
+
+    def test_negative_number_matcher_installed_everywhere(self):  # F-2, E7: the parser, its groups and its subparsers
+        p = _GateParser(prog="p")
+        subs = p.add_subparsers()
+        sub = subs.add_parser("s")
+        for owner in (p, p._optionals, p._positionals, p.add_argument_group(), p.add_mutually_exclusive_group(), sub,
+                      sub._optionals, sub.add_argument_group()):
+            self.assertIs(owner._negative_number_matcher, result._NEGATIVE_NUMBER)
+
+    def test_negative_number_options_defined_with_new_digits(self):  # F-2, E7: `_has_negative_number_optionals`
+        for where in ("parser", "group"):
+            with self.subTest(where):
+                p = _GateParser(prog="p")
+                p.add_argument("x", nargs="?")
+                (p if where == "parser" else p.add_argument_group()).add_argument("-\U0001e4f0", action="store_true")
+                self.assertEqual(p._has_negative_number_optionals, [])
+                self.assertEqual(p.parse_args(["-1"]).x, "-1")
+        p = _GateParser(prog="p")  # control: an option that is a number of Unicode 13 turns `-5` into an unknown option
+        p.add_argument("x", nargs="?")
+        p.add_argument("-٣", action="store_true")
+        self.assertEqual(p._has_negative_number_optionals, [True])
+        m = "unrecognized arguments: -5"
+        self.assertEqual(self.parse(p, ["-5"]), ("invalid arguments: " + m, "usage: p [-h] [-٣] [x]\np: error: " + m + "\n"))
+
+DIGITS_SHA256_39 = "a277bbc39852a47c72cac71ac7f70d50ee2bfbb4cbbf42d9a11ee54f240fcdbe"  # the 650 digits of Unicode 13.0.0 (3.9.6), see test
 
 # SHA-256 of "".join(repr(chr(c)) + "\n" for c in range(0x110000)) in UTF-8, measured on /usr/bin/python3 3.9.6.
 REPR_SHA256_39 = "7860d79119580a12183b4b8b15522d4fcdbfbed4155a7f59496bad6c65a96510"
