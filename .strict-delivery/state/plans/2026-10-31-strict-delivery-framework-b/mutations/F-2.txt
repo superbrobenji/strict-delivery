@@ -1,0 +1,16 @@
+F-2: Task B2.3 SKILL.md lacked the question threshold; closed by G1 (two SKILL lines in Decision classes)
+harness: as B3.txt; fix present PASS, the G1 lines deleted FAIL, restored PASS
+
+F-2: scratch worktree /var/folders/54/hnpyck115hq30qmdwvvcyl_h0000gn/T/tmp.zBtbmISV2d/wt at 81f9027
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest <targeted classes>
+present PASS [SkillDirectiveTest,SkillFileTest] python3                      rc=0 OK
+present PASS [SkillDirectiveTest,SkillFileTest] python3.13                   rc=0 OK
+mutant FAIL F-2 delete G1 line 0             python3                      rc=1 FAILED (failures=26) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL F-2 delete G1 line 0             python3.13                   rc=1 FAILED (failures=26) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL F-2 delete G1 line 1             python3                      rc=1 FAILED (failures=16) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL F-2 delete G1 line 1             python3.13                   rc=1 FAILED (failures=16) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL F-2 delete both G1 lines         python3                      rc=1 FAILED (failures=34) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL F-2 delete both G1 lines         python3.13                   rc=1 FAILED (failures=34) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+restored PASS [SkillDirectiveTest,SkillFileTest] python3                      rc=0 OK
+restored PASS [SkillDirectiveTest,SkillFileTest] python3.13                   rc=0 OK
+mutants 3 killed 3

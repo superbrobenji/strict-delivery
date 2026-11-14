@@ -1,0 +1,122 @@
+B3: owner directives routed into prompt blocks, base playbook and skill (groups: prompt blocks, playbook, skill)
+harness: a scratch git worktree --detach of 81f9027 holding the change; each mutant is one string change, run on /usr/bin/python3 (3.9) and /opt/homebrew/bin/python3.13, then restored; harness mutate.py in a private mktemp -d
+note: first skill run had one survivor (SKILL_PHRASES row dropped, test side): the phrases were pinned twice (PINS and the placement check); test_phrase_table_names_the_new_phrases was added and the group re-run, shown below
+
+## prompt blocks (tests.test_prompt_blocks.OwnerDirectiveBlockTest)
+B3: scratch worktree /var/folders/54/hnpyck115hq30qmdwvvcyl_h0000gn/T/tmp.zBtbmISV2d/wt at 81f9027
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest <targeted classes>
+present PASS [OwnerDirectiveBlockTest]       python3                      rc=0 OK
+present PASS [OwnerDirectiveBlockTest]       python3.13                   rc=0 OK
+mutant FAIL A1 controller delete 0           python3                      rc=1 FAILED (failures=29) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A1 controller delete 0           python3.13                   rc=1 FAILED (failures=29) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A2 controller delete 0           python3                      rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL A2 controller delete 0           python3.13                   rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL A2 controller delete 1           python3                      rc=1 FAILED (failures=16) test_deleted_sentence_names_label_refused,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL A2 controller delete 1           python3.13                   rc=1 FAILED (failures=16) test_deleted_sentence_names_label_refused,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL A3 controller delete 0           python3                      rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A3 controller delete 0           python3.13                   rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A4 controller delete 0           python3                      rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A4 controller delete 0           python3.13                   rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A4 controller delete 1           python3                      rc=1 FAILED (failures=20) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL A4 controller delete 1           python3.13                   rc=1 FAILED (failures=20) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL B implementer delete 0           python3                      rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL B implementer delete 0           python3.13                   rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL B task_reviewer delete 0         python3                      rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL B task_reviewer delete 0         python3.13                   rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL B final_reviewer delete 0        python3                      rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL B final_reviewer delete 0        python3.13                   rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL A1 glued                         python3                      rc=1 FAILED (failures=15) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL A1 glued                         python3.13                   rc=1 FAILED (failures=15) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL A1 twice                         python3                      rc=1 FAILED (failures=13) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL A1 twice                         python3.13                   rc=1 FAILED (failures=13) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL A2 reordered                     python3                      rc=1 FAILED (failures=12) test_deleted_sentence_names_label_refused,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL A2 reordered                     python3.13                   rc=1 FAILED (failures=12) test_deleted_sentence_names_label_refused,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL A3 token never inherits          python3                      rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A3 token never inherits          python3.13                   rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A2 token Decision                python3                      rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL A2 token Decision                python3.13                   rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL A4 token handed back             python3                      rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A4 token handed back             python3.13                   rc=1 FAILED (failures=27) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same
+mutant FAIL A4 token handback                python3                      rc=1 FAILED (failures=20) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL A4 token handback                python3.13                   rc=1 FAILED (failures=20) test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes
+mutant FAIL A4 before the anchor             python3                      rc=1 FAILED (failures=9) test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL A4 before the anchor             python3.13                   rc=1 FAILED (failures=9) test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL B token version differences      python3                      rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL B token version differences      python3.13                   rc=1 FAILED (failures=18) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_deleted_sentence_names_label_refused,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL EXACT pin A3 dropped (test side) python3                      rc=1 FAILED (failures=7) test_dispatch_discipline_pin_carries_the_model_sentence,test_harmless_rewording_passes,test_new_sentences_are_in_place_on_disk
+mutant FAIL EXACT pin A3 dropped (test side) python3.13                   rc=1 FAILED (failures=7) test_dispatch_discipline_pin_carries_the_model_sentence,test_harmless_rewording_passes,test_new_sentences_are_in_place_on_disk
+restored PASS [OwnerDirectiveBlockTest]      python3                      rc=0 OK
+restored PASS [OwnerDirectiveBlockTest]      python3.13                   rc=0 OK
+mutants 19 killed 19
+
+## playbook (tests.test_playbook.OwnerDirectivePlaybookTest)
+B3: scratch worktree /var/folders/54/hnpyck115hq30qmdwvvcyl_h0000gn/T/tmp.zBtbmISV2d/wt at 81f9027
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest <targeted classes>
+present PASS [OwnerDirectivePlaybookTest]    python3                      rc=0 OK
+present PASS [OwnerDirectivePlaybookTest]    python3.13                   rc=0 OK
+mutant FAIL C1 delete 0                      python3                      rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL C1 delete 0                      python3.13                   rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL C2 delete 0                      python3                      rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL C2 delete 0                      python3.13                   rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL D delete 0                       python3                      rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL D delete 0                       python3.13                   rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL D delete 1                       python3                      rc=1 FAILED (failures=12) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes
+mutant FAIL D delete 1                       python3.13                   rc=1 FAILED (failures=12) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes
+mutant FAIL E1 delete 0                      python3                      rc=1 FAILED (failures=17) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL E1 delete 0                      python3.13                   rc=1 FAILED (failures=17) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL E2 delete 0                      python3                      rc=1 FAILED (failures=22) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL E2 delete 0                      python3.13                   rc=1 FAILED (failures=22) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL E2 delete 1                      python3                      rc=1 FAILED (failures=18) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes
+mutant FAIL E2 delete 1                      python3.13                   rc=1 FAILED (failures=18) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes
+mutant FAIL C2 spaced                        python3                      rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL C2 spaced                        python3.13                   rc=1 FAILED (failures=14) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL E2 before the anchor             python3                      rc=1 FAILED (failures=7) test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL E2 before the anchor             python3.13                   rc=1 FAILED (failures=7) test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes,test_misplaced_refused
+mutant FAIL E1 token never inherits          python3                      rc=1 FAILED (failures=17) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL E1 token never inherits          python3.13                   rc=1 FAILED (failures=17) test_deleted_sentence_refused_naming_the_unit,test_forbidden_strings_in_new_sentence_refused,test_harmless_rewording_passes
+mutant FAIL E2 token handed back             python3                      rc=1 FAILED (failures=22) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL E2 token handed back             python3.13                   rc=1 FAILED (failures=22) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL D token Decision                 python3                      rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL D token Decision                 python3.13                   rc=1 FAILED (failures=21) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL C1 token version differences     python3                      rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL C1 token version differences     python3.13                   rc=1 FAILED (failures=19) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_forbidden_strings_in_new_sentence_refused
+mutant FAIL D twice                          python3                      rc=1 FAILED (failures=7) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes
+mutant FAIL D twice                          python3.13                   rc=1 FAILED (failures=7) test_deleted_sentence_refused_naming_the_unit,test_digit_runs_after_a_new_sentence_refused_the_same,test_harmless_rewording_passes
+restored PASS [OwnerDirectivePlaybookTest]   python3                      rc=0 OK
+restored PASS [OwnerDirectivePlaybookTest]   python3.13                   rc=0 OK
+mutants 14 killed 14
+
+## skill (tests.test_skill.SkillDirectiveTest, SkillFileTest)
+B3: scratch worktree /var/folders/54/hnpyck115hq30qmdwvvcyl_h0000gn/T/tmp.zBtbmISV2d/wt at 81f9027
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest <targeted classes>
+present PASS [SkillDirectiveTest,SkillFileTest] python3                      rc=0 OK
+present PASS [SkillDirectiveTest,SkillFileTest] python3.13                   rc=0 OK
+mutant FAIL G1 skill delete 0                python3                      rc=1 FAILED (failures=26) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G1 skill delete 0                python3.13                   rc=1 FAILED (failures=26) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G1 skill delete 1                python3                      rc=1 FAILED (failures=16) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL G1 skill delete 1                python3.13                   rc=1 FAILED (failures=16) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL G2 skill delete 0                python3                      rc=1 FAILED (failures=23) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G2 skill delete 0                python3.13                   rc=1 FAILED (failures=23) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G3 skill delete 0                python3                      rc=1 FAILED (failures=22) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G3 skill delete 0                python3.13                   rc=1 FAILED (failures=22) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G4 skill delete 0                python3                      rc=1 FAILED (failures=23) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G4 skill delete 0                python3.13                   rc=1 FAILED (failures=23) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G4 skill delete 1                python3                      rc=1 FAILED (failures=16) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL G4 skill delete 1                python3.13                   rc=1 FAILED (failures=16) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL G2 skill twice                   python3                      rc=1 FAILED (failures=4) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_new_lines_in_place_on_disk
+mutant FAIL G2 skill twice                   python3.13                   rc=1 FAILED (failures=4) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_new_lines_in_place_on_disk
+mutant FAIL G4 skill glued                   python3                      rc=1 FAILED (failures=8) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_misplaced_refused
+mutant FAIL G4 skill glued                   python3.13                   rc=1 FAILED (failures=8) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_misplaced_refused
+mutant FAIL G1 skill token owner delegation  python3                      rc=1 FAILED (failures=24) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G1 skill token owner delegation  python3.13                   rc=1 FAILED (failures=24) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G3 skill token version differences python3                      rc=1 FAILED (failures=22) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G3 skill token version differences python3.13                   rc=1 FAILED (failures=22) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G4 skill token handback          python3                      rc=1 FAILED (failures=11) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL G4 skill token handback          python3.13                   rc=1 FAILED (failures=11) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_every_sentence_pinned
+mutant FAIL G2 skill token never inherits    python3                      rc=1 FAILED (failures=22) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL G2 skill token never inherits    python3.13                   rc=1 FAILED (failures=22) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement
+mutant FAIL SKILL_PHRASES row dropped (test side) python3                      rc=1 FAILED (errors=2) test_phrase_table_names_the_new_phrases
+mutant FAIL SKILL_PHRASES row dropped (test side) python3.13                   rc=1 FAILED (errors=2) test_phrase_table_names_the_new_phrases
+restored PASS [SkillDirectiveTest,SkillFileTest] python3                      rc=0 OK
+restored PASS [SkillDirectiveTest,SkillFileTest] python3.13                   rc=0 OK
+mutants 13 killed 13
