@@ -205,7 +205,7 @@ def min_tier(role: str, cfg: dict) -> int:
     if role not in roles:
         raise ValueError("%s needs tier4, which is unset, and is not in top_tier_roles" % role)
     fb = cfg.get("top_tier_fallback", DEFAULT_TOP_TIER_FALLBACK)
-    if fb not in TIER_NAMES or fb not in tiers:
+    if fb not in TIER_NAMES or fb not in tiers:       # a non-str is never equal to a tier name, so it is refused here
         raise ValueError("top_tier_fallback '%s' names a tier that is unset or not tier1-tier4" % (fb,))
     return int(fb[4])
 
@@ -216,9 +216,10 @@ SMALL_PREFIX = "small-re-review: "
 _KEYS = ("plan", "task", "round", "fix", "narrowed", "questions", "prev-fix-defects")
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _SHA = r"[0-9a-f]{7,40}"
-_PATTERNS = {"plan": _WORD, "task": _WORD, "round": re.compile(r"[1-9][0-9]{0,8}"),
+# round and every narrowed id are [1-9][0-9]*; the length cap (MAX_DIGITS: no int() of longer text) is applied in small_line.
+_PATTERNS = {"plan": _WORD, "task": _WORD, "round": re.compile(r"[1-9][0-9]*"),
              "fix": re.compile("(%s)\\.\\.(%s)" % (_SHA, _SHA)),
-             "narrowed": re.compile(r"none|[1-9][0-9]{0,8}(,[1-9][0-9]{0,8})*"),
+             "narrowed": re.compile(r"none|[1-9][0-9]*(,[1-9][0-9]*)*"),
              "questions": re.compile(r"none"), "prev-fix-defects": re.compile(r"0")}
 
 
@@ -239,6 +240,8 @@ def small_line(brief: str) -> Optional[dict]:
         if m is None:
             raise ValueError("small-re-review: key %s is malformed" % key)
         val = toks[i][len(key) + 1:]
+        if key in ("round", "narrowed") and any(len(n) > MAX_DIGITS for n in val.split(",")):
+            raise ValueError("small-re-review: key %s is malformed" % key)
         if key == "round":
             out[key] = int(val)
         elif key == "fix":

@@ -16,14 +16,44 @@ WORKERS = ("implementer", "implementer_transcription", "task_reviewer", "final_r
            "drafter")
 
 
-def expected(live, d, child):
-    """The dispatcher rule of plan P:2076-2085 written as a function of (program_live, dispatcher, child)."""
-    if child in WORKERS:
-        return d in (("stream_controller", "controller") if live else ("session", "controller"))
-    if live:
-        return d in {"program_controller": ("session",), "stream_controller": ("session", "program_controller"),
-                     "controller": ("stream_controller", "controller")}[child]
-    return child == "controller" and d in ("session", "controller")
+# The dispatcher table of plan P:2076-2085, written out by hand: for each program_live and each of the fifteen child
+# roles, the literal tuple of dispatcher ids allowed to dispatch it. Nothing here is computed.
+EXPECTED = {
+    True: {
+        "program_controller": ("session",),
+        "stream_controller": ("session", "program_controller"),
+        "controller": ("stream_controller", "controller"),
+        "implementer": ("stream_controller", "controller"),
+        "implementer_transcription": ("stream_controller", "controller"),
+        "task_reviewer": ("stream_controller", "controller"),
+        "final_reviewer": ("stream_controller", "controller"),
+        "final_verifier": ("stream_controller", "controller"),
+        "exception_reviewer": ("stream_controller", "controller"),
+        "audit_reviewer": ("stream_controller", "controller"),
+        "audit_verifier": ("stream_controller", "controller"),
+        "investigator": ("stream_controller", "controller"),
+        "plan_writer": ("stream_controller", "controller"),
+        "plan_reviewer": ("stream_controller", "controller"),
+        "drafter": ("stream_controller", "controller"),
+    },
+    False: {
+        "program_controller": (),
+        "stream_controller": (),
+        "controller": ("session", "controller"),
+        "implementer": ("session", "controller"),
+        "implementer_transcription": ("session", "controller"),
+        "task_reviewer": ("session", "controller"),
+        "final_reviewer": ("session", "controller"),
+        "final_verifier": ("session", "controller"),
+        "exception_reviewer": ("session", "controller"),
+        "audit_reviewer": ("session", "controller"),
+        "audit_verifier": ("session", "controller"),
+        "investigator": ("session", "controller"),
+        "plan_writer": ("session", "controller"),
+        "plan_reviewer": ("session", "controller"),
+        "drafter": ("session", "controller"),
+    },
+}
 
 
 class ConstantsTest(unittest.TestCase):
@@ -55,14 +85,22 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(LEVELS_BELOW, {"program_controller": 2, "stream_controller": 1, "controller": 1})
 
     def test_dispatchers_all_triples(self):                         # K8, K9: 2 x 16 x 15 = 480 cells
+        self.assertEqual(set(EXPECTED), {True, False})
+        for live in (True, False):
+            self.assertEqual(tuple(EXPECTED[live]), ROLES)          # the table names each of the 15 roles, in order
+            self.assertEqual(set(DISPATCHERS[live]), set(ROLES))
         n = 0
         for live in (True, False):
             for d in ROLES + ("session",):
                 for child in ROLES:
                     with self.subTest(live=live, dispatcher=d, child=child):
                         n += 1
-                        self.assertEqual(d in DISPATCHERS[live][child], expected(live, d, child))
+                        self.assertEqual(d in DISPATCHERS[live][child], d in EXPECTED[live][child])
         self.assertEqual(n, 480)
+        for live in (True, False):                                  # the literal tuples too (the gate prints them)
+            for child in ROLES:
+                with self.subTest(live=live, child=child):
+                    self.assertEqual(tuple(DISPATCHERS[live][child]), EXPECTED[live][child])
 
     def test_program_session_may_not_dispatch_workers(self):       # F-B2p2-5
         self.assertNotIn("session", DISPATCHERS[True]["implementer"])
@@ -115,12 +153,26 @@ class LimitsTest(unittest.TestCase):
         self.assertEqual(limits_of({}, {}), (3, 20))                                        # neither
 
     def test_controller_needs_levels_below(self):                   # P1, P2: every cell written out
-        below = {"program_controller": 2, "stream_controller": 1, "controller": 1, "implementer": 0}
+        # The literal set of dispatcher levels that pass, per role kind, written by hand (P:2090-2092: a program
+        # controller needs two levels below it, a stream or sub-controller one, a worker none).
+        passing = {
+            3: {"program_controller": (0,), "stream_controller": (0, 1), "controller": (0, 1), "worker": (0, 1, 2)},
+            6: {"program_controller": (0, 1, 2, 3), "stream_controller": (0, 1, 2, 3, 4), "controller": (0, 1, 2, 3, 4),
+                "worker": (0, 1, 2, 3, 4, 5)},
+        }
+        kinds = {"program_controller": ("program_controller",), "stream_controller": ("stream_controller",),
+                 "controller": ("controller",), "worker": WORKERS}
+        self.assertEqual(len(WORKERS), 12)
+        self.assertEqual(set(WORKERS) | set(CONTROLLER_ROLES), set(ROLES))
+        cells = 0
         for limit in (3, 6):
-            for role, b in below.items():
-                for level in range(0, limit + 1):
-                    with self.subTest(limit=limit, role=role, level=level):
-                        self.assertEqual(depth_ok(role, level, limit), level + 1 + b <= limit)
+            for kind, roles in kinds.items():
+                for role in roles:
+                    for level in range(0, limit + 1):
+                        with self.subTest(limit=limit, role=role, level=level):
+                            cells += 1
+                            self.assertEqual(depth_ok(role, level, limit), level in passing[limit][kind])
+        self.assertEqual(cells, 15 * 4 + 15 * 7)
         self.assertTrue(depth_ok("program_controller", 0, 3) and not depth_ok("program_controller", 1, 3))
         self.assertTrue(depth_ok("controller", 1, 3) and not depth_ok("controller", 2, 3))
         self.assertTrue(depth_ok("implementer", 2, 3) and not depth_ok("implementer", 3, 3))
@@ -244,11 +296,16 @@ class TierTest(unittest.TestCase):
         self.assertEqual(min_tier("exception_reviewer", c), 3)
         c["top_tier_fallback"] = "tier2"
         self.assertEqual(min_tier("final_verifier", c), 2)
-        for bad in ("tier9", "tier4", "", "opus"):
-            c["top_tier_fallback"] = bad
-            with self.assertRaises(ValueError) as e:
-                min_tier("final_verifier", c)
-            self.assertIn("top_tier_fallback", str(e.exception))
+        for bad in ("tier9", "tier4", "", "opus", 3, 3.0, True, None, ["tier3"], ("tier3",), {"tier3": 1}, b"tier3"):
+            c["top_tier_fallback"] = bad                            # F-2c3-R1-3: any non-str is a ValueError too
+            for role in ("final_verifier", "exception_reviewer"):
+                with self.subTest(fallback=repr(bad), role=role):
+                    with self.assertRaises(ValueError) as e:
+                        min_tier(role, c)
+                    self.assertEqual(str(e.exception), "top_tier_fallback '%s' names a tier that is unset or not "
+                                     "tier1-tier4" % (bad,))
+            self.assertEqual(min_tier("controller", c), 3)          # a role whose minimum is below tier4 never reads it
+            self.assertEqual(min_tier("implementer", c), 2)
         c["top_tier_fallback"] = "tier3"
         c["top_tier_roles"] = ["exception_reviewer"]
         with self.assertRaises(ValueError):
@@ -289,7 +346,7 @@ class SmallLineTest(unittest.TestCase):
             "prev missing": ok.replace(" prev-fix-defects=0", ""),
             "swapped": ok.replace("plan=2026-10-31-x task=2c.3", "task=2c.3 plan=2026-10-31-x"),
             "repeated": ok + " round=2", "round=0": ok.replace("round=2", "round=0"),
-            "round=05": ok.replace("round=2", "round=05"), "round 10 digits": ok.replace("round=2", "round=1234567890"),
+            "round=05": ok.replace("round=2", "round=05"),
             "6-char sha": ok.replace(A7, "abcdef"), "41-char sha": ok.replace(B40, B40 + "0"),
             "uppercase": ok.replace(A7, "ABCDEF0"), "narrowed empty": ok.replace("narrowed=none", "narrowed="),
             "narrowed 1,,2": ok.replace("narrowed=none", "narrowed=1,,2"), "narrowed 01": ok.replace("narrowed=none", "narrowed=01"),
@@ -305,6 +362,35 @@ class SmallLineTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             small_line(ok + "\n" + ok)                                                  # S4
         self.assertEqual(small_line(ok.replace("round=2", "round=5"))["round"], 5)       # parses; refused by S8
+
+    def test_round_and_narrowed_digits(self):                       # F-2c3-R1-4: [1-9][0-9]* of up to 4300 digits
+        ok = LINE % (A7, B40)
+        for n in (9, 10, 11, 4300):
+            digits = "1" + "0" * (n - 1)
+            with self.subTest(n=n, key="round"):
+                got = small_line(ok.replace("round=2", "round=" + digits))
+                self.assertEqual((len(str(got["round"])), got["round"] == 10 ** (n - 1)), (n, True))
+            with self.subTest(n=n, key="narrowed one"):
+                got = small_line(ok.replace("narrowed=none", "narrowed=" + digits))
+                self.assertEqual(got["narrowed"], [digits])
+            with self.subTest(n=n, key="narrowed list"):
+                got = small_line(ok.replace("narrowed=none", "narrowed=3,%s,%s" % (digits, digits)))
+                self.assertEqual(got["narrowed"], ["3", digits, digits])
+        long_ = "1" + "0" * 4300                                     # 4301 digits
+        for key, text in (("round", ok.replace("round=2", "round=" + long_)),
+                          ("narrowed", ok.replace("narrowed=none", "narrowed=" + long_)),
+                          ("narrowed", ok.replace("narrowed=none", "narrowed=2,%s" % long_)),
+                          ("narrowed", ok.replace("narrowed=none", "narrowed=%s,2" % long_))):
+            with self.subTest(key=key, shape=text[40:60]):
+                with self.assertRaises(ValueError) as e:
+                    small_line(text)
+                self.assertEqual(str(e.exception), "small-re-review: key %s is malformed" % key)
+        for key, text in (("round", ok.replace("round=2", "round=0" + "1" * 10)),
+                          ("narrowed", ok.replace("narrowed=none", "narrowed=1,0" + "1" * 10))):
+            with self.subTest(key=key, shape="leading zero"):
+                with self.assertRaises(ValueError) as e:
+                    small_line(text)
+                self.assertEqual(str(e.exception), "small-re-review: key %s is malformed" % key)
 
     def test_named_key(self):
         with self.assertRaises(ValueError) as e:
@@ -420,6 +506,9 @@ class SmallErrorsTest(GitIsolatedTestCase):
         got = small_errors(self.line(a, b, round=5), [self.fid], self.root, self.cfg)
         self.assertEqual(len(got), 1)
         self.assertIn("round 5", got[0])
+        for r in (10 ** 8, 10 ** 9, 10 ** 10):                      # F-2c3-R1-4: a long round is a reason, not malformed
+            got = small_errors(self.line(a, b, round=r), [self.fid], self.root, self.cfg)
+            self.assertEqual(got, ["round %d: only rounds 1-4 may be small; round 5 always runs at the minimum tier" % r])
 
     def test_small_errors_ancestry(self):                           # S9, D10
         a, b = self.fix({"src/s.txt": "x\n"})

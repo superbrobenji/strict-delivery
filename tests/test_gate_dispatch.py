@@ -357,6 +357,54 @@ class ModelTierTest(GateCase):
         self.set_config(top_tier_roles="x")
         self.assertTrue(self.run_gate(fv("opus"))[0].startswith("FAIL dispatch.input"))
 
+    def test_top_tier_fallback_value_types(self):                   # F-2c3-R1-3, P:2064
+        """A top_tier_fallback that is not a str naming a set tier of tier1-tier3 fails dispatch.tier, and only for a
+        dispatch of a top_tier_roles role whose minimum is tier4, tier4 being unset; every other dispatch passes."""
+        cases = ((3, "3"), (None, "None"), (["tier3"], "['tier3']"), ("tier9", "tier9"), (True, "True"), ("", ""),
+                 ("tier4", "tier4"), ({"a": 1}, "{'a': 1}"), ("Tier3", "Tier3"),
+                 (["tier3", "tier2"], "['tier3', 'tier2']"))
+        for bad, shown in cases:
+            self.set_config(top_tier_fallback=bad)
+            for role in ("final_verifier", "exception_reviewer"):
+                with self.subTest(fallback=repr(bad), role=role):
+                    d = self.base(role, model="opus", prompt=prompt(role, model="opus"))
+                    out, code = self.lines(d)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(out, ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar",
+                                           "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.depth",
+                                           "PASS dispatch.concurrency", "PASS dispatch.children", "PASS dispatch.model",
+                                           "FAIL dispatch.tier: top_tier_fallback '%s' names a tier that is unset or "
+                                           "not tier1-tier4" % shown,
+                                           "FAIL dispatch.top-tier: not checked: dispatch.tier failed",
+                                           "PASS dispatch.block", "PASS dispatch.claims", "PASS dispatch.decisions"])
+            for role in dispatch.ROLES:                              # every other role: unaffected, whole run passes
+                if dispatch.MIN_TIERS[role] < 4 and role not in ("program_controller", "stream_controller"):
+                    with self.subTest(fallback=repr(bad), role=role):
+                        out, code = self.lines(self.base(role))
+                        self.assertEqual((out, code), (ALL_PASS, 0))
+        self.set_config(models={"tiers": {"tier1": "haiku", "tier2": "sonnet", "tier3": "opus", "tier4": "fable"}},
+                        top_tier_fallback=3)                        # tier4 set: the fallback is never read
+        d = self.base("final_verifier", model="fable", prompt=prompt("final_verifier", model="fable"))
+        self.assertEqual(self.lines(d), (ALL_PASS, 0))
+        self.set_config(top_tier_roles=["exception_reviewer"], top_tier_fallback=3)   # not a top_tier_roles role
+        d = self.base("final_verifier", model="opus", prompt=prompt("final_verifier", model="opus"))
+        self.assertEqual(self.only(d, "tier"),
+                         "FAIL dispatch.tier: final_verifier needs tier4, which is unset, and is not in top_tier_roles")
+
+    def test_top_tier_roles_bad_shapes_fail_input(self):            # F-2c3-R1-3: fail closed, for every role
+        for bad in ("final_verifier", 3, [3], [""], None, [None], ["final_verifier", ""], {"final_verifier": 1}, True,
+                    ["final_verifier", ["x"]]):
+            self.set_config(top_tier_roles=bad)
+            for role in ("implementer", "final_verifier", "controller"):
+                with self.subTest(top_tier_roles=repr(bad), role=role):
+                    out, code = self.run_gate(self.base(role))
+                    self.assertEqual((out, code), ("FAIL dispatch.input: input: config top_tier_roles must be a list "
+                                                   "of non-empty strings\n", 1))
+        self.set_config(top_tier_roles=[])                          # an empty list is a list: no top tier role
+        self.assertEqual(self.lines(self.base()), (ALL_PASS, 0))
+        self.set_config(top_tier_roles=["final_verifier"])
+        self.assertEqual(self.lines(self.base()), (ALL_PASS, 0))
+
     def test_top_tier_set(self):                                    # M5
         self.set_config(models={"tiers": {"tier1": "haiku", "tier2": "sonnet", "tier3": "opus", "tier4": "fable"}},
                         top_tier_fallback="tier2")
@@ -454,6 +502,29 @@ class SmallGateTest(GateCase):
             self.assertTrue(any(ln.startswith("FAIL dispatch.small") for ln in out), out)
             self.assertEqual(code, 1)
 
+    def test_small_line_long_numbers(self):                         # F-2c3-R1-4
+        ln = LINE % (self.a[:12], self.b[:12])
+        for n in (9, 10, 11, 4300):                                 # narrowed ids of any length up to 4300 digits pass
+            with self.subTest(n=n, key="narrowed"):
+                out, code = self.lines(self.small(line=ln.replace("narrowed=none", "narrowed=1,%s" % ("7" * n))))
+                self.assertEqual(code, 0, out)
+                self.assertIn("PASS dispatch.small", out)
+                self.assertIn("PASS dispatch.tier", out)
+        for n in (9, 10, 11, 4300):                                 # a long round is parsed, then refused as a reason
+            with self.subTest(n=n, key="round"):
+                out, code = self.lines(self.small(line=ln.replace("round=2", "round=%s" % ("7" * n))))
+                self.assertEqual(code, 1)
+                self.assertIn("FAIL dispatch.small: round %s: only rounds 1-4 may be small; round 5 always runs at "
+                              "the minimum tier" % ("7" * n), out)
+                self.assertIn("FAIL dispatch.tier: tier2 is below the minimum tier3 of task_reviewer", out)
+        for key, text in (("round", ln.replace("round=2", "round=" + "7" * 4301)),
+                          ("narrowed", ln.replace("narrowed=none", "narrowed=" + "7" * 4301))):
+            with self.subTest(n=4301, key=key):
+                out, code = self.lines(self.small(line=text))
+                self.assertEqual(code, 1)
+                self.assertIn("FAIL dispatch.small: small-re-review: key %s is malformed" % key, out)
+                self.assertTrue(any(x.startswith("FAIL dispatch.tier") for x in out), out)
+
     def test_malformed_below_min_fails_both(self):                  # S3
         out, _ = self.lines(self.small(line="small-re-review: plan=p"))
         self.assertTrue(any(ln.startswith("FAIL dispatch.small: small-re-review: key task") for ln in out), out)
@@ -547,24 +618,56 @@ class RegisterTest(GateCase):
 
 class VersionTest(GateCase):
     def test_digit_limits_same_on_both(self):                       # V1
-        for n, want in ((4300, "FAIL dispatch.depth"), (4301, None)):
-            raw = ('{"prompt": %s, "model": "sonnet", "dispatcher": {"id": "session", "depth": %s, "live_children": 0, '
-                   '"live_total": 0}, "program_live": false}' % (json.dumps(prompt("implementer")), "9" * n)).encode()
-            out, code = self.run_gate(self.write_input(raw))
-            if want is None:
-                self.assertTrue(out.startswith("FAIL dispatch.input: ") and len(out.splitlines()) == 1, out)
-            else:
-                self.assertIn(want, out)
-        raw = ('{"prompt": %s, "model": "sonnet", "dispatcher": {"id": "session", "depth": 0, "live_children": 0, '
-               '"live_total": %s}, "program_live": false}' % (json.dumps(prompt("implementer")), "9" * 4300)).encode()
-        self.assertIn("FAIL dispatch.concurrency", self.run_gate(self.write_input(raw))[0])
-        os.environ[ENV_D] = "9" * 4300
-        self.assertEqual(self.run_gate(self.base())[1], 0)                                  # accepted, min with default
-        os.environ[ENV_D] = "9" * 4301
-        self.assertTrue(self.run_gate(self.base())[0].startswith("FAIL dispatch.input"))
-        os.environ.pop(ENV_D)
+        """The whole output, not a prefix: the reason text is the gate's own on both interpreters (F-2c3-R1-5)."""
+        def raw(field, text):
+            disp = {"depth": "0", "live_children": "0", "live_total": "0"}
+            disp[field] = text
+            return ('{"prompt": %s, "model": "sonnet", "dispatcher": {"id": "session", "depth": %s, "live_children": %s, '
+                    '"live_total": %s}, "program_live": false}' % (json.dumps(prompt("implementer")), disp["depth"],
+                                                                   disp["live_children"], disp["live_total"])).encode()
+
+        def refused(path):                      # the gate's own text, written here, with no interpreter wording in it
+            return "FAIL dispatch.input: input: %s: not valid UTF-8 JSON (an integer of more than 4300 digits)\n" % path
+
+        for field in ("depth", "live_children", "live_total"):
+            for text in ("9" * 4301, "-" + "9" * 4301, "1" + "0" * 4300, "9" * 4301 + "0" * 3):
+                with self.subTest(field=field, digits=len(text.lstrip("-")), sign=text[0]):
+                    path = self.write_input(raw(field, text))
+                    self.assertEqual(self.run_gate(path), (refused(path), 1))
+            with self.subTest(field=field, digits=4300, sign="-"):       # parsed (the sign is no digit), then negative
+                self.assertEqual(self.run_gate(self.write_input(raw(field, "-" + "9" * 4300))),
+                                 ("FAIL dispatch.input: input: dispatcher.%s must be an integer of at least 0\n" % field,
+                                  1))
+            with self.subTest(field=field, digits=4300):                 # 4300 digits parse, then the line judges them
+                out, code = self.lines(self.write_input(raw(field, "9" * 4300)))
+                self.assertEqual(out, {
+                    "depth": ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar", "PASS dispatch.role",
+                              "PASS dispatch.dispatcher", "FAIL dispatch.depth: dispatcher depth %s + 1 + 0 "
+                              "level(s) below implementer exceeds max_depth 3" % ("9" * 4300), "PASS dispatch.concurrency",
+                              "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
+                              "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
+                              "PASS dispatch.decisions"],
+                    "live_children": ALL_PASS,
+                    "live_total": ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar",
+                                   "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.depth",
+                                   "FAIL dispatch.concurrency: %s running + 1 exceeds max_concurrent 20" % ("9" * 4300),
+                                   "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
+                                   "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
+                                   "PASS dispatch.decisions"]}[field])
+                self.assertEqual(code, 0 if field == "live_children" else 1)
+        for name, text in ((ENV_D, "depth"), (ENV_C, "concurrency")):
+            for n in (4301, 5000):
+                os.environ[name] = "9" * n
+                with self.subTest(env=name, digits=n):
+                    self.assertEqual(self.run_gate(self.base()), (
+                        "FAIL dispatch.input: input: %s must be a decimal integer of at least 1 (digits 0-9 only, no sign, "
+                        "space or leading zero, at most 4300 digits)\n" % name, 1))
+            os.environ[name] = "9" * 4300
+            with self.subTest(env=name, digits=4300):                    # accepted, min with the default
+                self.assertEqual(self.lines(self.base()), (ALL_PASS, 0))
+            os.environ.pop(name)
         big = prompt("implementer").replace("tokens=1000", "tokens=" + "1" * 4301)
-        self.assertEqual(self.lines(self.base(prompt=big))[1], 0)                           # budget by regex only
+        self.assertEqual(self.lines(self.base(prompt=big)), (ALL_PASS, 0))                 # budget by regex only
 
     def test_unicode_version_independent(self):                     # V2
         for cp in ("\U0001fae8", "ࡰ"):

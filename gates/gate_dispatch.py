@@ -119,10 +119,10 @@ def _validate(data: object, cfg: dict) -> dict:
         if k not in known:
             raise _bad("limits.max_children.%s names no role" % k)
     tr = cfg.get("top_tier_roles", dispatch.DEFAULT_TOP_TIER_ROLES)
-    if type(tr) not in (list, tuple) or any(type(x) is not str for x in tr):
-        raise _bad("config top_tier_roles must be a list of strings")
-    if type(cfg.get("top_tier_fallback", "")) is not str:
-        raise _bad("config top_tier_fallback must be a string")
+    if type(tr) not in (list, tuple) or any(type(x) is not str or x == "" for x in tr):
+        raise _bad("config top_tier_roles must be a list of non-empty strings")
+    # top_tier_fallback is not checked here: a value that is not a str naming a set tier fails dispatch.tier, and only
+    # for a top_tier_roles dispatch whose minimum tier is tier4 (dispatch.min_tier; plan P:2064).
     return data
 
 
