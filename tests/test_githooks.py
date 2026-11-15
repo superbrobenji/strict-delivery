@@ -1,5 +1,6 @@
 """Tests of gates/tools/githooks.py (Task 2b.2 input-domain table: producers 3 and 4, the dispatch rows M, the shell
-and interpreter rows V, the PC1 skeleton rows K; the producers of rows U and H are in tests/test_gitinfo.py).
+and interpreter rows V, the PC1 skeleton rows K; the producers of rows U and H, `UnstagedPathsTest` and
+`HooksDirTest`, are at the end).
 
 The hooks run through the production path: a real ``git commit`` or ``git push`` through a shim written by
 ``githooks.install(root, FRAMEWORK)`` (a temporary directory holding a ``python3`` symlink to the interpreter under
@@ -23,10 +24,10 @@ from unittest import mock
 from gates import __main__ as gates_main
 from gates import run_all
 from gates.lib import gitinfo
-from gates.lib.result import GateError, Result
+from gates.lib.result import GateError, Line, Result
 from gates.tools import githooks
-from tests.helpers import (E128, TOP, GitIsolatedTestCase, commit_all, git, make_repo, minimal_config,
-                           root_forms, write_record)
+from tests.helpers import (E128, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo,
+                           minimal_config, root_forms, write_record)
 
 FRAMEWORK = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG = ".strict-delivery/config.yml"
@@ -155,6 +156,12 @@ class HookCase(GitIsolatedTestCase):
 
     def push_line(self, local_ref, local_sha, remote_ref="refs/heads/main", remote_sha=ZEROS):
         return ("%s %s %s %s\n" % (local_ref, local_sha, remote_ref, remote_sha)).encode("utf-8")
+
+
+STALE_MODES = (0o644, 0o775, 0o700, 0o4755, 0o555, 0o757)  # row S4: group/other write, owner only, setuid, no write
+RUN_ALL_LINES = [Line("PASS", "schema.config"), Line("FAIL", "decisions.schema", "bad record: x; fix it"),
+                 Line("PASS", "cites.doc")]
+RUN_ALL_TEXT = "PASS schema.config\nFAIL decisions.schema: bad record: x; fix it\nPASS cites.doc\n"
 
 
 class ArgumentsTest(HookCase):
@@ -341,11 +348,54 @@ class PreCommitTest(HookCase):
         before = self.head(d)
         rc, out = self.commit(d)
         self.assertNotEqual(rc, 0)
-        self.assertIn("FAIL ", out)
-        self.assertIn("PASS schema.config", out)  # run_all's lines are printed in full
+        bad = ("FAIL schema.decision..strict-delivery/state/decisions/DEC-20261031-k3f9.yml: schema: expected "
+               "decision/2, got decision/999; run /strict-delivery:upgrade")
+        lines = out.splitlines()
+        self.assertEqual(lines[:3], ["PASS schema.kinds", "PASS schema.config", bad])  # C14: verbatim and in order
+        self.assertEqual(lines[3], "PASS schema.finding")
+        self.assertEqual(lines.count(bad), 1)
+        self.assertIn("FAIL decisions.schema..strict-delivery/state/decisions/DEC-20261031-k3f9.yml: schema: "
+                      "expected decision/2, got decision/999; run /strict-delivery:upgrade", lines)
+        self.assertIn("FAIL decisions.store.name..strict-delivery/state/decisions/DEC-20261031-k3f9.yml: file name "
+                      "DEC-20261031-k3f9.yml differs from the record id None", lines)
+        self.assertEqual(lines[-1], "PASS cites.landed")
+        self.assertEqual([ln for ln in lines if ln.startswith("FAIL githook")], [])  # a gate keeps its own id
+        self.assertEqual([ln for ln in lines if not ln.startswith(("PASS ", "FAIL "))], [])
         self.assertNotIn("githook.test", out)  # fail fast: commands.test not run
         self.assertFalse(os.path.exists(os.path.join(d, marker)))
         self.assertEqual(self.head(d), before)
+
+    def test_shim_with_pythonsafepath(self):  # V5 (review-1 F-5, decision D-12): the shim's exec line is unchanged
+        d = self.repo(install=True)
+        write_file(d, "a.txt", "two\n")
+        git(d, "add", "a.txt")
+        before = self.head(d)
+        env = self.env(PYTHONSAFEPATH="1")
+        rc, out = self.run_proc(["git", "-C", d, "commit", "-q", "-m", "change"], env=env)
+        if sys.version_info >= (3, 11):  # the current directory is not on sys.path: `-m gates` is not found
+            self.assertNotEqual(rc, 0, out)
+            self.assertIn("No module named gates", out)
+            self.assertNotIn("githook", out)  # Python's message, not a hook line
+            self.assertEqual(self.head(d), before)
+        else:  # the variable is ignored: the hook runs as without it
+            self.assertEqual(rc, 0, out)
+            self.assertIn("PASS schema.config\n", out)  # run_all's lines: the hook ran
+            self.assertNotEqual(self.head(d), before)
+            write_file(d, "a.txt", "three\n")
+            git(d, "add", "a.txt")
+            rc2, out2 = self.commit(d)
+            self.assertEqual((rc2, out2), (rc, out))
+
+    def test_pre_commit_run_all_lines_verbatim(self):  # C14: a PASS line, a gate's FAIL id and reason, run_all.input
+        d = self.repo()
+        for label, lines, want in (
+                ("a PASS line and a failing gate", RUN_ALL_LINES, RUN_ALL_TEXT),
+                ("all passing", RUN_ALL_LINES[::2], "PASS schema.config\nPASS cites.doc\n"),
+                ("run_all.input", [Line("PASS", "schema.kinds"), Line("FAIL", "run_all.input", "no config; run init")],
+                 "PASS schema.kinds\nFAIL githook.run_all: no config; run init\n")):
+            with self.subTest(label), mock.patch.object(run_all, "check", return_value=Result("run_all", lines)):
+                rc, out, err = self.hook(["pre-commit", "--root", d])
+                self.assertEqual((rc, out, err), (0 if label == "all passing" else 1, want, ""))
 
     def test_run_all_raising(self):  # C13, K3
         d = self.repo()
@@ -654,6 +704,38 @@ class PrePushTest(HookCase):
                 self.assertEqual((rc, err), (0, ""))
                 self.assertIn("PASS schema.config", out)
 
+    def test_pre_push_staged_submodule_ignore_config(self):  # U19, P2 (review-1 F-4, ruling R-G1-1)
+        lib = self.repo()
+        dirty = "FAIL githook.dirty: sub: tracked file has a change; commit it before pushing\n"
+
+        def staged_gitlink(sub):  # the gitlink moved to a new commit and staged: the index differs from HEAD
+            submodule_moved(sub)
+            git(os.path.dirname(sub), "add", "sub")
+
+        for state, setup in (("staged gitlink", staged_gitlink), ("moved gitlink", submodule_moved),
+                             ("dirty work tree", submodule_dirty), ("untracked file only", submodule_untracked)):
+            for label, config in IGNORE_SETTINGS:
+                with self.subTest(state=state, config=label):
+                    d = self.repo()
+                    add_submodule(d, lib)
+                    if config:
+                        git(d, *config)
+                    setup(os.path.join(d, "sub"))
+                    rc, out, err = self.push(d, self.push_line("refs/heads/main", self.head(d)))
+                    self.assertEqual((rc, out, err), (1, dirty, ""))
+
+    def test_pre_push_run_all_lines_verbatim(self):  # C14: the same rule as pre-commit, for pre-push
+        d = self.repo()
+        stdin = self.push_line("refs/heads/main", self.head(d))
+        for label, lines, want in (
+                ("a PASS line and a failing gate", RUN_ALL_LINES, RUN_ALL_TEXT),
+                ("all passing", RUN_ALL_LINES[::2], "PASS schema.config\nPASS cites.doc\n"),
+                ("run_all.input", [Line("PASS", "schema.kinds"), Line("FAIL", "run_all.input", "no config; run init")],
+                 "PASS schema.kinds\nFAIL githook.run_all: no config; run init\n")):
+            with self.subTest(label), mock.patch.object(run_all, "check", return_value=Result("run_all", lines)):
+                rc, out, err = self.push(d, stdin)
+                self.assertEqual((rc, out, err), (0 if label == "all passing" else 1, want, ""))
+
     def test_pre_push_empty_stdin(self):  # P7
         d = self.repo()
         rc, out, err = self.push(d, b"")
@@ -819,7 +901,7 @@ class PrePushTest(HookCase):
         with mock.patch.object(gitinfo.subprocess, "run", spy):
             githooks._staged_paths(d)
         self.assertEqual(calls, [["git", "-C", d, "diff", "--cached", "--no-color", "--name-only", "-z",
-                                  "--no-ext-diff", "--no-textconv"]])
+                                  "--no-ext-diff", "--no-textconv", "--ignore-submodules=none"]])
 
     def test_pre_push_ignores_colour_and_abbrev_config(self):  # P12; owner answer Q-RC-1 (a)
         d = self.repo()
@@ -944,6 +1026,22 @@ class InstallTest(HookCase):
         self.assertEqual(sorted(x for x in os.listdir(hooks) if not x.endswith(".sample")), list(self.names()))
         code, out, err = self.manage(["install", "--root", d])
         self.assertEqual((code, out, err), (0, "PASS githooks.pre-commit\nPASS githooks.pre-push\n", ""))
+
+    def test_install_rewrites_every_stale_mode(self):  # I5 (review-1 F-3): own hook of any mode is rewritten to 0o755
+        d = self.repo()
+        hooks = gitinfo.hooks_dir(d)
+        self.assertEqual(githooks.install(d, FRAMEWORK), [])
+        for mode in STALE_MODES:
+            with self.subTest(mode=oct(mode)):
+                for n in self.names():
+                    os.chmod(os.path.join(hooks, n), mode)
+                self.assertEqual(githooks.install(d, FRAMEWORK), [])
+                for n in self.names():
+                    path = os.path.join(hooks, n)
+                    self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o755)
+                    self.assertEqual(read_bytes(path), shim_text(n).encode())
+                self.assertEqual(self.manage(["status", "--root", d])[1],
+                                 "PASS githooks.pre-commit\nPASS githooks.pre-push\n")
 
     def test_hooks_path_refused(self):  # I7; the controller ruling P:1306
         for label in ("config", "environment", "default path", "empty", "spaces", "leading space"):
@@ -1202,6 +1300,22 @@ class StatusTest(HookCase):
                 self.assertIn("FAIL githooks.pre-commit: stale", out)  # the plan's assertion
                 self.assertEqual(out, "FAIL githooks.pre-commit: stale\nPASS githooks.pre-push\n")
 
+    def test_status_reports_stale_mode(self):  # S4 (review-1 F-3): any mode but 0o755 is stale, the bytes being right
+        d = self.repo()
+        path = os.path.join(gitinfo.hooks_dir(d), "pre-commit")
+        self.assertEqual(githooks.install(d, FRAMEWORK), [])
+        self.assertEqual(self.manage(["status", "--root", d]),
+                         (0, "PASS githooks.pre-commit\nPASS githooks.pre-push\n", ""))
+        for mode in STALE_MODES:
+            with self.subTest(mode=oct(mode)):
+                os.chmod(path, mode)
+                self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), mode)
+                self.assertEqual(read_bytes(path), shim_text("pre-commit").encode())
+                self.assertEqual(self.manage(["status", "--root", d]),
+                                 (1, "FAIL githooks.pre-commit: stale\nPASS githooks.pre-push\n", ""))
+        os.chmod(path, 0o755)
+        self.assertEqual(self.manage(["status", "--root", d])[1], "PASS githooks.pre-commit\nPASS githooks.pre-push\n")
+
     def test_status_default_root_and_arguments(self):  # the root of `githooks status` without --root
         d = self.repo(install=True)
         self.assertEqual(self.manage(["status"], env={"CLAUDE_PROJECT_DIR": d}),
@@ -1251,6 +1365,323 @@ class DispatchTest(HookCase):
             self.assertEqual(gates_main.main(["githooks", "status", "--root", d]), 1)
         self.assertEqual(out.getvalue(), "".join("PASS %s.ok\n" % g for g in GATES5)
                          + "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
+
+
+# ---- Task 2b.2 producers: unstaged_paths (rows U1-U18) and hooks_dir (rows H1-H6) -------------------------------
+def spy_runs():
+    """Patch subprocess.run in gitinfo to record (argv, env) of each call and still run it."""
+    calls = []
+    real = subprocess.run
+
+    def spy(argv, *a, **kw):
+        calls.append((list(argv), dict(kw.get("env") or {})))
+        return real(argv, *a, **kw)
+    return calls, mock.patch.object(gitinfo.subprocess, "run", spy)
+
+
+IGNORE_SETTINGS = [("no config", None)] + [
+    (key + "=" + value, ["config", key, value])
+    for value in ("all", "dirty", "untracked") for key in ("diff.ignoreSubmodules", "submodule.sub.ignore")]
+# git-diff(1) "none": a submodule with only untracked files counts as modified. Measured (git 2.50.1): listed in all
+# seven settings, "no config" included; without the option git's default lists nothing (R-G1-1: stricter, on purpose).
+UNTRACKED_ONLY = ["sub"]
+
+
+def add_submodule(d, lib):
+    git(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", lib, "sub")
+    git(d, "commit", "-q", "-m", "submodule")
+
+
+def submodule_moved(sub):  # a new commit in the submodule: the gitlink in the super project is behind
+    git(sub, "config", "user.email", "s@example.invalid")
+    git(sub, "config", "user.name", "S")
+    write_file(sub, "n.txt", "n\n")
+    git(sub, "add", "n.txt")
+    git(sub, "commit", "-q", "-m", "more")
+
+
+def submodule_dirty(sub):  # a tracked file of the submodule changed
+    write_file(sub, "a.txt", "dirty\n")
+
+
+def submodule_untracked(sub):  # a file the submodule does not track
+    write_file(sub, "u.txt", "untracked\n")
+
+
+class Repos(GitIsolatedTestCase):
+    """A fresh fixture repository per call, each holding a committed ``a.txt``."""
+
+    def setUp(self):
+        super().setUp()
+        self.n = 0
+
+    def fresh(self, files=("a.txt",)):
+        self.n += 1
+        d = os.path.join(self.tmp, "r%d" % self.n)
+        os.mkdir(d)
+        make_repo(d)
+        for name in files:
+            write_file(d, name, "one\n")
+        commit_all(d, "files")
+        return d
+
+
+class UnstagedPathsTest(Repos):
+    def test_unstaged_paths_states(self):  # U1-U10
+        def staged_then_changed(d):
+            write_file(d, "a.txt", "two\n")
+            git(d, "add", "a.txt")
+            write_file(d, "a.txt", "three\n")
+
+        def changed(d):
+            write_file(d, "a.txt", "two\n")
+
+        def deleted(d):
+            os.unlink(os.path.join(d, "a.txt"))
+
+        def intent_to_add(d):
+            write_file(d, "b.txt", "new\n")
+            git(d, "add", "-N", "b.txt")
+
+        def stat_only(d):
+            os.utime(os.path.join(d, "a.txt"), (1700000000, 1700000000))
+
+        def untracked(d):
+            write_file(d, "u.txt", "untracked\n")
+
+        def staged_equal(d):
+            write_file(d, "a.txt", "two\n")
+            git(d, "add", "a.txt")
+
+        def several(d):
+            for name in ("z.txt", "b/c.txt", "a.txt"):
+                write_file(d, name, "two\n")
+
+        def mode_true(d):
+            os.chmod(os.path.join(d, "a.txt"), 0o755)
+
+        def mode_false(d):
+            git(d, "config", "core.fileMode", "false")
+            os.chmod(os.path.join(d, "a.txt"), 0o755)
+
+        cases = [
+            ("U1 clean", lambda d: None, []),
+            ("U2 staged then changed", staged_then_changed, ["a.txt"]),
+            ("U3 changed", changed, ["a.txt"]),
+            ("U4 deleted", deleted, ["a.txt"]),
+            ("U5 add -N", intent_to_add, ["b.txt"]),
+            ("U6 stat only", stat_only, []),
+            ("U7 untracked", untracked, []),
+            ("U8 staged, tree equal", staged_equal, []),
+            ("U9 mode, fileMode true", mode_true, ["a.txt"]),
+            ("U9 mode, fileMode false", mode_false, []),
+        ]
+        for name, change, want in cases:
+            with self.subTest(name):
+                d = self.fresh()
+                change(d)
+                self.assertEqual(gitinfo.unstaged_paths(d), want)
+        with self.subTest("U10 several, git's order, no duplicates"):
+            d = self.fresh(("z.txt", "b/c.txt", "a.txt"))
+            several(d)
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt", "b/c.txt", "z.txt"])
+
+    def test_unstaged_paths_path_characters(self):  # U11
+        names = ["sp ace.txt", "nl\nname.txt", "tab\tname.txt", 'q"uote.txt', "back\\slash.txt", "é.txt",
+                 "\U0001f6dd.txt", "-lead.txt", "sub/dir/f.txt"]
+        for quote in ("true", "false"):
+            with self.subTest(quotePath=quote):
+                d = self.fresh(names)
+                git(d, "config", "core.quotePath", quote)
+                for name in names:
+                    write_file(d, name, "two\n")
+                self.assertEqual(gitinfo.unstaged_paths(d), sorted(names))
+
+    def test_unstaged_paths_invalid_utf8_name(self):  # U12: gitinfo's _text rule, a GateError naming the command
+        d = self.fresh()
+        p =subprocess.run(["git", "-C", d, "hash-object", "-w", "--stdin"], input=b"x\n",
+                           stdout=subprocess.PIPE, check=True)
+        blob = p.stdout.decode("ascii").strip()
+        subprocess.run(["git", "-C", d, "update-index", "--add", "--cacheinfo",
+                        b"100644," + blob.encode("ascii") + b",bad\xff.txt"], check=True)
+        # the work tree has no such file, so git lists it as deleted
+        with self.assertRaises(GateError) as e:
+            gitinfo.unstaged_paths(d)
+        self.assertEqual(str(e.exception), "git diff --name-only gave output that is not valid UTF-8")
+
+    def test_unstaged_paths_index_file(self):  # U13
+        d = self.fresh()
+        write_file(d, "a.txt", "two\n")
+        alt = os.path.join(d, "alt-index")
+        git(d, "read-tree", "HEAD", env={"GIT_INDEX_FILE": alt})
+        git(d, "add", "a.txt", env={"GIT_INDEX_FILE": alt})  # the other index holds the work tree's a.txt
+        other = self.fresh()  # a different repository as the process directory
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(other)
+        self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])  # GIT_INDEX_FILE unset: the real index
+        for label, value, want in (("absolute", alt, []), ("relative to root", "alt-index", []),
+                                   ("relative .git/index", ".git/index", ["a.txt"])):
+            with self.subTest(label), mock.patch.dict(os.environ, {"GIT_INDEX_FILE": value}):
+                self.assertEqual(gitinfo.unstaged_paths(d), want)
+
+    def test_unstaged_paths_ignore_colour_and_abbrev_config(self):  # U14; owner answer Q-RC-1 (a)
+        plain = self.fresh()
+        write_file(plain, "a.txt", "two\n")
+        configs = {
+            "colour": (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")),
+            "external": (("diff.external", "/usr/bin/false"),),
+            "noprefix": (("diff.noprefix", "true"),),
+            "relative": (("diff.relative", "true"),),
+            "quotepath": (("core.quotePath", "true"),),
+            "textconv": (("diff.x.textconv", "/usr/bin/false"),),
+        }
+        self.assertEqual(gitinfo.unstaged_paths(plain), ["a.txt"])
+        for label, pairs in configs.items():
+            with self.subTest(label):
+                d = self.fresh()
+                for key, value in pairs:
+                    git(d, "config", key, value)
+                if label == "textconv":
+                    write_file(d, ".gitattributes", "*.txt diff=x\n")
+                    git(d, "add", ".gitattributes")
+                    git(d, "commit", "-q", "-m", "attributes")
+                write_file(d, "a.txt", "two\n")
+                self.assertEqual(gitinfo.unstaged_paths(d), gitinfo.unstaged_paths(plain))
+                self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+
+    def test_unstaged_paths_argv(self):  # the call's exact argument list (P:1718, P:33)
+        d = self.fresh()
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.unstaged_paths(d)
+        diffs = [argv for argv, _ in calls if "diff" in argv]
+        self.assertEqual(diffs, [["git", "-C", d, "diff", "--no-color", "--name-only", "-z", "--no-ext-diff",
+                                  "--no-textconv", "--ignore-submodules=none"]])  # R-G1-1: config cannot hide a gitlink
+
+    def test_unstaged_paths_submodule(self):  # U15: a gitlink with a new commit, and a dirty submodule
+        lib = self.fresh()
+        for label in ("new commit", "dirty work tree"):
+            with self.subTest(label):
+                d = self.fresh()
+                git(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", lib, "sub")
+                git(d, "commit", "-q", "-m", "submodule")
+                self.assertEqual(gitinfo.unstaged_paths(d), [])
+                sub = os.path.join(d, "sub")
+                if label == "new commit":
+                    git(sub, "config", "user.email", "s@example.invalid")
+                    git(sub, "config", "user.name", "S")
+                    write_file(sub, "n.txt", "n\n")
+                    git(sub, "add", "n.txt")
+                    git(sub, "commit", "-q", "-m", "more")
+                else:
+                    write_file(sub, "a.txt", "dirty\n")
+                self.assertEqual(gitinfo.unstaged_paths(d), ["sub"])
+
+    def test_unstaged_paths_submodule_ignore_config(self):  # U19 (review-1 F-4, ruling R-G1-1)
+        lib = self.fresh()
+        for state, setup, want in (("moved gitlink", submodule_moved, ["sub"]),
+                                   ("dirty work tree", submodule_dirty, ["sub"]),
+                                   ("untracked file only", submodule_untracked, UNTRACKED_ONLY)):
+            for label, config in IGNORE_SETTINGS:
+                with self.subTest(state=state, config=label):
+                    d = self.fresh()
+                    add_submodule(d, lib)
+                    if config:
+                        git(d, *config)
+                    setup(os.path.join(d, "sub"))
+                    self.assertEqual(gitinfo.unstaged_paths(d), want)
+
+    def test_unstaged_paths_linked_worktree(self):  # U16
+        d = self.fresh()
+        wt = os.path.join(self.tmp, "wt")
+        git(d, "worktree", "add", "-q", "--detach", wt)
+        write_file(wt, "a.txt", "two\n")
+        self.assertEqual(gitinfo.unstaged_paths(wt), ["a.txt"])
+        self.assertEqual(gitinfo.unstaged_paths(d), [])
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": os.path.join(d, ".git", "worktrees", "wt", "index")}):
+            self.assertEqual(gitinfo.unstaged_paths(wt), ["a.txt"])
+
+    def test_unstaged_paths_bad_root(self):  # U17
+        d = self.fresh()
+        forms = root_forms(self.tmp, d)
+        check_root_forms(self, forms, {"unstaged_paths": gitinfo.unstaged_paths})
+
+    def test_unstaged_paths_git_failure(self):  # a corrupt index: git's exit status is a GateError naming the command
+        d = self.fresh()
+        with open(os.path.join(d, ".git", "index"), "wb") as fh:
+            fh.write(b"not an index")
+        with self.assertRaises(GateError) as e:
+            gitinfo.unstaged_paths(d)
+        self.assertEqual(str(e.exception), "git diff --name-only failed (exit 128)")
+
+    def test_unstaged_paths_cleared_env(self):  # U18
+        d = self.fresh()
+        write_file(d, "a.txt", "two\n")
+        other = self.fresh()
+        env = {"GIT_DIR": os.path.join(other, ".git"), "GIT_WORK_TREE": other}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+
+
+class HooksDirTest(Repos):
+    def test_hooks_dir(self):  # H1-H4, H6
+        d = self.fresh()
+        other = self.fresh()
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(other)  # H6: the process directory is another repository
+        self.assertEqual(gitinfo.hooks_dir(d), os.path.join(d, ".git", "hooks"))
+        wt = os.path.join(self.tmp, "wt")
+        git(d, "worktree", "add", "-q", "--detach", wt)
+        self.assertEqual(gitinfo.hooks_dir(wt), os.path.join(d, ".git", "hooks"))  # H2
+        sep = os.path.join(self.tmp, "sepwork")
+        os.mkdir(sep)
+        gitdir = os.path.join(self.tmp, "sepgit")
+        git(sep, "init", "-q", "-b", "main", "--separate-git-dir", gitdir)
+        self.assertTrue(os.path.isfile(os.path.join(sep, ".git")))
+        self.assertEqual(gitinfo.hooks_dir(sep), os.path.join(gitdir, "hooks"))  # H3
+        git(d, "config", "core.hooksPath", os.path.join(self.tmp, "abs-hooks"))  # H4
+        self.assertEqual(gitinfo.hooks_dir(d), os.path.join(self.tmp, "abs-hooks"))
+        git(d, "config", "core.hooksPath", "rel/hooks")
+        self.assertEqual(gitinfo.hooks_dir(d), os.path.join(d, "rel", "hooks"))
+        self.assertTrue(os.path.isabs(gitinfo.hooks_dir(d)))
+        git(d, "config", "core.hooksPath", "rel/../other/./hooks")  # a path with '..' and '.' is normalised
+        self.assertEqual(gitinfo.hooks_dir(d), os.path.join(d, "other", "hooks"))
+        git(d, "config", "core.hooksPath", "")  # set empty: git runs hooks from the top level
+        self.assertEqual(gitinfo.hooks_dir(d), d)
+
+    def test_hooks_dir_edge_whitespace(self):  # H4 (review-1 F-2): only git's one newline goes
+        d = self.fresh()
+        absolute = os.path.join(self.tmp, "abs hooks")
+        for label, value, want in (
+                ("leading space", " lead", os.path.join(d, " lead")),
+                ("trailing space", "trail ", os.path.join(d, "trail ")),
+                ("leading and trailing space", " both ", os.path.join(d, " both ")),
+                ("one trailing newline", "x\n", os.path.join(d, "x\n")),
+                ("two trailing newlines", "x\n\n", os.path.join(d, "x\n\n")),
+                ("trailing space then newline", "x \n", os.path.join(d, "x \n")),
+                ("newline inside", "a\nb", os.path.join(d, "a\nb")),
+                ("absolute, trailing newline", absolute + "\n", absolute + "\n"),
+                ("absolute, trailing space", absolute + " ", absolute + " ")):
+            with self.subTest(label):
+                git(d, "config", "core.hooksPath", value)
+                got = subprocess.run(["git", "-C", d, "rev-parse", "--git-path", "hooks"], stdout=subprocess.PIPE,
+                                     check=True).stdout
+                self.assertEqual(got, os.fsencode(value) + b"\n")  # git ends the answer with one newline
+                self.assertEqual(gitinfo.hooks_dir(d), want)
+
+    def test_hooks_dir_invalid_utf8(self):  # the decoding rule of the other readers (_text)
+        d = self.fresh()
+        subprocess.run(["git", "-C", d, "config", "core.hooksPath", b"/x/\xff"], check=True)
+        with self.assertRaises(GateError) as e:
+            gitinfo.hooks_dir(d)
+        self.assertEqual(str(e.exception), "git rev-parse --git-path hooks gave output that is not valid UTF-8")
+
+    def test_hooks_dir_bad_root(self):  # H5
+        d = self.fresh()
+        check_root_forms(self, root_forms(self.tmp, d), {"hooks_dir": gitinfo.hooks_dir})
+
 
 
 if __name__ == "__main__":

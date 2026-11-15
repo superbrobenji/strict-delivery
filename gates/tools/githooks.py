@@ -251,7 +251,8 @@ def _run_commands_test(root: str, cfg: dict) -> Line:
 
 def _staged_paths(root: str) -> List[str]:
     p = gitinfo._run(root, "diff --cached --name-only",
-                     ["diff", "--cached", "--no-color", "--name-only", "-z", "--no-ext-diff", "--no-textconv"])
+                     ["diff", "--cached", "--no-color", "--name-only", "-z", "--no-ext-diff", "--no-textconv",
+                      "--ignore-submodules=none"])
     return [gitinfo._text(raw, "diff --cached --name-only") for raw in p.stdout.split(b"\0") if raw]
 
 

@@ -357,9 +357,12 @@ def unstaged_paths(root: str) -> list:
     """The tracked paths whose work-tree content differs from the index git is using (``GIT_INDEX_FILE`` inherited;
     a relative value resolves against ``root``, because the call runs with ``-C root``): git's own ``diff`` rule, so a
     stat-only change is not listed, and a deleted file, an intent-to-add file and a changed submodule are (task 2b.2;
-    owner Q-RC-1 (a): colour, external diff and text conversion are switched off)."""
+    owner Q-RC-1 (a): colour, external diff and text conversion are switched off; ruling R-G1-1:
+    ``--ignore-submodules=none``, so ``diff.ignoreSubmodules`` and ``submodule.<name>.ignore`` cannot hide a changed
+    submodule, and a submodule holding only untracked files is listed too)."""
     _require_toplevel(root)
-    p = _run(root, "diff --name-only", ["diff", "--no-color", "--name-only", "-z", "--no-ext-diff", "--no-textconv"])
+    p = _run(root, "diff --name-only", ["diff", "--no-color", "--name-only", "-z", "--no-ext-diff", "--no-textconv",
+                                        "--ignore-submodules=none"])
     return [_text(raw, "diff --name-only") for raw in p.stdout.split(b"\0") if raw]
 
 
@@ -368,4 +371,7 @@ def hooks_dir(root: str) -> str:
     ``hooks`` for a linked worktree, ``core.hooksPath`` when set), a relative answer taken from ``root``."""
     _require_toplevel(root)
     p = _run(root, "rev-parse --git-path hooks", ["rev-parse", "--git-path", "hooks"])
-    return os.path.abspath(os.path.join(root, _text(p.stdout, "rev-parse --git-path hooks").rstrip("\n")))
+    path = _text(p.stdout, "rev-parse --git-path hooks")
+    if path.endswith("\n"):
+        path = path[:-1]  # git's one line terminator; every other byte (spaces, more newlines) is the path's own
+    return os.path.abspath(os.path.join(root, path))
