@@ -10,8 +10,10 @@ import unittest
 from unittest import mock
 
 from gates.lib.decisions import KNOWN_RULES
+from gates.lib.dispatch import MIN_TIERS
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROLES_MD = os.path.join(REPO, "playbook", "roles.md")
 RULES = os.path.join(REPO, "playbook", "rules.md")
 ALL = tuple("SD-R%d" % n for n in range(1, 20))
 
@@ -77,6 +79,49 @@ def table(ids) -> str:
 class KnownRulesDriftTest(unittest.TestCase):
     def test_known_rules_match_rules_md(self):  # D1 on this branch; strict on presence
         compare(KNOWN_RULES, RULES)
+
+
+def tiers_column(text: str):
+    """``{role: minimum tier}`` of the first markdown table whose header holds ``role`` and ``minimum tier`` columns;
+    ``None`` when the text holds no such table (Task 2c.3, Drift tests)."""
+    lines = text.splitlines()
+    for i in range(len(lines) - 1):
+        if lines[i].lstrip().startswith("|") and lines[i + 1].lstrip().startswith("|"):
+            head = _cells(lines[i])
+            if "role" in head and "minimum tier" in head:
+                r, t = head.index("role"), head.index("minimum tier")
+                out = {}
+                j = i + 2
+                while j < len(lines) and lines[j].lstrip().startswith("|"):
+                    cells = _cells(lines[j])
+                    out[cells[r]] = cells[t]
+                    j += 1
+                return out
+    return None
+
+
+class MinTiersDriftTest(unittest.TestCase):
+    def test_min_tiers_match_roles_md(self):  # skipTest only when playbook/roles.md is absent
+        if not os.path.lexists(ROLES_MD):
+            self.skipTest("playbook/roles.md absent on this branch: block B2 not merged")
+        with open(ROLES_MD, "rb") as fh:
+            got = tiers_column(fh.read().decode("utf-8"))
+        self.assertIsNotNone(got, "playbook/roles.md has no role / minimum tier table")
+        self.assertEqual({r: "tier%d" % t for r, t in MIN_TIERS.items()}, got)
+
+    def test_tiers_column_reads_the_table(self):
+        text = "| role | x | minimum tier |\n|---|---|---|\n| a | p | tier2 |\n| b | q | tier4 |\n\n| z |\n"
+        self.assertEqual(tiers_column(text), {"a": "tier2", "b": "tier4"})
+        self.assertIsNone(tiers_column("| a | b |\n|---|---|\n| 1 | 2 |\n"))
+
+    def test_drift_is_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "roles.md")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("| role | minimum tier |\n|---|---|\n" + "".join(
+                    "| %s | tier%d |\n" % (r, t + (r == "drafter")) for r, t in MIN_TIERS.items()))
+            with open(p, "rb") as fh:
+                self.assertNotEqual({r: "tier%d" % t for r, t in MIN_TIERS.items()}, tiers_column(fh.read().decode("utf-8")))
 
 
 class DriftHelperTests(unittest.TestCase):

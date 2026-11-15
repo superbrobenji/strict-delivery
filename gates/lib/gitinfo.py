@@ -216,6 +216,16 @@ def merge_base(root: str, a: str, b: str) -> str:
     return _text(p.stdout, "merge-base").strip()
 
 
+def is_ancestor(root: str, a: str, b: str) -> bool:
+    """True iff commit ``a`` is an ancestor of (or the same commit as) ``b``: ``git merge-base --is-ancestor``.
+    Exit 1 is False; any other failure (an unknown object, a bad root) is a GateError (owner Q-PLP-5 (a))."""
+    _check_rev(a)
+    _check_rev(b)
+    _require_toplevel(root)
+    p = _run(root, "merge-base --is-ancestor", ["merge-base", "--is-ancestor", a, b], ok=(0, 1))
+    return p.returncode == 0
+
+
 def _stage_entries(stdout: bytes, what: str) -> list:
     """Parse ``ls-files -z --stage`` output into (mode, object id, stage, path). ``-z`` ends each entry with NUL
     and quotes nothing, so a tab or newline in a path stays part of the path: the head before the first tab holds

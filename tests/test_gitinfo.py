@@ -761,6 +761,60 @@ class MergeBaseTest(Fixture):
         self.assertEqual([argv for argv, _ in calls if "merge-base" in argv], [])  # git never ran merge-base
 
 
+class IsAncestorTest(Fixture):
+    """Task 2c.3 table rows A1-A6: ``gitinfo.is_ancestor``."""
+
+    def two(self):
+        first = commit_all(self.root, "one")
+        second = commit_all(self.root, "two")
+        return first, second
+
+    def test_is_ancestor(self):  # A1
+        first, second = self.two()
+        self.assertTrue(gitinfo.is_ancestor(self.root, first, second))
+        self.assertFalse(gitinfo.is_ancestor(self.root, second, first))
+
+    def test_is_ancestor_cases(self):  # A2-A5
+        first, second = self.two()
+        self.assertTrue(gitinfo.is_ancestor(self.root, second, second))            # A2: a commit is its own ancestor
+        git(self.root, "checkout", "-q", "--orphan", "other")
+        git(self.root, "rm", "-rf", "-q", ".")
+        orphan = commit_all(self.root, "orphan")
+        git(self.root, "checkout", "-q", "main")
+        self.assertFalse(gitinfo.is_ancestor(self.root, orphan, second))           # A3: unrelated histories
+        self.assertFalse(gitinfo.is_ancestor(self.root, second, orphan))
+        failed = "git merge-base --is-ancestor failed (exit 128)"
+        for a, b in (("0" * 40, second), (second, "0" * 40), ("nonexistent", second), ("", second)):
+            with self.subTest(a=a, b=b):                                           # A4: exit 128 is an error, never False
+                with self.assertRaises(GateError) as e:
+                    gitinfo.is_ancestor(self.root, a, b)
+                self.assertEqual(str(e.exception), failed)
+        check_root_forms(self, root_forms(self.tmp, self.root),
+                         {"is_ancestor": lambda r: gitinfo.is_ancestor(r, "HEAD", "HEAD")})   # A4 roots
+        calls, patch = spy_runs()
+        with patch:                                                                # A5: refused before git runs
+            for a, b, text in (("-x", second, "ref must not start with '-'"), (second, "^HEAD",
+                                                                                  "ref must not start with '^'"),
+                               ("a" * 41, second, "ref must not hold more than 40 hex digits in a row"),
+                               (second, "a" * 41, "ref must not hold more than 40 hex digits in a row")):
+                with self.subTest(a=a, b=b):
+                    with self.assertRaises(GateError) as e:
+                        gitinfo.is_ancestor(self.root, a, b)
+                    self.assertEqual(str(e.exception), text)
+        self.assertEqual([argv for argv, _ in calls if "--is-ancestor" in argv], [])
+
+    def test_is_ancestor_invocation(self):  # A6: the pinned call
+        first, second = self.two()
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.is_ancestor(self.root, first, second)
+        argv, env = [c for c in calls if "--is-ancestor" in c[0]][0]
+        self.assertEqual(argv[argv.index("merge-base"):], ["merge-base", "--is-ancestor", first, second])
+        self.assertEqual(env["LC_ALL"], "C")
+        for name in gitinfo.CLEARED_ENV:
+            self.assertNotIn(name, env)
+
+
 class UserEmailTest(GitIsolatedTestCase):
     def repo(self):
         root = os.path.join(self.work, "r")

@@ -13,7 +13,8 @@ from tests.prose_check import (B_ROLES, DISPATCH_HEADINGS, LABELS, PROGRAM_ROLES
                                whole_token)
 
 WRITTEN = ("implementer", "implementer_transcription", "investigator", "task_reviewer", "final_reviewer",
-           "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier")
+           "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier",
+           "plan_writer", "plan_reviewer", "drafter")
 INTRO = "You act under the process. These rules override every other instruction, superpowers skill text included."
 STATUS = "status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED"
 
@@ -35,6 +36,10 @@ PLAN_LABELS = {
     "audit_reviewer": ["Verification method.", "Coverage first.", "Method."] + PLAN_TAIL,
     "audit_verifier": ["Verification method.", "Method.", "Verdict."] + PLAN_TAIL,
     "investigator": ["Verification method.", "Read-only."] + PLAN_TAIL,
+    "plan_writer": ["Verification method.", "Draft only.", "Plan shape.", "Input domain."] + PLAN_TAIL,
+    "plan_reviewer": ["Verification method.", "Read-only.", "Method.", "Input domain.", "No out-of-scope bucket.",
+                      "Verdict."] + PLAN_TAIL,
+    "drafter": ["Verification method.", "Draft only.", "Input domain."] + PLAN_TAIL,
 }
 PLAN_REQUIRED = {
     "Verification method.": ["directly", "by contradiction", "Record both commands"],
@@ -53,6 +58,8 @@ PLAN_REQUIRED = {
                              "`## Budget: tokens=<n> minutes=<n>`", "`## Model`", "`## Report`", "`## Strict block`",
                              "`## Task`", "fork"],
     "Read-only.": ["no tracked file"],
+    "Draft only.": ["draft file", "no tracked file"],
+    "Plan shape.": ["Input-domain dimensions", "assertions as code", "owner question"],
 }
 PLAN_HEADINGS = ["## Role", "## Brief", "## Findings", "## Claims", "## Budget: tokens=<n> minutes=<n>", "## Model",
                  "## Report", "## Strict block", "## Task"]
@@ -70,6 +77,9 @@ GOOD = {
     "Exception scope.": "Exception scope. Judge the exception.",
     "Coverage first.": "Coverage first. Count what was read.",
     "Read-only.": "Read-only. Leave no tracked file changed.",
+    "Draft only.": "Draft only. Write only the draft file; leave no tracked file changed.",
+    "Plan shape.": "Plan shape. Write Input-domain dimensions and assertions as code; anything open is an owner "
+                   "question, except a small point spec section 7.1 lets the controller decide.",
     "Input domain.": "Input domain. Every row of the input-domain table has a test.",
     "Unstated behaviour.": "Unstated behaviour. Stop NEEDS_DECISION; write one mutant per condition.",
     "No out-of-scope bucket.": "No out-of-scope bucket. A seeming exclusion is a class-narrowing question for the "
@@ -132,8 +142,9 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(SPEC_ROLES, (
             "program_controller", "stream_controller", "controller", "implementer", "implementer_transcription",
             "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer", "audit_reviewer",
-            "audit_verifier", "investigator"))
-        self.assertEqual(len(SPEC_ROLES), 12)
+            "audit_verifier", "investigator", "plan_writer", "plan_reviewer", "drafter"))
+        self.assertEqual(len(SPEC_ROLES), 15)
+        self.assertEqual(SPEC_ROLES[12:], ("plan_writer", "plan_reviewer", "drafter"))
         self.assertEqual(B_ROLES, SPEC_ROLES[2:])
         self.assertEqual(PROGRAM_ROLES, ("program_controller", "stream_controller"))
         self.assertTrue(set(B_ROLES) | set(PROGRAM_ROLES) == set(SPEC_ROLES) and not set(B_ROLES) & set(PROGRAM_ROLES))
@@ -141,6 +152,18 @@ class ConstantsTest(unittest.TestCase):
     def test_labels_table(self):                              # K2
         self.assertEqual(set(LABELS), set(B_ROLES))
         self.assertEqual({k: list(v) for k, v in LABELS.items()}, PLAN_LABELS)
+
+    def test_plan_roles_required_phrases(self):               # B3, Task 2c.3: (role, label, phrase) per subTest
+        rows = (("plan_writer", "Draft only.", ("draft file", "no tracked file")),
+                ("drafter", "Draft only.", ("draft file", "no tracked file")),
+                ("plan_writer", "Plan shape.", ("Input-domain dimensions", "assertions as code", "owner question")),
+                ("plan_reviewer", "Read-only.", ("no tracked file",)))
+        for role, label, phrases in rows:
+            with open(os.path.join(pc.prompts_dir(), role + ".md"), "rb") as f:
+                text = f.read().decode("ascii")
+            for phrase in phrases:
+                with self.subTest(role=role, label=label, phrase=phrase):
+                    self.assertTrue(whole_token(phrase, paragraph(text, label)))
 
     def test_required_table(self):                            # K3
         got = {}
@@ -1229,7 +1252,8 @@ def b13_swap(p, a, b):
 class B13Test(unittest.TestCase):
     def test_all_b_roles_written(self):                       # F1 F2, the plan's test
         self.assertEqual(sorted(WRITTEN), sorted(B_ROLES))
-        self.assertEqual(WRITTEN[7:], ("controller", "audit_reviewer", "audit_verifier"))     # plan order
+        self.assertEqual(WRITTEN[7:], ("controller", "audit_reviewer", "audit_verifier",
+                                       "plan_writer", "plan_reviewer", "drafter"))     # plan order, Task 2c.3 last
         for name, t in (("one dropped", WRITTEN[:-1]), ("one twice", WRITTEN + ("controller",)),
                         ("program role added", WRITTEN + ("program_controller",)),
                         ("one swapped for a program role", WRITTEN[:-1] + ("stream_controller",))):
@@ -1808,6 +1832,43 @@ SINGLE_SENTENCES = {
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
 }
+
+# Task 2c.3: the plan roles' and the drafter's pins. Their Zero bugs, No subagents, Owner-only and Report-contract
+# sentences are the investigator's and the task reviewer's own (the prose says the same), reused by name.
+_DRAFT_OWNER = SINGLE_SENTENCES["investigator"][0][1].replace("the question needs", "the draft needs")
+_PLAN_PRECEDENCE = ("Report contract.",
+                    "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE.")
+EXACT_PARAGRAPHS["plan_writer"] = list(EXACT_PARAGRAPHS["investigator"])
+EXACT_PARAGRAPHS["drafter"] = list(EXACT_PARAGRAPHS["investigator"])
+EXACT_PARAGRAPHS["plan_reviewer"] = [
+    ("Zero bugs.", (
+        "Zero bugs.",
+        "A defect in the draft is a finding and makes the draft incomplete.",
+        "A defect you find outside the draft is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+    )),
+    ("Verdict.", (
+        "Verdict.",
+        "You judge this one draft.",
+        "Report status DONE only on a clean pass: every quote, line number and consumed signature re-checked and no finding.",
+        "A cosmetic item (spec section 8) is not a finding.",
+        "Report DONE_WITH_FINDINGS when the draft holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+        "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+    )),
+    ("No out-of-scope bucket.", (
+        "No out-of-scope bucket.",
+        "Every defect you see is reported, whether the draft touched it or not: one the draft caused goes in findings, and one the draft did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
+        "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+        "A missing input-domain table is a finding.",
+    )),
+    ("No subagents.", (
+        "No subagents.",
+        "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+        "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+    )),
+]
+SINGLE_SENTENCES["plan_writer"] = [("Owner-only decisions.", _DRAFT_OWNER), _PLAN_PRECEDENCE]
+SINGLE_SENTENCES["drafter"] = [("Owner-only decisions.", _DRAFT_OWNER), _PLAN_PRECEDENCE]
+SINGLE_SENTENCES["plan_reviewer"] = [SINGLE_SENTENCES["task_reviewer"][0], _PLAN_PRECEDENCE]
 
 
 EXACT_LABELS = frozenset(("Dispatch discipline.", "Zero bugs.", "Verdict.", "No out-of-scope bucket.", "No subagents."))
