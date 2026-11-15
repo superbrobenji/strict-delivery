@@ -1,5 +1,5 @@
 kind: config
-version: 1
+version: 2
 format: yaml
 files:
   - path: config
@@ -133,3 +133,85 @@ fields:
   top_tier_fallback:
     type: str
     required: false
+  limits:
+    type: map
+    required: false
+    fields:
+      max_children:
+        type: any-map
+        required: false
+      max_depth:
+        type: int
+        required: false
+        min: 1
+      max_concurrent:
+        type: int
+        required: false
+        min: 1
+  merge:
+    type: map
+    required: false
+    fields:
+      mode:
+        type: enum
+        required: false
+        values:
+          - host
+          - controller
+  escape_cost:
+    type: map
+    required: false
+    fields:
+      CRITICAL:
+        type: int
+        min: 0
+      HIGH:
+        type: int
+        min: 0
+      MEDIUM:
+        type: int
+        min: 0
+      LOW:
+        type: int
+        min: 0
+  reviews:
+    type: map
+    required: false
+    fields:
+      small:
+        type: map
+        required: false
+        fields:
+          max_lines:
+            type: int
+            required: false
+            min: 1
+          max_files:
+            type: int
+            required: false
+            min: 1
+          exclude:
+            type: list
+            required: false
+            items:
+              type: glob
+          tier:
+            type: enum
+            required: false
+            values:
+              - tier1
+              - tier2
+              - tier3
+              - tier4
+  context:
+    type: map
+    required: false
+    fields:
+      max_lines:
+        type: int
+        required: false
+        min: 1
+      max_bytes:
+        type: int
+        required: false
+        min: 1

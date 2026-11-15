@@ -24,7 +24,7 @@ E128 = "git rev-parse --show-toplevel failed (exit 128)"
 
 
 def minimal_config() -> dict:
-    return {"schema": "config/1", "framework_version": "0.0.0", "profile": "strict"}
+    return {"schema": "config/2", "framework_version": "0.0.0", "profile": "strict"}
 
 
 def git(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -> str:

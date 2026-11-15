@@ -11,6 +11,10 @@ from gates.lib.gitinfo import LONG_HEX, _require_toplevel
 from gates.lib.result import GateError
 
 CONFIG_PATH = ".strict-delivery/config.yml"
+# The current config tag. It cannot be read from the schema file here: gates.lib.schema imports this module, so a
+# module-level import of schema would be circular. tests/test_config.py pins it to migrations.current_version("config").
+CONFIG_TAG = "config/2"
+_OLD_TAG = re.compile(r"config/[1-9][0-9]*")  # the tag form gate_schema gives the upgrade hint for (schema._TAG)
 
 DEFAULTS: dict = {
     "paths": {
@@ -39,11 +43,18 @@ DEFAULTS: dict = {
                        "finding-class", "rule-override", "program-create", "stream-ownership",
                        "stream-merge", "request-dispute", "program-close"],
     },
+    # No DEFAULTS entry for ``limits`` or ``escape_cost``: both are absent by default (Q-H2, Q-B6plan-3 (a)).
+    "merge": {"mode": "host"},
+    "reviews": {"small": {"max_lines": 150, "max_files": 4,
+                          "exclude": [".strict-delivery/**", ".github/workflows/**", ".claude/**", "CLAUDE.md"],
+                          "tier": "tier2"}},
+    "context": {"max_lines": 2000, "max_bytes": 100000},
 }
 
 CONFIG_KEYS = ("schema", "framework_version", "profile", "commands", "paths", "ids", "models", "roles",
                "top_tier_roles", "top_tier_fallback", "decision_classes", "block", "rulings", "dispatch",
-               "budgets", "drift", "overrides", "base_branch", "decisions")
+               "budgets", "drift", "overrides", "base_branch", "decisions", "limits", "merge", "escape_cost",
+               "reviews", "context")
 _REQUIRED = ("schema", "framework_version", "profile")
 _PROFILES = ("light", "standard", "strict")
 _OPEN_MAPS = ("models.tiers",)  # mappings that keep keys the defaults do not name
@@ -89,9 +100,63 @@ def _check_path(key: str, v: object) -> None:
         raise _bad(key, "must be a non-empty normalised repo-relative path of printable characters")
 
 
+def _unknown(full: str) -> GateError:
+    return GateError("%s: unknown key '%s'" % (CONFIG_PATH, full))
+
+
+def _int_min(v: object, key: str, least: int) -> None:
+    if type(v) is not int or v < least:
+        raise _bad(key, "must be an integer of at least %d" % least)
+
+
+def _check_glob(key: str, item: object) -> None:
+    """``item`` is a glob of the framework's one grammar: a non-empty normalised repo-relative pattern of printable
+    characters (no leading ``/``, no empty, ``.`` or ``..`` segment) whose bracket expressions are supported."""
+    from gates.lib import schema  # function-local: schema imports this module (D4)
+    # An empty item and a leading '/' both give an empty first segment, so the segment test covers them.
+    if (not isinstance(item, str) or not print_table.is_printable(item)
+            or any(seg in ("", ".", "..") for seg in item.split("/")) or schema.bracket_problem(item)):
+        raise _bad(key, "must hold only globs: non-empty printable repo-relative patterns with no leading '/', "
+                   "no empty, '.' or '..' segment and supported bracket expressions")
+
+
+def _validate_limits(limits: object) -> None:
+    if type(limits) is not dict:
+        raise _bad("limits", "must be a mapping")
+    for k in limits:
+        if k not in ("max_children", "max_depth", "max_concurrent"):
+            raise _unknown("limits." + k)
+    if "max_children" in limits:
+        mc = limits["max_children"]
+        if type(mc) is not dict:
+            raise _bad("limits.max_children", "must be a mapping")
+        for role, n in mc.items():
+            if role == "":  # yamlsub gives only str keys, so a non-str key is unreachable (table L14)
+                raise _bad("limits.max_children", "keys must be non-empty strings")
+            _int_min(n, "limits.max_children." + role, 1)
+    for k in ("max_depth", "max_concurrent"):
+        if k in limits:
+            _int_min(limits[k], "limits." + k, 1)
+
+
+def _validate_escape_cost(ec: object) -> None:
+    sev = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+    if type(ec) is not dict:
+        raise _bad("escape_cost", "must be a mapping")
+    for k in ec:
+        if k not in sev:
+            raise _unknown("escape_cost." + k)
+    for k in sev:
+        if k not in ec:
+            raise _bad("escape_cost." + k, "required key is missing")
+        _int_min(ec[k], "escape_cost." + k, 0)
+
+
 def _validate(cfg: dict) -> None:
-    if cfg["schema"] != "config/1":
-        raise _bad("schema", "must be 'config/1'")
+    tag = cfg["schema"]
+    if tag != CONFIG_TAG:
+        hint = "; run /strict-delivery:upgrade" if type(tag) is str and _OLD_TAG.fullmatch(tag) else ""
+        raise _bad("schema", "must be '%s'%s" % (CONFIG_TAG, hint))
     fv = cfg["framework_version"]
     if not isinstance(fv, str) or fv == "":
         raise _bad("framework_version", "must be a non-empty string")
@@ -117,6 +182,23 @@ def _validate(cfg: dict) -> None:
     pct = cfg["drift"]["estimate_factor_pct"]
     if type(pct) is not int or pct < 1:
         raise _bad("drift.estimate_factor_pct", "must be an integer of at least 1")
+    if "limits" in cfg:
+        _validate_limits(cfg["limits"])
+    if cfg["merge"]["mode"] not in ("host", "controller"):
+        raise _bad("merge.mode", "must be one of host, controller")
+    if "escape_cost" in cfg:
+        _validate_escape_cost(cfg["escape_cost"])
+    small = cfg["reviews"]["small"]
+    _int_min(small["max_lines"], "reviews.small.max_lines", 1)
+    _int_min(small["max_files"], "reviews.small.max_files", 1)
+    if type(small["exclude"]) is not list:
+        raise _bad("reviews.small.exclude", "must be a list of globs")
+    for item in small["exclude"]:
+        _check_glob("reviews.small.exclude", item)
+    if small["tier"] not in ("tier1", "tier2", "tier3", "tier4"):
+        raise _bad("reviews.small.tier", "must be one of tier1, tier2, tier3, tier4")
+    for k in ("max_lines", "max_bytes"):
+        _int_min(cfg["context"][k], "context." + k, 1)
 
 
 def load(root: str) -> dict:

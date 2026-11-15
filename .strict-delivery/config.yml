@@ -1,3 +1,20 @@
-schema: config/1
+schema: config/2
 framework_version: "0.0.0"
 profile: strict
+reviews:
+  small:
+    exclude:
+      - .strict-delivery/**
+      - .github/workflows/**
+      - .claude/**
+      - CLAUDE.md
+      - gates/lib/**
+      - gates/schemas/**
+      - gates/gate_schema.py
+      - gates/hook.py
+      - gates/hooks/**
+      - hooks/**
+      - gates/gate_dispatch.py
+      - gates/__main__.py
+      - gates/producers.py
+      - gates/run_all.py

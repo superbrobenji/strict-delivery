@@ -34,12 +34,12 @@ class D(dict):
 
 class RegistryTests(unittest.TestCase):
     def test_registered_steps(self):  # R1; spec 15 "every migration is tested from an old fixture"
-        self.assertEqual(set(MIGRATIONS), {("decision", 1)})
+        self.assertEqual(set(MIGRATIONS), {("decision", 1), ("config", 1)})  # G4
 
     def test_current_version_reads_schema_file(self):  # V1
         self.assertEqual(current_version("decision"), 2)
         self.assertEqual(current_version("finding"), 1)
-        self.assertEqual(current_version("config"), 1)
+        self.assertEqual(current_version("config"), 2)
 
     def test_current_version_follows_the_schemas_dir(self):  # V1: read from the file, never a literal
         with tempfile.TemporaryDirectory() as d:
@@ -77,6 +77,55 @@ class RegistryTests(unittest.TestCase):
                     with self.assertRaises(schema.SchemaError) as cm:
                         current_version(kind)
                 self.assertEqual(str(cm.exception), "%s: not a known schema kind" % (kind,))
+
+
+CONFIG_V1 = {"schema": "config/1", "framework_version": "0.0.0", "profile": "strict",
+             "paths": {"state": "s", "decisions": "d"}, "ids": {"decision": "DEC", "finding": "F"},
+             "base_branch": "main", "decisions": {"scan": ["docs/**", "CLAUDE.md"]},
+             "models": {"tiers": {"tier1": "haiku", "tier2": "sonnet"}},
+             "commands": {"test": "make test"}, "roles": {"a": [1, 2]}, "top_tier_roles": ["x"],
+             "top_tier_fallback": "tier3", "decision_classes": {"owner_only": ["triage", "scope"]},
+             "block": {"k": {"j": [1, {"z": 2}]}}, "rulings": {}, "dispatch": {"d": 1}, "budgets": {"b": {"c": 3}},
+             "drift": {"estimate_factor_pct": 150}, "overrides": {"o": ["p"]}}
+
+
+def _containers(x, out):
+    if isinstance(x, (dict, list)):
+        out.append(x)
+        for v in (x.values() if isinstance(x, dict) else x):
+            _containers(v, out)
+    return out
+
+
+class ConfigMigrationTests(unittest.TestCase):
+    def test_config_1_migrates_to_2(self):  # G1
+        self.assertEqual(migrate("config", {"schema": "config/1", "profile": "strict"}),
+                         {"schema": "config/2", "profile": "strict"})
+
+    def test_config_step_copies_and_sets_tag_only(self):  # G2
+        before = copy.deepcopy(CONFIG_V1)
+        got = migrate("config", CONFIG_V1)
+        self.assertEqual(got, {**before, "schema": "config/2"})
+        self.assertEqual(list(got), list(before))
+        self.assertEqual(CONFIG_V1, before)
+        old_ids = {id(c) for c in _containers(CONFIG_V1, [])}
+        self.assertTrue(old_ids)
+        self.assertFalse(old_ids & {id(c) for c in _containers(got, [])})
+        self.assertIsNot(got, CONFIG_V1)
+
+    def test_config_migrate_noop_rows(self):  # G3
+        for row in ({"schema": "config/2", "profile": "strict"}, {"schema": "config/3"}, {"schema": "decision/1"},
+                    {"profile": "strict"}, {"schema": "config/01"}, {"schema": "config/0"}):
+            with self.subTest(row=row):
+                before = copy.deepcopy(row)
+                self.assertIs(migrate("config", row), row)
+                self.assertEqual(row, before)
+
+    def test_config_gap_leaves_the_row(self):
+        with mock.patch.dict(MIGRATIONS):
+            del MIGRATIONS[("config", 1)]
+            row = {"schema": "config/1"}
+            self.assertIs(migrate("config", row), row)
 
 
 class MigrateTests(unittest.TestCase):
