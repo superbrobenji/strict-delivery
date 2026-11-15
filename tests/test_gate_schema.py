@@ -238,6 +238,30 @@ class Config2Schema(GateCase):
                 self.assertTrue(lines[1].startswith("FAIL schema.config..strict-delivery/config.yml: " + dotted + ": "),
                                 lines)
 
+    def test_schema_file_exclude_items_are_globs(self):  # F-2c2-R1-1: the item type of reviews.small.exclude
+        """Exact lines, written by hand from schema.py's ``glob`` type: a non-str or empty item gives ``must be a
+        non-empty glob``, null gives ``must not be null``, a bracket expression outside the grammar gives
+        ``must be a supported glob: the bracket expression [..] holds <problem>``. ``[!]`` has no closing ``]``
+        once the leading ``!`` and ``]`` are read, so fnmatch takes it as literal text and it is accepted."""
+        allowed = (r"which is not allowed: inside [ ] use an optional leading ! then characters or ranges x-y "
+                   r"(x <= y) of printable ASCII other than ! - [ \\ ] ^ & ~ |")  # Result.render escapes `\` once
+        pre = "FAIL schema.config..strict-delivery/config.yml: reviews.small.exclude.%d: "
+        cases = [("[z-a]", "must be a supported glob: the bracket expression [z-a] holds the reversed range z-a"),
+                 ("[a-]", "must be a supported glob: the bracket expression [a-] holds U+002D, " + allowed),
+                 ("[^a]", "must be a supported glob: the bracket expression [^a] holds U+005E, " + allowed),
+                 ("[é]", "must be a supported glob: the bracket expression [é] holds U+00E9, " + allowed),
+                 (3, "must be a non-empty glob"), ("", "must be a non-empty glob"), (None, "must not be null")]
+        for item, why in cases:
+            for pos in (0, 1):
+                with self.subTest(item=item, pos=pos):
+                    items = ["ok/**"] * pos + [item]
+                    lines, code = self.out({"reviews": {"small": {"exclude": items}}})
+                    self.assertEqual((lines[1:], code), ([(pre % pos) + why], 1))
+        for item in ("[!]", "[a]", "[!a]", "a/*.py", "CLAUDE.md"):
+            with self.subTest(accepted=item):
+                self.assertEqual(self.out({"reviews": {"small": {"exclude": [item]}}}),
+                                 (["PASS schema.kinds", "PASS schema.config"], 0))
+
 
 class Config(GateCase):
     def test_C15_valid_config_passes(self):
