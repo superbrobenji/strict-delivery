@@ -15,7 +15,7 @@ cites:
   - file: gates/run_all.py
     lines: "55"
     sha: 41cff11
-repro: "Mutants r-imp-err (a write to stderr in the import-site except at gates/run_all.py:55, corrected from review-cr.md:107 which says :61) and r-se-out (a stderr line in the SystemExit branch at :37) both pass the whole tests.test_run_all module on both interpreters, because RunAllCase.run_main (tests/test_run_all.py:141-145) captures stderr and discards it (source review-cr.md:105-112; not run for this row)."
+repro: "Mutants r-imp-err (a write to stderr in the import-site except at gates/run_all.py:55, corrected from review-cr.md:107 which says :61) and r-se-out (a stderr line in the SystemExit branch at :37) both pass the whole tests.test_run_all module on both interpreters, because RunAllCase.run_main (tests/test_run_all.py:141-145) captures stderr and discards it (source review-cr.md:105-108; not run for this row)."
 owner:
   kind: roadmap
   plan: 2026-10-31-strict-delivery-framework
