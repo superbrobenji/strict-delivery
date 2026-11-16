@@ -1,0 +1,210 @@
+B4: seven LOW findings of Task B3 fixed in the framework prose and its tests (FR-1, U-3, FV-1, FV-2, U-2, U-4, U-5, U-6)
+harness: the worktree /Users/benji/projects/personal/strict-delivery-worktrees/b/sb4 on block/sb4 (base f3ec748) holding the change; each mutant is one exact string change to one file, run on /usr/bin/python3 (3.9.6) and /opt/homebrew/bin/python3.13 (3.13.18) in parallel, then restored byte for byte (read back and compared); script mutate.py in the session scratch directory.
+note: the present PASS line is the run of the targeted modules on the fixed tree; restored PASS is the same run after each restore. FR-1/U-3 mutants revert the skip (to the old assertIn/changed presence check) or make it invisible; FV-1 mutants revert the file-wide count; U-2/U-4/U-5 mutants delete, revert, or copy the new sentence into another paragraph of the same file; U-6 mutants revert one of the two pin tests to a substring test.
+note: a mutant FAIL line carries the failing test method names (first 150 characters).
+
+## FV-2
+FV-2 is comment and name only: the three row-14 test comments now say `Cn on 3.9, Lu on 3.13` and the three methods are named test_version_dependent_code_point_refused_by_the_character_check (tests/test_prompt_blocks.py, tests/test_playbook.py, tests/test_skill.py). Probe, python3 -I probe.py with c = chr(0x2C2F), run on both interpreters:
+3.9.6 unidata 13.0.0 Cn lower 0x2c2f isprintable False
+3.13.18 unidata 15.1.0 Lu lower 0x2c5f isprintable True
+
+## FR-1
+FR-1: harmless-rewording self-check requires its sample phrase on disk (prompt blocks, playbook, K20)
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_prompt_blocks tests.test_playbook
+present PASS (test_prompt_blocks,test_playbook)                   python3     rc=0 OK 
+present PASS (test_prompt_blocks,test_playbook)                   python3.13  rc=0 OK 
+mutant FAIL DIRECTIVE_HARMLESS skip reverted to assertIn         python3     rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+mutant FAIL DIRECTIVE_HARMLESS skip reverted to assertIn         python3.13  rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+restored PASS DIRECTIVE_HARMLESS skip reverted to assertIn         python3     rc=0 OK 
+restored PASS DIRECTIVE_HARMLESS skip reverted to assertIn         python3.13  rc=0 OK 
+mutant FAIL DIRECTIVE_HARMLESS skip made invisible (continue)    python3     rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+mutant FAIL DIRECTIVE_HARMLESS skip made invisible (continue)    python3.13  rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+restored PASS DIRECTIVE_HARMLESS skip made invisible (continue)    python3     rc=0 OK 
+restored PASS DIRECTIVE_HARMLESS skip made invisible (continue)    python3.13  rc=0 OK 
+mutant FAIL B3_HARMLESS skip reverted to assertIn                python3     rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+mutant FAIL B3_HARMLESS skip reverted to assertIn                python3.13  rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+restored PASS B3_HARMLESS skip reverted to assertIn                python3     rc=0 OK 
+restored PASS B3_HARMLESS skip reverted to assertIn                python3.13  rc=0 OK 
+mutant FAIL B3_HARMLESS skip made invisible (continue)           python3     rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+mutant FAIL B3_HARMLESS skip made invisible (continue)           python3.13  rc=1 FAILED (failures=5) test_harmless_row_absent_on_disk_is_skipped_not_failed
+restored PASS B3_HARMLESS skip made invisible (continue)           python3     rc=0 OK 
+restored PASS B3_HARMLESS skip made invisible (continue)           python3.13  rc=0 OK 
+mutant FAIL K20 SD-R7 skip reverted to a bare index              python3     rc=1 FAILED (failures=1) test_k20_absent_phrase_is_skipped_not_failed
+mutant FAIL K20 SD-R7 skip reverted to a bare index              python3.13  rc=1 FAILED (failures=1) test_k20_absent_phrase_is_skipped_not_failed
+restored PASS K20 SD-R7 skip reverted to a bare index              python3     rc=0 OK 
+restored PASS K20 SD-R7 skip reverted to a bare index              python3.13  rc=0 OK 
+
+## U-3
+U-3: test_skill HARMLESS rows go through changed() and need the phrase on disk
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_skill
+present PASS (test_skill)                                         python3     rc=0 OK 
+present PASS (test_skill)                                         python3.13  rc=0 OK 
+mutant FAIL HARMLESS skip reverted to changed() presence check   python3     rc=1 FAILED (failures=7) test_harmless_row_absent_on_disk_is_skipped_not_failed
+mutant FAIL HARMLESS skip reverted to changed() presence check   python3.13  rc=1 FAILED (failures=7) test_harmless_row_absent_on_disk_is_skipped_not_failed
+restored PASS HARMLESS skip reverted to changed() presence check   python3     rc=0 OK 
+restored PASS HARMLESS skip reverted to changed() presence check   python3.13  rc=0 OK 
+mutant FAIL HARMLESS skip made invisible (continue)              python3     rc=1 FAILED (failures=7) test_harmless_row_absent_on_disk_is_skipped_not_failed
+mutant FAIL HARMLESS skip made invisible (continue)              python3.13  rc=1 FAILED (failures=7) test_harmless_row_absent_on_disk_is_skipped_not_failed
+restored PASS HARMLESS skip made invisible (continue)              python3     rc=0 OK 
+restored PASS HARMLESS skip made invisible (continue)              python3.13  rc=0 OK 
+
+## FV-1
+FV-1: placement checks count each new sentence over its paragraph or unit, not its file
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_prompt_blocks tests.test_playbook
+present PASS (test_prompt_blocks,test_playbook)                   python3     rc=0 OK 
+present PASS (test_prompt_blocks,test_playbook)                   python3.13  rc=0 OK 
+mutant FAIL placed_problem counts over the paragraph             python3     rc=1 FAILED (failures=35) test_copied_into_another_paragraph_refused
+mutant FAIL placed_problem counts over the paragraph             python3.13  rc=1 FAILED (failures=35) test_copied_into_another_paragraph_refused
+restored PASS placed_problem counts over the paragraph             python3     rc=0 OK 
+restored PASS placed_problem counts over the paragraph             python3.13  rc=0 OK 
+mutant FAIL b3_problems counts over the unit                     python3     rc=1 FAILED (failures=13) test_copied_into_another_unit_of_the_file_refused
+mutant FAIL b3_problems counts over the unit                     python3.13  rc=1 FAILED (failures=13) test_copied_into_another_unit_of_the_file_refused
+restored PASS b3_problems counts over the unit                     python3     rc=0 OK 
+restored PASS b3_problems counts over the unit                     python3.13  rc=0 OK 
+
+## U-6
+U-6: substring pins in the skill's pin check
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_skill
+present PASS (test_skill)                                         python3     rc=0 OK 
+present PASS (test_skill)                                         python3.13  rc=0 OK 
+mutant FAIL section-level pin check back to a substring          python3     rc=0 OK 
+mutant FAIL section-level pin check back to a substring          python3.13  rc=0 OK 
+restored PASS section-level pin check back to a substring          python3     rc=0 OK 
+restored PASS section-level pin check back to a substring          python3.13  rc=0 OK 
+mutant FAIL sentence-level pin check back to a substring         python3     rc=1 FAILED (failures=7) test_pins_are_whole_tokens
+mutant FAIL sentence-level pin check back to a substring         python3.13  rc=1 FAILED (failures=7) test_pins_are_whole_tokens
+restored PASS sentence-level pin check back to a substring         python3     rc=0 OK 
+restored PASS sentence-level pin check back to a substring         python3.13  rc=0 OK 
+
+## U-6 (re-run)
+note: the first U-6 run above had one survivor, "section-level pin check back to a substring" (rc=0 OK): no test isolated the section-level check, because every pin removed in the tests also left an unpinned sentence. Test side fix: test_pins_are_whole_tokens gained the case "section-level check alone" (the U-2 line loses its first pin to a joined letter, keeps its second pin). The survivor is re-run on the full suites at the end of this file.
+
+## U-6
+U-6: substring pins in the skill's pin check
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_skill
+present PASS (test_skill)                                         python3     rc=0 OK 
+present PASS (test_skill)                                         python3.13  rc=0 OK 
+mutant FAIL section-level pin check back to a substring          python3     rc=1 FAILED (failures=1) test_pins_are_whole_tokens
+mutant FAIL section-level pin check back to a substring          python3.13  rc=1 FAILED (failures=1) test_pins_are_whole_tokens
+restored PASS section-level pin check back to a substring          python3     rc=0 OK 
+restored PASS section-level pin check back to a substring          python3.13  rc=0 OK 
+mutant FAIL sentence-level pin check back to a substring         python3     rc=1 FAILED (failures=7) test_pins_are_whole_tokens
+mutant FAIL sentence-level pin check back to a substring         python3.13  rc=1 FAILED (failures=7) test_pins_are_whole_tokens
+restored PASS sentence-level pin check back to a substring         python3     rc=0 OK 
+restored PASS sentence-level pin check back to a substring         python3.13  rc=0 OK 
+
+## U-2
+U-2: shipped prose says a dispatch names a tier, never a model
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_skill tests.test_playbook tests.test_prompt_blocks
+present PASS (test_skill,test_playbook,test_prompt_blocks)        python3     rc=0 OK 
+present PASS (test_skill,test_playbook,test_prompt_blocks)        python3.13  rc=0 OK 
+mutant FAIL SKILL.md line back to the old unqualified text       python3     rc=1 FAILED (failures=37, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+mutant FAIL SKILL.md line back to the old unqualified text       python3.13  rc=1 FAILED (failures=37, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+restored PASS SKILL.md line back to the old unqualified text       python3     rc=0 OK 
+restored PASS SKILL.md line back to the old unqualified text       python3.13  rc=0 OK 
+mutant FAIL SKILL.md `## Model` clause dropped                   python3     rc=1 FAILED (failures=33, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+mutant FAIL SKILL.md `## Model` clause dropped                   python3.13  rc=1 FAILED (failures=33, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+restored PASS SKILL.md `## Model` clause dropped                   python3     rc=0 OK 
+restored PASS SKILL.md `## Model` clause dropped                   python3.13  rc=0 OK 
+mutant FAIL roles.md back to the old unqualified text            python3     rc=1 FAILED (failures=38, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_class_every_block_end_verifier_paragraph_conditioned,test_class_refuses_an_uncondi
+mutant FAIL roles.md back to the old unqualified text            python3.13  rc=1 FAILED (failures=38, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_class_every_block_end_verifier_paragraph_conditioned,test_class_refuses_an_uncondi
+restored PASS roles.md back to the old unqualified text            python3     rc=0 OK 
+restored PASS roles.md back to the old unqualified text            python3.13  rc=0 OK 
+mutant FAIL roles.md `## Model` clause dropped                   python3     rc=1 FAILED (failures=36, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_class_every_block_end_verifier_paragraph_conditioned,test_class_refuses_an_uncondi
+mutant FAIL roles.md `## Model` clause dropped                   python3.13  rc=1 FAILED (failures=36, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_class_every_block_end_verifier_paragraph_conditioned,test_class_refuses_an_uncondi
+restored PASS roles.md `## Model` clause dropped                   python3     rc=0 OK 
+restored PASS roles.md `## Model` clause dropped                   python3.13  rc=0 OK 
+mutant FAIL controller.md back to the old unqualified text       python3     rc=1 FAILED (failures=67) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+mutant FAIL controller.md back to the old unqualified text       python3.13  rc=1 FAILED (failures=67) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+restored PASS controller.md back to the old unqualified text       python3     rc=0 OK 
+restored PASS controller.md back to the old unqualified text       python3.13  rc=0 OK 
+mutant FAIL controller.md `## Model` exception dropped           python3     rc=1 FAILED (failures=67) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+mutant FAIL controller.md `## Model` exception dropped           python3.13  rc=1 FAILED (failures=67) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+restored PASS controller.md `## Model` exception dropped           python3     rc=0 OK 
+restored PASS controller.md `## Model` exception dropped           python3.13  rc=0 OK 
+mutant FAIL controller.md sentence copied into Oracle.           python3     rc=1 FAILED (failures=44) test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless
+mutant FAIL controller.md sentence copied into Oracle.           python3.13  rc=1 FAILED (failures=44) test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless
+restored PASS controller.md sentence copied into Oracle.           python3     rc=0 OK 
+restored PASS controller.md sentence copied into Oracle.           python3.13  rc=0 OK 
+mutant FAIL roles.md sentence copied into Budget cap             python3     rc=1 FAILED (failures=10) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+mutant FAIL roles.md sentence copied into Budget cap             python3.13  rc=1 FAILED (failures=10) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+restored PASS roles.md sentence copied into Budget cap             python3     rc=0 OK 
+restored PASS roles.md sentence copied into Budget cap             python3.13  rc=0 OK 
+
+## U-4
+U-4: the input-domain table rule lacks spec 8 :505's open-grammar sentence
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_skill tests.test_playbook tests.test_prompt_blocks
+present PASS (test_skill,test_playbook,test_prompt_blocks)        python3     rc=0 OK 
+present PASS (test_skill,test_playbook,test_prompt_blocks)        python3.13  rc=0 OK 
+mutant FAIL review.md sentence deleted                           python3     rc=1 FAILED (failures=30, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_copied_into_another_unit_of_the_file_refused,test_deleted_sentence_refused_naming_
+mutant FAIL review.md sentence deleted                           python3.13  rc=1 FAILED (failures=30, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_copied_into_another_unit_of_the_file_refused,test_deleted_sentence_refused_naming_
+restored PASS review.md sentence deleted                           python3     rc=0 OK 
+restored PASS review.md sentence deleted                           python3.13  rc=0 OK 
+mutant FAIL sessions.md sentence deleted                         python3     rc=1 FAILED (failures=28, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_copied_into_another_unit_of_the_file_refused,test_deleted_sentence_refused_naming_
+mutant FAIL sessions.md sentence deleted                         python3.13  rc=1 FAILED (failures=28, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_copied_into_another_unit_of_the_file_refused,test_deleted_sentence_refused_naming_
+restored PASS sessions.md sentence deleted                         python3     rc=0 OK 
+restored PASS sessions.md sentence deleted                         python3.13  rc=0 OK 
+mutant FAIL SKILL.md line deleted                                python3     rc=1 FAILED (failures=31, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+mutant FAIL SKILL.md line deleted                                python3.13  rc=1 FAILED (failures=31, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+restored PASS SKILL.md line deleted                                python3     rc=0 OK 
+restored PASS SKILL.md line deleted                                python3.13  rc=0 OK 
+mutant FAIL controller.md sentence deleted                       python3     rc=1 FAILED (failures=60) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+mutant FAIL controller.md sentence deleted                       python3.13  rc=1 FAILED (failures=60) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+restored PASS controller.md sentence deleted                       python3     rc=0 OK 
+restored PASS controller.md sentence deleted                       python3.13  rc=0 OK 
+mutant FAIL review.md sentence copied into item 2                python3     rc=1 FAILED (failures=8) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+mutant FAIL review.md sentence copied into item 2                python3.13  rc=1 FAILED (failures=8) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+restored PASS review.md sentence copied into item 2                python3     rc=0 OK 
+restored PASS review.md sentence copied into item 2                python3.13  rc=0 OK 
+mutant FAIL sessions.md sentence copied into Blocks and checkpoints python3     rc=1 FAILED (failures=8) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+mutant FAIL sessions.md sentence copied into Blocks and checkpoints python3.13  rc=1 FAILED (failures=8) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+restored PASS sessions.md sentence copied into Blocks and checkpoints python3     rc=0 OK 
+restored PASS sessions.md sentence copied into Blocks and checkpoints python3.13  rc=0 OK 
+mutant FAIL SKILL.md sentence copied into Verification method line 1 python3     rc=1 FAILED (failures=17) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_harmless_rewordings_pass,test_harmless_row_absent_on_disk_is_skipped_
+mutant FAIL SKILL.md sentence copied into Verification method line 1 python3.13  rc=1 FAILED (failures=17) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_harmless_rewordings_pass,test_harmless_row_absent_on_disk_is_skipped_
+restored PASS SKILL.md sentence copied into Verification method line 1 python3     rc=0 OK 
+restored PASS SKILL.md sentence copied into Verification method line 1 python3.13  rc=0 OK 
+mutant FAIL controller.md sentence copied into Oracle.           python3     rc=1 FAILED (failures=43) test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless
+mutant FAIL controller.md sentence copied into Oracle.           python3.13  rc=1 FAILED (failures=43) test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless
+restored PASS controller.md sentence copied into Oracle.           python3     rc=0 OK 
+restored PASS controller.md sentence copied into Oracle.           python3.13  rc=0 OK 
+
+## U-5
+U-5: controller handoff with live children
+command: PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH <python> -m unittest tests.test_skill tests.test_playbook tests.test_prompt_blocks
+present PASS (test_skill,test_playbook,test_prompt_blocks)        python3     rc=0 OK 
+present PASS (test_skill,test_playbook,test_prompt_blocks)        python3.13  rc=0 OK 
+mutant FAIL SKILL.md line deleted                                python3     rc=1 FAILED (failures=31, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+mutant FAIL SKILL.md line deleted                                python3.13  rc=1 FAILED (failures=31, errors=1) test_all_checks_pass,test_control_and_non_ascii_bytes_in_a_new_line_refused,test_deleted_line_refused_by_the_pin_and_the_placement,test_digit_runs_ref
+restored PASS SKILL.md line deleted                                python3     rc=0 OK 
+restored PASS SKILL.md line deleted                                python3.13  rc=0 OK 
+mutant FAIL sessions.md sentence deleted                         python3     rc=1 FAILED (failures=20, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_copied_into_another_unit_of_the_file_refused,test_deleted_sentence_refused_naming_
+mutant FAIL sessions.md sentence deleted                         python3.13  rc=1 FAILED (failures=20, errors=1) test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same,test_copied_into_another_unit_of_the_file_refused,test_deleted_sentence_refused_naming_
+restored PASS sessions.md sentence deleted                         python3     rc=0 OK 
+restored PASS sessions.md sentence deleted                         python3.13  rc=0 OK 
+mutant FAIL controller.md sentence deleted                       python3     rc=1 FAILED (failures=57) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+mutant FAIL controller.md sentence deleted                       python3.13  rc=1 FAILED (failures=57) test_control_and_non_ascii_bytes_in_new_sentence_refused,test_copied_into_another_paragraph_refused,test_deleted_sentence_names_label_refused,test_dig
+restored PASS controller.md sentence deleted                       python3     rc=0 OK 
+restored PASS controller.md sentence deleted                       python3.13  rc=0 OK 
+mutant FAIL SKILL.md sentence copied into Continuation line      python3     rc=1 FAILED (failures=17) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_harmless_rewordings_pass,test_harmless_row_absent_on_disk_is_skipped_
+mutant FAIL SKILL.md sentence copied into Continuation line      python3.13  rc=1 FAILED (failures=17) test_all_checks_pass,test_deleted_line_refused_by_the_pin_and_the_placement,test_harmless_rewordings_pass,test_harmless_row_absent_on_disk_is_skipped_
+restored PASS SKILL.md sentence copied into Continuation line      python3     rc=0 OK 
+restored PASS SKILL.md sentence copied into Continuation line      python3.13  rc=0 OK 
+mutant FAIL sessions.md sentence copied into Blocks and checkpoints python3     rc=1 FAILED (failures=8) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+mutant FAIL sessions.md sentence copied into Blocks and checkpoints python3.13  rc=1 FAILED (failures=8) test_copied_into_another_unit_of_the_file_refused,test_harmless_rewording_passes,test_harmless_row_absent_on_disk_is_skipped_not_failed,test_new_sente
+restored PASS sessions.md sentence copied into Blocks and checkpoints python3     rc=0 OK 
+restored PASS sessions.md sentence copied into Blocks and checkpoints python3.13  rc=0 OK 
+mutant FAIL controller.md sentence copied into Background work.  python3     rc=1 FAILED (failures=43) test_copied_into_another_paragraph_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes,test_harmless_row_absent
+mutant FAIL controller.md sentence copied into Background work.  python3.13  rc=1 FAILED (failures=43) test_copied_into_another_paragraph_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes,test_harmless_row_absent
+restored PASS controller.md sentence copied into Background work.  python3     rc=0 OK 
+restored PASS controller.md sentence copied into Background work.  python3.13  rc=0 OK 
+mutant FAIL controller.md sentence moved into Continuation. (PB7 pins it unchanged) python3     rc=1 FAILED (failures=43) test_copied_into_another_paragraph_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes,test_harmless_row_absent
+mutant FAIL controller.md sentence moved into Continuation. (PB7 pins it unchanged) python3.13  rc=1 FAILED (failures=43) test_copied_into_another_paragraph_refused,test_digit_runs_in_a_new_paragraph_refused_the_same,test_harmless_rewording_passes,test_harmless_row_absent
+restored PASS controller.md sentence moved into Continuation. (PB7 pins it unchanged) python3     rc=0 OK 
+restored PASS controller.md sentence moved into Continuation. (PB7 pins it unchanged) python3.13  rc=0 OK 
+
+## Full suites (U-6 survivor re-run, and the commit gate)
+PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH /usr/bin/python3 /Users/benji/projects/personal/strict-delivery-worktrees/_program/par_suite.py 10
+/usr/bin/python3: Ran 2289 tests; OK (skipped=8)
+/opt/homebrew/bin/python3.13: Ran 2289 tests; OK (skipped=3)
+The U-6 survivor (section-level substring pin check) is killed by test_pins_are_whole_tokens (U-6 re-run above) and the full suites are green with the fix. The 8 and 3 skips are the pre-existing version-dependent skips; none of them is a B4 harmless row: at HEAD `-v` shows no skipped line for test_harmless_rewording_passes, test_harmless_rewordings_pass or the K20 test (row 3).
