@@ -42,6 +42,16 @@ def unstaged_line(path):
     return "FAIL githook.unstaged: %s: %s\n" % (path, UNSTAGED)
 
 
+FLAGGED = ("tracked file is flagged assume-unchanged or skip-worktree; clear the flag with git update-index so the "
+           "gates read the work tree")
+FLAG_KINDS = (("assume-unchanged", ["--assume-unchanged"]), ("skip-worktree", ["--skip-worktree"]),
+              ("both flags", ["--assume-unchanged", "--skip-worktree"]))
+
+
+def flagged_line(path):
+    return "FAIL githook.flagged: %s: %s\n" % (path, FLAGGED)
+
+
 def shim_text(name, framework=FRAMEWORK):
     return ("#!/bin/sh\n%s\ncd '%s' && exec python3 -m gates githook %s --root \"$OLDPWD\" \"$@\"\n"
             % (HEADER, framework, name))
@@ -280,6 +290,104 @@ class PreCommitTest(HookCase):
         self.stage_then_change(d)
         rc, out, err = self.hook(["pre-commit", "--root", d])
         self.assertEqual((rc, out, err), (1, unstaged_line("a.txt"), ""))
+        self.assertEqual(called, [])
+
+    def test_flagged_file_refuses_commit_before_gates(self):  # F10 (Q-G1-3 (a), D-14), review-1 U-1 probes P4/P5
+        for kind, flags in FLAG_KINDS:
+            with self.subTest(kind):  # the reproducer: a changed flagged file, git diff shows nothing
+                d = self.repo(install=True)
+                write_file(d, "b.txt", "two\n")
+                git(d, "add", "b.txt")
+                git(d, "update-index", *flags, "a.txt")
+                write_file(d, "a.txt", "two\n")
+                self.assertEqual(git(d, "diff", "--name-only"), "")
+                before = self.head(d)
+                rc, out = self.commit(d)
+                self.assertNotEqual(rc, 0, out)
+                self.assertEqual(out, flagged_line("a.txt"))  # no gate line
+                self.assertEqual(self.head(d), before)
+        with self.subTest("a flagged file that is unchanged on disk"):
+            d = self.repo(install=True)
+            git(d, "update-index", "--assume-unchanged", "a.txt")
+            write_file(d, "b.txt", "two\n")
+            git(d, "add", "b.txt")
+            before = self.head(d)
+            rc, out = self.commit(d)
+            self.assertEqual((rc != 0, out, self.head(d)), (True, flagged_line("a.txt"), before))
+        with self.subTest("a flagged path and an unstaged path: flagged lines first"):
+            d = self.repo(install=True)
+            git(d, "update-index", "--skip-worktree", "a.txt")
+            self.stage_then_change(d, "b.txt")
+            before = self.head(d)
+            rc, out = self.commit(d)
+            self.assertEqual((rc != 0, out, self.head(d)),
+                             (True, flagged_line("a.txt") + unstaged_line("b.txt"), before))
+        with self.subTest("several flagged paths, ls-files order"):
+            d = self.repo(install=True, files=("a.txt", "b.txt", "c.txt"))
+            git(d, "update-index", "--assume-unchanged", "c.txt")
+            git(d, "update-index", "--skip-worktree", "a.txt")
+            write_file(d, "b.txt", "two\n")
+            git(d, "add", "b.txt")
+            rc, out = self.commit(d)
+            self.assertEqual((rc != 0, out), (True, flagged_line("a.txt") + flagged_line("c.txt")))
+        with self.subTest("a path both flagged and unstaged gets both lines"):
+            # Measured (git 2.50.1): git diff never lists a flagged path, so no real state is both; the unstaged
+            # list is replaced at the call boundary to pin the order and the one line per list.
+            d = self.repo()
+            self.fake_gates()
+            self.stage_then_change(d, "a.txt")
+            for flags in ("--assume-unchanged", "--skip-worktree"):
+                git(d, "update-index", flags, "a.txt")
+                self.assertEqual(gitinfo.unstaged_paths(d), [])
+                git(d, "update-index", "--no-" + flags[2:], "a.txt")
+            git(d, "update-index", "--assume-unchanged", "a.txt")
+            with mock.patch.object(gitinfo, "unstaged_paths", return_value=["a.txt"]):
+                rc, out, err = self.hook(["pre-commit", "--root", d])
+            self.assertEqual((rc, out, err), (1, flagged_line("a.txt") + unstaged_line("a.txt"), ""))
+        with self.subTest("commit -a with a flagged file changed on disk"):
+            d = self.repo(install=True)
+            git(d, "update-index", "--assume-unchanged", "a.txt")
+            write_file(d, "a.txt", "two\n")
+            before = self.head(d)
+            rc, out = self.commit(d, "-a")
+            self.assertEqual((rc != 0, out, self.head(d)), (True, flagged_line("a.txt"), before))
+        with self.subTest("a flag on a file that is not part of the commit"):
+            d = self.repo(install=True)
+            git(d, "update-index", "--assume-unchanged", "a.txt")
+            write_file(d, "b.txt", "two\n")
+            before = self.head(d)
+            rc, out = self.commit(d, "b.txt")
+            self.assertEqual((rc != 0, out, self.head(d)), (True, flagged_line("a.txt"), before))
+        with self.subTest("in process: no gate ran"):
+            d = self.repo()
+            called = self.fake_gates()
+            git(d, "update-index", "--assume-unchanged", "a.txt")
+            self.stage_then_change(d, "b.txt")
+            rc, out, err = self.hook(["pre-commit", "--root", d])
+            self.assertEqual((rc, out, err), (1, flagged_line("a.txt") + unstaged_line("b.txt"), ""))
+            self.assertEqual(called, [])
+        with self.subTest("a cleared flag passes"):
+            d = self.repo(install=True)
+            git(d, "update-index", "--assume-unchanged", "a.txt")
+            git(d, "update-index", "--no-assume-unchanged", "a.txt")
+            write_file(d, "b.txt", "two\n")
+            git(d, "add", "b.txt")
+            rc, out = self.commit(d)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("PASS schema.config", out)
+
+    def test_flagged_line_rendering(self):  # K4: U+1F6DD and the escapes in the flagged line
+        names = ["nl\nname.txt", "tab\tname.txt", "back\\slash.txt", "\U0001f6dd.txt", "ctl\x01.txt", "café.txt"]
+        want = {"nl\nname.txt": "nl\\nname.txt", "tab\tname.txt": "tab\\tname.txt",
+                "back\\slash.txt": "back\\\\slash.txt", "\U0001f6dd.txt": "\\U0001f6dd.txt",
+                "ctl\x01.txt": "ctl\\x01.txt", "café.txt": "café.txt"}
+        d = self.repo(files=names)
+        called = self.fake_gates()
+        for name in names:
+            git(d, "update-index", "--assume-unchanged", "--", name)
+        rc, out, err = self.hook(["pre-commit", "--root", d])
+        self.assertEqual((rc, err), (1, ""))
+        self.assertEqual(out, "".join(flagged_line(want[n]) for n in sorted(names)))
         self.assertEqual(called, [])
 
     def test_stat_only_and_untracked_pass(self):  # C6, C7
@@ -915,6 +1023,55 @@ class PrePushTest(HookCase):
         rc, out, err = self.push(d, self.push_line("refs/heads/main", head))
         self.assertEqual((rc, out), (1, "FAIL githook.dirty: a.txt: tracked file has a change; commit it before "
                                         "pushing\n"))
+
+    def test_pre_push_refuses_flagged_file(self):  # F11 (Q-G1-3 (a), D-14): a real git push to a local bare remote
+        dirty = "FAIL githook.dirty: %s: tracked file has a change; commit it before pushing\n"
+        push_sha = "FAIL githook.push-sha: %s: pushes %s, not HEAD %s; check out the branch to push it\n"
+
+        def setup(flags, extra):
+            d = self.repo(install=True)
+            remote = os.path.join(self.tmp, "remote%d.git" % next(self._repos))
+            git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+            git(d, "remote", "add", "origin", remote)
+            git(d, "branch", "other")
+            write_file(d, "n.txt")
+            git(d, "add", "n.txt")
+            git(d, "commit", "-q", "--no-verify", "-m", "second")
+            git(d, "update-index", *flags, "a.txt")
+            write_file(d, "a.txt", "two\n")  # git diff shows nothing
+            if extra:
+                write_file(d, "b.txt", "two\n")
+                git(d, "add", "b.txt")
+            return d, remote
+
+        for kind, flags in FLAG_KINDS:
+            with self.subTest(kind):
+                d, remote = setup(flags, False)
+                rc, out = self.git_run(d, "push", "-q", "origin", "main")
+                self.assertNotEqual(rc, 0, out)
+                self.assertEqual(out.split("error: failed to push")[0], flagged_line("a.txt"))  # git adds its own error
+                self.assertNotIn("PASS", out)  # no gate line
+                self.assertEqual(git(remote, "for-each-ref"), "")  # the remote is unchanged
+        with self.subTest("flagged, a staged change and another sha: flagged, dirty, push-sha"):
+            d, remote = setup(FLAG_KINDS[0][1], True)
+            head, other = self.head(d), git(d, "rev-parse", "other")
+            rc, out = self.git_run(d, "push", "-q", "origin", "other:refs/heads/other")
+            self.assertNotEqual(rc, 0, out)
+            self.assertEqual(out.split("error: failed to push")[0], flagged_line("a.txt") + dirty % "b.txt"
+                             + push_sha % ("refs/heads/other", other, head))
+            self.assertEqual(git(remote, "for-each-ref"), "")
+        with self.subTest("in process: no gate ran"):
+            d, remote = setup(FLAG_KINDS[1][1], True)
+            called = self.fake_gates()
+            rc, out, err = self.push(d, self.push_line("refs/heads/main", self.head(d)))
+            self.assertEqual((rc, out, err), (1, flagged_line("a.txt") + dirty % "b.txt", ""))
+            self.assertEqual(called, [])
+        with self.subTest("a cleared flag pushes"):
+            d, remote = setup(FLAG_KINDS[0][1], False)
+            git(d, "update-index", "--no-assume-unchanged", "a.txt")
+            git(d, "checkout", "-q", "--", "a.txt")
+            rc, out = self.git_run(d, "push", "-q", "origin", "main")
+            self.assertEqual(rc, 0, out)
 
     def test_pre_push_real_push(self):  # P11
         d = self.repo(install=True)
@@ -1622,6 +1779,171 @@ class UnstagedPathsTest(Repos):
         env = {"GIT_DIR": os.path.join(other, ".git"), "GIT_WORK_TREE": other}
         with mock.patch.dict(os.environ, env):
             self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+
+
+def listing(d):
+    """``git ls-files -v`` as ``(tag, path)`` pairs: the tags are pinned by hand in the tests below."""
+    pairs = [tuple(line.split(" ", 1)) for line in git(d, "ls-files", "-v").split("\n")]
+    return [pair for pair in pairs if not pair[1].startswith(".strict-delivery/")]  # the fixture's config file
+
+
+class FlaggedPathsTest(Repos):
+    """Producer 6 (Q-G1-3 (a), D-14): rows F1-F9, F13."""
+
+    def test_flagged_paths_states(self):  # F1, F2, F13 (git 2.50.1 tags measured 2026-11-16 and pinned by hand)
+        names = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]
+        d = self.fresh(names)
+        self.assertEqual(gitinfo.flagged_paths(d), [])
+        git(d, "update-index", "--assume-unchanged", "a.txt")
+        git(d, "update-index", "--skip-worktree", "c.txt")
+        git(d, "update-index", "--assume-unchanged", "--skip-worktree", "e.txt")
+        self.assertEqual(listing(d), [("h", "a.txt"), ("H", "b.txt"), ("S", "c.txt"), ("H", "d.txt"), ("h", "e.txt")])
+        self.assertEqual(gitinfo.flagged_paths(d), ["a.txt", "c.txt", "e.txt"])  # ls-files order, unflagged between
+        write_file(d, "a.txt", "two\n")  # changed on disk: git diff shows nothing, the flag alone lists it
+        write_file(d, "c.txt", "two\n")
+        self.assertEqual(git(d, "diff", "--name-only"), "")
+        self.assertEqual(gitinfo.flagged_paths(d), ["a.txt", "c.txt", "e.txt"])
+        for label, flags, tag in (("assume-unchanged", ["--assume-unchanged"], "h"),
+                                  ("skip-worktree", ["--skip-worktree"], "S"),
+                                  ("both", ["--assume-unchanged", "--skip-worktree"], "h")):
+            with self.subTest(label):
+                d = self.fresh()
+                git(d, "update-index", *flags, "a.txt")
+                self.assertEqual(listing(d), [(tag, "a.txt")])
+                self.assertEqual(gitinfo.flagged_paths(d), ["a.txt"])
+                git(d, "update-index", "--no-assume-unchanged", "a.txt")
+                git(d, "update-index", "--no-skip-worktree", "a.txt")
+                self.assertEqual(listing(d), [("H", "a.txt")])
+                self.assertEqual(gitinfo.flagged_paths(d), [])
+        with self.subTest("core.ignoreStat"):  # git sets the assume-unchanged bit itself
+            d = self.fresh()
+            git(d, "config", "core.ignoreStat", "true")
+            write_file(d, "a.txt", "two\n")
+            git(d, "add", "a.txt")
+            self.assertEqual(listing(d), [("h", "a.txt")])
+            self.assertEqual(gitinfo.flagged_paths(d), ["a.txt"])
+        with self.subTest("sparse checkout"):  # the files outside the cone carry skip-worktree
+            d = self.fresh(["a.txt", "x/f.txt", "y/g.txt"])
+            git(d, "sparse-checkout", "set", "x", ".strict-delivery")
+            self.assertEqual(listing(d), [("H", "a.txt"), ("H", "x/f.txt"), ("S", "y/g.txt")])
+            self.assertEqual(gitinfo.flagged_paths(d), ["y/g.txt"])
+        configs = {  # F13: the Q-RC-1 (a) config set
+            "colour": (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")),
+            "external": (("diff.external", "/usr/bin/false"),), "noprefix": (("diff.noprefix", "true"),),
+            "relative": (("diff.relative", "true"),), "quotepath": (("core.quotePath", "true"),),
+            "textconv": (("diff.x.textconv", "/usr/bin/false"),),
+            "ignoreSubmodules": (("diff.ignoreSubmodules", "all"),),
+        }
+        for label, pairs in configs.items():
+            with self.subTest(label):
+                d = self.fresh(["a.txt", "b.txt"])
+                for key, value in pairs:
+                    git(d, "config", key, value)
+                git(d, "update-index", "--assume-unchanged", "b.txt")
+                self.assertEqual(gitinfo.flagged_paths(d), ["b.txt"])
+
+    def test_flagged_paths_path_characters(self):  # F3
+        names = ["sp ace.txt", "nl\nname.txt", "tab\tname.txt", 'q"uote.txt', "back\\slash.txt", "é.txt",
+                 "\U0001f6dd.txt", "-lead.txt", "sub/dir/f.txt"]
+        for quote in ("true", "false"):
+            with self.subTest(quotePath=quote):
+                d = self.fresh(names)
+                git(d, "config", "core.quotePath", quote)
+                for name in names:
+                    git(d, "update-index", "--assume-unchanged", "--", name)
+                self.assertEqual(gitinfo.flagged_paths(d), sorted(names))
+
+    def test_flagged_paths_invalid_utf8_name(self):  # F4: gitinfo's _text rule, a GateError naming the command
+        d = self.fresh()
+        p = subprocess.run(["git", "-C", d, "hash-object", "-w", "--stdin"], input=b"x\n",
+                           stdout=subprocess.PIPE, check=True)
+        blob = p.stdout.decode("ascii").strip()
+        subprocess.run(["git", "-C", d, "update-index", "--add", "--cacheinfo",
+                        b"100644," + blob.encode("ascii") + b",bad\xff.txt"], check=True)
+        subprocess.run(["git", "-C", d, "update-index", "--assume-unchanged", b"bad\xff.txt"], check=True)
+        with self.assertRaises(GateError) as e:
+            gitinfo.flagged_paths(d)
+        self.assertEqual(str(e.exception), "git ls-files -v gave output that is not valid UTF-8")
+
+    def test_flagged_paths_index_file(self):  # F5
+        d = self.fresh()
+        alt = os.path.join(d, "alt-index")
+        git(d, "read-tree", "HEAD", env={"GIT_INDEX_FILE": alt})
+        git(d, "update-index", "--assume-unchanged", "a.txt", env={"GIT_INDEX_FILE": alt})
+        other = self.fresh()  # a different repository as the process directory
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(other)
+        self.assertEqual(gitinfo.flagged_paths(d), [])  # GIT_INDEX_FILE unset: the real index, which has no flag
+        for label, value, want in (("absolute", alt, ["a.txt"]), ("relative to root", "alt-index", ["a.txt"]),
+                                   ("relative .git/index", ".git/index", [])):
+            with self.subTest(label), mock.patch.dict(os.environ, {"GIT_INDEX_FILE": value}):
+                self.assertEqual(gitinfo.flagged_paths(d), want)
+
+    def test_flagged_paths_bad_root(self):  # F6
+        d = self.fresh()
+        check_root_forms(self, root_forms(self.tmp, d), {"flagged_paths": gitinfo.flagged_paths})
+
+    def test_flagged_paths_cleared_env(self):  # F7
+        d = self.fresh()
+        other = self.fresh()
+        git(other, "update-index", "--assume-unchanged", "a.txt")
+        env = {"GIT_DIR": os.path.join(other, ".git"), "GIT_WORK_TREE": other}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(gitinfo.flagged_paths(d), [])
+            self.assertEqual(gitinfo.flagged_paths(other), ["a.txt"])
+
+    def test_flagged_paths_linked_worktree(self):  # F8
+        d = self.fresh()
+        wt = os.path.join(self.tmp, "wt")
+        git(d, "worktree", "add", "-q", "--detach", wt)
+        git(wt, "update-index", "--assume-unchanged", "a.txt")  # the linked worktree's own index only
+        self.assertEqual((gitinfo.flagged_paths(wt), gitinfo.flagged_paths(d)), (["a.txt"], []))
+        git(wt, "update-index", "--no-assume-unchanged", "a.txt")
+        git(d, "update-index", "--skip-worktree", "a.txt")  # the main index only
+        self.assertEqual((gitinfo.flagged_paths(wt), gitinfo.flagged_paths(d)), ([], ["a.txt"]))
+
+    def test_flagged_paths_argv(self):  # the call's exact argument list: -C root, -v, -z
+        d = self.fresh()
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.flagged_paths(d)
+        self.assertEqual([argv for argv, _ in calls if "ls-files" in argv], [["git", "-C", d, "ls-files", "-v", "-z"]])
+
+    def test_flagged_paths_entry_shape(self):  # F9: git's output replaced at the subprocess boundary
+        d = self.fresh()
+        real = subprocess.run
+
+        def fake(data):
+            def run(argv, *a, **kw):
+                if "ls-files" in argv:
+                    return subprocess.CompletedProcess(argv, 0, stdout=data, stderr=b"")
+                return real(argv, *a, **kw)
+            return mock.patch.object(gitinfo.subprocess, "run", run)
+
+        for label, data, want in (("nothing", b"", []), ("a trailing NUL is not an entry", b"h x.txt\0", ["x.txt"]),
+                                  ("unflagged", b"H x.txt\0", []),
+                                  ("path with a space after the tag", b"h  x y.txt\0", [" x y.txt"]),
+                                  ("every tag letter", b"H a\0h b\0S c\0s d\0M e\0", ["b", "c", "d"])):
+            with self.subTest(label), fake(data):
+                self.assertEqual(gitinfo.flagged_paths(d), want)
+        for label, data in (("no space after the tag", b"hx.txt\0"), ("two-letter tag", b"hh x.txt\0"),
+                            ("digit tag", b"1 x.txt\0"), ("question mark tag", b"? x.txt\0"),
+                            ("non-ASCII tag", "é x.txt\0".encode()), ("empty entry between NULs", b"h x\0\0S y\0"),
+                            ("leading empty entry", b"\0h x\0"), ("tag and space only", b"h \0"),
+                            ("tag only", b"h\0"), ("no NUL terminator", b"h x"), ("newline terminated", b"h x\n")):
+            with self.subTest(label), fake(data):
+                with self.assertRaises(GateError) as e:
+                    gitinfo.flagged_paths(d)
+                self.assertTrue(str(e.exception).startswith("git ls-files -v: unexpected entry "), str(e.exception))
+
+    def test_flagged_paths_git_failure(self):  # a corrupt index: git's exit status is a GateError naming the command
+        d = self.fresh()
+        with open(os.path.join(d, ".git", "index"), "wb") as fh:
+            fh.write(b"not an index")
+        with self.assertRaises(GateError) as e:
+            gitinfo.flagged_paths(d)
+        self.assertEqual(str(e.exception), "git ls-files -v failed (exit 128)")
 
 
 class HooksDirTest(Repos):

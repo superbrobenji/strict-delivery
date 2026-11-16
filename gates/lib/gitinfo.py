@@ -366,6 +366,26 @@ def unstaged_paths(root: str) -> list:
     return [_text(raw, "diff --name-only") for raw in p.stdout.split(b"\0") if raw]
 
 
+def flagged_paths(root: str) -> list:
+    """The tracked paths flagged assume-unchanged (a lowercase ASCII tag in ``git ls-files -v``) or skip-worktree
+    (tag ``S``), in git's order: the rule of spec C-29 (``git ls-files -v | grep '^[a-zS]'``), so ``git diff`` cannot
+    show a change to them (task 2b.2, owner Q-G1-3 (a), D-14; ``GIT_INDEX_FILE`` inherited as in ``unstaged_paths``).
+    An entry that is not ``<ASCII letter> <space> <path>`` is a GateError: the hook fails closed."""
+    _require_toplevel(root)
+    p = _run(root, "ls-files -v", ["ls-files", "-v", "-z"])
+    data = p.stdout
+    if data and not data.endswith(b"\0"):
+        raise GateError("git ls-files -v: unexpected entry %r" % data.rsplit(b"\0", 1)[-1])
+    out = []
+    for raw in (data.split(b"\0")[:-1] if data else []):
+        if len(raw) < 3 or raw[1:2] != b" " or not (b"a" <= raw[:1] <= b"z" or b"A" <= raw[:1] <= b"Z"):
+            raise GateError("git ls-files -v: unexpected entry %r" % raw)
+        path = _text(raw[2:], "ls-files -v")
+        if raw[:1] == b"S" or raw[:1].islower():
+            out.append(path)
+    return out
+
+
 def hooks_dir(root: str) -> str:
     """The absolute directory git runs hooks from (``rev-parse --git-path hooks``: the common git directory's
     ``hooks`` for a linked worktree, ``core.hooksPath`` when set), a relative answer taken from ``root``."""
