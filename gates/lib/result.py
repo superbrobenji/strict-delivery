@@ -226,27 +226,156 @@ _DIGIT = "[" + "".join("%s-%s" % (chr(lo), chr(hi)) for lo, hi in _DIGIT_RANGES)
 _NEGATIVE_NUMBER = re.compile(r"^-%(d)s+$|^-%(d)s*\.%(d)s+$" % {"d": _DIGIT})  # argparse's pattern, with its ``\d`` frozen
 
 
+class ParserRefused(ValueError):
+    """A parser configuration that `_GateParser` does not admit (owner Q-G3-F1C-1 (a), F1 rule E8). Argparse 3.9 and
+    3.12+ read some configurations differently, so the parity of their messages and results cannot be kept for them:
+    they are refused when the parser is built, and again when parsing starts, before any argument is read."""
+
+
+class OptionStringHoldsEquals(ParserRefused):
+    """An option string holding ``=`` (``-a=b``, ``--x=``): 3.12+ matches an argument against it by prefix."""
+
+
+class AbbrevDisabled(ParserRefused):
+    """``allow_abbrev=False``: 3.12+ and 3.9 differ in what a single-dash abbreviation of a long single-dash option is."""
+
+
+class NestedGroup(ParserRefused):
+    """A group created on a group: the negative-number test of its options is not under this module's control."""
+
+
+class ShortFlagWithoutLongAlias(ParserRefused):
+    """A zero-argument single-dash flag with no long alias: 3.9 and 3.12+ read ``-x<text>`` differently."""
+
+
+def _single_dash(option: str, prefix_chars: str) -> bool:
+    return len(option) > 1 and option[0] in prefix_chars and option[1] not in prefix_chars
+
+
+def _long_option(option: str, prefix_chars: str) -> bool:
+    return len(option) > 1 and option[0] in prefix_chars and option[1] in prefix_chars
+
+
+def _refuse_options(option_strings, nargs, prefix_chars: str) -> None:
+    """Rule E8 for one action: an ``=`` in an option string, then a zero-argument action with a single-dash option
+    string and no long one."""
+    for option in option_strings:
+        if "=" in option:
+            raise OptionStringHoldsEquals("option string %s holds '=' (refused: F1 rule E8)" % _frozen_repr(option))
+    if nargs == 0 and any(_single_dash(o, prefix_chars) for o in option_strings) \
+            and not any(_long_option(o, prefix_chars) for o in option_strings):
+        raise ShortFlagWithoutLongAlias("single-dash flag %s has no long alias (refused: F1 rule E8)"
+                                        % ", ".join(_frozen_repr(o) for o in option_strings))
+
+
+def _refuse_registered(actions, option_string_actions, prefix_chars: str) -> None:
+    """Rule E8 over a container's final state: every action, and every option string it is registered under (an edit
+    of ``option_strings`` or of the registry after the action was added)."""
+    for action in actions:
+        _refuse_options(action.option_strings, action.nargs, prefix_chars)
+    for option, action in option_string_actions.items():
+        _refuse_options([option] + list(action.option_strings), action.nargs, prefix_chars)
+
+
+class _Guarded:
+    """Mixin of the argument groups `_GateParser` makes: the options added through a group are checked (E8), a group
+    inside a group is refused (a nested group is not one this module builds), and the group's negative-number test is
+    the frozen one (E7)."""
+
+    def _add_action(self, action):
+        _refuse_options(action.option_strings, action.nargs, self.prefix_chars)
+        action = super()._add_action(action)
+        # a conflict handled by ``resolve`` may have removed the long alias of an earlier flag
+        _refuse_registered(self._actions, self._option_string_actions, self.prefix_chars)
+        return action
+
+    def add_argument_group(self, *args, **kwargs):
+        raise NestedGroup("a group inside a group (refused: F1 rule E8)")
+
+    def add_mutually_exclusive_group(self, **kwargs):
+        raise NestedGroup("a group inside a group (refused: F1 rule E8)")
+
+
+class _GateArgumentGroup(_Guarded, argparse._ArgumentGroup):
+    def __init__(self, container, *args, **kwargs) -> None:
+        super().__init__(container, *args, **kwargs)
+        self._container = container
+        self._negative_number_matcher = _NEGATIVE_NUMBER
+
+
+class _GateExclusiveGroup(_Guarded, argparse._MutuallyExclusiveGroup):
+    def __init__(self, container, **kwargs) -> None:
+        super().__init__(container, **kwargs)  # sets ``_container``
+        self._negative_number_matcher = _NEGATIVE_NUMBER
+
+
+class _KeptSeparator(list):
+    """Argument strings of an option whose value is the text ``--``: 3.9's ``_get_values`` removes the first ``--`` it
+    finds from the list (leaving none), 3.12+ keeps it as the value; this list refuses the removal (rule E9)."""
+
+    def remove(self, value):
+        raise ValueError(value)
+
+
 class _GateParser(argparse.ArgumentParser):
     """Help and usage errors go to stderr and become GateError, never SystemExit. Every error text built from argv
     is the one 3.9.6 builds, whatever the interpreter (spec section 14; owner F1 rules E1-E5): the repr of argv text is
     ``_frozen_repr``, a single-dash combination such as ``-ha`` is an ignored explicit argument, usage wraps as 3.9.6
     wraps it, an ambiguous option is reported when the arguments are scanned, and a leading ``--`` is the subcommand's
-    first value."""
+    first value. An option value given as ``--`` is the text ``--`` (E9). Configurations whose messages and results
+    differ between the interpreters are refused (E8): an option string holding ``=``, ``allow_abbrev=False``, a nested
+    group, a single-dash zero-argument flag without a long alias."""
 
     def __init__(self, *args, **kwargs) -> None:
         kwargs.setdefault("formatter_class", _UsageFormatter)
         super().__init__(*args, **kwargs)
-        self._negative_number_matcher = _NEGATIVE_NUMBER  # E7; the groups, which register the options, get it below
+        self._negative_number_matcher = _NEGATIVE_NUMBER  # E7; the groups, which register the options, get it too
+        if not self.allow_abbrev:
+            raise AbbrevDisabled("allow_abbrev=False (refused: F1 rule E8)")
 
     def add_argument_group(self, *args, **kwargs):
-        group = super().add_argument_group(*args, **kwargs)
-        group._negative_number_matcher = _NEGATIVE_NUMBER
+        group = _GateArgumentGroup(self, *args, **kwargs)
+        self._action_groups.append(group)
         return group
 
     def add_mutually_exclusive_group(self, **kwargs):
-        group = super().add_mutually_exclusive_group(**kwargs)
-        group._negative_number_matcher = _NEGATIVE_NUMBER
+        group = _GateExclusiveGroup(self, **kwargs)
+        self._mutually_exclusive_groups.append(group)
         return group
+
+    def _refuse_state(self, seen=None) -> None:
+        """Rule E8 over the parser's final state, and over its subparsers': what the build hooks did not see."""
+        seen = set() if seen is None else seen
+        if id(self) in seen:
+            return
+        seen.add(id(self))
+        if not self.allow_abbrev:
+            raise AbbrevDisabled("allow_abbrev=False (refused: F1 rule E8)")
+        _refuse_registered(self._actions, self._option_string_actions, self.prefix_chars)
+        for group in self._action_groups:
+            if not isinstance(group, _GateArgumentGroup) or group._container is not self:
+                raise NestedGroup("an argument group this parser did not make (refused: F1 rule E8)")
+        for group in self._mutually_exclusive_groups:
+            if not isinstance(group, _GateExclusiveGroup) or group._container is not self:
+                raise NestedGroup("an exclusive group this parser did not make (refused: F1 rule E8)")
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for sub in action.choices.values():
+                    if isinstance(sub, _GateParser):
+                        sub._refuse_state(seen)
+
+    def parse_known_args(self, args=None, namespace=None):
+        self._refuse_state()
+        return super().parse_known_args(args, namespace)
+
+    def parse_known_intermixed_args(self, args=None, namespace=None):
+        self._refuse_state()
+        return super().parse_known_intermixed_args(args, namespace)
+
+    def _get_values(self, action, arg_strings):
+        if action.option_strings and arg_strings == ["--"]:  # `--opt=--`, `-o--`: the value is the text `--` (E9)
+            arg_strings = _KeptSeparator(arg_strings)
+        return super()._get_values(action, arg_strings)
 
     def print_help(self, file=None) -> None:
         super().print_help(sys.stderr if file is None else file)
@@ -315,14 +444,12 @@ class _GateParser(argparse.ArgumentParser):
         ``_parse_optional`` shape for it, or None for any other argument. ``rest`` loses one leading ``=`` and then every
         leading ``h``; nothing left is the help, ``-h=`` alone and anything else is an ignored explicit argument, which
         the long form ``--help`` makes argparse raise on every interpreter (3.9.6 crashes on ``-h=``, 3.12+ shows the
-        help for ``-ha``). A flag with no long alias keeps the interpreter's own handling."""
+        help for ``-ha``). Every such flag has a long alias: the parser refuses one without (E8, checked before parsing)."""
         actions = self._option_string_actions
         action = actions.get(arg_string[:2]) if len(arg_string) > 2 else None
         if action is None or action.nargs != 0:
             return None
-        long_option = next((o for o in action.option_strings if o[1] in self.prefix_chars), None)
-        if long_option is None:
-            return None
+        long_option = next(o for o in action.option_strings if o[1] in self.prefix_chars)
         rest = arg_string[2:]
         if rest.startswith("="):
             rest = rest[1:]
