@@ -1,10 +1,18 @@
-"""Tests for the shell scanner (gates.lib.shellscan): plain simple commands, the cd form, token_in. Every expected
-value is written here from the input-domain table (task-3b.1-domain.md), never computed by the scanner."""
+"""Tests for the shell scanner (gates.lib.shellscan): the closed grammar of plain commands, the cd form, token_in.
+Every expected value is written here from the input-domain table (task-3b.1-domain-r3.md, revision 3, and the rows
+of task-3b.1-domain.md that it carries), never computed by the scanner."""
 import dataclasses
+import gc
 import time
 import unittest
 
+import gates.lib.shellscan as shellscan
 from gates.lib.shellscan import Scan, scan, token_in
+
+# K: bash and zsh reserved words and zsh precommand modifiers (rows N7, W8, W9).
+K = ("case coproc do done elif else esac fi for function if in select then time until while repeat foreach end "
+     "nocorrect noglob declare export float integer local readonly typeset - builtin command exec").split()
+ALLOW = ("GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "LANG", "LC_ALL", "TZ")
 
 
 def P(argv=(), asg=(), cd=None):
@@ -39,18 +47,18 @@ class ShapeTest(ScanCase):
         s = scan("git commit")
         with self.assertRaises(dataclasses.FrozenInstanceError):
             s.plain = False
-        for t in ("git commit", "a && b", "A=1 git x", "echo $(x)", "cd /w && git commit"):
+        for t in ("git commit", "a && b", "TZ=1 git x", "echo $(x)", "cd /w && git commit"):
             with self.subTest(text=t):
                 s = scan(t)
                 self.assertIs(type(s.argv), tuple)
                 self.assertIs(type(s.assignments), tuple)
                 self.assertIs(type(s.words), tuple)
-        self.assertEqual(scan("A=1 git x").assignments, (("A", "1"),))
-        self.assertIs(type(scan("A=1 git x").assignments[0]), tuple)
+        self.assertEqual(scan("TZ=1 git x").assignments, (("TZ", "1"),))
+        self.assertIs(type(scan("TZ=1 git x").assignments[0]), tuple)
 
 
 class SeparatorTest(ScanCase):
-    def test_separators_not_plain(self):  # S1-S7, plan Step 1
+    def test_separators_not_plain(self):  # N1: S1-S7, plan Step 1
         s = scan("git add x && git commit")
         self.assertFalse(s.plain)
         self.assertEqual(s.reason, "operator &&")
@@ -68,12 +76,9 @@ class SeparatorTest(ScanCase):
             ("a\n\nb", NP("operator newline")),
         ])
 
-    def test_trailing_newlines_dropped(self):  # S8
+    def test_trailing_newlines_dropped(self):  # N1 boundary: S8
         self.many([("git commit\n", P(("git", "commit"))), ("git commit\n\n\n", P(("git", "commit"))),
-                   ("git commit \\\n", P(("git", "commit")))])
-
-    def test_crlf(self):  # S9
-        self.many([("git commit\r\n", P(("git", "commit\r"))), ("a\r\nb", NP("operator newline"))])
+                   ("git commit \\\n", P(("git", "commit"))), ("git commit \\\n -m x", P(("git", "commit", "-m", "x")))])
 
     def test_plain_commit(self):  # S10, plan Step 1
         s = scan("git commit -m 'a && b'")
@@ -81,7 +86,7 @@ class SeparatorTest(ScanCase):
         self.assertEqual(s.argv, ("git", "commit", "-m", "a && b"))
         self.check("git commit -m 'a && b'", P(("git", "commit", "-m", "a && b")))
 
-    def test_quoted_separators_plain(self):  # S10
+    def test_quoted_separators_plain(self):  # N1 boundary: S10
         self.many([
             ('git commit -m "a; b"', P(("git", "commit", "-m", "a; b"))),
             ("git commit -m 'a|b'", P(("git", "commit", "-m", "a|b"))),
@@ -94,14 +99,20 @@ class SeparatorTest(ScanCase):
             ('echo "a ;; b"', P(("echo", "a ;; b"))),
         ])
 
-    def test_first_construct_is_reason(self):  # S11
+    def test_first_construct_is_reason(self):  # S11 and the section 1 precedence (invariant: first construct wins)
         self.many([("a > x; b", NP("redirection")), ("a; b > x", NP("operator ;")), ("a $X; b", NP("expansion")),
                    ("a 'oops; b", NP("unbalanced quote")), ("a; 'oops", NP("operator ;")),
-                   ("a (b) ; c", NP("grouping")), ("a ; (b)", NP("operator ;"))])
+                   ("a (b) ; c", NP("grouping")), ("a ; (b)", NP("operator ;")),
+                   # a catch-all at a smaller position wins over a specific construct after it
+                   ("x a'b' > o", NP("quoting")), ("x é $X", NP("character")), ("A=1 git > o", NP("assignment")),
+                   ("'git' > o", NP("command word")),
+                   # at the same position a specific construct wins over a catch-all
+                   ("=git", NP("expansion")), ("{a,b}", NP("expansion")), ("! x", NP("reserved word")),
+                   ("A+=1 git", NP("expansion"))])
 
 
 class GroupingTest(ScanCase):
-    def test_grouping_and_substitution_not_plain(self):  # G1-G6, plan Step 1
+    def test_grouping_and_substitution_not_plain(self):  # N2, N3: G1-G6, plan Step 1
         for t in ("(git commit)", "{ git commit; }", "echo $(git commit)", "echo `git commit`"):
             self.assertFalse(scan(t).plain)
         self.many([
@@ -111,6 +122,7 @@ class GroupingTest(ScanCase):
             ("{ git commit; }", NP("grouping")),
             ("a }", NP("grouping")),
             ("a )", NP("grouping")),
+            ("{", NP("grouping")),
             ("echo $(git commit)", NP("substitution")),
             ("echo $((1))", NP("substitution")),
             ("echo `git commit`", NP("substitution")),
@@ -118,71 +130,87 @@ class GroupingTest(ScanCase):
             ('echo "$(git commit)"', NP("substitution")),
             ("diff <(a) b", NP("substitution")),
             ("tee >(a)", NP("substitution")),
-            ("'(x)'", P(("(x)",))),
-            ('"(x)"', P(("(x)",))),
-            ("'$(x)'", P(("$(x)",))),
-            ("'{'", P(("{",))),
+            ("x '(x)'", P(("x", "(x)"))),
+            ('x "(x)"', P(("x", "(x)"))),
+            ("x '$(x)'", P(("x", "$(x)"))),
+            ("x '{'", P(("x", "{"))),
             ("echo '`x`'", P(("echo", "`x`"))),
             ("echo \\`x\\`", P(("echo", "`x`"))),
+            # the same quoted texts as the program word are a quoted program word (N8)
+            ("'(x)'", NP("command word")),
+            ('"(x)"', NP("command word")),
+            ("'{'", NP("command word")),
         ])
 
-    def test_glob_not_plain(self):  # G7
+    def test_glob_not_plain(self):  # N4: G7
         self.many([
             ("git add *.py", NP("expansion")),
             ("git add *", NP("expansion")),
             ("ls a*", NP("expansion")),
-            ("a?b", NP("expansion")),
-            ("x[1]", NP("expansion")),
+            ("x a?b", NP("expansion")),
+            ("x x[1]", NP("expansion")),
             ("[", NP("expansion")),
+            ("x [", NP("expansion")),
+            ("*x", NP("expansion")),
             ("git add '*.py'", P(("git", "add", "*.py"))),
             ('git add "a?b"', P(("git", "add", "a?b"))),
             ("git add \\*.py", P(("git", "add", "*.py"))),
-            ("echo x\\[1]", P(("echo", "x[1]"))),
-            ("echo x'['1]", P(("echo", "x[1]"))),
+            ("echo x\\[1]", NP("character")),  # `]` unquoted is outside U (N11)
+            ("echo x'[1]'", P(("echo", "x[1]"))),
+            ("echo x'['1']'", P(("echo", "x[1]"))),
+            ("a?b", NP("command word")),  # the program word sits at position 0
         ])
 
-    def test_brace_expansion_not_plain(self):  # G8
+    def test_brace_expansion_not_plain(self):  # N4: G8
         self.many([
             ("{a,b}", NP("expansion")),
-            ("x{1..3}", NP("expansion")),
+            ("x x{1..3}", NP("expansion")),
             ("git commit --no-verif{y,}", NP("expansion")),
-            ("a{b,c}d", NP("expansion")),
-            ("git show HEAD@{1}", P(("git", "show", "HEAD@{1}"))),
-            ("x{", P(("x{",))),
-            ("a}b", P(("a}b",))),
-            ("{}", P(("{}",))),
-            ("a{b\\,c}", P(("a{b,c}",))),
-            ("a{b','c}", P(("a{b,c}",))),
-            ("a{'b'.c}", P(("a{b.c}",))),
-            ("}a,{", P(("}a,{",))),
-            ("a,{b}", P(("a,{b}",))),
-            ("a..{b}", P(("a..{b}",))),
-            ("x{a.'x'.b}", P(("x{a.x.b}",))),
+            ("x a{b,c}d", NP("expansion")),
             ("{a`,{b}}", NP("expansion")),
+            ("git show HEAD@{1}", P(("git", "show", "HEAD@{1}"))),
+            ("x x{", P(("x", "x{"))),
+            ("x a}b", P(("x", "a}b"))),
+            ("x a{b\\,c}", P(("x", "a{b,c}"))),
+            ("x a{b','c}", P(("x", "a{b,c}"))),
+            ("x a{'b'.c}", P(("x", "a{b.c}"))),
+            ("x a,{b}", P(("x", "a,{b}"))),
+            ("x a..{b}", P(("x", "a..{b}"))),
+            ("x x{a.'x'.b}", P(("x", "x{a.x.b}"))),
+            # an unquoted `{` or `}` as a word's first character is `character` (N11)
+            ("x {}", NP("character")),
+            ("x }a,{", NP("character")),
         ])
 
-    def test_tilde_not_plain(self):  # G9
+    def test_tilde_not_plain(self):  # N4: G9 widened to every word
         self.many([
             ("cd ~ && x", NP("expansion")),
             ("~/x", NP("expansion")),
-            ("A=~/x git", NP("expansion")),
-            ("A=a:~/b git", NP("expansion")),
+            ("x ~", NP("expansion")),
+            ("TZ=~/x git", NP("expansion")),
+            ("TZ=a:~/b git", NP("expansion")),
+            ("git x=~/y", NP("expansion")),
+            ("git --p=~/y", NP("expansion")),
+            ("git a:~b", NP("expansion")),
+            ("git --opt=~x", NP("expansion")),
             ("git log HEAD~1", P(("git", "log", "HEAD~1"))),
-            ("a~b", P(("a~b",))),
-            ("'~'", P(("~",))),
-            ("\\~", P(("~",))),
-            ("A='~' git", P(("git",), (("A", "~"),))),
-            ("A=a:'~' git", P(("git",), (("A", "a:~"),))),
-            ("A=a~ git", P(("git",), (("A", "a~"),))),
-            ("git --opt=~x", P(("git", "--opt=~x"))),
+            ("x a~b", P(("x", "a~b"))),
+            ("x '~'", P(("x", "~"))),
+            ("x \\~", P(("x", "~"))),
+            ("git x='~'/y", P(("git", "x=~/y"))),
+            ("git x\\=~/y", P(("git", "x=~/y"))),
+            ("git a':'~b", P(("git", "a:~b"))),
+            ("TZ='~' git", P(("git",), (("TZ", "~"),))),
+            ("TZ=a:'~' git", P(("git",), (("TZ", "a:~"),))),
+            ("TZ=a~ git", P(("git",), (("TZ", "a~"),))),
         ])
 
-    def test_append_assignment_not_plain(self):  # G10
-        self.many([("A+=1 git", NP("expansion")), ("git A+=1", P(("git", "A+=1")))])
+    def test_append_assignment_not_plain(self):  # N4: G10
+        self.many([("TZ+=1 git", NP("expansion")), ("A+=1 git", NP("expansion")), ("git A+=1", P(("git", "A+=1")))])
 
 
 class ExpansionTest(ScanCase):
-    def test_expansions(self):  # X1, X4
+    def test_expansions(self):  # N4: X1, X4
         self.many([
             ("echo $X", NP("expansion")),
             ("echo ${X}", NP("expansion")),
@@ -194,7 +222,7 @@ class ExpansionTest(ScanCase):
             ('echo $"a"', NP("expansion")),
         ])
 
-    def test_double_quoted_dollar_not_plain(self):  # X2, X3, X5, plan Step 1
+    def test_double_quoted_dollar_not_plain(self):  # N4: X2, X3, X5, plan Step 1
         self.assertEqual(scan('git commit -m "$MSG"').reason, "expansion")
         self.assertTrue(scan("git commit -m '$MSG'").plain)
         self.many([
@@ -207,12 +235,12 @@ class ExpansionTest(ScanCase):
 
 
 class RedirectionTest(ScanCase):
-    def test_redirections(self):  # R1, R2
+    def test_redirections(self):  # N5: R1, R2
         for t in (">x", ">>x", "2>&1", "<x", "<<<x", "&>x", "&>>x", ">|x", "<>x", "<&0", "a >x", "a 2>&1", "a <<-x", "a >& x"):
             self.check(t, NP("redirection"))
-        self.many([("'>'", P((">",))), ('"a<b"', P(("a<b",))), ("echo '2>&1'", P(("echo", "2>&1")))])
+        self.many([("x '>'", P(("x", ">"))), ('x "a<b"', P(("x", "a<b"))), ("echo '2>&1'", P(("echo", "2>&1")))])
 
-    def test_heredoc_not_plain(self):  # R1, plan Step 1
+    def test_heredoc_not_plain(self):  # N5: R1, plan Step 1
         self.assertEqual(scan("git commit -F - <<'EOF'\nmsg\nEOF").reason, "redirection")
         self.many([
             ("<<EOF\nb\nEOF", NP("redirection")),
@@ -222,141 +250,216 @@ class RedirectionTest(ScanCase):
 
 
 class QuoteTest(ScanCase):
-    def test_unbalanced_quote_not_plain(self):  # Q1, Q2, plan Step 1
+    def test_unbalanced_quote_not_plain(self):  # N13: Q1, Q2, plan Step 1
         self.assertEqual(scan("git commit -m 'oops").reason, "unbalanced quote")
         self.check("git commit -m 'oops", NP("unbalanced quote"), ("git", "commit", "-m", "oops"))
         self.many([('git commit -m "oops', NP("unbalanced quote")), ('"a\'', NP("unbalanced quote")),
-                   ("git commit \\", NP("unbalanced quote"))])
+                   ("git commit \\", NP("unbalanced quote")), ("git commit -m 'a' 'b", NP("unbalanced quote")),
+                   # the quote that would split a token (rule Q) is unbalanced: the specific reason wins
+                   ("x a'b", NP("unbalanced quote")), ('x a"b', NP("unbalanced quote"))])
         self.assertEqual(scan('git "oops x').words, ("git", "oops x"))
 
-    def test_quotes(self):  # Q3-Q8
+    def test_quotes(self):  # Q3, Q5, Q6, Q7, Q8 (members not moved to N10), as argument words
         self.many([
             ("git commit -m ''", P(("git", "commit", "-m", ""))),
             ('git commit -m ""', P(("git", "commit", "-m", ""))),
-            ('""', P(("",))),
-            ("a'b'\"c\"", P(("abc",))),
+            ('x ""', P(("x", ""))),
             ("git commit -m 'a\nb'", P(("git", "commit", "-m", "a\nb"))),
             ('git commit -m "a\nb"', P(("git", "commit", "-m", "a\nb"))),
-            ('"\\""', P(('"',))),
-            ('"\\\\"', P(("\\",))),
-            ('"\\$"', P(("$",))),
-            ('"\\`"', P(("`",))),
-            ('"a\\\nb"', P(("ab",))),
-            ('"\\a"', P(("\\a",))),
-            ("\\a", P(("a",))),
-            ("\\ ", P((" ",))),
-            ("\\;", P((";",))),
-            ("\\'", P(("'",))),
-            ("a\\\nb", P(("ab",))),
-            ("'a\\'", P(("a\\",))),
-            ("a'b c'd", P(("ab cd",))),
+            ('x "\\""', P(("x", '"'))),
+            ('x "\\\\"', P(("x", "\\"))),
+            ('x "\\$"', P(("x", "$"))),
+            ('x "\\`"', P(("x", "`"))),
+            ('x "\\a"', P(("x", "\\a"))),
+            ("x \\a", P(("x", "a"))),
+            ("x \\ ", P(("x", " "))),
+            ("x \\;", P(("x", ";"))),
+            ("x a\\;", P(("x", "a;"))),
+            ("x \\'", P(("x", "'"))),
+            ("x 'a\\'", P(("x", "a\\"))),
+            # the same as the program word: a quoted or escaped program word (N8)
+            ('""', NP("command word")),
+            ("''", NP("command word")),
+            ('"\\""', NP("command word")),
+            ("\\a", NP("command word")),
+        ])
+
+    def test_quoting_splits_token(self):  # N10 (rule Q)
+        self.many([
+            ("git c'o'mmit", NP("quoting")),
+            ("git commit --no-'verify'", NP("quoting")),
+            ("git commit -'-no-verify'", NP("quoting")),
+            ('git commit -m"fix"', NP("quoting")),
+            ("x a'b'\"c\"", NP("quoting")),
+            ("x a\\\nb", NP("quoting")),
+            ('x "a\\\nb"', NP("quoting")),
+            ("x ab\\c", NP("quoting")),
+            ('git "co"mmit', NP("quoting")),
+            ("TZ=a'b' git", NP("quoting")),
+            ("cd '/w/a'b && git x", NP("quoting")),
+            ("x a'b c'd", NP("quoting")),
+            ("git commit --no-verif\\y", NP("quoting")),
+            ("git commit \\-\\-no-verify", NP("quoting")),
+            ("x 'a''b'", NP("quoting")),
+            ("git commit -m 'a && b'", P(("git", "commit", "-m", "a && b"))),
+            ('git commit -m "fix bug"', P(("git", "commit", "-m", "fix bug"))),
+            ("git log --format='%H %s'", P(("git", "log", "--format=%H %s"))),
+            ('git commit --author="B S"', P(("git", "commit", "--author=B S"))),
+            ("git commit -m 'fix'", P(("git", "commit", "-m", "fix"))),
+            ("x \\a", P(("x", "a"))),
+            ("x \\ ", P(("x", " "))),
+            ("x a\\;", P(("x", "a;"))),
+            ("x 'a\\'", P(("x", "a\\"))),
+            ("git commit -m ''", P(("git", "commit", "-m", ""))),
+            ("x x'.'y", P(("x", "x.y"))),
+            ("TZ='x y' git", P(("git",), (("TZ", "x y"),))),
         ])
 
 
 class WordTest(ScanCase):
-    def test_reserved_words(self):  # W1-W3
+    def test_reserved_words(self):  # N7: W1, W3
         self.many([
             ("!", NP("reserved word")),
             ("[[", NP("reserved word")),
             ("]]", NP("reserved word")),
-            ("a !", NP("reserved word")),
-            ("a!b", P(("a!b",))),
+            ("x !", NP("reserved word")),
+            ("x [[", NP("reserved word")),
+            ("x ]]", NP("reserved word")),
+            ("! x", NP("reserved word")),
             ("git show HEAD@{1}", P(("git", "show", "HEAD@{1}"))),
-            ("x]]", P(("x]]",))),
-            ("'!'", P(("!",))),
-            ('"[["', P(("[[",))),
-            ("'}'", P(("}",))),
+            ("x '!'", P(("x", "!"))),
+            ('x "[["', P(("x", "[["))),
+            ("x '}'", P(("x", "}"))),
+            ("'!'", NP("command word")),
+            ('"[["', NP("command word")),
         ])
 
-    def test_reserved_words_in_command_position(self):  # W8
-        words = ("case coproc do done elif else esac fi for function if in select then time until while repeat foreach "
-                 "end nocorrect noglob declare export float integer local readonly typeset - builtin command exec").split()
-        self.assertEqual(len(words), 33)
-        for w in words:
+    def test_reserved_words_in_command_position(self):  # N7: W8, W9
+        self.assertEqual(len(K), 33)
+        for w in K:
             self.many([
                 (w + " git commit", NP("reserved word")),
                 (w, NP("reserved word")),
-                ("A=1 " + w + " git", NP("reserved word")),
+                ("TZ=1 " + w + " git", NP("reserved word")),
                 ("cd /w && " + w + " git commit", NP("reserved word")),
-                ("'" + w + "' git", P((w, "git"))),
-                ('"' + w + '" git', P((w, "git"))),
-                ("\\" + w + " git", P((w, "git"))),
                 ("git commit -m " + w, P(("git", "commit", "-m", w))),
                 ("git log -- " + w, P(("git", "log", "--", w))),
-                ("A=" + w + " git", P(("git",), (("A", w),))),
+                ("TZ=" + w + " git", P(("git",), (("TZ", w),))),
                 ("git " + w, P(("git", w))),
             ])
         self.many([
             ("time git commit", NP("reserved word")),
-            ("A=1 B=2 time git", NP("reserved word")),
-            ("A=1 git", P(("git",), (("A", "1"),))),
-            ("A=1", P((), (("A", "1"),))),
+            ("TZ=1 LANG=C time git", NP("reserved word")),
+            ("TZ=1 git", P(("git",), (("TZ", "1"),))),
+            ("TZ=1", P((), (("TZ", "1"),))),
             ("timex git", P(("timex", "git"))),
             ("Time git", P(("Time", "git"))),
             ("time\tgit", NP("reserved word")),
             ("x time git", P(("x", "time", "git"))),
-            ("A+=1 time git", NP("expansion")),
+            ("TZ+=1 time git", NP("expansion")),
             ("a; time git", NP("operator ;")),
             ("time git commit; x", NP("reserved word")),
-            ("A=1 time git > o", NP("reserved word")),
+            ("TZ=1 time git > o", NP("reserved word")),
         ])
 
-    def test_equals_expansion_not_plain(self):  # G11
+    def test_command_word(self):  # N8
+        quoted = ("'git' commit", '"git" commit', "\\git commit", "g'i't commit", "'time' git", "\\time git",
+                  "'exec' git", "\\command git", "'' x", '"" x', "./x\\\n.sh y", "gi\\\nt commit")
+        chars = ("%1 x", "%+", "%%", "git@x y", "a:b", "x+y", "é x", "a!b x", "x] y", "git\rx y", "-x y", "--help",
+                 "HEAD~1", "x{1..3}", "{a x", "x%1 git")
+        for t in quoted + chars:
+            self.check(t, NP("command word"))
+            self.check("TZ=1 " + t, NP("command word"))
+            self.check("cd /w && " + t, NP("command word"))
+        for w in K:  # a quoted or escaped K word is a quoted program word, not a reserved word
+            self.many([("'" + w + "' git", NP("command word")), ('"' + w + '" git', NP("command word")),
+                       ("\\" + w + " git", NP("command word"))])
+        self.many([
+            # precedence: a specific construct at the program word's first character wins
+            ("=git", NP("expansion")),
+            ("#x", NP("comment")),
+            ("{", NP("grouping")),
+            ("*x", NP("expansion")),
+            ("time", NP("reserved word")),
+            ("-", NP("reserved word")),
+            ("1=x git", NP("expansion")),
+            # still plain
+            ("git commit", P(("git", "commit"))),
+            ("/usr/bin/git x", P(("/usr/bin/git", "x"))),
+            ("./run.sh", P(("./run.sh",))),
+            ("python3 x", P(("python3", "x"))),
+            ("git-lfs x", P(("git-lfs", "x"))),
+            ("a_b.c x", P(("a_b.c", "x"))),
+            ("1 git", P(("1", "git"))),
+            ("TZ=1 /usr/bin/git x", P(("/usr/bin/git", "x"), (("TZ", "1"),))),
+            ("cd /w && ./run.sh -x", P(("./run.sh", "-x"), (), "/w")),
+        ])
+
+    def test_equals_expansion_not_plain(self):  # N4: G11, G12
         self.many([
             ("=git commit", NP("expansion")),
             ("git commit -m =x", NP("expansion")),
+            ("git -m =x", NP("expansion")),
             ("cd =w && git commit", NP("expansion")),
             ("=", NP("expansion")),
             ("git commit -m '=x'", P(("git", "commit", "-m", "=x"))),
             ("git commit -m \\=x", P(("git", "commit", "-m", "=x"))),
             ("git commit -m a=b", P(("git", "commit", "-m", "a=b"))),
-            ("A==1 git", NP("expansion")),  # superseded by G12
+            ("TZ==1 git", NP("expansion")),
+            ("TZ==x git", NP("expansion")),
             ("git commit --m=x", P(("git", "commit", "--m=x"))),
+            ("git --format=x", P(("git", "--format=x"))),
             ("=x '='", NP("expansion")),
-            # G12: zsh EQUALS at the start of an assignment value and after a colon in it (the colon may be quoted)
-            ("A==python3 git", NP("expansion")),
-            ("A=a:=python3 git", NP("expansion")),
-            ("A=a\\:=x git", NP("expansion")),
-            ("A=a':'=x git", NP("expansion")),
-            ("A='=x' git", P(("git",), (("A", "=x"),))),
-            ("A=\\=x git", P(("git",), (("A", "=x"),))),
-            ("A=a=b git", P(("git",), (("A", "a=b"),))),
-            ("A=a:'=x' git", P(("git",), (("A", "a:=x"),))),
-            ("A=a:\\=x git", P(("git",), (("A", "a:=x"),))),
-            ("A=a\\:~/b git", NP("expansion")),
-            ("A=a':'~/b git", NP("expansion")),
-            ('A=a":"~/b git', NP("expansion")),
-            ("A=a:'~'/b git", P(("git",), (("A", "a:~/b"),))),
+            ("TZ==python3 git", NP("expansion")),
+            ("TZ=a:=python3 git", NP("expansion")),
+            ("TZ=a:=x git", NP("expansion")),
+            ("TZ=a\\:=x git", NP("expansion")),
+            ("TZ=a':'=x git", NP("expansion")),
+            ("TZ='=x' git", P(("git",), (("TZ", "=x"),))),
+            ("TZ=\\=x git", P(("git",), (("TZ", "=x"),))),
+            ("TZ=a=b git", P(("git",), (("TZ", "a=b"),))),
+            ("TZ=a:'=x' git", P(("git",), (("TZ", "a:=x"),))),
+            ("TZ=a:\\=x git", P(("git",), (("TZ", "a:=x"),))),
+            ("TZ=a\\:~/b git", NP("expansion")),
+            ("TZ=a':'~/b git", NP("expansion")),
+            ('TZ=a":"~/b git', NP("expansion")),
+            ("TZ=a:'~'/b git", P(("git",), (("TZ", "a:~/b"),))),
             ("git B==x", NP("expansion")),
+            ("git B=a:=x", NP("expansion")),
+            ("1=x git", NP("expansion")),
+            ("10+=v git", NP("expansion")),
+            ("x '=x'", P(("x", "=x"))),
+            ("x \\=x", P(("x", "=x"))),
         ])
 
-    def test_zsh_sweep(self):  # Z1: zsh 5.9 default options; each verdict probed in zsh (see the fix-2 report)
+    def test_zsh_sweep(self):  # Z1 under the closed grammar (verdicts per N4/N7/N8/N11)
         self.many([
-            # zshexpn HISTORY EXPANSION (41-): interactive only; a non-interactive zsh passes the text unchanged
-            ("echo !!", P(("echo", "!!"))),
-            ("echo !$", NP("expansion")),
-            ("echo a!b", P(("echo", "a!b"))),
+            # zshexpn HISTORY EXPANSION: `!` unquoted mid-word is outside U
+            ("echo !!", NP("character")),
+            ("echo !$", NP("character")),
+            ("echo a!b", NP("character")),
             ("echo \\!x", P(("echo", "!x"))),
             ('echo "\\!"', P(("echo", "\\!"))),
-            # zshexpn PROCESS SUBSTITUTION (358-): <(..) >(..) =(..)
+            # zshexpn PROCESS SUBSTITUTION: <(..) >(..) =(..)
             ("cat <(a)", NP("substitution")),
             ("tee >(a)", NP("substitution")),
             ("cat =(a)", NP("expansion")),
-            # zshexpn PARAMETER EXPANSION (471-), COMMAND SUBSTITUTION (1578-), ARITHMETIC EXPANSION (1594-)
+            # zshexpn PARAMETER EXPANSION, COMMAND SUBSTITUTION, ARITHMETIC EXPANSION
             ("echo $x", NP("expansion")),
             ("echo ${x}", NP("expansion")),
             ("echo $[1+1]", NP("expansion")),
             ("echo $((1))", NP("substitution")),
             ("echo $(a)", NP("substitution")),
             ("echo `a`", NP("substitution")),
-            # zshexpn BRACE EXPANSION (1600-)
+            # zshexpn BRACE EXPANSION
             ("echo x{a,b}y", NP("expansion")),
             ("echo {1..3}", NP("expansion")),
             ("echo {a..c}", NP("expansion")),
             ("echo {1..10..2}", NP("expansion")),
-            ("echo {a}", P(("echo", "{a}"))),
-            ("echo {}", P(("echo", "{}"))),
-            # zshexpn FILENAME EXPANSION (1655-): ~, ~+, ~-, ~name, ~[dyn], =cmd (1785), assignments (1790-)
+            ("echo {a}", NP("character")),
+            ("echo {}", NP("character")),
+            ("echo a{b}", P(("echo", "a{b}"))),
+            # zshexpn FILENAME EXPANSION: ~, ~+, ~-, ~name, ~[dyn], =cmd, assignments
             ("echo ~", NP("expansion")),
             ("echo ~+", NP("expansion")),
             ("echo ~-", NP("expansion")),
@@ -364,26 +467,26 @@ class WordTest(ScanCase):
             ("echo ~[x]", NP("expansion")),
             ("echo =ls", NP("expansion")),
             ("echo a~b", P(("echo", "a~b"))),
-            # zshexpn FILENAME GENERATION (1805-): * ? [..] qualifiers, <n-m>, (a|b)
+            # zshexpn FILENAME GENERATION: * ? [..] qualifiers, <n-m>, (a|b)
             ("echo *", NP("expansion")),
             ("echo a?", NP("expansion")),
             ("echo [a]", NP("expansion")),
             ("echo *(.)", NP("expansion")),
             ("echo <1-3>", NP("redirection")),
             ("echo (a|b)", NP("grouping")),
-            # zshmisc SIMPLE COMMANDS & PIPELINES (6-70): | |& && || ; & &| &! newline
+            # zshmisc SIMPLE COMMANDS & PIPELINES: | |& && || ; & &| &! newline
             ("a &|", NP("operator &")),
             ("a &!", NP("operator &")),
             ("a |& b", NP("operator |")),
             ("a ;& b", NP("operator ;")),
             ("a ;| b", NP("operator ;")),
-            # zshmisc REDIRECTION (603-), MULTIOS (793-), REDIRECTIONS WITH NO COMMAND (898-)
-            ("a {fd}>f", NP("redirection")),
+            # zshmisc REDIRECTION, MULTIOS, REDIRECTIONS WITH NO COMMAND
+            ("a {fd}>f", NP("character")),
             ("a >! f", NP("redirection")),
             ("a >>& f", NP("redirection")),
             ("a >&| f", NP("redirection")),
             ("< f", NP("redirection")),
-            # zshmisc COMPLEX COMMANDS (128-), ALTERNATE FORMS (329-), RESERVED WORDS (398-): keywords, groups
+            # zshmisc COMPLEX COMMANDS, ALTERNATE FORMS, RESERVED WORDS
             ("if a; then b; fi", NP("reserved word")),
             ("for i in a; do b; done", NP("reserved word")),
             ("repeat 3 a", NP("reserved word")),
@@ -392,52 +495,57 @@ class WordTest(ScanCase):
             ("[[ a ]]", NP("reserved word")),
             ("(( 1 ))", NP("grouping")),
             ("f() { a; }", NP("grouping")),
-            ("A=(1 2) a", NP("grouping")),
-            ("A[1]=x a", NP("expansion")),
-            # zshmisc JOBS (1307-): a command word starting with % resumes a job
-            ("%1", NP("reserved word")),
-            ("%+ x", NP("reserved word")),
-            ("A=1 %%", NP("reserved word")),
-            ("cd /w && %1", NP("reserved word")),
+            ("TZ=(1 2) a", NP("grouping")),
+            ("A=(1 2) a", NP("assignment")),
+            ("A[1]=x a", NP("command word")),
+            # zshmisc JOBS: a command word starting with % is outside the command-word set (N8)
+            ("%1", NP("command word")),
+            ("%+ x", NP("command word")),
+            ("TZ=1 %%", NP("command word")),
+            ("cd /w && %1", NP("command word")),
             ("git log %1", P(("git", "log", "%1"))),
-            ("'%1' x", P(("%1", "x"))),
-            ("\\%1 x", P(("%1", "x"))),
-            ("A=%1 git", P(("git",), (("A", "%1"),))),
-            # zshparam: digits are a valid parameter name, so `1=x` is an assignment in zsh (not in bash)
+            ("'%1' x", NP("command word")),
+            ("\\%1 x", NP("command word")),
+            ("TZ=%1 git", P(("git",), (("TZ", "%1"),))),
+            # zshparam: digits are a parameter name, so `1=x` is an assignment in zsh
             ("1=x git", NP("expansion")),
             ("0=v git", NP("expansion")),
             ("10+=v git", NP("expansion")),
-            ("A=1 2=x git", NP("expansion")),
+            ("TZ=1 2=x git", NP("expansion")),
             ("cd /w && 1=x git", NP("expansion")),
-            ("1A=x git", P(("1A=x", "git"))),
+            ("1A=x git", NP("command word")),
             ("git 1=x", P(("git", "1=x"))),
-            ("'1'=x git", P(("1=x", "git"))),
-            ("1\\=x git", P(("1=x", "git"))),
+            ("'1'=x git", NP("command word")),
+            ("1\\=x git", NP("command word")),
             ("1 git", P(("1", "git"))),
-            ("+=x git", P(("+=x", "git"))),
-            ("1'+'=x git", P(("1+=x", "git"))),
-            ("x%1 git", P(("x%1", "git"))),
-            ("A=1 x%1 git", P(("x%1", "git"), (("A", "1"),))),
+            ("+=x git", NP("command word")),
+            ("1'+'=x git", NP("command word")),
+            ("x%1 git", NP("command word")),
+            ("TZ=1 x%1 git", NP("command word")),
             ("12 x", P(("12", "x"))),
+            # zshparam ARGV0 (F5) and the other special parameters: not on the allow-list (N9)
+            ("ARGV0=git-push git origin HEAD:main", NP("assignment")),
         ])
 
-    def test_comments(self):  # W4, W5
+    def test_comments(self):  # N6: W4, W5
         self.many([
             ("git commit # x", NP("comment")),
             ("#x", NP("comment")),
             ("#a$X", NP("comment")),
+            ("cd /w && git commit # c", NP("comment")),
             ("a;#b", NP("operator ;")),
-            ("a#b", P(("a#b",))),
-            ("'#x'", P(("#x",))),
-            ("\\#x", P(("#x",))),
-            ('"#x"', P(("#x",))),
+            ("x a#b", P(("x", "a#b"))),
+            ("x '#x'", P(("x", "#x"))),
+            ("x \\#x", P(("x", "#x"))),
+            ('x "#x"', P(("x", "#x"))),
+            ("a#b", NP("command word")),
         ])
 
     def test_empty_text_plain(self):  # W6
-        for t in ("", "   ", "\n", "\n\n", " \t "):
+        for t in ("", "   ", "\n", "\n\n", " \t ", "\\\n"):
             self.check(t, P(), ())
 
-    def test_words_field(self):  # W7
+    def test_words_field(self):  # W7 (invariant: words)
         self.check("git add x && git commit", NP("operator &&"), ("git", "add", "x", "&&", "git", "commit"))
         self.check("a>b", NP("redirection"), ("a", ">", "b"))
         self.check("echo $(git commit)", NP("substitution"), ("echo", "$", "(", "git", "commit", ")"))
@@ -449,36 +557,59 @@ class WordTest(ScanCase):
                     "j", "<<<", "k", "<<-", "l", "<<", "m", "<>", "n", "<&", "o", "<", "p", ">>", "q", ">&", "r", ">|",
                     "s", ">", "t"))
         self.check("(a)", NP("grouping"), ("(", "a", ")"))
-        self.check("A=1 git x\n", P(("git", "x"), (("A", "1"),)), ("A=1", "git", "x"))
+        self.check("TZ=1 git x\n", P(("git", "x"), (("TZ", "1"),)), ("TZ=1", "git", "x"))
         self.check("cd /w && git commit", P(("git", "commit"), (), "/w"), ("cd", "/w", "&&", "git", "commit"))
         self.check("echo `x`", NP("substitution"), ("echo", "`x`"))
+        self.check("git c'o'mmit", NP("quoting"), ("git", "commit"))
+        self.check("A=1 git", NP("assignment"), ("A=1", "git"))
+        self.check("cd +1 && git commit", NP("operator &&"), ("cd", "+1", "&&", "git", "commit"))
 
 
 class AssignmentTest(ScanCase):
-    def test_assignments_split(self):  # A1-A6, plan Step 1
+    def test_assignments_split(self):  # A1-A6 with ALLOW names, plan Step 1 (invariant: the assignment split)
         self.assertEqual(scan("GIT_INDEX_FILE=x git commit").assignments, (("GIT_INDEX_FILE", "x"),))
         self.many([
-            ("A=1 git", P(("git",), (("A", "1"),))),
             ("GIT_INDEX_FILE=x git commit", P(("git", "commit"), (("GIT_INDEX_FILE", "x"),))),
-            ("A= git", P(("git",), (("A", ""),))),
-            ("1A=x git", P(("1A=x", "git"))),
-            ("'A'=1 git", P(("A=1", "git"))),
-            ("A\\=1 git", P(("A=1", "git"))),
-            ("A-B=1 git", P(("A-B=1", "git"))),
-            ("A'B'=1 git", P(("AB=1", "git"))),
-            ("A=1", P((), (("A", "1"),))),
-            ("A=1 B=2", P((), (("A", "1"), ("B", "2")))),
-            ("_a9=1 B2= git x", P(("git", "x"), (("_a9", "1"), ("B2", "")))),
+            ("TZ=1 git", P(("git",), (("TZ", "1"),))),
+            ("TZ= git", P(("git",), (("TZ", ""),))),
+            ("1A=x git", NP("command word")),
+            ("'A'=1 git", NP("command word")),
+            ("A\\=1 git", NP("command word")),
+            ("A-B=1 git", NP("command word")),
+            ("A'B'=1 git", NP("command word")),
+            ("LANG=C", P((), (("LANG", "C"),))),
+            ("TZ=1 LANG=C", P((), (("TZ", "1"), ("LANG", "C")))),
+            ("GIT_DIR=1 GIT_WORK_TREE= git x", P(("git", "x"), (("GIT_DIR", "1"), ("GIT_WORK_TREE", "")))),
             ("git B=2", P(("git", "B=2"))),
-            ("A='x y' git", P(("git",), (("A", "x y"),))),
-            ('A="x" git', P(("git",), (("A", "x"),))),
-            ("A=b=c git", P(("git",), (("A", "b=c"),))),
-            ("A=1 git B=2", P(("git", "B=2"), (("A", "1"),))),
+            ("TZ='x y' git", P(("git",), (("TZ", "x y"),))),
+            ('TZ="x" git', P(("git",), (("TZ", "x"),))),
+            ("TZ=b=c git", P(("git",), (("TZ", "b=c"),))),
+            ("TZ=1 git B=2", P(("git", "B=2"), (("TZ", "1"),))),
+        ])
+
+    def test_assignment_allow_list(self):  # N9 (F5)
+        for t in ("ARGV0=git-push git origin HEAD:main", "PATH=/tmp/x git commit", "A=1 git", "A= git", "A=1",
+                  "HOME=/x git", "IFS=x git", "GIT_CONFIG_PARAMETERS=x git", "BASH_ENV=x git", "ENV=x git",
+                  "ZDOTDIR=x git", "path=x git", "argv=x git", "LD_PRELOAD=x git", "DYLD_INSERT_LIBRARIES=x git",
+                  "_=x git", "git_dir=x git", "tz=1 git", "A=1 TZ=1 git", "TZ=1 A=1 git", "cd /w && A=1 git commit",
+                  "ARGV0=x", "A='x y' git", "A=1 'git' x"):
+            self.check(t, NP("assignment"))
+        for name in ALLOW:
+            self.check(name + "=x git commit", P(("git", "commit"), ((name, "x"),)))
+            self.check(name + "=", P((), ((name, ""),)))
+        self.many([
+            ("TZ= git", P(("git",), (("TZ", ""),))),
+            ("LANG=C", P((), (("LANG", "C"),))),
+            ("TZ='x y' git", P(("git",), (("TZ", "x y"),))),
+            ('TZ="x" git', P(("git",), (("TZ", "x"),))),
+            ("cd /w/x && TZ=1 git commit", P(("git", "commit"), (("TZ", "1"),), "/w/x")),
+            ("git B=2", P(("git", "B=2"))),
+            ("git ARGV0=x", P(("git", "ARGV0=x"))),
         ])
 
 
 class CdTest(ScanCase):
-    def test_cd_form_is_the_only_plain_compound(self):  # CD1-CD5, plan Step 1
+    def test_cd_form_is_the_only_plain_compound(self):  # N12: CD1-CD6, plan Step 1 (invariant: the cd form)
         s = scan("cd /w/x && git commit -m m")
         self.assertTrue(s.plain)
         self.assertEqual((s.cd, s.argv), ("/w/x", ("git", "commit", "-m", "m")))
@@ -488,7 +619,7 @@ class CdTest(ScanCase):
             ("cd /w/x && git commit -m m", P(("git", "commit", "-m", "m"), (), "/w/x")),
             ("cd '/w/a b' && git push", P(("git", "push"), (), "/w/a b")),
             ("cd /w/x&&git commit", P(("git", "commit"), (), "/w/x")),
-            ("cd /w/x && A=1 git commit", P(("git", "commit"), (("A", "1"),), "/w/x")),
+            ("cd /w/x && TZ=1 git commit", P(("git", "commit"), (("TZ", "1"),), "/w/x")),
             ("cd /w/x && cd y", P(("cd", "y"), (), "/w/x")),
             ("cd /w/x && git commit\n", P(("git", "commit"), (), "/w/x")),
             ("cd /w/x; git commit", NP("operator ;")),
@@ -501,8 +632,9 @@ class CdTest(ScanCase):
             ("cd -- && git commit", NP("operator &&")),
             ("cd a b && x", NP("operator &&")),
             ("cd '' && x", NP("operator &&")),
-            ('"cd" /w && x', NP("operator &&")),
-            ("A=1 cd /w && x", NP("operator &&")),
+            ("TZ=1 cd /w && x", NP("operator &&")),
+            ('"cd" /w && x', NP("command word")),
+            ("A=1 cd /w && x", NP("assignment")),
             ("cd /w/x && cd y && git commit", NP("operator &&")),
             ("cd /w/x && git commit && git push", NP("operator &&")),
             ("cd /w/x &&", NP("operator &&")),
@@ -516,25 +648,61 @@ class CdTest(ScanCase):
             ("cdx /w && x", NP("operator &&")),
             ("CD /w && x", NP("operator &&")),
             ("Cd /w && x", NP("operator &&")),
-            ("cd time && git commit", P(("git", "commit"), (), "time")),
+            ("cd time && git commit", NP("operator &&")),
             ("cd /w && time git commit", NP("reserved word")),
+        ])
+
+    def test_cd_target_absolute(self):  # N12 (F7)
+        for t in ("cd +1 && git commit", "cd -2 && x", "cd y && git commit", "cd ./x && x", "cd ../x && x",
+                  "cd /w/../x && x", "cd /w/./x && x", "cd /w/.. && x", "cd . && x", "cd .. && x", "cd /w/. && x",
+                  "cd /.. && x", "cd '/w/..' && x", "cd x/y && x", "cd '' && x", "cd %1 && x"):
+            self.check(t, NP("operator &&"))
+        self.many([
+            ("cd /w/x && git commit -m m", P(("git", "commit", "-m", "m"), (), "/w/x")),
+            ("cd '/w/a b' && git push", P(("git", "push"), (), "/w/a b")),
+            ("cd /w/x&&git commit", P(("git", "commit"), (), "/w/x")),
+            ("cd / && x", P(("x",), (), "/")),
+            ("cd /w/.x && x", P(("x",), (), "/w/.x")),
+            ("cd /w/x.. && x", P(("x",), (), "/w/x..")),
+            ("cd //w && x", P(("x",), (), "//w")),
+            ("cd /w/x/ && x", P(("x",), (), "/w/x/")),
+            ("cd /w/... && x", P(("x",), (), "/w/...")),
         ])
 
 
 class CharacterTest(ScanCase):
-    def test_characters(self):  # CH1-CH4
+    OUTSIDE = ("\r", "\x01", "\x0b", "\x0c", "\x1b", "\x7f", "é", "\u00a0", "\u2028", "\u3000", "\u0085",
+               "\U0001f6dd", "\u180e", "\u0661", "!", "]")
+
+    def test_characters(self):  # N11, N14, CH1
         self.check("git\tcommit", P(("git", "commit")))
-        self.check("git commit -m é", P(("git", "commit", "-m", "é")))
-        for ch in (" ", " ", "　", "\u0085"):
-            self.check("git%scommit" % ch, P(("git%scommit" % ch,)))
-        for t in ("git\x00commit", "'a\x00'"):
-            with self.subTest(text=t):
-                s = scan(t)
-                self.assertFalse(s.plain)
-                self.assertEqual(s.reason, "nul character")
-                self.assertEqual((s.argv, s.assignments, s.cd), ((), (), None))
-        for ch in ("\x01", "\x0b", "\x0c", "\x1b", "\x7f"):
-            self.check("a%sb c" % ch, P(("a%sb" % ch, "c")))
+        self.check("git commit\r\n", NP("character"))
+        for ch in self.OUTSIDE:
+            self.check("x a%sb" % ch, NP("character"))
+            self.check("TZ=a%sb git" % ch, NP("character"))
+            self.check("x 'a%sb'" % ch, P(("x", "a%sb" % ch)))
+            self.check('x "a%sb"' % ch, P(("x", "a%sb" % ch)))
+            self.check("x \\%s" % ch, P(("x", ch)))
+            if ch != "!":
+                self.check("x " + ch, NP("character"))
+        self.many([
+            ("x x]", NP("character")),
+            ("x x]]", NP("character")),
+            ("x {a", NP("character")),
+            ("x }a", NP("character")),
+            ("x a!b", NP("character")),
+            ("git commit -m 'é'", P(("git", "commit", "-m", "é"))),
+            ('git commit -m "a\x01b"', P(("git", "commit", "-m", "a\x01b"))),
+            ("x 'a!b'", P(("x", "a!b"))),
+            ('x "x]"', P(("x", "x]"))),
+            ("x \\é", P(("x", "é"))),
+            # CRLF between commands: the CR is the first construct (by position), in an argument or the program word
+            ("x a\r\nb", NP("character")),
+            ("a\r\nb", NP("command word")),
+        ])
+        for t in ("x git\x00commit", "x 'a\x00'", 'x "a\x00"', "x \\\x00", "git commit\x00", "x y\x00"):
+            self.check(t, NP("nul character"))
+        self.check("git\x00commit", NP("command word"))
 
     def test_non_str_text_is_type_error(self):  # CH5, V3
         for bad in (None, b"git", Sub("git"), 5, ["git"]):
@@ -542,30 +710,52 @@ class CharacterTest(ScanCase):
                 with self.assertRaises(TypeError):
                     scan(bad)
 
-    def test_long_text_linear(self):  # CH6
-        took = []
-        for _ in range(3):  # the best of three, so a loaded machine does not fail a linear scanner
-            t0 = time.perf_counter()
-            s = scan("a " * 100000)
-            took.append(time.perf_counter() - t0)
-            self.assertTrue(s.plain)
-            self.assertEqual(len(s.argv), 100000)
-        self.assertLess(min(took), 2.0)
+    def test_long_text_linear(self):  # CH6 (F6): growth ratio, best of five; no absolute wall-clock bound
+        # CPU time of this process (not wall-clock time, which other processes stretch); the n and 4n rounds alternate,
+        # so a change in machine load falls on both sizes; the cyclic collector is
+        # off while a scan is timed (its cost follows the size of the whole test process, not the text).
+        n = 25000
+        texts = {n: "a " * n, 4 * n: "a " * (4 * n)}
+        took = {n: [], 4 * n: []}
+        enabled = gc.isenabled()
+        try:
+            for _ in range(5):
+                for size in (n, 4 * n):
+                    gc.disable()
+                    t0 = time.process_time()
+                    s = scan(texts[size])
+                    took[size].append(time.process_time() - t0)
+                    if enabled:
+                        gc.enable()
+                    self.assertTrue(s.plain)
+                    self.assertEqual(len(s.argv), size)
+        finally:
+            if enabled:
+                gc.enable()
+        self.assertLess(min(took[4 * n]) / min(took[n]), 8)
 
     def test_huge_numbers_are_text(self):  # V1
         d4300, d4301 = "7" * 4300, "7" * 4301
         self.check("git commit -m " + d4300, P(("git", "commit", "-m", d4300)))
         self.check("git commit -m " + d4301, P(("git", "commit", "-m", d4301)))
-        self.check("A=%s git" % d4301, P(("git",), (("A", d4301),)))
+        self.check("TZ=%s git" % d4301, P(("git",), (("TZ", d4301),)))
         self.check(d4301 + ">x", NP("redirection"))
 
-    def test_unicode_version_independent(self):  # V2
-        self.check("a\U0001f6ddb x", P(("a\U0001f6ddb", "x")))
-        self.check("a᠎b x", P(("a᠎b", "x")))
-        self.check("A١=1 git", P(("A١=1", "git")))
-        self.check("١=1 git", P(("١=1", "git")))
-        self.check("A=١ git", P(("git",), (("A", "١"),)))
-        self.assertEqual(scan("a\U0001f6ddb ᠎").argv, ("a\U0001f6ddb", "᠎"))
+    def test_unicode_version_independent(self):  # V2, N11
+        for ch in ("\U0001f6dd", "\u180e", "\u0661"):
+            self.check("x a%sb" % ch, NP("character"))
+            self.check("x 'a%sb'" % ch, P(("x", "a%sb" % ch)))
+            self.check('x "%s"' % ch, P(("x", ch)))
+        self.check("A\u0661=1 git", NP("command word"))
+        self.check("\u0661=1 git", NP("command word"))
+        self.check("TZ=\u0661 git", NP("character"))
+        self.check("TZ='\u0661' git", P(("git",), (("TZ", "\u0661"),)))
+        with open(shellscan.__file__, encoding="utf-8") as f:
+            source = f.read()
+        for name in (".isspace(", ".isalnum(", ".isalpha(", ".isdigit(", ".isdecimal(", ".isnumeric(", ".lower(",
+                     ".upper(", ".casefold(", "unicodedata", "re.I", "IGNORECASE", "\\s", "\\w", "\\d"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, source)
 
 
 class TokenInTest(unittest.TestCase):
