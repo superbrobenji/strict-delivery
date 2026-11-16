@@ -1,7 +1,7 @@
 schema: finding/1
 id: F-20261116-c2jx
 status: open
-source: "U-2-R2: .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a2-g3d-report.md:59-64, .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a2-g3-log.md:50-51 (review 3 of U1, registered under LOW_PLATEAU, not fixed)"
+source: "U-2-R2: .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a2-g3d-report.md:59-63, .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a2-g3-log.md:50-51 (review 3 of U1, registered under LOW_PLATEAU, not fixed)"
 severity: LOW
 class: "fold_table.py header statements of the tables' source or derivation, and test comments giving why a claim is checked on some interpreters only: fold_table.py:65-66, tests/test_fold_table.py:145"
 siblings: []
