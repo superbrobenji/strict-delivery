@@ -19,6 +19,9 @@ owner:
 pin: null
 ruling: null
 evidence: []
+review_round: 3
+caused_by_change: true
+dimension: "fold_table.py header statements of the tables' source or derivation, and test comments giving why a claim is checked on some interpreters only"
 history:
   - status: open
     sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3

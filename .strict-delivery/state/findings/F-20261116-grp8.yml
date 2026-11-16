@@ -17,6 +17,9 @@ owner:
 pin: null
 ruling: null
 evidence: []
+review_round: 1
+caused_by_change: false
+dimension: "quote removal before text checks"
 history:
   - status: open
     sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
