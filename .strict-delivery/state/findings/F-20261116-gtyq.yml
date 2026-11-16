@@ -1,0 +1,22 @@
+schema: finding/1
+id: F-20261116-gtyq
+status: open
+source: "U-G0-1: SDD/stream-a2-g0-log.md:26 (SDD = .superpowers/sdd/2026-10-31-strict-delivery-framework; severity not stated at source)"
+severity: LOW
+class: "numeric size: int values > 4300 digits rendered by run_check/Result (ids, reasons, map/list items)"
+siblings: []
+cites:
+  - file: gates/lib/result.py
+    lines: 134-136
+    sha: f3ec748
+repro: "On both interpreters run: from gates.lib import result; result._raw(10**4300). /usr/bin/python3 (3.9.6) returns the 4301 digits, python3.13 (3.13.18) returns the text int (checked 2026-11-16 at f3ec748). Source: run_check with a Result line whose id is 10**4300."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

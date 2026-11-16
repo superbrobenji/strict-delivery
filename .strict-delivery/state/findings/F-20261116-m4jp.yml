@@ -1,0 +1,28 @@
+schema: finding/1
+id: F-20261116-m4jp
+status: open
+source: "U-CR-2: .superpowers/sdd/2026-10-31-strict-delivery-framework/g0/review-cr.md:105-112 (and :88-89)"
+severity: LOW
+class: "output channel on a reported gate failure: {stderr}; sites {import, reading check, find_spec, check}"
+siblings: []
+cites:
+  - file: tests/test_run_all.py
+    lines: 141-145
+    sha: 41cff11
+  - file: gates/run_all.py
+    lines: "37"
+    sha: 41cff11
+  - file: gates/run_all.py
+    lines: "61"
+    sha: 41cff11
+repro: "Mutants r-imp-err (a write to stderr in the import-site except at gates/run_all.py:61) and r-se-out (a stderr line in the SystemExit branch at :37) both pass the whole tests.test_run_all module on both interpreters, because RunAllCase.run_main (tests/test_run_all.py:141-145) captures stderr and discards it (source review-cr.md:105-112; not run for this row)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

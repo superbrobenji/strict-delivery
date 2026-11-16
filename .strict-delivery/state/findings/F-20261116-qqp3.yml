@@ -1,0 +1,22 @@
+schema: finding/1
+id: F-20261116-qqp3
+status: open
+source: "F-FV3-1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g0/final-verifier-3.md:47 (and table rows :32-33)"
+severity: LOW
+class: "import failure kind: an exception raised by the self-named check outside find_spec: {e.name.__eq__ raising an Exception, a str-subclass name whose __eq__ raises, an __eq__ result whose __bool__ raises, a ModuleNotFoundError subclass whose name attribute raises, __eq__ raising SystemExit}"
+siblings: []
+cites:
+  - file: gates/run_all.py
+    lines: "52"
+    sha: 41cff11
+repro: "A gate module file whose body is: class N with __hash__ = None and __eq__ raising ValueError('eq'), then raise ModuleNotFoundError('x', name=N()); set as GATES['claims'], then run_all.main(['--root', repo]). Gives rc 1 and only 'FAIL run_all.input: ValueError: eq' (n=1, expected n=27) on 3.9.6 and 3.13 (source final-verifier-3.md:47-50, scripts p1.py/apply.py; not run for this row)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

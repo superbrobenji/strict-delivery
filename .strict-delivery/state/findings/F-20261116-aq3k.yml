@@ -1,0 +1,25 @@
+schema: finding/1
+id: F-20261116-aq3k
+status: open
+source: "U-CR-1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g0/review-cr.md:98-104 (and :87)"
+severity: LOW
+class: "evaluation order of the missing check against the module name: {name compared before find_spec}"
+siblings: []
+cites:
+  - file: gates/run_all.py
+    lines: "52"
+    sha: 41cff11
+  - file: gates/run_all.py
+    lines: "41"
+    sha: 6f5563a
+repro: "Mutant r-swap: swap the conditions at gates/run_all.py:52 to '_absent(name) and e.name == name'; the module passes on both interpreters. Observable: swap_probe.py raises a dependency-named ModuleNotFoundError on the first lookup, then KeyboardInterrupt on a later find_spec; unmutated: 'FAIL run_all.missing.claims: import of rev5_swap_gate raised ModuleNotFoundError', rc 1, 1 lookup; mutant: 'raised KeyboardInterrupt', 2 lookups (source review-cr.md:98-104; not run for this row)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

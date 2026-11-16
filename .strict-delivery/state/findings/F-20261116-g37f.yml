@@ -1,0 +1,22 @@
+schema: finding/1
+id: F-20261116-g37f
+status: open
+source: "U-1 (G2, 2c.2 review 1): .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a3-g2-log.md:16, .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a3-g2-report.md:50"
+severity: LOW
+class: "decisions.scan items: bracket expressions outside the grammar; non-repo-relative patterns"
+siblings: []
+cites:
+  - file: gates/lib/config.py
+    lines: "178"
+    sha: 520913f
+repro: "config.load (gates/lib/config.py:178 at 520913f) accepts a decisions.scan item '[z-a]', which python3 -m gates check schema refuses; both accept '../x' (source stream-a3-g2-log.md:16, stream-a3-g2-report.md:50; not run for this row)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

@@ -1,0 +1,25 @@
+schema: finding/1
+id: F-20261116-wump
+status: open
+source: "U-1 (docs-rev6 plan review 1): SDD/docs-rev6-plan-review-1.md:239 (and :39), SDD/docs-rev6-impl-bd.md:36,48 (SDD = .superpowers/sdd/2026-10-31-strict-delivery-framework; severity not stated at source, LOW per the registration brief)"
+severity: LOW
+class: "breakdown record syntax: multi-line flow sequence in done:"
+siblings: []
+cites:
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md
+    lines: 283-391
+    sha: f3ec748
+  - file: gates/lib/yamlsub.py
+    lines: 1-8
+    sha: f3ec748
+repro: "Extract the yaml block of breakdown.md section 6 (lines 284-390 at f3ec748) and call gates.lib.yamlsub.parse on it: YamlError 'line 5: unterminated flow sequence' on /usr/bin/python3 (3.9.6) and python3.13 (checked 2026-11-16 at f3ec748). Causes: a multi-line flow sequence in done:, flow mappings in streams:, edges: and groups:. Source script: yamlcheck.py (scratch, not kept). The block is also not valid YAML for PyYAML 6.0.3 (yaml.safe_load: ParserError at breakdown.md:317, an unescaped double quote inside the double-quoted unblock string of stream config around the words Program grouping for v0.1), so a rewrite must also fix that quote."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7
