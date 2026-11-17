@@ -27,6 +27,11 @@ LONG_HEX = re.compile(r"[0-9a-fA-F]{41,}")  # longer than a sha-1: git would mat
 
 CLEARED_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+# D-18 (owner Q-G1-4 (a)): the hooks' index-reading calls run with core.fsmonitor off, so git stats every tracked file
+# and never trusts an fsmonitor-valid bit that hides a work-tree change (a hook or daemon that reports no change).
+# ``_run`` puts these options before ``-C root`` and the subcommand; they override every config source, including
+# ``git -c`` and GIT_CONFIG_COUNT (measured with git 2.50.1).
+FSMONITOR_OFF = ["-c", "core.fsmonitor=false"]
 REFUSED_LEAD = ("-", "^")  # an option, or an exclusion marker that names no object (F-1a-ver-2)
 
 
@@ -362,7 +367,7 @@ def unstaged_paths(root: str) -> list:
     submodule, and a submodule holding only untracked files is listed too)."""
     _require_toplevel(root)
     p = _run(root, "diff --name-only", ["diff", "--no-color", "--name-only", "-z", "--no-ext-diff", "--no-textconv",
-                                        "--ignore-submodules=none"])
+                                        "--ignore-submodules=none"], opts=FSMONITOR_OFF)
     return [_text(raw, "diff --name-only") for raw in p.stdout.split(b"\0") if raw]
 
 
@@ -372,7 +377,7 @@ def flagged_paths(root: str) -> list:
     show a change to them (task 2b.2, owner Q-G1-3 (a), D-14; ``GIT_INDEX_FILE`` inherited as in ``unstaged_paths``).
     An entry that is not ``<ASCII letter> <space> <path>`` is a GateError: the hook fails closed."""
     _require_toplevel(root)
-    p = _run(root, "ls-files -v", ["ls-files", "-v", "-z"])
+    p = _run(root, "ls-files -v", ["ls-files", "-v", "-z"], opts=FSMONITOR_OFF)
     data = p.stdout
     if data and not data.endswith(b"\0"):
         raise GateError("git ls-files -v: unexpected entry %r" % data.rsplit(b"\0", 1)[-1])

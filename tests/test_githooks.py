@@ -170,8 +170,12 @@ class HookCase(GitIsolatedTestCase):
 
 STALE_MODES = (0o644, 0o775, 0o700, 0o4755, 0o555, 0o757)  # row S4: group/other write, owner only, setuid, no write
 RUN_ALL_LINES = [Line("PASS", "schema.config"), Line("FAIL", "decisions.schema", "bad record: x; fix it"),
-                 Line("PASS", "cites.doc")]
-RUN_ALL_TEXT = "PASS schema.config\nFAIL decisions.schema: bad record: x; fix it\nPASS cites.doc\n"
+                 Line("PASS", "cites.doc"), Line("FAIL", "schema.input", "boom"),
+                 Line("FAIL", "run_all.missing.claims", "not registered in gates.__main__.GATES")]
+RUN_ALL_TEXT = ("PASS schema.config\nFAIL decisions.schema: bad record: x; fix it\nPASS cites.doc\n"
+                "FAIL schema.input: boom\nFAIL run_all.missing.claims: not registered in gates.__main__.GATES\n")
+RUN_ALL_PASSING = [Line("PASS", "schema.config"), Line("PASS", "cites.doc")]  # F-R2-1: the whole pass-through class
+RUN_ALL_INPUT = [Line("PASS", "schema.kinds"), Line("FAIL", "run_all.input", "no config; run init")]
 
 
 class ArgumentsTest(HookCase):
@@ -390,6 +394,75 @@ class PreCommitTest(HookCase):
         self.assertEqual(out, "".join(flagged_line(want[n]) for n in sorted(names)))
         self.assertEqual(called, [])
 
+    def test_fsmonitor_hidden_change_refuses_commit(self):  # FM4, FM7, FM8 (Q-G1-4 (a), D-18; review-2 U-R2-1)
+        def hidden(source):
+            d = self.repo(install=True)
+            env, was_hidden = fsmon_hidden(self.tmp, d, source)
+            self.assertTrue(was_hidden)  # plain git diff shows nothing: this is the reproducer, not an assumption
+            write_file(d, "b.txt", "two\n")  # another file staged, as in the review's steps
+            git(d, "update-index", "--no-fsmonitor-valid", "b.txt", env=env)
+            git(d, "add", "b.txt", env=env)
+            self.assertEqual(git(d, "diff", "--name-only", env=env), "")
+            return d, env
+
+        for source in FSMON_SOURCES:
+            with self.subTest(source):
+                d, env = hidden(source)
+                before = self.head(d)
+                rc, out = self.run_proc(["git", "-C", d, "commit", "-q", "-m", "change"], env=self.env(**env))
+                self.assertEqual((rc, out), (1, unstaged_line("a.txt")))  # no PASS line: no gate ran
+                self.assertEqual(self.head(d), before)
+                self.assertEqual(git(d, "show", "HEAD:a.txt"), "one")
+                self.assertEqual(git(d, "-c", "core.fsmonitor=false", "status", "--porcelain", env=env),
+                             "M a.txt\nM  b.txt")  # the index is intact (git's strip of " M a.txt")
+        with self.subTest("git -c core.fsmonitor=<hook> commit"):
+            d, env = hidden("repository config")
+            hook = git(d, "config", "core.fsmonitor")
+            git(d, "config", "--unset", "core.fsmonitor")
+            before = self.head(d)
+            rc, out = self.run_proc(["git", "-C", d, "-c", "core.fsmonitor=" + hook, "commit", "-q", "-m", "change"])
+            self.assertEqual((rc, out), (1, unstaged_line("a.txt")))
+            self.assertEqual(self.head(d), before)
+        with self.subTest("in process: no gate runs, and a held index.lock does not change the verdict"):
+            d, env = hidden("repository config")
+            called = self.fake_gates()
+            self.assertEqual(self.hook(["pre-commit", "--root", d], env=env), (1, unstaged_line("a.txt"), ""))
+            write_file(d, ".git/index.lock", "")  # another process holds the index
+            self.assertEqual(self.hook(["pre-commit", "--root", d], env=env), (1, unstaged_line("a.txt"), ""))
+            self.assertEqual(called, [])
+        with self.subTest("without the change the commit lands"):
+            d = self.repo(install=True)
+            env, was_hidden = fsmon_hidden(self.tmp, d)
+            git(d, "update-index", "--no-fsmonitor-valid", "a.txt", env=env)  # git add would skip a valid entry
+            git(d, "add", "a.txt", env=env)  # staged: the work tree equals the index
+            rc, out = self.run_proc(["git", "-C", d, "commit", "-q", "-m", "change"], env=self.env(**env))
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(git(d, "show", "HEAD:a.txt"), "hidden change")
+
+    def test_pre_commit_read_order(self):  # K5 (F-R2-2): diff first, then ls-files -v; the error names the first read
+        d = self.repo()
+        called = self.fake_gates()
+        bad_diff = "FAIL githook.input: git diff --name-only gave output that is not valid UTF-8\n"
+        bad_ls = "FAIL githook.input: git ls-files -v gave output that is not valid UTF-8\n"
+        for label, unstaged, flagged, want in (
+                ("both producers fail: diff first", GateError("unstaged boom"), GateError("flagged boom"),
+                 "FAIL githook.input: unstaged boom\n"),
+                ("only ls-files -v fails", [], GateError("flagged boom"), "FAIL githook.input: flagged boom\n")):
+            with self.subTest(label), \
+                    mock.patch.object(gitinfo, "unstaged_paths", side_effect=lambda root, v=unstaged: raises(v)), \
+                    mock.patch.object(gitinfo, "flagged_paths", side_effect=lambda root, v=flagged: raises(v)):
+                self.assertEqual(self.hook(["pre-commit", "--root", d]), (1, want, ""))
+        sha = subprocess.run(["git", "-C", d, "hash-object", "-w", "--stdin"], input=b"x\n", check=True,
+                             stdout=subprocess.PIPE).stdout.decode("ascii").strip()
+        subprocess.run(["git", "-C", d, "update-index", "--add", "--cacheinfo",
+                        b"100644," + sha.encode("ascii") + b",bad\xff.txt"], check=True)  # tracked, absent: diff lists it
+        with self.subTest("a non-UTF-8 name that both git calls report: the diff read comes first"):
+            self.assertEqual(self.hook(["pre-commit", "--root", d]), (1, bad_diff, ""))
+        with self.subTest("a name only ls-files -v reports"):
+            with mock.patch.object(gitinfo, "unstaged_paths", return_value=[]):
+                self.assertEqual(self.hook(["pre-commit", "--root", d]), (1, bad_ls, ""))
+        self.assertEqual(called, [])
+
     def test_stat_only_and_untracked_pass(self):  # C6, C7
         for label in ("stat-only", "untracked"):
             with self.subTest(label):
@@ -498,9 +571,10 @@ class PreCommitTest(HookCase):
         d = self.repo()
         for label, lines, want in (
                 ("a PASS line and a failing gate", RUN_ALL_LINES, RUN_ALL_TEXT),
-                ("all passing", RUN_ALL_LINES[::2], "PASS schema.config\nPASS cites.doc\n"),
-                ("run_all.input", [Line("PASS", "schema.kinds"), Line("FAIL", "run_all.input", "no config; run init")],
-                 "PASS schema.kinds\nFAIL githook.run_all: no config; run init\n")):
+                ("all passing", RUN_ALL_PASSING, "PASS schema.config\nPASS cites.doc\n"),
+                ("run_all.input", RUN_ALL_INPUT, "PASS schema.kinds\nFAIL githook.run_all: no config; run init\n"),
+                ("a gate's own .input line, then run_all.input", [Line("FAIL", "claims.input", "x")] + RUN_ALL_INPUT,
+                 "FAIL claims.input: x\nPASS schema.kinds\nFAIL githook.run_all: no config; run init\n")):
             with self.subTest(label), mock.patch.object(run_all, "check", return_value=Result("run_all", lines)):
                 rc, out, err = self.hook(["pre-commit", "--root", d])
                 self.assertEqual((rc, out, err), (0 if label == "all passing" else 1, want, ""))
@@ -837,9 +911,10 @@ class PrePushTest(HookCase):
         stdin = self.push_line("refs/heads/main", self.head(d))
         for label, lines, want in (
                 ("a PASS line and a failing gate", RUN_ALL_LINES, RUN_ALL_TEXT),
-                ("all passing", RUN_ALL_LINES[::2], "PASS schema.config\nPASS cites.doc\n"),
-                ("run_all.input", [Line("PASS", "schema.kinds"), Line("FAIL", "run_all.input", "no config; run init")],
-                 "PASS schema.kinds\nFAIL githook.run_all: no config; run init\n")):
+                ("all passing", RUN_ALL_PASSING, "PASS schema.config\nPASS cites.doc\n"),
+                ("run_all.input", RUN_ALL_INPUT, "PASS schema.kinds\nFAIL githook.run_all: no config; run init\n"),
+                ("a gate's own .input line, then run_all.input", [Line("FAIL", "claims.input", "x")] + RUN_ALL_INPUT,
+                 "FAIL claims.input: x\nPASS schema.kinds\nFAIL githook.run_all: no config; run init\n")):
             with self.subTest(label), mock.patch.object(run_all, "check", return_value=Result("run_all", lines)):
                 rc, out, err = self.push(d, stdin)
                 self.assertEqual((rc, out, err), (0 if label == "all passing" else 1, want, ""))
@@ -976,6 +1051,29 @@ class PrePushTest(HookCase):
                                              "not valid UTF-8\n", ""))
         rc, out, err = self.push(d, b"malformed\n")  # the stdin is read before the tree
         self.assertEqual(out, "FAIL githook.input: pre-push line 1: expected 4 fields, found 1\n")
+        with self.subTest("K5 (F-R2-2): the staged read, then the diff read, then ls-files -v"):
+            line = self.push_line("refs/heads/main", self.head(d))
+            for label, staged, unstaged, flagged, want in (
+                    ("all three fail: staged first", GateError("staged boom"), GateError("unstaged boom"),
+                     GateError("flagged boom"), "staged boom"),
+                    ("diff and ls-files -v fail: diff first", [], GateError("unstaged boom"),
+                     GateError("flagged boom"), "unstaged boom"),
+                    ("only ls-files -v fails", [], [], GateError("flagged boom"), "flagged boom")):
+                with self.subTest(label), \
+                        mock.patch.object(githooks, "_staged_paths", side_effect=lambda root, v=staged: raises(v)), \
+                        mock.patch.object(gitinfo, "unstaged_paths", side_effect=lambda root, v=unstaged: raises(v)), \
+                        mock.patch.object(gitinfo, "flagged_paths", side_effect=lambda root, v=flagged: raises(v)):
+                    self.assertEqual(self.push(d, line), (1, "FAIL githook.input: %s\n" % want, ""))
+        with self.subTest("a tracked name that is not UTF-8 and absent from the work tree: the diff read fails"):
+            e = self.repo()
+            blob = subprocess.run(["git", "-C", e, "hash-object", "-w", "--stdin"], input=b"x\n", check=True,
+                                  stdout=subprocess.PIPE).stdout.decode("ascii").strip()
+            subprocess.run(["git", "-C", e, "update-index", "--add", "--cacheinfo",
+                            b"100644," + blob.encode("ascii") + b",bad\xff.txt"], check=True)
+            git(e, "commit", "-q", "-m", "name")  # staged equals HEAD: the staged read is clean
+            rc, out, err = self.push(e, self.push_line("refs/heads/main", self.head(e)))
+            self.assertEqual((rc, out, err), (1, "FAIL githook.input: git diff --name-only gave output that is not "
+                                                 "valid UTF-8\n", ""))
 
     def test_pre_push_order_of_checks(self):  # the root and HEAD come before the stdin, the stdin before the tree
         d = os.path.join(self.tmp, "unborn2")
@@ -1008,8 +1106,8 @@ class PrePushTest(HookCase):
             return real(argv, *a, **kw)
         with mock.patch.object(gitinfo.subprocess, "run", spy):
             githooks._staged_paths(d)
-        self.assertEqual(calls, [["git", "-C", d, "diff", "--cached", "--no-color", "--name-only", "-z",
-                                  "--no-ext-diff", "--no-textconv", "--ignore-submodules=none"]])
+        self.assertEqual(calls, [FSMON_OFF + ["-C", d, "diff", "--cached", "--no-color", "--name-only", "-z",
+                                              "--no-ext-diff", "--no-textconv", "--ignore-submodules=none"]])
 
     def test_pre_push_ignores_colour_and_abbrev_config(self):  # P12; owner answer Q-RC-1 (a)
         d = self.repo()
@@ -1072,6 +1170,36 @@ class PrePushTest(HookCase):
             git(d, "checkout", "-q", "--", "a.txt")
             rc, out = self.git_run(d, "push", "-q", "origin", "main")
             self.assertEqual(rc, 0, out)
+
+    def test_pre_push_refuses_fsmonitor_hidden_change(self):  # FM5, FM8 (Q-G1-4 (a), D-18; review-2 U-R2-1)
+        dirty = "FAIL githook.dirty: %s: tracked file has a change; commit it before pushing\n"
+
+        def setup(source, staged):
+            d = self.repo(install=True)
+            remote = os.path.join(self.tmp, "remote%d.git" % next(self._repos))
+            git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+            git(d, "remote", "add", "origin", remote)
+            env, was_hidden = fsmon_hidden(self.tmp, d, source)
+            self.assertTrue(was_hidden)  # plain git diff shows nothing
+            if staged:  # the review's steps: a change staged on another path through --no-fsmonitor-valid
+                write_file(d, "b.txt", "two\n")
+                git(d, "update-index", "--no-fsmonitor-valid", "b.txt", env=env)
+                git(d, "add", "b.txt", env=env)
+            return d, remote, env
+
+        for source in FSMON_SOURCES:
+            for staged, want in ((False, dirty % "a.txt"), (True, dirty % "b.txt" + dirty % "a.txt")):
+                with self.subTest(source=source, staged=staged):
+                    d, remote, env = setup(source, staged)
+                    rc, out = self.run_proc(["git", "-C", d, "push", "-q", "origin", "main"], env=self.env(**env))
+                    self.assertNotEqual(rc, 0, out)
+                    self.assertEqual(out.split("error: failed to push")[0], want)  # git adds its own error; no gate line
+                    self.assertEqual(git(remote, "for-each-ref"), "")  # the remote is unchanged
+        with self.subTest("in process: no gate runs"):
+            d, remote, env = setup("repository config", False)
+            called = self.fake_gates()
+            self.assertEqual(self.push(d, self.push_line("refs/heads/main", self.head(d))), (1, dirty % "a.txt", ""))
+            self.assertEqual(called, [])
 
     def test_pre_push_real_push(self):  # P11
         d = self.repo(install=True)
@@ -1536,6 +1664,60 @@ def spy_runs():
     return calls, mock.patch.object(gitinfo.subprocess, "run", spy)
 
 
+# ---- core.fsmonitor fixtures (producer 7, Q-G1-4 (a), D-18). The hook scripts live outside the repository.
+FSMON_HOOKS = (  # row FM2: what the hook answers; the first reports no change, which hides a change (U-R2-1)
+    ("no change", "printf 'tok\\0'\n", 0o755), ("everything changed", "printf 'tok\\0/\\0'\n", 0o755),
+    ("exits non-zero", "exit 3\n", 0o755), ("garbage", "printf 'garbage'\n", 0o755),
+    ("not executable", "printf 'tok\\0'\n", 0o644))
+FSMON_OFF = ["git", "-c", "core.fsmonitor=false"]  # D-18: before -C and the subcommand, on every index-reading call
+FSMON_SOURCES = ("repository config", "global config", "git -c", "GIT_CONFIG_COUNT")  # row FM1
+
+
+def fsmon_hook(tmp, body, mode=0o755, name="fsmon-hook"):
+    path = os.path.join(tmp, name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\n" + body)
+    os.chmod(path, mode)
+    return path
+
+
+def fsmon_env(tmp, d, hook, source):
+    """Set ``core.fsmonitor = hook`` for repository ``d`` the way ``source`` says; return the environment to run
+    git (and the hook under test) with."""
+    if source == "repository config":
+        git(d, "config", "core.fsmonitor", hook)
+        return {}
+    if source == "global config":
+        cfg = os.path.join(tmp, "global-gitconfig")
+        git(d, "config", "--file", cfg, "core.fsmonitor", hook)
+        return {"GIT_CONFIG_GLOBAL": cfg}
+    if source == "git -c":  # what ``git -c core.fsmonitor=<hook> commit`` hands to the hooks
+        return {"GIT_CONFIG_PARAMETERS": "'core.fsmonitor=%s'" % hook}
+    return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": hook}
+
+
+def fsmon_prime(d, env):
+    """Two ``git status`` runs: the first stores the token, the second marks every entry fsmonitor-valid."""
+    git(d, "status", "--porcelain", env=env)
+    git(d, "status", "--porcelain", env=env)
+
+
+def fsmon_hidden(tmp, d, source="repository config", body="printf 'tok\\0'\n", mode=0o755):
+    """Prime ``d`` under a hook, then change a.txt: ``(env, hidden)``. ``hidden`` is true when plain ``git diff`` no
+    longer shows the change (the no-change hook: review-2 U-R2-1)."""
+    env = fsmon_env(tmp, d, fsmon_hook(tmp, body, mode), source)
+    fsmon_prime(d, env)
+    write_file(d, "a.txt", "hidden change\n")
+    return env, git(d, "diff", "--name-only", env=env) == ""
+
+
+def raises(value):
+    """A fake producer's answer: an exception instance is raised, anything else returned."""
+    if isinstance(value, BaseException):
+        raise value
+    return value
+
+
 IGNORE_SETTINGS = [("no config", None)] + [
     (key + "=" + value, ["config", key, value])
     for value in ("all", "dirty", "untracked") for key in ("diff.ignoreSubmodules", "submodule.sub.ignore")]
@@ -1707,14 +1889,78 @@ class UnstagedPathsTest(Repos):
                 self.assertEqual(gitinfo.unstaged_paths(d), gitinfo.unstaged_paths(plain))
                 self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
 
+    def test_unstaged_paths_ignore_fsmonitor(self):  # FM1-FM3, FM6 (Q-G1-4 (a), D-18; review-2 U-R2-1)
+        for source in FSMON_SOURCES:
+            for label, body, mode in FSMON_HOOKS:
+                with self.subTest(source=source, hook=label):
+                    d = self.fresh(["a.txt", "b.txt"])
+                    env, hidden = fsmon_hidden(self.tmp, d, source, body, mode)
+                    if label == "no change":  # the fixture really hides the change from plain git
+                        self.assertTrue(hidden)
+                        self.assertIn("h a.txt", git(d, "ls-files", "-f", env=env).split("\n"))
+                    with mock.patch.dict(os.environ, env):
+                        self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+        with self.subTest("stale bits after core.fsmonitor is unset"):  # FM3
+            d = self.fresh(["a.txt", "b.txt"])
+            env, hidden = fsmon_hidden(self.tmp, d)
+            self.assertTrue(hidden)
+            git(d, "config", "--unset", "core.fsmonitor")
+            self.assertEqual(git(d, "diff", "--name-only"), "a.txt")  # measured: git ignores the bits when disabled
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+        with self.subTest("another file staged through --no-fsmonitor-valid"):  # the review's reproducer steps
+            d = self.fresh(["a.txt", "b.txt"])
+            env, hidden = fsmon_hidden(self.tmp, d)
+            write_file(d, "b.txt", "two\n")
+            git(d, "update-index", "--no-fsmonitor-valid", "b.txt")
+            git(d, "add", "b.txt")
+            self.assertEqual(git(d, "diff", "--name-only"), "")
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+        with self.subTest("GIT_INDEX_FILE absolute and relative"):  # FM6 (U13)
+            d = self.fresh(["a.txt", "b.txt"])
+            alt = os.path.join(d, "alt-index")
+            git(d, "read-tree", "HEAD", env={"GIT_INDEX_FILE": alt})
+            hook = fsmon_hook(self.tmp, "printf 'tok\\0'\n")
+            env = fsmon_env(self.tmp, d, hook, "repository config")
+            env["GIT_INDEX_FILE"] = alt
+            git(d, "update-index", "--refresh", env=env)
+            fsmon_prime(d, env)
+            write_file(d, "a.txt", "hidden change\n")
+            self.assertEqual(git(d, "diff", "--name-only", env=env), "")
+            for value in (alt, "alt-index"):
+                with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": value}):
+                    self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+        with self.subTest("a linked worktree"):  # FM6 (U16)
+            d = self.fresh(["a.txt", "b.txt"])
+            linked = os.path.join(self.tmp, "linked")
+            git(d, "worktree", "add", "-q", linked)
+            env, hidden = fsmon_hidden(self.tmp, linked)
+            self.assertTrue(hidden)
+            self.assertEqual(gitinfo.unstaged_paths(linked), ["a.txt"])
+        with self.subTest("the U14 config set"):  # FM6
+            d = self.fresh(["a.txt", "b.txt"])
+            git(d, "config", "color.ui", "always")
+            git(d, "config", "diff.noprefix", "true")
+            env, hidden = fsmon_hidden(self.tmp, d)
+            self.assertTrue(hidden)
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+        with self.subTest("core.fsmonitor=true: the built-in daemon, stopped at the end"):  # FM1 (measured)
+            d = self.fresh(["a.txt", "b.txt"])
+            git(d, "config", "core.fsmonitor", "true")
+            try:
+                git(d, "status", "--porcelain", check=False)
+                write_file(d, "a.txt", "hidden change\n")
+                self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+            finally:
+                git(d, "fsmonitor--daemon", "stop", check=False)  # never leaves a daemon running
+
     def test_unstaged_paths_argv(self):  # the call's exact argument list (P:1718, P:33)
         d = self.fresh()
         calls, patch = spy_runs()
         with patch:
             gitinfo.unstaged_paths(d)
         diffs = [argv for argv, _ in calls if "diff" in argv]
-        self.assertEqual(diffs, [["git", "-C", d, "diff", "--no-color", "--name-only", "-z", "--no-ext-diff",
-                                  "--no-textconv", "--ignore-submodules=none"]])  # R-G1-1: config cannot hide a gitlink
+        self.assertEqual(diffs, [FSMON_OFF + ["-C", d, "diff", "--no-color", "--name-only", "-z", "--no-ext-diff",
+                                              "--no-textconv", "--ignore-submodules=none"]])  # R-G1-1: config cannot hide a gitlink
 
     def test_unstaged_paths_submodule(self):  # U15: a gitlink with a new commit, and a dirty submodule
         lib = self.fresh()
@@ -1903,12 +2149,25 @@ class FlaggedPathsTest(Repos):
         git(d, "update-index", "--skip-worktree", "a.txt")  # the main index only
         self.assertEqual((gitinfo.flagged_paths(wt), gitinfo.flagged_paths(d)), ([], ["a.txt"]))
 
+    def test_flagged_paths_ignore_fsmonitor(self):  # FM1, FM2 (Q-G1-4 (a), D-18)
+        # Measured (git 2.50.1): ``ls-files -v`` (no -f) tags only assume-unchanged and skip-worktree, so an
+        # fsmonitor-valid entry is never flagged and the answer does not read the bits; the option is carried anyway
+        # (D-18 names this call) and test_flagged_paths_argv pins it.
+        for source in FSMON_SOURCES:
+            for label, body, mode in FSMON_HOOKS:
+                with self.subTest(source=source, hook=label):
+                    d = self.fresh(["a.txt", "b.txt", "c.txt"])
+                    git(d, "update-index", "--skip-worktree", "c.txt")
+                    env, hidden = fsmon_hidden(self.tmp, d, source, body, mode)
+                    with mock.patch.dict(os.environ, env):
+                        self.assertEqual(gitinfo.flagged_paths(d), ["c.txt"])
+
     def test_flagged_paths_argv(self):  # the call's exact argument list: -C root, -v, -z
         d = self.fresh()
         calls, patch = spy_runs()
         with patch:
             gitinfo.flagged_paths(d)
-        self.assertEqual([argv for argv, _ in calls if "ls-files" in argv], [["git", "-C", d, "ls-files", "-v", "-z"]])
+        self.assertEqual([argv for argv, _ in calls if "ls-files" in argv], [FSMON_OFF + ["-C", d, "ls-files", "-v", "-z"]])
 
     def test_flagged_paths_entry_shape(self):  # F9: git's output replaced at the subprocess boundary
         d = self.fresh()
