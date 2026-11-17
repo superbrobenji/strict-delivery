@@ -1002,6 +1002,13 @@ class TestDuplicateReferents(Base):
 # Rows RR*, CC*, D*, X* of task-findings-fields-domain.md.
 
 class TestNewLoopFields(Base):
+    BASE_KEYS = {"schema", "id", "status", "source", "severity", "class", "siblings", "cites", "repro", "owner", "pin",
+                 "ruling", "evidence", "history"}
+
+    def keys(self, row, *extra):
+        """The record holds exactly the base keys and ``extra``: a mutant writing one more key fails (row X2)."""
+        self.assertEqual(set(row), self.BASE_KEYS | set(extra))
+
     def usage(self, *flag_args):
         """The call exits 2 with the usage on stderr, nothing on stdout, no file changed."""
         err = self.refused("new", *(self.new_args() + list(flag_args)), code=2)
@@ -1013,13 +1020,13 @@ class TestNewLoopFields(Base):
 
     def test_rr1_absent(self):
         row = self.made()
-        for k in ("review_round", "caused_by_change", "dimension"):
-            self.assertNotIn(k, row)
+        self.keys(row)
 
     def test_rr2_accepted(self):
         for text, want in (("1", 1), ("7", 7), ("99", 99), ("100", 100)):
             with self.subTest(text=text):
                 row = self.made("--review-round", text)
+                self.keys(row, "review_round")
                 self.assertIs(type(row["review_round"]), int)
                 self.assertEqual(row["review_round"], want)
 
@@ -1050,13 +1057,13 @@ class TestNewLoopFields(Base):
         self.assertEqual(self.made("--review-round", text)["review_round"], int(text))
 
     def test_cc1_absent(self):
-        self.assertNotIn("caused_by_change", self.made("--review-round", "1"))
+        self.keys(self.made("--review-round", "1"), "review_round")
 
     def test_cc2_yes_no(self):
         for text, want in (("yes", True), ("no", False)):
             with self.subTest(text=text):
                 row = self.made("--caused-by-change", text)
-                self.assertIn("caused_by_change", row)
+                self.keys(row, "caused_by_change")
                 self.assertIs(row["caused_by_change"], want)
 
     def test_cc4_refused(self):
@@ -1072,12 +1079,14 @@ class TestNewLoopFields(Base):
         self.refused("new", *(self.new_args() + ["--caused-by-change"]), code=2)
 
     def test_d1_absent(self):
-        self.assertNotIn("dimension", self.made("--caused-by-change", "yes"))
+        self.keys(self.made("--caused-by-change", "yes"), "caused_by_change")
 
     def test_d2_accepted(self):
         for text in ("interface-contract", "a b"):
             with self.subTest(text=text):
-                self.assertEqual(self.made("--dimension", text)["dimension"], text)
+                row = self.made("--dimension", text)
+                self.keys(row, "dimension")
+                self.assertEqual(row["dimension"], text)
 
     def test_d3_yaml_hostile(self):
         for text in ("true", "null", "123", "a: b", "# c", '"q"', "- x", "~"):
@@ -1116,7 +1125,13 @@ class TestNewLoopFields(Base):
 
     def test_x4_abbrev(self):
         row = self.made("--review=2", "--caused-by=yes", "--dim", "d")
+        self.keys(row, "review_round", "caused_by_change", "dimension")
         self.assertEqual((row["review_round"], row["caused_by_change"], row["dimension"]), (2, True, "d"))
+
+    def test_x4_r_ambiguous(self):
+        # F1: --review-round makes --r (once the unique prefix of --root) ambiguous: refused, exit 2
+        err = self.refused("new", *self.new_args(), "--r", self.root, code=2)
+        self.assertIn("ambiguous option: --r could match --root, --review-round", err)
 
     def test_x1_round_trip(self):
         from gates import loopstats as loopstats_cli
