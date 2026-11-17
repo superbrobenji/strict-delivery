@@ -1611,6 +1611,20 @@ class PlaybookFilesTest(unittest.TestCase):
         self.assertNotIn("advisory", body)                        # design 5.4: the verdict is binding, not advisory
         self.assertNotIn("never block a fix", body)
 
+    def test_finding_records_for_loopstats_and_plan_3d1_alignment(self):   # program controller input; design 5.4
+        rec = ("After each review, before `loopstats` runs, the controller writes each finding of that review, with "
+               "its `review_round`, `caused_by_change` and `dimension`, as a finding record (schema `finding`) under "
+               "config `paths.findings` on the task's branch; the records stay on that branch while its pull request "
+               "is open and merge with it, and `loopstats` counts only findings that have a record.")
+        spec = " ".join(read("docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md").split())
+        self.assertEqual(spec.count(rec), 1)
+        self.assertEqual(" ".join(pc.section(read("playbook/review.md"), "Rules N and T").split()).count(rec), 1)
+        self.assertIn("A finding carries `review_round`, `caused_by_change` and `dimension`. " + rec, spec)
+        plan = read(PLAN_DOC)
+        self.assertIn("`json.loads` refusing duplicate keys, keeping each JSON integer as a `str` subclass "
+                      "(PC1 S1: no `int()` runs)", plan)
+        self.assertEqual(plan.count("`plugin.repository`"), 1)      # only the sentence that says it is satisfied
+
     def test_review_rules_n_t_and_methods(self):                  # R3, R4, R6
         t = read("playbook/review.md")
         self.assertIn("`class: <dimension>: <members>`", pc.section(t, "Input domains"))          # R3

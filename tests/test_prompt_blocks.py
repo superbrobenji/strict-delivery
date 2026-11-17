@@ -2077,7 +2077,10 @@ WORKER_BACKGROUND = ("A poll loop has a bounded timeout and never matches its ow
 CONTINUATION = (   # controller "Continuation." (session-resume design 3.9; process v2 design 5.4, 5.7, D1, D6)
     "Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then the binding "
     "Rules N and T verdict: compute it after each review (by hand until `loopstats` exists) and ledger it as the "
-    "`Loopstats:` line. STOP_NARROW stops the loop, and its open findings are narrowed in one last round or "
+    "`Loopstats:` line. Before `loopstats` runs, write each finding of that review as a finding record under "
+    "`paths.findings` on the task's branch, with `review_round`, `caused_by_change` and `dimension` (schema "
+    "`finding`); the records stay on that branch while its pull request is open and merge with it. "
+    "STOP_NARROW stops the loop, and its open findings are narrowed in one last round or "
     "registered for a planned task. ESCALATE stops the loop: open LOW and MEDIUM findings are registered against a "
     "named follow-up task, and an open CRITICAL or HIGH finding is an owner question that blocks only that task. A "
     "change-caused CRITICAL or HIGH finding is fixed whatever the verdict. One block runs per agent context, at most "
