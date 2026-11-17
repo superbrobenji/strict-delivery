@@ -54,17 +54,24 @@ PINS = {
                         "its `## Model` names the model config `models.tiers` maps that tier to"],  # U-2 (B4)
     "Decision classes": ["always the owner's", "`decision_classes.owner_only`", CLASS_LINE.strip(),
                          "`playbook/decisions.md`", "only inside an approved plan",
-                         "The one exception is a small point", "The owner keeps work added or removed"],  # G1, F-2
+                         "The one exception is a small point", "The owner keeps work added or removed",  # G1, F-2
+                         "only the work that depends on the answer waits", "because the owner is away",      # design 5.6
+                         "Decision (controller): class -- action -- cost if wrong"],                         # design 5.5, D3
     "Owner questions": ["search before asking", "found answered", "id, class, the question, the recommended option "
                         "with its cost, every alternative with its cost, effect, topics and `applies_to`",
                         "`model-policy`", "one batch", "restarts as soon as every question with its `source`",
-                        "only the session writes decision records"],
+                        "only the session writes decision records",
+                        "nothing independent waits on the batch"],                                  # design 5.6
     "Verification method": ["by contradiction", "no executable check", "input-domain table", "`playbook/review.md`",
                             "Input domains", "known version differences",                           # G3
                             "never samples an open grammar"],                                       # U-4 (B4)
     "Change kinds": ["superpowers:brainstorming", "dispatches no writer"],
     "Pipeline and gates": ["register row", "final verifier", "`python3 -m gates run_all`", "owner's approval",
-                           "where the profile enables it (strict), a top-tier final verifier"],   # F-B23R-1; spec 12
+                           "where the profile enables it (strict), one top-tier final verifier per stream",  # F-B23R-1; 5.2
+                           "binding Rules N and T verdict", "only narrows or corrects",                  # design 5.4, 5.3
+                           "is not re-run after its own fixes", "a block another stream consumes opens its pull request",
+                           "the touched-area tests", "the full suite runs on each pull request's head",   # design 5.1
+                           "decides what that covers"],
     "Session resume": ["no memory of the work", "`playbook/sessions.md`", "`skills`", "`required_reads`",
                        "investigator", "Resume check", "before any edit or dispatch", "take over at once",
                        "no hook holds the session", "continued worker never dispatches"],
@@ -73,7 +80,8 @@ PINS = {
                      "background-job check", "bounded timeout", "own command line", "completion record",
                      "waiting on its own background work", "Handoffs and continuation",
                      "never ends its turn while a child", "its handback arrives",                    # G4
-                     "dispatches nothing new and waits"],                                           # U-5 (B4)
+                     "dispatches nothing new and waits",                                            # U-5 (B4)
+                     "schedules a wake-up at the reset time"],                                      # design 5.7, D6
     "Document locations": ["`docs/strict-delivery/specs/`", "override"],
     "Judgment, not gated": ["`judgment`", "`rule-override`"],
 }
@@ -449,6 +457,20 @@ TEXT_MUTANTS = (   # (row, old, new, check that refuses it); each applied once t
     ("G3", "known version differences", "known differences", "pins"),
     ("G4", "its handback arrives", "its report arrives", "pins"),
     ("G4", "never ends its turn while a child", "may end its turn while a child", "pins"),
+    # process v2 (design 5.1-5.7): each new rule, broken back to the old one or negated
+    ("5.6", "only the work that depends on the answer waits", "that path halts", "pins"),
+    ("5.6", "because the owner is away", "because the owner is busy", "pins"),
+    ("5.5", "Decision (controller): class -- action -- cost if wrong", "Decision (owner): class -- action -- cost if wrong",
+     "pins"),
+    ("5.6", "nothing independent waits on the batch", "every task waits on the batch", "pins"),
+    ("5.4", "until the binding Rules N and T verdict stops it", "until a clean pass", "pins"),
+    ("5.3", "a fix only narrows or corrects", "a fix may widen behaviour", "pins"),
+    ("5.2", "one top-tier final verifier per stream", "a top-tier final verifier per block", "pins"),
+    ("5.2", "is not re-run after its own fixes", "is re-run after its own fixes", "pins"),
+    ("5.2", "block another stream consumes opens its pull request", "block opens its pull request", "pins"),
+    ("5.1", "the touched-area tests", "the full suite", "pins"),
+    ("5.1", "decides what that covers", "decides nothing", "pins"),
+    ("5.7", "schedules a wake-up at the reset time", "dispatches at once", "pins"),
 )
 BYTE_MUTANTS = (   # HD2 (Q-B23v2-2 (a)): (old, new); each refused by byte_problems
     (b"section", "§".encode("utf-8")), (b"never a model", "never — a model".encode("utf-8")),
