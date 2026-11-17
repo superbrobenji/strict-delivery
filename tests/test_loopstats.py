@@ -348,7 +348,6 @@ class TestCli(Fixture):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual((p.returncode, p.stdout.decode(), p.stderr.decode()), (0, GOLDEN, ""))
 
-    @unittest.skipUnless("loopstats" in gates_main.COMMANDS, "Rq-6-1 not on this branch")
     def test_loopstats_command_registered(self):  # A10
         self.golden_fixture()
         p = subprocess.run([sys.executable, "-m", "gates", "loopstats"] + self.base("--narrowed", "2"), cwd=ROOT,
