@@ -1222,6 +1222,8 @@ class VersionLineTest(RunAllCase):
         out, code = self.sub([])
         self.assertEqual(out.splitlines()[-1], "PASS run_all.version")
         self.assertNotIn("run_all.version:", out)
+        # F-1: the exit code agrees with the lines (not asserted to be 0: see the comment above)
+        self.assertEqual(code, 1 if any(ln.startswith("FAIL ") for ln in out.splitlines()) else 0)
 
     def test_r4_r5_repository_rows_through_run_all(self):  # R4, R5: run_all reads the version only, never repository
         self.all_pass()

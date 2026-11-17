@@ -96,7 +96,12 @@ def _hook(args: List[str]) -> int:
     if not usable:
         sys.stderr.write("FAIL hook.import: gates.hook has no callable main\n")
         return 2
-    return main_fn(args)
+    rc = main_fn(args)
+    if type(rc) is not int:   # None would exit 0: fail open (plan :3266 "(fail closed)")
+        from gates.lib import result
+        sys.stderr.write("FAIL hook.result: gates.hook main returned %s\n" % result._type_name(rc))
+        return 2
+    return rc
 
 
 COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings,

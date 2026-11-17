@@ -495,6 +495,22 @@ class HookCommandTest(HookCase):
                 self.hook_file(body)
                 self.assertEqual(self.run_hook("PreToolUse"), (2, "", "FAIL hook.import: %s\n" % name))
 
+    def test_h9_main_must_return_an_exact_int(self):  # H9 (plan :3266 "(fail closed)"): None would exit 0
+        rows = [("return None", "NoneType"), ("pass", "NoneType"), ("return True", "bool"), ("return False", "bool"),
+                ("return '0'", "str"), ("return 0.0", "float"), ("return 2.0", "float"), ("return b''", "bytes"),
+                ("return [0]", "list"), ("return I(2)", "I"), ("return I(0)", "I")]
+        for stmt, name in rows:
+            with self.subTest(stmt=stmt):
+                self.hook_file("class I(int):\n    pass\n\ndef main(args):\n    %s\n" % stmt)
+                self.assertEqual(self.run_hook("PreToolUse"),
+                                 (2, "", "FAIL hook.result: gates.hook main returned %s\n" % name))
+
+    def test_h9_exact_ints_pass_through(self):  # H9 (H1 siblings: 0, 2, 7 and the edges)
+        for code, exit_code in ((0, 0), (2, 2), (7, 7), (1, 1), (255, 255), (-1, 255), (3, 3)):
+            with self.subTest(code=code):
+                self.hook_file("def main(args):\n    return %d\n" % code)
+                self.assertEqual(self.run_hook("PreToolUse"), (exit_code, "", ""))
+
     def test_r1_1_import_error_name_with_a_raising_eq_fails_closed(self):  # F-3d1-R1-1
         bodies = [
             "class N:\n    def __eq__(self, o):\n        raise RuntimeError('eq')\n    __hash__ = None\n"
