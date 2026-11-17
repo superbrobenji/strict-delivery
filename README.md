@@ -87,8 +87,9 @@ planned owner step.
 - Playbook and prompt-block rules from the build so far: a threshold for asking the owner, an explicit model on every dispatch, no handback while child agents run (#15, #19)
 - The plan and the stream breakdown re-based on the owner's answers of 2026-11-10 and 2026-11-14 (revision 6, #16), and the findings register kept current (#18, #20)
 - This overview itself (#14)
+- `run_all`, every enabled gate in one command (#17), and `loopstats`, the fix-loop stopping math (#22)
 
-Merged pull requests: #1-#21.
+Merged pull requests: #1-#22.
 
 ## Roadmap to v0.1
 
