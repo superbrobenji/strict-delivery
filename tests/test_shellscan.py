@@ -1,5 +1,5 @@
 """Tests for the shell scanner (gates.lib.shellscan): the closed grammar of plain commands, the cd form, token_in.
-Every expected value is written here from the input-domain table (task-3b.1-domain-r3.md, revision 3, and the rows
+Every expected value is written here from the input-domain table (task-3b.1-domain-r4.md, revision 4, and the rows
 of task-3b.1-domain.md that it carries), never computed by the scanner."""
 import dataclasses
 import gc
@@ -107,8 +107,14 @@ class SeparatorTest(ScanCase):
                    ("x a'b' > o", NP("quoting")), ("x é $X", NP("character")), ("A=1 git > o", NP("assignment")),
                    ("'git' > o", NP("command word")),
                    # at the same position a specific construct wins over a catch-all
-                   ("=git", NP("expansion")), ("{a,b}", NP("expansion")), ("! x", NP("reserved word")),
-                   ("A+=1 git", NP("expansion"))])
+                   ("=git", NP("expansion")), ("! x", NP("reserved word")), ("A+=1 git", NP("expansion")),
+                   ("x {", NP("grouping")), ("x }", NP("grouping")),
+                   # r4: `{a,b}` is no brace expansion any more; the program word ranks over the `{` character (N15)
+                   ("{a,b}", NP("command word")),
+                   # r4: an unquoted brace is `character` at its own position, before or after another construct
+                   ("x a} $X", NP("character")), ("x $X a}", NP("expansion")), ("x {*}", NP("character")),
+                   ("x *{", NP("expansion")), ("x a}; y", NP("character")), ("x a} > o", NP("character")),
+                   ("x a'b{", NP("unbalanced quote")), ("x a{'b", NP("character"))])
 
 
 class GroupingTest(ScanCase):
@@ -123,6 +129,11 @@ class GroupingTest(ScanCase):
             ("a }", NP("grouping")),
             ("a )", NP("grouping")),
             ("{", NP("grouping")),
+            ("}", NP("grouping")),  # r4 invariant: a lone unquoted `{` or `}` keeps the specific reason
+            ("x {", NP("grouping")),
+            ("x } y", NP("grouping")),
+            ("TZ=1 { git commit; }", NP("grouping")),
+            ("cd /w && { git commit; }", NP("grouping")),
             ("echo $(git commit)", NP("substitution")),
             ("echo $((1))", NP("substitution")),
             ("echo `git commit`", NP("substitution")),
@@ -161,25 +172,64 @@ class GroupingTest(ScanCase):
             ("a?b", NP("command word")),  # the program word sits at position 0
         ])
 
-    def test_brace_expansion_not_plain(self):  # N4: G8
+    def test_brace_not_plain(self):  # N15 (r4; R4-1, R4-2), replaces the G8 test: every unquoted `{` or `}` refused
+        # R4-1 (zsh close brace): a `}` that ends a word, as an argument
+        r41 = ("x}", "a{b}}", "'{'}", "a\\{}", '"a"}', "''a}", "+}", "x\\{a,b}")
+        # R4-2 (zsh brace range with quoted or escaped separators or bounds)
+        r42 = ("{1.\\.3}", "{1.'.'3}", '{1".".3}', "{1'..'3}", "{'1..3'}", '{"1..3"}', "c{o.'.'o}mmit", "{-1.\\.1}",
+               "{01.\\.3}", "{1.\\.3.\\.2}")
+        # the forms that were `expansion` or plain before r4
+        old = ("{a,b}", "x{a,b}y", "x{1..3}", "HEAD@{1}", "@{u}", "x{", "a{b}", "x}y", "{a", "}a", "{}", "}a,{",
+               "a{b,c}d", "a{b\\,c}", "a{b','c}", "a{'b'.c}", "a,{b}", "a..{b}", "x{a.'x'.b}", "'a'{b", "{a}")
+        for m in r41 + r42 + old:
+            self.check("x " + m, NP("character"))
+            self.check("x " + m + " y", NP("character"))
         self.many([
-            ("{a,b}", NP("expansion")),
-            ("x x{1..3}", NP("expansion")),
-            ("git commit --no-verif{y,}", NP("expansion")),
-            ("x a{b,c}d", NP("expansion")),
-            ("{a`,{b}}", NP("expansion")),
-            ("git show HEAD@{1}", P(("git", "show", "HEAD@{1}"))),
-            ("x x{", P(("x", "x{"))),
-            ("x a}b", P(("x", "a}b"))),
-            ("x a{b\\,c}", P(("x", "a{b,c}"))),
-            ("x a{b','c}", P(("x", "a{b,c}"))),
-            ("x a{'b'.c}", P(("x", "a{b.c}"))),
-            ("x a,{b}", P(("x", "a,{b}"))),
-            ("x a..{b}", P(("x", "a..{b}"))),
-            ("x x{a.'x'.b}", P(("x", "x{a.x.b}"))),
-            # an unquoted `{` or `}` as a word's first character is `character` (N11)
-            ("x {}", NP("character")),
-            ("x }a,{", NP("character")),
+            # R4-1 reproducers: a line join and a second command after the `}`, and the `}` at the end
+            ("git commit -m x}\\\n git push --force", NP("character")),
+            ("p a}\\\n\\\n q y", NP("character")),
+            ("p a}\\\n\tq y", NP("character")),
+            ("p x}\\\n", NP("character")),
+            ("p x}", NP("character")),
+            ("p x}\n", NP("character")),
+            # R4-2 reproducer
+            ("git commit --no-verif{y.\\.y}", NP("character")),
+            ("git commit --no-verif{y,}", NP("character")),
+            ("x a{b,c}d", NP("character")),
+            ("git show HEAD@{1}", NP("character")),
+            ("x x{1..3}", NP("character")),
+            ("x a}b", NP("character")),
+            ("x x{", NP("character")),
+            # in the program word (N8), in an assignment value, in the cd target
+            ("{a,b}", NP("command word")),
+            ("{a`,{b}}", NP("command word")),
+            ("{a x", NP("command word")),
+            ("}a x", NP("command word")),
+            ("x{1..3}", NP("command word")),
+            ("TZ=x} git", NP("character")),
+            ("TZ=a{1.\\.3}b git", NP("character")),
+            ("TZ={a,b} git", NP("character")),
+            ("TZ=1 git x}", NP("character")),
+            ("cd /w/a} && x", NP("character")),
+            ("cd /w/{a,b} && x", NP("character")),
+            ("cd /w && git x{", NP("character")),
+            # a lone brace keeps `grouping` (N2)
+            ("a }", NP("grouping")),
+            ("{ git commit; }", NP("grouping")),
+            # still plain: quoted or escaped braces are ordinary (the plan example, revised, is 'HEAD@{1}')
+            ("git show 'HEAD@{1}'", P(("git", "show", "HEAD@{1}"))),
+            ('git show "HEAD@{1}"', P(("git", "show", "HEAD@{1}"))),
+            ("git show HEAD@\\{1\\}", P(("git", "show", "HEAD@{1}"))),
+            ("x '{a,b}'", P(("x", "{a,b}"))),
+            ("x a\\}", P(("x", "a}"))),
+            ("x a'}'", P(("x", "a}"))),
+            ("x '{'", P(("x", "{"))),
+            ('x "}"', P(("x", "}"))),
+            ("x \\{a,b\\}", P(("x", "{a,b}"))),
+            ("x '--no-verif{y.\\.y}'", P(("x", "--no-verif{y.\\.y}"))),
+            ("cd '/w/{a}' && git x", P(("git", "x"), (), "/w/{a}")),
+            ("TZ='x}' git", P(("git",), (("TZ", "x}"),))),
+            ("TZ=\\{a,b\\} git", P(("git",), (("TZ", "{a,b}"),))),
         ])
 
     def test_tilde_not_plain(self):  # N4: G9 widened to every word
@@ -326,7 +376,8 @@ class WordTest(ScanCase):
             ("x [[", NP("reserved word")),
             ("x ]]", NP("reserved word")),
             ("! x", NP("reserved word")),
-            ("git show HEAD@{1}", P(("git", "show", "HEAD@{1}"))),
+            ("git show HEAD@{1}", NP("character")),  # r4 (N15): unquoted braces are refused; quoted they are plain
+            ("git show 'HEAD@{1}'", P(("git", "show", "HEAD@{1}"))),
             ("x '!'", P(("x", "!"))),
             ('x "[["', P(("x", "[["))),
             ("x '}'", P(("x", "}"))),
@@ -366,7 +417,7 @@ class WordTest(ScanCase):
         quoted = ("'git' commit", '"git" commit', "\\git commit", "g'i't commit", "'time' git", "\\time git",
                   "'exec' git", "\\command git", "'' x", '"" x', "./x\\\n.sh y", "gi\\\nt commit")
         chars = ("%1 x", "%+", "%%", "git@x y", "a:b", "x+y", "é x", "a!b x", "x] y", "git\rx y", "-x y", "--help",
-                 "HEAD~1", "x{1..3}", "{a x", "x%1 git")
+                 "HEAD~1", "x{1..3}", "{a x", "}a x", "{a,b} x", "a} x", "x%1 git")
         for t in quoted + chars:
             self.check(t, NP("command word"))
             self.check("TZ=1 " + t, NP("command word"))
@@ -451,14 +502,15 @@ class WordTest(ScanCase):
             ("echo $((1))", NP("substitution")),
             ("echo $(a)", NP("substitution")),
             ("echo `a`", NP("substitution")),
-            # zshexpn BRACE EXPANSION
-            ("echo x{a,b}y", NP("expansion")),
-            ("echo {1..3}", NP("expansion")),
-            ("echo {a..c}", NP("expansion")),
-            ("echo {1..10..2}", NP("expansion")),
+            # zshexpn BRACE EXPANSION (r4, N15: every unquoted brace is refused, so none of these reaches zsh)
+            ("echo x{a,b}y", NP("character")),
+            ("echo {1..3}", NP("character")),
+            ("echo {a..c}", NP("character")),
+            ("echo {1..10..2}", NP("character")),
             ("echo {a}", NP("character")),
             ("echo {}", NP("character")),
-            ("echo a{b}", P(("echo", "a{b}"))),
+            ("echo a{b}", NP("character")),
+            ("echo 'a{b}'", P(("echo", "a{b}"))),
             # zshexpn FILENAME EXPANSION: ~, ~+, ~-, ~name, ~[dyn], =cmd, assignments
             ("echo ~", NP("expansion")),
             ("echo ~+", NP("expansion")),
@@ -563,6 +615,8 @@ class WordTest(ScanCase):
         self.check("git c'o'mmit", NP("quoting"), ("git", "commit"))
         self.check("A=1 git", NP("assignment"), ("A=1", "git"))
         self.check("cd +1 && git commit", NP("operator &&"), ("cd", "+1", "&&", "git", "commit"))
+        self.check("x a{b} 'c}'", NP("character"), ("x", "a{b}", "c}"))  # r4: a brace leaves the words as written
+        self.check("x \\{ '}'", P(("x", "{", "}")), ("x", "{", "}"))
 
 
 class AssignmentTest(ScanCase):
@@ -658,6 +712,15 @@ class CdTest(ScanCase):
                   "cd /.. && x", "cd '/w/..' && x", "cd x/y && x", "cd '' && x", "cd %1 && x"):
             self.check(t, NP("operator &&"))
         self.many([
+            # r4 amendment of N12: a CD3/CD6 member with an earlier construct reports it (smallest position)
+            ('"cd" /w && x', NP("command word")),
+            ("A=1 cd /w && x", NP("assignment")),
+            ("TZ=1 cd /w && x", NP("operator &&")),
+            # r4 (N15): an unquoted brace in the cd target
+            ("cd /w/{a,b} && x", NP("character")),
+            ("cd /w/a} && x", NP("character")),
+            ("cd {/w,/x} && x", NP("character")),
+            ("cd '/w/{a}' && git x", P(("git", "x"), (), "/w/{a}")),
             ("cd /w/x && git commit -m m", P(("git", "commit", "-m", "m"), (), "/w/x")),
             ("cd '/w/a b' && git push", P(("git", "push"), (), "/w/a b")),
             ("cd /w/x&&git commit", P(("git", "commit"), (), "/w/x")),
@@ -699,6 +762,7 @@ class CharacterTest(ScanCase):
             # CRLF between commands: the CR is the first construct (by position), in an argument or the program word
             ("x a\r\nb", NP("character")),
             ("a\r\nb", NP("command word")),
+            ("git commit\r\ngit push", NP("character")),  # r4 amendment of N11 (r3 said `operator newline`)
         ])
         for t in ("x git\x00commit", "x 'a\x00'", 'x "a\x00"', "x \\\x00", "git commit\x00", "x y\x00"):
             self.check(t, NP("nul character"))
@@ -710,29 +774,39 @@ class CharacterTest(ScanCase):
                 with self.assertRaises(TypeError):
                     scan(bad)
 
-    def test_long_text_linear(self):  # CH6 (F6): growth ratio, best of five; no absolute wall-clock bound
+    def test_long_text_linear(self):  # CH6 (F6; r4 R4-3): growth ratio per shape, best of five; no wall-clock bound
         # CPU time of this process (not wall-clock time, which other processes stretch); the n and 4n rounds alternate,
         # so a change in machine load falls on both sizes; the cyclic collector is
         # off while a scan is timed (its cost follows the size of the whole test process, not the text).
+        # Shapes (each with its argv written by hand): the fast path (plain [0-9A-Za-z_] words), and two that go through
+        # the per-character path: one word of escaped blanks (the unquoted run, then an escape, per unit) and
+        # single-quoted words.
         n = 25000
-        texts = {n: "a " * n, 4 * n: "a " * (4 * n)}
-        took = {n: [], 4 * n: []}
+        shapes = (
+            ("fast", lambda k: "a " * k, lambda k: ("a",) * k),
+            ("escaped", lambda k: "x " + "a\\ " * k, lambda k: ("x", "a " * k)),
+            ("quoted", lambda k: "x " + "'a' " * k, lambda k: ("x",) + ("a",) * k),
+        )
         enabled = gc.isenabled()
-        try:
-            for _ in range(5):
-                for size in (n, 4 * n):
-                    gc.disable()
-                    t0 = time.process_time()
-                    s = scan(texts[size])
-                    took[size].append(time.process_time() - t0)
+        for name, make, argv in shapes:
+            with self.subTest(shape=name):
+                texts = {n: make(n), 4 * n: make(4 * n)}
+                took = {n: [], 4 * n: []}
+                try:
+                    for _ in range(5):
+                        for size in (n, 4 * n):
+                            gc.disable()
+                            t0 = time.process_time()
+                            s = scan(texts[size])
+                            took[size].append(time.process_time() - t0)
+                            if enabled:
+                                gc.enable()
+                            self.assertEqual((s.plain, s.reason, s.assignments, s.cd), (True, "", (), None))
+                            self.assertEqual(s.argv, argv(size))
+                finally:
                     if enabled:
                         gc.enable()
-                    self.assertTrue(s.plain)
-                    self.assertEqual(len(s.argv), size)
-        finally:
-            if enabled:
-                gc.enable()
-        self.assertLess(min(took[4 * n]) / min(took[n]), 8)
+                self.assertLess(min(took[4 * n]) / min(took[n]), 8)
 
     def test_huge_numbers_are_text(self):  # V1
         d4300, d4301 = "7" * 4300, "7" * 4301

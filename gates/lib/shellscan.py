@@ -13,7 +13,9 @@ the input and fail closed, on the union of bash and zsh default semantics); text
 - argument words. Unquoted, a word holds only the characters of ``_U``; quoted, anything but NUL (and, in double
   quotes, an unescaped ``$`` or backtick). Two neighbouring ``[0-9A-Za-z_-]`` characters of a word must be neighbours
   in the text too, so quoting, an escape or a line join never splits a token that ``token_in`` looks for;
-- no construct the shell would expand (glob, brace, tilde, ``=``, ``$``), so ``argv`` is what the shell would run.
+- no unquoted ``{`` or ``}`` anywhere (owner answer 2026-11-17): every unquoted brace is refused, so no brace
+  expansion and no close-brace token reaches the shell; quoted or escaped, a brace is an ordinary character;
+- no construct the shell would expand (glob, tilde, ``=``, ``$``), so ``argv`` is what the shell would run.
 
 Everything else is not plain, and ``reason`` names the construct at the smallest text position; at the same position a
 specific construct wins over a catch-all (``command word``, then ``character``, ``assignment``, ``quoting``).
@@ -31,7 +33,7 @@ from typing import Optional
 _NAME_START = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
 _NAME_REST = _NAME_START | frozenset("0123456789")
 _TOKEN_CLASS = _NAME_REST | frozenset("-")
-_U = _NAME_REST | frozenset("-./:@+,%^=~{}#")  # the characters a word may hold unquoted
+_U = _NAME_REST | frozenset("-./:@+,%^=~#")  # the characters a word may hold unquoted (no { or })
 _PROGRAM = _NAME_REST | frozenset("./-")  # the characters of the program word
 _GLOB = frozenset("*?[")
 # Leading assignments allowed: the five that Task 3b.2 refuses by their own ids, and three that change no program or path.
@@ -219,32 +221,6 @@ def _digits_assign(chars):
     return k < len(chars) and not chars[k][1] and chars[k][0] == "="
 
 
-def _brace_pos(chars):
-    """Position of an unquoted ``{`` that has an unquoted ``,`` or ``..`` and then an unquoted ``}``, else -1."""
-    opened = -1
-    sep = False
-    dot = False
-    for ch, quoted, pos in chars:
-        if quoted:
-            dot = False
-            continue
-        if ch == "{":
-            if opened < 0:
-                opened = pos
-        elif ch == "}":
-            if opened >= 0 and sep:
-                return opened
-        elif opened >= 0 and ch == ",":
-            sep = True
-        if ch == ".":
-            if dot and opened >= 0:
-                sep = True
-            dot = True
-        else:
-            dot = False
-    return -1
-
-
 def _word_checks(tok, found):
     """Add to ``found`` every construct inside one word: a reserved or group word, a comment, a character outside
     ``_U``, an expansion, and a token split by quoting."""
@@ -264,8 +240,6 @@ def _word_checks(tok, found):
             found.append((pos, _SPECIFIC, "comment"))
         elif first[0] == "~" or first[0] == "=":  # tilde, and zsh EQUALS (`=git` is the path of git)
             found.append((first[2], _SPECIFIC, "expansion"))
-        elif first[0] == "{" or first[0] == "}":
-            found.append((first[2], _CATCH_ALL, "character"))
     prev = None
     for cur in chars:
         ch, quoted, p = cur
@@ -279,9 +253,6 @@ def _word_checks(tok, found):
         if prev is not None and prev[0] in _TOKEN_CLASS and ch in _TOKEN_CLASS and p != prev[2] + 1:
             found.append((prev[2] + 1, _CATCH_ALL, "quoting"))
         prev = cur
-    brace = _brace_pos(chars)
-    if brace >= 0:
-        found.append((brace, _SPECIFIC, "expansion"))
     head = _assign_head(chars)
     if head is not None:
         k = head[2]
