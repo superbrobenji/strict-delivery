@@ -45,7 +45,7 @@ PLAN_REQUIRED = {
     "Commit gate.": ["python3 -m gates run_all"],
     "Input domain.": ["input-domain table"],
     "Unstated behaviour.": ["NEEDS_DECISION", "mutant"],
-    "No out-of-scope bucket.": ["class-narrowing question for the owner", "missing input-domain table is a finding"],
+    "No out-of-scope bucket.": ["class-narrowing question for the controller", "missing input-domain table is a finding"],
     "Oracle.": ["production path", "independent expected value"],
     "Finding class.": ["class: <dimension>: <members>"],
     "Continuation.": ["handoff", "BLOCKED: budget", "Nothing continues from inherited memory"],
@@ -73,7 +73,7 @@ GOOD = {
     "Input domain.": "Input domain. Every row of the input-domain table has a test.",
     "Unstated behaviour.": "Unstated behaviour. Stop NEEDS_DECISION; write one mutant per condition.",
     "No out-of-scope bucket.": "No out-of-scope bucket. A seeming exclusion is a class-narrowing question for the "
-                               "owner; a missing input-domain table is a finding.",
+                               "controller; a missing input-domain table is a finding.",
     "Oracle.": "Oracle. Run the production path and compare an independent expected value.",
     "Rulings.": "Rulings. Quote each ruling.",
     "Finding class.": "Finding class. Write class: <dimension>: <members> for each finding.",
@@ -225,6 +225,10 @@ class RealFilesTest(unittest.TestCase):
             body = paragraph(f.read().decode("ascii"), "Commit gate.")
         self.assertIn("`commands.test`", body)
         self.assertIn("`python3 -m gates run_all`", body)
+        # process v2 (design 5.1): the touched-area modules, not the full suite, at each commit
+        self.assertIn("the test modules of each changed file", body)
+        self.assertIn("every test module that imports a changed module", body)
+        self.assertIn("The full suite runs at the points the brief names, not at every commit.", body)
 
     def test_transcription_stops_on_any_gap(self):            # W3
         with open(self.path("implementer_transcription"), "rb") as f:
@@ -881,12 +885,20 @@ DONE_WITH_FINDINGS_WHEN = {"task_reviewer": "when the change itself holds a find
 # Task B1.2 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
 B12_CONTENT = {
     "task_reviewer": [("Method.", GATE), ("Method.", "every claim")] + list(OOS_RULE)
-    + list(DONE_RULE) + [("Verdict.", DONE_WITH_FINDINGS_WHEN["task_reviewer"])],
+    + list(DONE_RULE) + [("Verdict.", DONE_WITH_FINDINGS_WHEN["task_reviewer"])]
+    # process v2 (design 5.1, 5.3): touched-area re-run, every fix diff checked against the fix rule, blame tested
+    + [("Method.", "touched-area tests"), ("Method.", "fix rule"), ("Method.", "parent"),
+       ("No out-of-scope bucket.", "class-narrowing question for the controller")],
     "final_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("Branch scope.", "whole branch")]
     + list(OOS_RULE) + list(DONE_RULE)
-    + [("Verdict.", DONE_WITH_FINDINGS_WHEN["final_reviewer"])],
+    + [("Verdict.", DONE_WITH_FINDINGS_WHEN["final_reviewer"]),
+       ("Verdict.", "open its pull request"),                          # process v2 (design 5.2)
+       ("No out-of-scope bucket.", "class-narrowing question for the controller")],
     "final_verifier": [("Adversarial scope.", GATE), ("Adversarial scope.", "tier4"),
-                       ("Adversarial scope.", "top_tier_fallback")] + list(DONE_RULE)
+                       ("Adversarial scope.", "top_tier_fallback"),
+                       ("Adversarial scope.", "once per stream"),      # process v2 (design 5.2)
+                       ("Adversarial scope.", "merged parts included"),
+                       ("Adversarial scope.", "never re-run after your own fixes")] + list(DONE_RULE)
     + [("Verdict.", DONE_WITH_FINDINGS_WHEN["final_verifier"])],
     "exception_reviewer": [("Exception scope.", s) for s in EXC_PHRASES],
 }
@@ -1159,7 +1171,8 @@ def _replace_all(p, alts, fn):
 AUDIT_ROLES = ("audit_reviewer", "audit_verifier")
 B13_ROLES = ("controller",) + AUDIT_ROLES
 TRIAGE = ("the owner rules", "before any plan", "`triage`")                 # spec section 8, Q-B13-1 (a)
-CTRL_FIX_LOOP = ("rounds 1-3", "rounds 4-5", "one tier up", "owner question")     # spec section 10, Q-B13-1 (a)
+CTRL_FIX_LOOP = ("rounds 1-3", "rounds 4-5", "one tier up", "binding Rules N and T verdict", "STOP_NARROW",
+                 "ESCALATE")     # spec section 10, Q-B13-1 (a); process v2 design 5.4 (D1): the verdict binds
 CTRL_HEADINGS = tuple("`%s`" % h for h in DISPATCH_HEADINGS)
 RULING = "Ruling: what -- why -- cost if wrong -- spec cite"                  # spec section 7.1
 # Task B1.3 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
@@ -1171,7 +1184,18 @@ B13_CONTENT = {
                                                       "Nothing continues from inherited memory")]
     + [("Input domain.", "input-domain table"), ("Oracle.", "production path"),
        ("Oracle.", "independent expected value"), ("Finding class.", "class: <dimension>: <members>"),
-       ("Budget.", "`budgets`")],
+       ("Budget.", "`budgets`")]
+    # process v2 (design 5.1-5.6, D3): the controller rules class questions, only dependent work waits, merge on demand
+    + [("Finding class.", "`Decision (controller): class -- action -- cost if wrong`"),
+       ("Finding class.", "fix rule"), ("Finding class.", "`spec-direction`"),
+       ("Finding class.", "is the controller's"), ("Finding class.", "shipped user-facing behaviour"),
+       ("Owner-only decisions.", "only the work that depends on it waits"),
+       ("Owner-only decisions.", "nothing independent is left"),
+       ("Owner-only decisions.", "because the owner is away"),
+       ("Merge and checkpoint.", "a block another stream consumes"),
+       ("Merge and checkpoint.", "touched-area tests"), ("Merge and checkpoint.", "stays on the stream branch"),
+       ("Merge and checkpoint.", "once per stream"), ("Merge and checkpoint.", "is not re-run after its own fixes"),
+       ("Continuation.", "wake-up"), ("Continuation.", "account-wide")],
     "audit_reviewer": [("Owner-only decisions.", s) for s in TRIAGE]
     + [("Coverage first.", "coverage list"), ("Coverage first.", "progress file")],
     "audit_verifier": [("Owner-only decisions.", s) for s in TRIAGE]
@@ -1336,7 +1360,10 @@ class B13Test(unittest.TestCase):
         for s, new in (("rounds 1-3", "rounds 1-2"), ("rounds 1-3", "rounds 1-30"), ("rounds 1-3", "round 1-3"),
                        ("rounds 1-3", "rounds 2-3"), ("rounds 4-5", "rounds 4-6"), ("rounds 4-5", "rounds 4-50"),
                        ("rounds 4-5", "round 4-5"), ("rounds 4-5", "rounds 5-5"), ("one tier up", "one tier down"),
-                       ("one tier up", "one tier upx"), ("owner question", "owner questions")):
+                       ("one tier up", "one tier upx"),
+                       ("binding Rules N and T verdict", "binding Rules N and T verdicts"),
+                       ("binding Rules N and T verdict", "advisory Rules N and T verdict"),
+                       ("STOP_NARROW", "STOP_NARROWx"), ("ESCALATE", "ESCALATEx")):
             with self.subTest(s=s, new=new):
                 bad = in_para(t, "Continuation.", lambda p: p.replace(s, new))
                 self.assertIn("Continuation. lacks %r" % s, b13_problems("controller", bad))
@@ -1544,7 +1571,7 @@ EXACT_PARAGRAPHS = {
         )),
         ("Zero bugs.", (
             "Zero bugs.",
-            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred.",
+            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task when the binding verdict (STOP_NARROW or ESCALATE) stops the loop, and otherwise never deferred.",
             "An unrelated bug gets a register row and an owner.",
             "A deleted test is restored and fixed; dropping a test is never offered as a fix.",
         )),
@@ -1601,7 +1628,8 @@ EXACT_PARAGRAPHS = {
         ("No out-of-scope bucket.", (
             "No out-of-scope bucket.",
             "Every defect you see is reported, whether the diff touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
-            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A seeming exclusion is a class-narrowing question for the controller, never your reason to drop a finding.",
+            "Widening a fix's behaviour is out of scope for a fix round, never for a finding: the dimension is re-checked.",
             "A missing input-domain table is a finding.",
         )),
         ("No subagents.", (
@@ -1618,7 +1646,7 @@ EXACT_PARAGRAPHS = {
         )),
         ("Verdict.", (
             "Verdict.",
-            "You judge whether the branch may go to the final verifier.",
+            "You judge whether the branch may open its pull request (and, at a stream's end, go to the final verifier).",
             "Report status DONE when every claim and gate re-ran clean at the tip and the change itself holds no finding (here the whole branch).",
             "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
             "Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`, naming the task it belongs to.",
@@ -1627,7 +1655,7 @@ EXACT_PARAGRAPHS = {
         ("No out-of-scope bucket.", (
             "No out-of-scope bucket.",
             "Every defect you see is reported, whether the branch touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
-            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A seeming exclusion is a class-narrowing question for the controller, never your reason to drop a finding.",
             "A missing input-domain table is a finding.",
         )),
         ("No subagents.", (
@@ -1729,9 +1757,9 @@ SINGLE_SENTENCES = {
         ("Merge and checkpoint.",
          "The base branch (`base_branch`, default `main`) is protected: you never merge into it locally and never push to it; it changes only by merging an approved PR."),
         ("Merge and checkpoint.",
-         "A finished block or stream opens a pull request to the base branch, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
+         "A finished stream, or a block another stream consumes through an edge in the breakdown, opens a pull request to the base branch, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
         ("Continuation.",
-         "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner question."),
+         "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then the binding Rules N and T verdict: compute it after each review (by hand until `loopstats` exists) and ledger it as the `Loopstats:` line."),
         ("Continuation.",
          "When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page."),
         ("Report contract.",
@@ -1833,6 +1861,18 @@ KEY_MUTANTS = (
      "makes the branch incomplete", "leaves the branch complete"),
     ("R-OOS dropped", ("task_reviewer", "final_reviewer"), "No out-of-scope bucket.",
      "Every defect you see is reported", "Every defect you see is dropped"),
+    ("D3 class-narrowing question back to the owner", ("task_reviewer", "final_reviewer"), "No out-of-scope bucket.",
+     "question for the controller", "question for the owner"),
+    ("D3 widening a fix is in scope", ("task_reviewer",), "No out-of-scope bucket.",
+     "is out of scope for a fix round", "is in scope for a fix round"),
+    ("D3 controller class ruling back to the owner", ("controller",), "Finding class.",
+     "is the controller's", "is the owner's"),
+    ("D1 verdict advisory again", ("controller",), "Continuation.", "then the binding Rules", "then the advisory Rules"),
+    ("D4 deferral without a named task", ("controller",), "Zero bugs.",
+     "or registered against a named task when the binding verdict (STOP_NARROW or ESCALATE) stops the loop, ", ""),
+    ("5.2 verifier per block again", ("controller",), "Merge and checkpoint.", "once per stream", "once per block"),
+    ("5.6 whole stream waits", ("controller",), "Owner-only decisions.", "only the work that depends on it waits",
+     "the whole stream waits"),
     ("R-Verdict does make", TR, "Verdict.", "does not by itself make", "does make"),
     ("F-B13rr-1 audit mapping back to otherwise", ("audit_reviewer",), "Report contract.",
      "and DONE_WITH_FINDINGS when it holds at least one", "and DONE_WITH_FINDINGS otherwise"),
@@ -2033,17 +2073,25 @@ CTRL_BACKGROUND = ("Before you ledger a child's result, list its background job 
 WORKER_BACKGROUND = ("A poll loop has a bounded timeout and never matches its own command line; a job you no longer need "
                      "is stopped with TaskStop, not by pattern-killing processes; the report lists each background id "
                      "as finished or stopped.")
-CONTINUATION = (   # controller "Continuation." unchanged (session-resume design 3.9)
-    "Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner "
-    "question. One block runs per agent context, at most `block.max_tasks` tasks, with a clean worktree at every "
-    "checkpoint. When you reach a checkpoint, 80 % of your token or time budget, or a usage-limit stop, write your "
-    "handoff and return. When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same "
-    "role with a continue prompt built from the handoff, the ledger and the status page. Nothing continues from "
-    "inherited memory, and the owner never clears the session and re-prompts.")
+CONTINUATION = (   # controller "Continuation." (session-resume design 3.9; process v2 design 5.4, 5.7, D1, D6)
+    "Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then the binding "
+    "Rules N and T verdict: compute it after each review (by hand until `loopstats` exists) and ledger it as the "
+    "`Loopstats:` line. STOP_NARROW stops the loop, and its open findings are narrowed in one last round or "
+    "registered for a planned task. ESCALATE stops the loop: open LOW and MEDIUM findings are registered against a "
+    "named follow-up task, and an open CRITICAL or HIGH finding is an owner question that blocks only that task. A "
+    "change-caused CRITICAL or HIGH finding is fixed whatever the verdict. One block runs per agent context, at most "
+    "`block.max_tasks` tasks, with a clean worktree at every checkpoint. When you reach a checkpoint, 80 % of your "
+    "token or time budget, or a usage-limit stop, write your handoff and return. When a child returns a handoff or "
+    "BLOCKED: budget, dispatch at once a fresh agent of the same role with a continue prompt built from the handoff, "
+    "the ledger and the status page. After a usage-limit stop the limit is account-wide, so dispatch nothing at once: "
+    "the session that owns the program schedules a wake-up at the reset time the limit message names and "
+    "re-dispatches from the handoffs; with no scheduling tool the handoff names the resume command and the owner "
+    "runs it. Nothing continues from inherited memory, and the owner never clears the session and re-prompts.")
 RESUME_PINS = ((("controller", "Merge and checkpoint.", "handoff is complete"),)
                + tuple((r, "Background work.", "TaskStop") for r in WRITTEN)
                + tuple((r, "Owner-only decisions.", "recommended") for r in WRITTEN))
-ZERO_BUGS_TAIL = "in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred."  # DN-4 (a)
+ZERO_BUGS_TAIL = ("in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task when "
+                  "the binding verdict (STOP_NARROW or ESCALATE) stops the loop, and otherwise never deferred.")  # DN-4 (a), D4
 
 
 def resume_sentences(role):
@@ -2198,11 +2246,20 @@ DIRECTIVE_TOKENS = (   # (role, label, whole token): case-sensitive whole tokens
     ("controller", "Budget.", "live_subagents"),
     ("controller", "Report contract.", "handed back"),
     ("controller", "Report contract.", "handback"),
-) + tuple((r, "Input domain.", "version differences") for r in ("controller",) + INPUT_ROLES)
+) + tuple((r, "Input domain.", "version differences") for r in ("controller",) + INPUT_ROLES) + (
+    # process v2 (design 5.3): a fix only narrows or corrects; new behaviour becomes a proposed task
+    ("implementer", "Input domain.", "by narrowing"),
+    ("implementer", "Input domain.", "failing closed"),
+    ("implementer", "Unstated behaviour.", "may only narrow or correct"),
+    ("implementer", "Unstated behaviour.", "quotes"),
+    ("implementer", "Unstated behaviour.", "proposed task"),
+    ("implementer", "Commit gate.", "touched-area tests"),
+    ("implementer_transcription", "Commit gate.", "touched-area tests"),
+)
 DIRECTIVE_HARMLESS = (   # (role, label, old, new): an unpinned word elsewhere in the same paragraph; every check passes
     ("controller", "Input domain.", "Dispatch no task", "Send no task"),
     ("controller", "Rulings.", "Rule at most", "Rule no more than"),
-    ("implementer", "Input domain.", "Fix the whole dimension", "Repair the whole dimension"),
+    ("implementer", "Input domain.", "Cover the whole dimension", "Handle the whole dimension"),
     ("task_reviewer", "Input domain.", "Open the task's", "Read the task's"),
     ("final_reviewer", "Input domain.", "Open every task's", "Read every task's"),
 )

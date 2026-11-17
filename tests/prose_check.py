@@ -67,7 +67,7 @@ REQUIRED = {
     "Commit gate.": ("python3 -m gates run_all",),
     "Input domain.": ("input-domain table",),
     "Unstated behaviour.": ("NEEDS_DECISION", "mutant"),
-    "No out-of-scope bucket.": ("class-narrowing question for the owner", "missing input-domain table is a finding"),
+    "No out-of-scope bucket.": ("class-narrowing question for the controller", "missing input-domain table is a finding"),
     "Oracle.": ("production path", "independent expected value"),
     "Finding class.": ("class: <dimension>: <members>",),
     "Continuation.": ("handoff", "BLOCKED: budget", "Nothing continues from inherited memory"),
