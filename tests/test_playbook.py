@@ -793,10 +793,31 @@ class ContentChecksRefuseTest(unittest.TestCase):
         self.assertEqual(rules_problems(t), [])
         self.assertEqual(all_content_problems(t), [])
         why = self.cell("SD-R7", 2)
-        t = self.with_cell("SD-R7", 2, "Mending only one member " + why[why.index("of a class"):])
-        self.assertNotEqual(t, self.text)
-        self.assertEqual(rules_problems(t), [])
-        self.assertEqual(all_content_problems(t), [])
+        with self.subTest(part="SD-R7 why"):                   # FR-1 (B4): "of a class" is unpinned; absent = visible skip
+            self.harmless_phrase_skipped_if_absent(why)
+            t = self.with_cell("SD-R7", 2, "Mending only one member " + why[why.index("of a class"):])
+            self.assertNotEqual(t, self.text)
+            self.assertEqual(rules_problems(t), [])
+            self.assertEqual(all_content_problems(t), [])
+
+    def harmless_phrase_skipped_if_absent(self, why):
+        if "of a class" not in why:
+            self.skipTest("FR-1: 'of a class' is reworded on disk; unpinned, so never a failure")
+
+    def test_k20_absent_phrase_is_skipped_not_failed(self):    # B4 rows 2, 3 (FR-1)
+        case = type(self)("test_harmless_rewording_passes")
+        orig = case.cell
+        self.harmless_phrase_skipped_if_absent(self.cell("SD-R7", 2))    # already reworded on disk: skipped as well
+
+        def cell(rid, col):
+            got = orig(rid, col)
+            return got.replace("of a class", "of the class", 1) if (rid, col) == ("SD-R7", 2) else got
+        case.cell = cell
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertEqual((result.failures, result.errors), ([], []))
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(len(result.skipped), 1, result.skipped)
 
     def test_real_file_has_no_content_problems(self):
         self.assertEqual(all_content_problems(self.text), [])
@@ -1078,6 +1099,77 @@ class PlaceholderTest(unittest.TestCase):
     def test_takes_str(self):
         with self.assertRaises(TypeError):
             pc.placeholder_hits(b"<n>")
+
+
+class SpanPositionTest(unittest.TestCase):                   # verifier v11 F-1, F-2: rows S-a..S-e, PC1-a, PC1-b
+    """Every per-span loop must see every code span, not only the first (prose_check.py _mask_spans,
+    _info_refusals, _unpaired_runs and the table-row loop). Expected values are written by hand."""
+    def check(self, cases):
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(pc.placeholder_hits(text), want)
+
+    def test_table_row_pipe_span_after_the_first(self):      # S-a (F-1)
+        self.check([
+            ("| a | b |\n|---|---|\n| `x` | `<b>|` |", [(3, R3)]),                  # the reproducer: 2nd span, body row
+            ("| a | `x` | `a|b` |\n|---|---|---|\n", [(1, R3)]),                     # header row, 3rd (last) span
+            ("| `x` | `y` | `a|b` |\n|---|---|---|\n", [(1, R3)]),                   # 3rd of three
+            ("| `x` | `a|b` | `y` |\n|---|---|---|\n", [(1, R3)]),                   # middle of three
+            ("| `x` | `y` |\n|---|---|\n| `x` | `a|b` | `y` | `z` |", [(3, R3)]),    # body row, 2nd of four
+            ("a | `x` | `a|b`\n---|---|---\n", [(1, R3)]),                           # no leading pipe, header
+            ("a | b\n---|---\n`x` | `<b>|`", [(3, R3)]),                             # no leading pipe, body, last span
+            ("a | b\n---|---\n`x` | `y` | `z` | `a|b`", [(3, R3)]),                  # no leading pipe, 4th
+            ("| a |\n| `x` `|` |\n|---|", [(2, R3)]),                                # pipe span right after a span
+            ("| a |\n|---|\n| `x` | `a|b` |\n| `y` | `c|d` |", [(3, R3), (4, R3)]),   # two rows
+        ])
+
+    def test_tilde_info_string_pipe_span_after_the_first(self):    # S-b (F-2)
+        self.check([
+            ("~~~ `x` `a|b`\ny\n~~~\n", [(1, R3)]),
+            ("~~~ `x` `y` `a|b`\ny\n~~~\n", [(1, R3)]),
+            ("~~~ `x` `a|b` `y`\ny\n~~~\n", [(1, R3)]),
+            ("~~~~ a `x` b `c` d `e|f` g\ny\n~~~~\n", [(1, R3)]),
+        ])
+
+    def test_unpaired_run_after_spans(self):                  # S-c (R1)
+        self.check([
+            ("`a` `b` `\n", [(1, R1)]),
+            ("`a` x ``\n", [(1, R1)]),
+            ("`a` `b` `c` `\n", [(1, R1)]),
+            ("~~~ `a` `b` `\ny\n~~~\n", [(1, R1)]),
+            ("`a` `b`\n", []),            # controls: every run paired, no refusal for a span after the first
+            ("`a` `b` `c`\n", []),
+            ("`a` x ``b`` y\n", []),
+        ])
+
+    def test_mask_covers_every_span(self):                    # S-d
+        self.check([
+            ("`a` `<b>`\n", []),
+            ("`a` `b` `<c>`\n", []),
+            ("`a` `b` `c` `<d>`\n", []),
+            ("`a` `www.x` `b` `\\c`\n", []),
+            ("`a` <b>\n", [(1, "<b>"), (1, RA)]),     # control: the '<' outside a span is still found
+        ])
+
+    def test_controls_without_the_pipe_in_a_span(self):      # S-e
+        self.check([
+            ("| a | b |\n|---|---|\n| `x` | `y` |", []),
+            ("| `x` | `y` | `z` |\n|---|---|---|\n", []),
+            ("`x` `y` a|b\n", []),                                  # pipe outside every span, not a table row
+            ("`x` | `y` | `z`\n", []),                              # no delimiter run, no leading pipe: not a row
+            ("~~~ `x` `y` a|b\ny\n~~~\n", []),                      # pipe outside the spans
+            ("`x` `a|b`\n", []),                                    # pipe span on a non-table line
+        ])
+
+    def test_long_digit_run_in_a_later_span(self):           # PC1-a: 4301 digits, same on 3.9 and 3.13
+        digits = "1" * 4301
+        self.check([
+            ("| `x` | `%s|` |\n" % digits, [(1, R3)]),
+            ("~~~ `x` `%s|`\ny\n~~~\n" % digits, [(1, R3)]),
+        ])
+
+    def test_non_ascii_gives_only_the_character_refusal(self):    # PC1-b
+        self.check([("| `x` | `a|b%s` |\n" % chr(0xe9), [(1, RC)])])
 
 
 # Row Y samples. GOOD_FM's expected dict is written here, not parsed back.
@@ -1523,8 +1615,9 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
      "| final_verifier | skills/strict-delivery/prompts/final_verifier.md | tier4 | yes | open |",
      "role table row: prompt block, minimum tier, finding states"),
     ("playbook/roles.md",
-     "A role runs at its minimum tier or above, and a dispatch names a tier, never a model: config `models.tiers` maps "
-     "each tier to the model the project uses. The top tier, `tier4`, is allowed only for the roles in "
+     "A role runs at its minimum tier or above. A dispatch chooses a tier, and config `models.tiers` maps each tier to "
+     "the model the project uses: the dispatch's `## Model` names that model, and every other line of a brief or "
+     "report names tiers, never a model. The top tier, `tier4`, is allowed only for the roles in "
      "`top_tier_roles`, by default `final_verifier` and `exception_reviewer`. `tier4` has no default model; while it "
      "is unset, the `top_tier_roles` run at the tier `top_tier_fallback` names, default `tier3`. A small re-review "
      "that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, \"Small "
@@ -2595,6 +2688,401 @@ class RawLinkSyntaxTest(unittest.TestCase):                         # fix round 
                 with self.subTest(text=text):
                     self.assertEqual(pc.placeholder_hits(text), [(1, RC)])
             self.assertEqual(pc.placeholder_hits("- [a]\n"), [(1, RL)])
+
+
+# Task B3: the owner directives of 2026-11-09/10 in the base playbook, written out (spec section 7.1, 8, 10;
+# Q-VER-DO-1 (a): the version-rows rule is stack-neutral). Each sentence is pinned with its place.
+B3_VERSION_ROWS = ("Every table carries rows for the known version differences of the project's own stack and "
+                   "runtime, each run on every runtime the project supports.")
+B3_ASKING_ANCHOR = ("Any other open point, and every point in an owner-only class, is an owner question, and the path "
+                    "that needs it halts until it is answered.")
+B3_SMALL_POINT = ("The one exception is a small point inside the plan's intent: a question of format, syntax, bytes or "
+                  "whitespace, wording, layout, naming, test detail, a test-helper contract or an error-return shape "
+                  "is not asked; the controller decides it, taking the option it would recommend, and ledgers it as "
+                  "`Decision (owner delegation): what -- why -- cost if wrong`, outside `rulings.max_per_block`.")
+B3_OWNER_KEEPS = ("The owner keeps work added or removed, plan and spec changes, architecture choices, framework or "
+                  "process changes, agent models and costs, merge-blocking risk, and anything irreversible or "
+                  "otherwise important; a question in an owner-only class is always asked, and when unsure, the "
+                  "controller asks.")
+B3_ROLES_MODEL = "The dispatch's model equals `## Model` and meets the role's minimum tier."
+B3_ROLES_EXPLICIT = ("The dispatch call passes that model explicitly, the one `models.tiers` maps the chosen tier to; "
+                     "a dispatch never inherits its dispatcher's model.")
+B3_ROLES_AFTER = "A worker role dispatches no agent, and a dispatch whose dispatcher is a worker role is refused (`gate_dispatch`)."
+B3_ROLES_RETURN = ("A controller never returns while its children run: questions and progress go up to its parent as "
+                   "messages, and answers come down as decision records.")
+B3_NO_LIVE_CHILD = ("A controller never ends its turn while a child or a background job it started still runs: it "
+                    "waits inside its turn, in the foreground, and returns only after every child has handed back.")
+B3_FINISHED = ("A child has finished only when its handback arrives, never because its report file already holds a "
+               "status line.")
+B3_ITEM1_ANCHOR = ("A missing table blocks dispatch; a row with no test is a finding, and its fix covers the whole "
+                   "dimension.")
+# Task B4: U-2 (tier against model), U-4 (open grammar), U-5 (no handback with live children), playbook form.
+B4_ROLES_MIN = "A role runs at its minimum tier or above."
+B4_ROLES_TIER = ("A dispatch chooses a tier, and config `models.tiers` maps each tier to the model the project uses: "
+                 "the dispatch's `## Model` names that model, and every other line of a brief or report names tiers, "
+                 "never a model.")
+B4_ROLES_FOLLOW = "The top tier, `tier4`, is allowed only for the roles in `top_tier_roles`"
+B4_OPEN_GRAMMAR = ("A table enumerates the full input class or restricts the input, so the code refuses what lies "
+                   "outside the enumerated class, and never samples an open grammar.")
+B4_CONT_FIRST = ("Continuation is automatic, at every agent level: an agent that reaches a checkpoint, 80 % of its "
+                 "token or time budget, or a usage-limit stop writes its handoff and returns `status: DONE` with "
+                 "`next:` (or `BLOCKED: budget`).")
+B4_LIVE_CHILDREN = ("Before it writes that handoff, a controller dispatches nothing new and waits, inside its turn, "
+                    "for the handback of every child still running; a child that a usage-limit stop cuts off before "
+                    "its handback is listed in the handoff's `live_subagents`.")
+B4_CONT_NEXT = "Its dispatcher at once dispatches a fresh agent"
+B3_MISMATCH_ANCHOR = "any other mismatch, plan-vs-code included, is an owner question"
+B3_MISMATCH_TAIL = ", except a small point that `playbook/decisions.md` (\"Asking\") lets the controller decide."
+
+
+# B3 review R1-1: the Plan format paragraph of playbook/sessions.md states the same input-domain table rule.
+B3_PLAN_ANCHOR = "The implementer fills `test`, and a row with no test is a finding."
+B3_PLAN_VERDICT = ("Each verdict is marked as settled by the spec or plan, as an owner question, as a controller "
+                   "ruling, or as a small point the controller decided under `playbook/decisions.md` (\"Asking\"); a "
+                   "controller row goes to the reviewer as a ruling with one line of why.")
+B3_PLAN_VERDICT_KEEPS = (   # the invariants of the replaced sentence, plus the new kind
+    "Each verdict is marked as", "settled by the spec or plan", "as an owner question", "as a controller ruling",
+    "as a small point the controller decided under `playbook/decisions.md` (\"Asking\")",
+    "a controller row goes to the reviewer as a ruling with one line of why.")
+B3_PLAN_NEXT = "The table's sections are: Oracle,"
+
+
+def b3_unit(body, start):
+    """The one non-empty line of a section body that starts with `start`; ValueError unless exactly one."""
+    found = [l for l in body.split("\n") if l.startswith(start)]
+    if len(found) != 1:
+        raise ValueError("%d lines start with %r" % (len(found), start))
+    return found[0]
+
+
+B3_ENTRIES = (   # (id, file, section, the line the sentences sit in (its start), sentences, anchor, separator, follow)
+    ("C1", "playbook/review.md", "Input domains", "1. Every task whose interface", (B3_VERSION_ROWS,),
+     B4_OPEN_GRAMMAR, " ", None),                                     # B4: the U-4 sentence now stands before it
+    ("C2", "playbook/review.md", "Input domains", "A mismatch a table finds", (B3_MISMATCH_TAIL,),
+     B3_MISMATCH_ANCHOR, "", None),
+    ("D", "playbook/decisions.md", "Asking", "A point the spec, the plan", (B3_SMALL_POINT, B3_OWNER_KEEPS),
+     B3_ASKING_ANCHOR, " ", None),
+    ("E1", "playbook/roles.md", "Dispatch contract", "A dispatch prompt carries", (B3_ROLES_EXPLICIT,),
+     B3_ROLES_MODEL, " ", B3_ROLES_AFTER),
+    ("E2", "playbook/roles.md", "Report contract", "Every report starts with", (B3_NO_LIVE_CHILD, B3_FINISHED),
+     B3_ROLES_RETURN, " ", None),
+    ("R1a", "playbook/sessions.md", "Plan format", "Every task whose interface takes", (B3_VERSION_ROWS,),
+     B4_OPEN_GRAMMAR, " ", "Each verdict is marked as settled by the spec or plan,"),   # B4: U-4 stands before it
+    ("R1b", "playbook/sessions.md", "Plan format", "Every task whose interface takes", (B3_PLAN_VERDICT,),
+     B3_VERSION_ROWS, " ", B3_PLAN_NEXT),
+    ("U2", "playbook/roles.md", "Model tiers", "A role runs at its minimum tier", (B4_ROLES_TIER,),
+     B4_ROLES_MIN, " ", B4_ROLES_FOLLOW),                                                 # U-2 (B4)
+    ("U4a", "playbook/review.md", "Input domains", "1. Every task whose interface", (B4_OPEN_GRAMMAR,),
+     B3_ITEM1_ANCHOR, " ", B3_VERSION_ROWS),                                              # U-4 (B4)
+    ("U4b", "playbook/sessions.md", "Plan format", "Every task whose interface takes", (B4_OPEN_GRAMMAR,),
+     B3_PLAN_ANCHOR, " ", B3_VERSION_ROWS),                                               # U-4 (B4)
+    ("U5", "playbook/sessions.md", "Handoffs and continuation", "Continuation is automatic, at every agent level",
+     (B4_LIVE_CHILDREN,), B4_CONT_FIRST, " ", B4_CONT_NEXT),                              # U-5 (B4)
+)
+B3_BY_ID = {e[0]: e for e in B3_ENTRIES}
+B3_TOKENS = (   # (file, section, line start, whole token): case-sensitive
+    ("playbook/review.md", "Input domains", "1. Every task whose interface", "version differences"),
+    ("playbook/decisions.md", "Asking", "A point the spec, the plan",
+     "Decision (owner delegation): what -- why -- cost if wrong"),
+    ("playbook/roles.md", "Dispatch contract", "A dispatch prompt carries", "never inherits"),
+    ("playbook/roles.md", "Report contract", "Every report starts with", "handed back"),
+    ("playbook/roles.md", "Report contract", "Every report starts with", "handback"),
+    ("playbook/sessions.md", "Plan format", "Every task whose interface takes", "version differences"),
+    ("playbook/sessions.md", "Plan format", "Every task whose interface takes", "small point"),
+    ("playbook/review.md", "Input domains", "1. Every task whose interface", "open grammar"),                   # B4 U-4
+    ("playbook/sessions.md", "Plan format", "Every task whose interface takes", "open grammar"),              # B4 U-4
+    ("playbook/roles.md", "Model tiers", "A role runs at its minimum tier", "never a model"),                 # B4 U-2
+    ("playbook/sessions.md", "Handoffs and continuation", "Continuation is automatic, at every agent level",
+     "live_subagents"),                                                                                       # B4 U-5
+)
+B3_HARMLESS = (   # (file, section, line start, old, new): an unpinned phrase elsewhere in the unit
+    ("playbook/review.md", "Input domains", "1. Every task whose interface", "sections per producer",
+     "one section per producer"),
+    ("playbook/decisions.md", "Asking", "A point the spec, the plan", "is applied as written", "is applied as stated"),
+    ("playbook/roles.md", "Dispatch contract", "A dispatch prompt carries", "A fork dispatch is refused.",
+     "A fork dispatch is rejected."),
+    ("playbook/roles.md", "Report contract", "Every report starts with", "the first of DENIED",
+     "the first value of DENIED"),
+    ("playbook/sessions.md", "Plan format", "Every task whose interface takes", "one row per parameter",
+     "one row for each parameter"),
+)
+
+
+def b3_chain(sentences, sep):
+    return sep.join(sentences) if sep == "" else " ".join(sentences)
+
+
+def b3_problems(text, entry):
+    """Problems of one entry in the text of its file: the sentences stand once, in order, right after the anchor
+    (with its separator), before `follow`, or last when nothing follows; a section or line problem is one problem."""
+    ident, _, heading, start, sentences, anchor, sep, follow = entry
+    try:
+        unit = b3_unit(pc.section(text, heading), start)
+    except (ValueError, AssertionError) as e:
+        return ["%s: %s" % (ident, e)]
+    chain = b3_chain(sentences, sep)
+    want = anchor + sep + chain + ((" " + follow) if follow else "")
+    out = []
+    if want not in unit:
+        out.append("%s: not in place" % ident)
+    if any(text.count(s) != 1 for s in sentences):          # FV-1 (B4): counted over the whole file, not the unit
+        out.append("%s: not once" % ident)
+    if follow is None and not unit.endswith(chain):
+        out.append("%s: not last" % ident)
+    return out
+
+
+def b3_token_problems(text, token_row):
+    _, heading, start, token = token_row
+    try:
+        return [] if pc.whole_token(token, b3_unit(pc.section(text, heading), start)) else ["lacks %r" % token]
+    except (ValueError, AssertionError) as e:
+        return [str(e)]
+
+
+def b3_in_section(text, heading, fn):
+    body = pc.section(text, heading)
+    new = fn(body)
+    assert new != body, (heading, "mutation changed nothing")
+    return text.replace(body, new, 1)
+
+
+def b3_key_phrase_problems(stem, text):
+    out = []
+    for h, phrases in PLAYBOOK_SECTIONS.get(stem, []):
+        body = pc.section(text, h).lower()
+        out += ["%s %r" % (h, s) for s in phrases if s.lower() not in body]
+    return out
+
+
+class OwnerDirectivePlaybookTest(unittest.TestCase):
+    def test_new_sentences_in_place_on_disk(self):                # rows 1, 3, 4, 5, 9
+        for entry in B3_ENTRIES:
+            with self.subTest(id=entry[0]):
+                self.assertEqual(b3_problems(read(entry[1]), entry), [])
+                self.assertEqual(forbidden_hits(read(entry[1])), [])
+        for row in B3_TOKENS:
+            with self.subTest(token=row[3]):
+                self.assertEqual(b3_token_problems(read(row[0]), row), [])
+
+    def test_deleted_sentence_refused_naming_the_unit(self):      # row 1, per sentence
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            for s in sentences:
+                with self.subTest(id=ident, sentence=s[:30]):
+                    bad = b3_in_section(read(rel), heading, lambda b: b.replace((" " if sep else "") + s, "", 1))
+                    got = b3_problems(bad, entry)
+                    self.assertTrue(got and got[0].startswith(ident + ":"), got)
+
+    def test_moved_to_another_section_refused(self):              # row 2
+        other = {"playbook/review.md": "Small re-review", "playbook/decisions.md": "Answering",
+                 "playbook/roles.md": "Budget cap", "playbook/sessions.md": "Commits"}
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            for s in sentences:
+                with self.subTest(id=ident, sentence=s[:30]):
+                    t = read(rel)
+                    gone = b3_in_section(t, heading, lambda b: b.replace(s, "zzz", 1))
+                    moved = b3_in_section(gone, other[rel], lambda b: b.rstrip("\n") + " " + s + "\n")
+                    self.assertTrue(b3_problems(moved, entry))
+
+    def test_misplaced_refused(self):                             # row 3: first, before the anchor, glued, reordered
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            t = read(rel)
+            chain = b3_chain(sentences, sep)
+            with self.subTest(id=ident, case="first"):
+                bad = b3_in_section(t, heading, lambda b: b.replace(sep + chain, "", 1).replace(start, chain + " " + start, 1))
+                self.assertTrue(b3_problems(bad, entry))
+            with self.subTest(id=ident, case="before the anchor"):
+                bad = b3_in_section(t, heading, lambda b: b.replace(anchor + sep + chain, chain + " " + anchor, 1))
+                self.assertTrue(b3_problems(bad, entry))
+            if sep:
+                with self.subTest(id=ident, case="glued"):
+                    bad = b3_in_section(t, heading, lambda b: b.replace(anchor + sep + chain, anchor + chain, 1))
+                    self.assertTrue(b3_problems(bad, entry))
+            else:
+                with self.subTest(id=ident, case="spaced"):
+                    bad = b3_in_section(t, heading, lambda b: b.replace(anchor + chain, anchor + " " + chain, 1))
+                    self.assertTrue(b3_problems(bad, entry))
+            if len(sentences) == 2:
+                with self.subTest(id=ident, case="reordered"):
+                    bad = b3_in_section(t, heading, lambda b: b.replace(chain, sentences[1] + " " + sentences[0], 1))
+                    self.assertTrue(b3_problems(bad, entry))
+                with self.subTest(id=ident, case="glued between"):
+                    bad = b3_in_section(t, heading, lambda b: b.replace(sentences[0] + " " + sentences[1],
+                                                                        sentences[0] + sentences[1], 1))
+                    self.assertTrue(b3_problems(bad, entry))
+            if follow is None:
+                with self.subTest(id=ident, case="not last"):
+                    bad = b3_in_section(t, heading, lambda b: b.replace(chain, chain + " Zzz.", 1))
+                    self.assertTrue(b3_problems(bad, entry))
+
+    def test_twice_refused(self):                                 # row 4
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            for s in sentences:
+                with self.subTest(id=ident, sentence=s[:30]):
+                    bad = b3_in_section(read(rel), heading, lambda b: b.replace(s, s + " " + s, 1))
+                    self.assertTrue(b3_problems(bad, entry))
+
+    def test_copied_into_another_unit_of_the_file_refused(self):  # B4 row 4, FV-1: counted over the whole file
+        other = {"playbook/review.md": "Small re-review", "playbook/decisions.md": "Answering",
+                 "playbook/roles.md": "Budget cap", "playbook/sessions.md": "Commits"}
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            for s in sentences:
+                with self.subTest(id=ident, sentence=s[:30]):
+                    t = read(rel)
+                    self.assertEqual(b3_problems(t, entry), [])
+                    bad = b3_in_section(t, other[rel], lambda b: b.rstrip("\n") + " " + s + "\n")
+                    got = b3_problems(bad, entry)
+                    self.assertEqual(got, ["%s: not once" % ident], got)
+
+    def test_same_sentence_in_different_files_accepted(self):     # B4 row 6: the count is per file
+        self.assertEqual(read("playbook/review.md").count(B3_VERSION_ROWS), 1)
+        self.assertEqual(read("playbook/sessions.md").count(B3_VERSION_ROWS), 1)
+        self.assertEqual(read("playbook/review.md").count(B4_OPEN_GRAMMAR), 1)
+        self.assertEqual(read("playbook/sessions.md").count(B4_OPEN_GRAMMAR), 1)
+        for entry in B3_ENTRIES:
+            self.assertEqual(b3_problems(read(entry[1]), entry), [])
+
+    def test_roles_model_clause_dropped_refused(self):            # B4 row 8 (U-2): a mutant dropping the `## Model` clause
+        entry = B3_BY_ID["U2"]
+        for name, old, new in (("clause dropped", ": the dispatch's `## Model` names that model, and every other line",
+                                ", and every other line"),
+                               ("tier unqualified", "A dispatch chooses a tier", "A dispatch names a tier")):
+            with self.subTest(case=name):
+                bad = b3_in_section(read("playbook/roles.md"), "Model tiers", lambda b: b.replace(old, new, 1))
+                self.assertTrue(b3_problems(bad, entry))
+        self.assertIsNone(re.search(r"names a tier, never a model[;.:]", read("playbook/roles.md")))   # row 9
+
+    def test_b4_digit_runs_glued_to_each_new_sentence_refused_the_same(self):   # B4 row 13 (no int() on text)
+        for ident in ("U2", "U4a", "U4b", "U5"):
+            entry = B3_BY_ID[ident]
+            rel, heading, sentences = entry[1], entry[2], entry[4]
+            got = []
+            for n in (4300, 4301):
+                with self.subTest(id=ident, digits=n):
+                    s = sentences[-1]
+                    bad = b3_in_section(read(rel), heading, lambda b: b.replace(s, s + "9" * n, 1))
+                    got.append(b3_problems(bad, entry))
+                    self.assertTrue(got[-1])
+                    self.assertEqual(pc.char_refusals(bad), [])
+            self.assertEqual(got[0], got[1])
+
+    def test_whole_tokens_joined_or_recased_refused(self):        # row 5
+        for row in B3_TOKENS:
+            rel, heading, start, token = row
+            for name, new in (("joined before", "x" + token), ("joined after", token + "x"),
+                              ("case", token.upper()), ("absent", "zzz")):
+                with self.subTest(token=token, case=name):
+                    bad = b3_in_section(read(rel), heading, lambda b: b.replace(token, new))
+                    self.assertTrue(b3_token_problems(bad, row))
+
+    def text_of(self, rel):
+        """The text the harmless rows run on; the row-2 test replaces it with a reworded copy (FR-1)."""
+        return read(rel)
+
+    def test_harmless_row_absent_on_disk_is_skipped_not_failed(self):   # B4 rows 2, 3 (FR-1)
+        def absent(rel, heading, start, old):
+            return old not in b3_unit(pc.section(read(rel), heading), start)
+        gone0 = [row[3] for row in B3_HARMLESS if absent(*row[:4])]
+        for i, (rel, heading, start, old, new) in enumerate(B3_HARMLESS):
+            with self.subTest(reworded=old):
+                case = OwnerDirectivePlaybookTest("test_harmless_rewording_passes")
+                case.text_of = lambda r, i=i: (b3_in_section(read(r), B3_HARMLESS[i][1],
+                                                             lambda b: b.replace(B3_HARMLESS[i][3], B3_HARMLESS[i][4], 1))
+                                               if r == B3_HARMLESS[i][0] and not absent(*B3_HARMLESS[i][:4])
+                                               else read(r))
+                result = unittest.TestResult()
+                case.run(result)
+                gone = gone0 + ([old] if old not in gone0 else [])
+                self.assertEqual((result.failures, result.errors), ([], []))
+                self.assertTrue(result.wasSuccessful())
+                self.assertEqual(len(result.skipped), len(gone), result.skipped)
+                self.assertEqual(case.harmless_ran, [row[3] for row in B3_HARMLESS if row[3] not in gone])
+
+    def test_harmless_rewording_passes(self):                     # row 6 (spec section 14); FR-1 (B4): absent = visible skip
+        self.harmless_ran = []
+        for rel, heading, start, old, new in B3_HARMLESS:
+            with self.subTest(rel=rel, new=new):
+                t = self.text_of(rel)
+                if old not in b3_unit(pc.section(t, heading), start):
+                    self.skipTest("FR-1: %r is reworded on disk; unpinned, so never a failure" % old)
+                self.harmless_ran.append(old)
+                bad = b3_in_section(t, heading, lambda b: b.replace(old, new, 1))
+                for entry in B3_ENTRIES:
+                    if entry[1] == rel:
+                        self.assertEqual(b3_problems(bad, entry), [])
+                for row in B3_TOKENS:
+                    if row[0] == rel:
+                        self.assertEqual(b3_token_problems(bad, row), [])
+                self.assertEqual(b3_key_phrase_problems(os.path.basename(rel)[:-3], bad), [])
+                self.assertEqual(forbidden_hits(bad), [])
+
+    def test_new_sentences_join_no_class_and_are_clean(self):     # rows 9, 10: no verifier-step, no deferral member
+        for entry in B3_ENTRIES:
+            for s in entry[4]:
+                with self.subTest(id=entry[0]):
+                    s.encode("ascii")
+                    self.assertEqual(pc.char_refusals(s), [])
+                    self.assertIsNone(_VERIFIER.search(s), s)
+                    self.assertIsNone(_DEFERRAL.search(s), s)
+        for rel in {e[1] for e in B3_ENTRIES}:                    # the files' class members are the hand-listed ones
+            self.assertEqual(verifier_step_problems(read(rel), rel), [])
+
+    def test_plan_format_verdict_sentence_keeps_its_invariants(self):   # R1-1: the replaced sentence's invariants
+        t = read("playbook/sessions.md")
+        unit = b3_unit(pc.section(t, "Plan format"), "Every task whose interface takes")
+        self.assertEqual(unit.count(B3_PLAN_VERDICT), 1)
+        self.assertNotIn("as an owner question, or as a controller ruling;", unit)    # the old wording is gone
+        for phrase in B3_PLAN_VERDICT_KEEPS:                       # three verdict kinds, the new kind, the ruling line
+            with self.subTest(phrase=phrase[:40]):
+                self.assertIn(phrase, B3_PLAN_VERDICT)
+                bad = b3_in_section(t, "Plan format", lambda b: b.replace(phrase, "zzz", 1))
+                self.assertTrue(b3_problems(bad, B3_BY_ID["R1b"]))
+
+    def test_plan_format_digit_runs_refused_the_same(self):        # row 13 (no int() on text), R1 sentences
+        for entry in (B3_BY_ID["R1a"], B3_BY_ID["R1b"]):
+            for n in (4300, 4301):
+                with self.subTest(id=entry[0], digits=n):
+                    s = entry[4][-1]
+                    bad = b3_in_section(read("playbook/sessions.md"), "Plan format",
+                                        lambda b: b.replace(s, s + "9" * n, 1))
+                    self.assertTrue(b3_problems(bad, entry))
+                    self.assertEqual(pc.char_refusals(bad), [])
+
+    def test_forbidden_strings_in_new_sentence_refused(self):     # row 9
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            for name, sample in (("model-name", "use Opus"), ("owner-handle", "ask superbrobenji"),
+                                 ("row-id", "row X9-ABC-1")):
+                with self.subTest(id=ident, sample=sample):
+                    bad = read(rel).replace(sentences[0], sentences[0] + " " + sample, 1)
+                    self.assertIn(name, [h[0] for h in forbidden_hits(bad)])
+
+    def test_digit_runs_after_a_new_sentence_refused_the_same(self):   # row 13 (no int() on text)
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            if follow is not None:
+                continue
+            for n in (4300, 4301):
+                with self.subTest(id=ident, digits=n):
+                    bad = b3_in_section(read(rel), heading, lambda b: b.replace(sentences[-1], sentences[-1] + " " + "9" * n, 1))
+                    self.assertEqual(len(b3_problems(bad, entry)), 1)
+
+    def test_version_dependent_code_point_refused_by_the_character_check(self):   # row 14 (U+2C2F: Cn on 3.9, Lu on 3.13)
+        c = chr(0x2C2F)
+        for entry in B3_ENTRIES:
+            ident, rel, heading, start, sentences, anchor, sep, follow = entry
+            with self.subTest(id=ident):
+                bad = read(rel).replace(sentences[0], sentences[0].replace("e", c, 1), 1)
+                self.assertTrue(pc.char_refusals(bad))
+                self.assertEqual([h[0] for h in forbidden_hits(bad)][:1], [pc.CHAR_KIND])
+                self.assertTrue(b3_problems(bad, entry)[0].startswith(ident + ":"))
+                with self.assertRaises(AssertionError):
+                    pc.section(bad, heading)
 
 
 if __name__ == "__main__":

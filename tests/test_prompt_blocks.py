@@ -1539,7 +1539,8 @@ EXACT_PARAGRAPHS = {
             "Give every dispatch the headings `## Role`, `## Brief`, `## Findings`, `## Claims`, `## Budget: tokens=<n> minutes=<n>`, `## Model`, `## Report`, `## Strict block` and `## Task`, in that order; the strict block is the role's prompt block, byte for byte.",
             "A fork dispatch is refused: dispatch a fresh agent with that grammar instead.",
             "Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top tier only to the roles in `top_tier_roles` (by default the final verifier and the exception reviewer).",
-            "Name tiers in every brief and report, never a model.",
+            "Name tiers in every brief and report, never a model, except under `## Model`, which names the model that `models.tiers` maps the chosen tier to.",   # U-2 (B4)
+            "Pass each dispatch the model that `models.tiers` maps its tier to, explicitly in the dispatch call; a dispatch never inherits its dispatcher's model.",
         )),
         ("Zero bugs.", (
             "Zero bugs.",
@@ -2146,6 +2147,308 @@ class SessionResumeTest(unittest.TestCase):
                 if b"minors are fixed" in f.read():
                     with_copy.append(rel)
         self.assertEqual(with_copy, ["%s/controller.md" % PROMPTS_DIR])
+
+
+# Task B3: the owner directives of 2026-11-09/10 in the prompt blocks (spec section 7.1 small point, section 8 version
+# rows, section 10 explicit model and no handback with live children), written out. Q-VER-DO-1 (a): stack-neutral only.
+VERSION_ROWS = ("Every table carries rows for the known version differences of the project's own stack and runtime, "
+                "each run on every runtime the project supports.")
+SMALL_POINT_CTRL = ("The one exception is a small point inside the plan's intent: a question of format, syntax, bytes "
+                    "or whitespace, wording, layout, naming, test detail, a test-helper contract or an error-return "
+                    "shape is not asked; decide it, taking the option you would recommend, and ledger it as `Decision "
+                    "(owner delegation): what -- why -- cost if wrong`, outside `rulings.max_per_block`.")
+OWNER_KEEPS_CTRL = ("The owner keeps work added or removed, plan and spec changes, architecture choices, framework or "
+                    "process changes, agent models and costs, merge-blocking risk, and anything irreversible or "
+                    "otherwise important; a question in an owner-only class is always asked, and when unsure, you ask.")
+EXPLICIT_MODEL = ("Pass each dispatch the model that `models.tiers` maps its tier to, explicitly in the dispatch call; "
+                  "a dispatch never inherits its dispatcher's model.")
+HANDBACK_1 = ("Never end your turn while a child or a background job you started still runs: wait for it inside your "
+              "turn, in the foreground, and return only after every child has handed back.")
+HANDBACK_2 = ("A child has finished only when its handback arrives, never because its report file already holds a "
+              "status line.")
+NEVER_RETURN = "Never return while a child you dispatched still runs: questions and progress go up as messages."
+FINAL_REPLY = "Your final reply is at most 10 lines with the same fields."
+INPUT_ROLES = ("implementer", "task_reviewer", "final_reviewer")
+# Task B4: U-2 (tier against model), U-4 (open grammar), U-5 (no handback with live children), controller form.
+CHOOSE_MODEL = ("Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top "
+                "tier only to the roles in `top_tier_roles` (by default the final verifier and the exception "
+                "reviewer).")
+U2_CTRL = ("Name tiers in every brief and report, never a model, except under `## Model`, which names the model that "
+           "`models.tiers` maps the chosen tier to.")
+OPEN_GRAMMAR = ("A table enumerates the full input class or restricts the input, so the code refuses what lies outside "
+                "the enumerated class, and never samples an open grammar.")
+FIX_WHOLE = "A row without a test is a finding, and the fix covers the whole dimension the row names, not only the listed values."
+LIVE_CTRL = ("Before you write your handoff, dispatch nothing new and wait, inside your turn, for the handback of every "
+             "child still running; a child that a usage-limit stop cuts off before its handback is listed in your "
+             "handoff's `live_subagents`.")
+DIRECTIVES = (   # (id, role, label, sentences in order, the anchor they follow or None for last, what follows or None)
+    ("A1", "controller", "Input domain.", (VERSION_ROWS,), None, None),
+    ("A2", "controller", "Rulings.", (SMALL_POINT_CTRL, OWNER_KEEPS_CTRL), None, None),
+    ("A3", "controller", "Dispatch discipline.", (EXPLICIT_MODEL,), None, None),
+    ("A4", "controller", "Report contract.", (HANDBACK_1, HANDBACK_2), NEVER_RETURN, FINAL_REPLY),
+    ("A5", "controller", "Dispatch discipline.", (U2_CTRL,), CHOOSE_MODEL, EXPLICIT_MODEL),            # U-2 (B4)
+    ("A6", "controller", "Input domain.", (OPEN_GRAMMAR,), FIX_WHOLE, VERSION_ROWS),                   # U-4 (B4)
+    ("A7", "controller", "Budget.", (LIVE_CTRL,), None, None),                                         # U-5 (B4)
+) + tuple(("B", r, "Input domain.", (VERSION_ROWS,), None, None) for r in INPUT_ROLES)
+DIRECTIVE_TOKENS = (   # (role, label, whole token): case-sensitive whole tokens of the new sentences
+    ("controller", "Rulings.", "Decision (owner delegation): what -- why -- cost if wrong"),
+    ("controller", "Dispatch discipline.", "never inherits"),
+    ("controller", "Dispatch discipline.", "except under"),
+    ("controller", "Input domain.", "open grammar"),
+    ("controller", "Budget.", "live_subagents"),
+    ("controller", "Report contract.", "handed back"),
+    ("controller", "Report contract.", "handback"),
+) + tuple((r, "Input domain.", "version differences") for r in ("controller",) + INPUT_ROLES)
+DIRECTIVE_HARMLESS = (   # (role, label, old, new): an unpinned word elsewhere in the same paragraph; every check passes
+    ("controller", "Input domain.", "Dispatch no task", "Send no task"),
+    ("controller", "Rulings.", "Rule at most", "Rule no more than"),
+    ("implementer", "Input domain.", "Fix the whole dimension", "Repair the whole dimension"),
+    ("task_reviewer", "Input domain.", "Open the task's", "Read the task's"),
+    ("final_reviewer", "Input domain.", "Open every task's", "Read every task's"),
+)
+
+
+def placed_problem(p, sentences, anchor, follow, text):
+    """True when the sentences do not stand once each, in order, directly after the anchor (or last without one);
+    FV-1 (B4): each sentence is counted over the whole file `text`, so a copy in another paragraph is refused."""
+    chain = " ".join(sentences)
+    want = (anchor + " " if anchor else "") + chain + (" " + follow if follow else "")
+    if want not in p or any(text.count(s) != 1 for s in sentences):
+        return True
+    return not anchor and not follow and not p.endswith(" " + chain)
+
+
+def directive_problems(role, text):
+    out = []
+    for ident, role_, label, sentences, anchor, follow in DIRECTIVES:
+        if role_ != role:
+            continue
+        try:
+            p = paragraph(text, label)
+        except ValueError as e:
+            out.append("%s %s: unreadable: %s" % (ident, label, e))
+            continue
+        if placed_problem(p, sentences, anchor, follow, text):
+            out.append("%s %s: %r not in place" % (ident, label, sentences[0][:40]))
+    return out
+
+
+def token_problems(role, text):
+    out = []
+    for role_, label, token in DIRECTIVE_TOKENS:
+        if role_ != role:
+            continue
+        try:
+            if not whole_token(token, paragraph(text, label)):
+                out.append("%s lacks %r" % (label, token))
+        except ValueError:
+            out.append("%s is missing" % label)
+    return out
+
+
+def all_problems(role, text):
+    return (directive_problems(role, text) + token_problems(role, text) + key_problems(role, text)
+            + (content_problems(role, text) if role in B12_CONTENT else []) + block_problems(text.encode("utf-8"), role))
+
+
+class OwnerDirectiveBlockTest(unittest.TestCase):
+    def test_new_sentences_are_in_place_on_disk(self):           # rows 1, 3, 4, 5, 8, 9
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            with self.subTest(id=ident, role=role):
+                t = disk(role)
+                self.assertEqual(directive_problems(role, t), [])
+                self.assertEqual(token_problems(role, t), [])
+                self.assertEqual(block_problems(t.encode("ascii"), role), [])
+                self.assertEqual(forbidden_hits(t), [])
+                self.assertEqual(key_problems(role, t), [])
+
+    def test_deleted_sentence_names_label_refused(self):         # row 1, per sentence
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            for s in sentences:
+                with self.subTest(id=ident, role=role, sentence=s[:30]):
+                    bad = in_para(disk(role), label, lambda p: p.replace(" " + s, ""))
+                    got = directive_problems(role, bad)
+                    self.assertTrue(got and label in got[0], got)
+
+    def test_moved_to_another_paragraph_refused(self):           # row 2
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            for s in sentences:
+                for dest in ("Budget.", "Background work."):
+                    if dest == label:                          # B4: A7 sits in Budget. itself
+                        continue
+                    with self.subTest(id=ident, role=role, sentence=s[:30], dest=dest):
+                        bad = other_para(disk(role), label, s, dest)
+                        self.assertTrue(directive_problems(role, bad))
+
+    def test_copied_into_another_paragraph_refused(self):        # B4 row 4, FV-1: the copy is counted over the whole file
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            for s in sentences:
+                for dest in ("Budget.", "Background work.", "Verification method."):
+                    if dest == label:
+                        continue
+                    with self.subTest(id=ident, role=role, sentence=s[:30], dest=dest):
+                        t = disk(role)
+                        self.assertEqual(directive_problems(role, t), [])
+                        bad = in_para(t, dest, lambda p: p + " " + s)
+                        got = directive_problems(role, bad)
+                        self.assertTrue(any(x.startswith("%s %s:" % (ident, label)) for x in got), got)
+
+    def test_same_sentence_in_another_file_accepted(self):       # B4 row 6: the count is per file
+        for r in INPUT_ROLES:
+            self.assertEqual(directive_problems(r, disk(r)), [])
+        self.assertEqual(disk("controller").count(VERSION_ROWS), 1)
+        self.assertEqual(disk("implementer").count(VERSION_ROWS), 1)
+
+    def test_misplaced_refused(self):                            # row 3: first, before the anchor, glued, reordered
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            t = disk(role)
+            chain = " ".join(sentences)
+            with self.subTest(id=ident, role=role, case="first"):
+                bad = in_para(t, label, lambda p: p.replace(" " + chain, "").replace(label, label + " " + chain, 1))
+                self.assertTrue(directive_problems(role, bad))
+            with self.subTest(id=ident, role=role, case="glued"):
+                bad = in_para(t, label, lambda p: p.replace(" " + chain, chain))
+                self.assertTrue(directive_problems(role, bad))
+            if len(sentences) == 2:
+                with self.subTest(id=ident, role=role, case="glued between"):
+                    bad = in_para(t, label, lambda p: p.replace(sentences[0] + " " + sentences[1],
+                                                                sentences[0] + sentences[1]))
+                    self.assertTrue(directive_problems(role, bad))
+                with self.subTest(id=ident, role=role, case="reordered"):
+                    bad = in_para(t, label, lambda p: p.replace(chain, sentences[1] + " " + sentences[0]))
+                    self.assertTrue(directive_problems(role, bad))
+            if anchor:
+                with self.subTest(id=ident, role=role, case="before the anchor"):
+                    bad = in_para(t, label, lambda p: p.replace(anchor + " " + chain, chain + " " + anchor))
+                    self.assertTrue(directive_problems(role, bad))
+            else:
+                with self.subTest(id=ident, role=role, case="not last"):
+                    bad = in_para(t, label, lambda p: p + " Zzz.")
+                    self.assertTrue(directive_problems(role, bad))
+
+    def test_twice_refused(self):                                # row 4
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            for s in sentences:
+                with self.subTest(id=ident, role=role, sentence=s[:30]):
+                    bad = in_para(disk(role), label, lambda p: p.replace(s, s + " " + s))
+                    self.assertTrue(directive_problems(role, bad))
+
+    def test_whole_tokens_joined_or_recased_refused(self):       # row 5
+        for role, label, token in DIRECTIVE_TOKENS:
+            t = disk(role)
+            for name, new in (("joined before", "x" + token), ("joined after", token + "x"),
+                              ("case", token.upper()), ("absent", "zzz")):
+                with self.subTest(role=role, token=token, case=name):
+                    bad = in_para(t, label, lambda p: p.replace(token, new))
+                    self.assertTrue(token_problems(role, bad))
+
+    def text_of(self, role):
+        """The text the harmless rows run on; the row-2 test replaces it with a reworded copy (FR-1)."""
+        return disk(role)
+
+    def test_harmless_rewording_passes(self):                    # row 6 (spec section 14); FR-1 (B4): absent = visible skip
+        self.harmless_ran = []
+        for role, label, old, new in DIRECTIVE_HARMLESS:
+            with self.subTest(role=role, label=label, new=new):
+                t = self.text_of(role)
+                if old not in paragraph(t, label):
+                    self.skipTest("FR-1: %r is reworded on disk; unpinned, so never a failure" % old)
+                bad = in_para(t, label, lambda p: p.replace(old, new, 1))
+                self.assertEqual(all_problems(role, bad), [])
+                self.harmless_ran.append(old)
+
+    def test_harmless_row_absent_on_disk_is_skipped_not_failed(self):   # B4 rows 2, 3 (FR-1)
+        absent = [old for role, label, old, new in DIRECTIVE_HARMLESS if old not in paragraph(disk(role), label)]
+        for i, (role, label, old, new) in enumerate(DIRECTIVE_HARMLESS):
+            with self.subTest(reworded=old):
+                case = OwnerDirectiveBlockTest("test_harmless_rewording_passes")
+                case.text_of = lambda r, i=i: (in_para(disk(r), DIRECTIVE_HARMLESS[i][1],
+                                                       lambda p: p.replace(DIRECTIVE_HARMLESS[i][2],
+                                                                           DIRECTIVE_HARMLESS[i][3], 1))
+                                               if r == DIRECTIVE_HARMLESS[i][0] and DIRECTIVE_HARMLESS[i][2]
+                                               in paragraph(disk(r), DIRECTIVE_HARMLESS[i][1]) else disk(r))
+                result = unittest.TestResult()
+                case.run(result)
+                gone = absent + ([old] if old not in absent else [])
+                self.assertEqual((result.failures, result.errors), ([], []))
+                self.assertTrue(result.wasSuccessful())
+                self.assertEqual(len(result.skipped), len(gone), result.skipped)
+                self.assertEqual(case.harmless_ran, [o for _, _, o, _ in DIRECTIVE_HARMLESS if o not in gone])
+
+    def test_control_and_non_ascii_bytes_in_new_sentence_refused(self):   # row 8
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            s = sentences[0]
+            t = disk(role)
+            for name, mutated, kind in (
+                    ("cr", t.replace(s, s.replace(", ", ",\r ", 1) if ", " in s else s + "\r", 1), "line-ending"),
+                    ("trailing tab", t.replace(s, s + "\t", 1), "control"),
+                    ("non-ascii", t.replace(s, s.replace("e", chr(0xe9), 1), 1), "encoding")):
+                with self.subTest(id=ident, role=role, case=name):
+                    got = block_problems(mutated.encode("utf-8"), role)
+                    self.assertTrue(any(x.startswith(kind) for x in got), got)
+
+    def test_forbidden_strings_in_new_sentence_refused(self):    # row 9
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            for name, sample in (("model-name", "use Opus"), ("owner-handle", "ask superbrobenji"),
+                                 ("row-id", "row X9-ABC-1")):
+                with self.subTest(id=ident, role=role, sample=sample):
+                    bad = disk(role).replace(sentences[0], sentences[0] + " " + sample, 1)
+                    self.assertIn(name, [h[0] for h in forbidden_hits(bad)])
+
+    def test_new_sentences_join_no_class(self):                  # row 10: no new verifier-step or deferral member
+        from tests.test_playbook import _DEFERRAL, _VERIFIER
+        for s in (VERSION_ROWS, SMALL_POINT_CTRL, OWNER_KEEPS_CTRL, EXPLICIT_MODEL, HANDBACK_1, HANDBACK_2):
+            s.encode("ascii")
+            self.assertIsNone(_VERIFIER.search(s), s)
+            self.assertIsNone(_DEFERRAL.search(s), s)
+
+    def test_dispatch_discipline_pin_carries_the_model_sentence(self):   # row 11
+        pinned = dict(EXACT_PARAGRAPHS["controller"])["Dispatch discipline."]
+        self.assertEqual(len(pinned), 8)
+        self.assertEqual(pinned[-1], EXPLICIT_MODEL)
+        t = disk("controller")
+        self.assertEqual(key_problems("controller", t), [])
+        for name, bad in (("dropped", in_para(t, "Dispatch discipline.", lambda p: p.replace(" " + EXPLICIT_MODEL, ""))),
+                          ("reworded", in_para(t, "Dispatch discipline.",
+                                               lambda p: p.replace("never inherits", "does not inherit"))),
+                          ("first", in_para(t, "Dispatch discipline.",
+                                            lambda p: p.replace(" " + EXPLICIT_MODEL, "").replace(
+                                                "Dispatch discipline.", "Dispatch discipline. " + EXPLICIT_MODEL, 1)))):
+            with self.subTest(case=name):
+                self.assertTrue(key_problems("controller", bad))
+
+    def test_digit_runs_in_a_new_paragraph_refused_the_same(self):       # row 13 (no int() on text)
+        for n in (4300, 4301):
+            with self.subTest(digits=n):
+                bad = in_para(disk("controller"), "Rulings.", lambda p: p + " " + "9" * n)
+                got = directive_problems("controller", bad)
+                self.assertEqual(len(got), 1, got)
+                self.assertEqual(block_problems(bad.encode("ascii"), "controller"), [])
+
+    def test_digit_runs_glued_to_each_b4_sentence_refused_the_same(self):   # B4 row 13 (U-2, U-4, U-5; no int() on text)
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            if ident not in ("A5", "A6", "A7"):
+                continue
+            got = []
+            for n in (4300, 4301):
+                with self.subTest(id=ident, digits=n):
+                    s = sentences[-1]
+                    bad = disk(role).replace(s, s + "9" * n, 1)
+                    problems = directive_problems(role, bad)
+                    self.assertTrue(any(x.startswith("%s %s:" % (ident, label)) for x in problems), problems)
+                    self.assertEqual(block_problems(bad.encode("ascii"), role), [])
+                    got.append([x.split(" not in place")[0] for x in problems])
+            self.assertEqual(got[0], got[1])
+
+    def test_version_dependent_code_point_refused_by_the_character_check(self):   # row 14 (U+2C2F: Cn on 3.9, Lu on 3.13)
+        c = chr(0x2C2F)
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            with self.subTest(id=ident, role=role):
+                bad = disk(role).replace(sentences[0], sentences[0].replace("e", c, 1), 1)
+                self.assertTrue(any(x.startswith("encoding") for x in block_problems(bad.encode("utf-8"), role)))
+                self.assertEqual([h[0] for h in forbidden_hits(bad)][:1], [pc.CHAR_KIND])
+                self.assertTrue(any(x.startswith("%s %s: unreadable" % (ident, label))
+                                    for x in directive_problems(role, bad)))
 
 
 if __name__ == "__main__":

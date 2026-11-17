@@ -26,7 +26,9 @@ Where superpowers says otherwise (for example "do not re-run the suite" for revi
 
 The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: `program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, `task_reviewer`, `final_reviewer`, `final_verifier`, `exception_reviewer`, `audit_reviewer`, `audit_verifier` and `investigator`.
 
-Every dispatch carries its role's prompt block byte for byte and names a tier, never a model; config `models.tiers` maps each tier to a model.
+Every dispatch carries its role's prompt block byte for byte and chooses a tier; its `## Model` names the model config `models.tiers` maps that tier to, and every other line of a brief or report names tiers, never a model.
+
+The dispatch call passes that model explicitly; a dispatch never inherits its dispatcher's model.
 
 A controller dispatches workers within the configured depth and concurrency limits, and workers never dispatch.
 
@@ -41,6 +43,10 @@ Default owner-only classes: `triage`, `spec-direction`, `scope`, `merge-grant`, 
 `playbook/decisions.md` says what the owner decides in each class.
 
 A controller rules only inside an approved plan, only on a plan-vs-spec or task-vs-task conflict the spec settles, and ledgers each ruling as `Ruling: what -- why -- cost if wrong -- spec cite`; every other open point is an owner question.
+
+The one exception is a small point inside the plan's intent: a question of format, syntax, bytes or whitespace, wording, layout, naming, test detail, a test-helper contract or an error-return shape is not asked; the controller decides it, taking the option it would recommend, and ledgers it as `Decision (owner delegation): what -- why -- cost if wrong`, outside `rulings.max_per_block`.
+
+The owner keeps work added or removed, plan and spec changes, architecture choices, framework or process changes, agent models and costs, merge-blocking risk, and anything irreversible or otherwise important; when unsure, the controller asks.
 
 ## Owner questions
 
@@ -63,6 +69,10 @@ Every statement read or written is a hypothesis until it is checked twice: verif
 A statement with no executable check is not written; a divergence is reported with both quotes and no side taken.
 
 The input-domain method, stated in full in `playbook/review.md` section "Input domains": every task that takes an argument or reads a file carries an input-domain table, one row per dimension with its expected verdict and a test, and a row with no test is a finding; the oracle is the production path compared with an independent expected value; an implementer lists every unstated behaviour and stops with NEEDS_DECISION; reviewers keep no out-of-scope bucket for the task's own code; and each finding's class is written `class: <dimension>: <members>`.
+
+Every input-domain table carries rows for the known version differences of the project's own stack and runtime, each run on every runtime the project supports.
+
+Every input-domain table enumerates the full input class or restricts the input, so the code refuses what lies outside the enumerated class, and never samples an open grammar.
 
 ## Change kinds
 
@@ -99,6 +109,8 @@ A continued worker never dispatches, so its dispatcher runs the check before the
 
 Continuation is automatic: an agent that reaches a checkpoint, 80 % of its token or time budget, or a usage-limit stop writes its handoff and returns, and its dispatcher at once dispatches a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page.
 
+Before it writes that handoff, a controller dispatches nothing new and waits, inside its turn, for the handback of every child still running; a child that a usage-limit stop cuts off before its handback is listed in the handoff's `live_subagents`.
+
 Nothing continues from inherited memory, and the owner never clears the session and re-prompts.
 
 One block runs per agent context, at most `block.max_tasks` tasks, with a clean worktree at every checkpoint.
@@ -108,6 +120,10 @@ A statement that a handoff is complete carries three outputs, pasted: `git statu
 The background-job check: every agent reaps its background jobs before it reports; a poll loop has a bounded timeout and never matches its own command line; a job no longer needed is stopped with TaskStop, never by pattern-killing processes; and the report lists each background job id as finished or stopped.
 
 Before a controller ledgers a child's result, it lists the child's background job ids from its transcript: each has a completion record, or is stopped with TaskStop and the stop is ledgered; a notice that a child is waiting on its own background work leaves its task open.
+
+A controller never ends its turn while a child or a background job it started still runs: it waits inside its turn, in the foreground, and returns only after every child has handed back.
+
+A child has finished only when its handback arrives, never because its report file already holds a status line.
 
 The handoff fields are in `playbook/sessions.md` section "Handoffs and continuation".
 

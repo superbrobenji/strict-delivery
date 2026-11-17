@@ -1,0 +1,27 @@
+schema: finding/1
+id: F-20261114-e69z
+status: open
+source: PR-B2 (stream b controller 8), owner Q-B2UR1-1 (a), accepted residual
+severity: LOW
+class: "markdown placeholder: excess GFM table cells: a code span in a table cell beyond the header row's cell count is dropped by the renderer and the placeholder checker returns [] (accepted residual)"
+siblings: []
+cites:
+  - file: tests/prose_check.py
+    lines: 705-793
+    sha: 81f9027
+  - file: tests/test_playbook.py
+    lines: 2345-2349
+    sha: 81f9027
+repro: null
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+caused_by_change: false
+dimension: "markdown placeholder"
+history:
+  - status: open
+    sha: bd529d1bb2da7dc5e32750e22f6c7f6ca46bec70
+    by: docs-rev6

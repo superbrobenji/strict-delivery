@@ -618,7 +618,7 @@ brief:
 | dispatch grammar + model tiers | no | yes | yes |
 | top-tier final verifier | no | no | yes |
 | review package + mutation transcript | no | per finding | every pin |
-| pre-commit | schema, register, decisions | run_all | run_all + gate suite on every supported runtime |
+| pre-commit | schema, register, decisions | run_all | run_all, then `commands.test` |
 | block size cap | none | 5 tasks | 3 tasks |
 | context read receipts | advisory | advisory | enforced |
 | programs and streams | available | available | available |

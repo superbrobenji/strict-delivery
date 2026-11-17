@@ -1,0 +1,24 @@
+schema: finding/1
+id: F-20261116-mkbc
+status: open
+source: "U-G0-2: SDD/stream-a2-g0-report.md:58, SDD/stream-a2-g0-log.md:54 (SDD = .superpowers/sdd/2026-10-31-strict-delivery-framework; severity not stated at source; F-FV-2 is LOW)"
+severity: LOW
+class: "import failure kind: self-named ModuleNotFoundError from inside an existing module"
+siblings: []
+cites:
+  - file: gates/__main__.py
+    lines: 28-29
+    sha: f3ec748
+repro: "An existing gate module that raises ModuleNotFoundError('x', name=<itself>), run through python3 -m gates check <gate>: gates/__main__.py:28-29 reports it as '<path>.py missing' (source: stream-a2-g0-report.md:58; code read at f3ec748, not run for this row)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+caused_by_change: false
+dimension: "import failure kind"
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7
