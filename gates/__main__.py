@@ -53,6 +53,16 @@ def _run_all(args: List[str]) -> int:
     return run_all.main(args)
 
 
+def _githook(args: List[str]) -> int:
+    from gates.tools import githooks
+    return githooks.main(args)
+
+
+def _githooks(args: List[str]) -> int:
+    from gates.tools import githooks
+    return githooks.manage(args)
+
+
 def _hook(args: List[str]) -> int:
     """Delegate to ``gates.hook.main(args)``, imported here (stream ``runtime``'s file). Fail closed with exit 2 and
     one stderr line: ``hook.missing`` when ``gates/hook.py`` is absent, ``hook.import`` when it cannot be used (a hook
@@ -90,7 +100,8 @@ def _hook(args: List[str]) -> int:
 
 
 COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings,
-                                                   "hook": _hook, "index": _index, "run_all": _run_all}
+                                                   "githook": _githook, "githooks": _githooks, "hook": _hook,
+                                                   "index": _index, "run_all": _run_all}
 
 
 def main(argv: List[str]) -> int:
