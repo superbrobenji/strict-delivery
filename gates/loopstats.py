@@ -95,7 +95,7 @@ def _lines(r: dict) -> list:
     task = safe_text(r["task"])
     narrowed = _csv(r["narrowed"]) if r["narrowed"] else "none"
     x, w = _csv(r["X"]), _csv(r["W"])
-    ev_line = "EV unset: escape_cost not configured"  # escape_cost is not read until config/2 (D7)
+    ev_line = "EV unset: escape_cost not configured"  # config/2 declares escape_cost; loopstats refuses it until follow-up 6E.3 reads it (D7)
     out = [
         "LOOPSTATS plan=%s task=%s rounds=%d X=%s W=%s N=%d S=%d narrowed=%s"
         % (r["plan"], task, r["rounds"], x, w, r["N"], r["S"], narrowed),

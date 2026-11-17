@@ -338,7 +338,8 @@ class TestCli(Fixture):
         full = {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}
         cfg = ".strict-delivery/config.yml"
         lead = "loopstats: " + cfg + ": "
-        closed = "loopstats: escape_cost is set, but reading it needs config/2, which is not available yet"
+        closed = ("loopstats: escape_cost is set, but loopstats does not read it yet "
+                  "(follow-up task 6E.3 escape_cost read after config/2)")
         low = lead + "escape_cost.LOW: must be an integer of at least 0"
         digits_cap = lead + "escape_cost.LOW: must be an integer of at most 600 digits"
         shapes = {

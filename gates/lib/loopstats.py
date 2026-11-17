@@ -4,8 +4,9 @@ Advisory statistics over the findings of one task. All arithmetic is in ``fracti
 except ``u``. ``report`` is the one entry that reads finding rows; ``trend``, ``geo_fit``, ``rule_n``,
 ``verdict`` and ``ev`` are pure functions of the series.
 
-``escape_cost`` is never read here: ``config/2`` (which declares it) is not on this branch, so a ``cfg`` holding
-the key is refused instead of being ignored (program-controller departure 2; table 6E.3 D7).
+``escape_cost`` is never read here: ``config/2`` declares it, but loopstats reads it only in the follow-up task
+"6E.3 escape_cost read after config/2", so a ``cfg`` holding the key is refused instead of being ignored
+(program-controller departure 2; table 6E.3 D7).
 """
 from __future__ import annotations
 
@@ -149,7 +150,8 @@ def _check_args(rounds: object, narrowed: object, cfg: object) -> list:
             raise GateError("narrowing %s is outside 1..%d (the contract is narrowed after a review, not the last)"
                             % (safe_text(r), rounds - 1))
     if type(cfg) is dict and "escape_cost" in cfg:
-        raise GateError("escape_cost is set, but reading it needs config/2, which is not available yet")
+        raise GateError("escape_cost is set, but loopstats does not read it yet "
+                        "(follow-up task 6E.3 escape_cost read after config/2)")
     return sorted(set(narrowed))
 
 
@@ -217,7 +219,8 @@ def report(rows: list, plan: str, task: str, rounds: int, narrowed: list, cfg: d
 def small_signals(rows: list, plan: str, task: str, rounds: int, narrowed: list, cfg: dict) -> dict:
     """``{rule_n, converging, ev_below_one}`` for the small re-review's conditions 6-8 (same refusals as report).
 
-    ``ev_below_one`` is ``None`` until ``escape_cost`` can be read (``config/2``)."""
+    ``ev_below_one`` is ``None`` until loopstats reads ``escape_cost`` (``config/2`` declares it; the follow-up
+    task "6E.3 escape_cost read after config/2" reads it)."""
     r = report(rows, plan, task, rounds, narrowed, cfg)
     converging = None
     if rounds >= 3:

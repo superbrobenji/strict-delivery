@@ -98,7 +98,7 @@ class ConfigTest(GitIsolatedTestCase):
         self.assertEqual(sorted(set(current) - set(base)), ["commands", "reviews", "top_tier_roles"])
         for key in ("commands", "reviews", "top_tier_roles"):
             del current[key]
-        # this repository is migrated to config/2 (Task 2c.3): the base keys under the migrated tag
+        # this repository is migrated to config/2 (Task 2c.2): the base keys under the migrated tag
         self.assertEqual(current, migrations.migrate("config", base))
         # append only: the base's lines open the file unchanged but for the first line's tag, the new keys follow
         old_text = p.stdout.decode("utf-8")
