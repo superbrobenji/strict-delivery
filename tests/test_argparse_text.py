@@ -39,7 +39,7 @@ USAGE_40 = {
     'decisions batch': 'usage: decisions batch [-h]\n                       [--root ROOT]\n                       [--since SINCE]\n                       [--answered]\n                       [--source SOURCE]\n                       [--date DATE]\n',
     'decisions find': 'usage: decisions find [-h]\n                      [--root ROOT]\n                      [--path PATH]\n                      [--topic TOPIC]\n                      [--all]\n                      [TERM ...]\n',
     'findings': 'usage: findings [-h] {new,move} ...\n',
-    'findings new': 'usage: findings new [-h] --source\n                    SOURCE --severity\n                    SEVERITY\n                    --owner-kind\n                    OWNER_KIND --by BY\n                    --class CLASS_\n                    [--plan PLAN]\n                    [--task TASK]\n                    [--number NUMBER]\n                    [--parent PARENT]\n                    [--root ROOT]\n                    [--cite CITE]\n',
+    'findings new': 'usage: findings new [-h] --source\n                    SOURCE --severity\n                    SEVERITY\n                    --owner-kind\n                    OWNER_KIND --by BY\n                    --class CLASS_\n                    [--plan PLAN]\n                    [--task TASK]\n                    [--number NUMBER]\n                    [--parent PARENT]\n                    [--root ROOT]\n                    [--review-round REVIEW_ROUND]\n                    [--caused-by-change CAUSED_BY_CHANGE]\n                    [--dimension DIMENSION]\n                    [--cite CITE]\n',
     'findings move': 'usage: findings move [-h] --to TO --by\n                     BY\n                     [--ruling RULING]\n                     [--pin-test PIN_TEST]\n                     [--pin-transcript PIN_TRANSCRIPT]\n                     [--resolved-by RESOLVED_BY]\n                     [--root ROOT]\n                     [--evidence EVIDENCE]\n                     id\n',
 }
 USAGE_80 = {
@@ -56,7 +56,7 @@ USAGE_80 = {
     'decisions batch': 'usage: decisions batch [-h] [--root ROOT] [--since SINCE] [--answered]\n                       [--source SOURCE] [--date DATE]\n',
     'decisions find': 'usage: decisions find [-h] [--root ROOT] [--path PATH] [--topic TOPIC] [--all]\n                      [TERM ...]\n',
     'findings': 'usage: findings [-h] {new,move} ...\n',
-    'findings new': 'usage: findings new [-h] --source SOURCE --severity SEVERITY --owner-kind\n                    OWNER_KIND --by BY --class CLASS_ [--plan PLAN]\n                    [--task TASK] [--number NUMBER] [--parent PARENT]\n                    [--root ROOT] [--cite CITE]\n',
+    'findings new': 'usage: findings new [-h] --source SOURCE --severity SEVERITY --owner-kind\n                    OWNER_KIND --by BY --class CLASS_ [--plan PLAN]\n                    [--task TASK] [--number NUMBER] [--parent PARENT]\n                    [--root ROOT] [--review-round REVIEW_ROUND]\n                    [--caused-by-change CAUSED_BY_CHANGE]\n                    [--dimension DIMENSION] [--cite CITE]\n',
     'findings move': 'usage: findings move [-h] --to TO --by BY [--ruling RULING]\n                     [--pin-test PIN_TEST] [--pin-transcript PIN_TRANSCRIPT]\n                     [--resolved-by RESOLVED_BY] [--root ROOT]\n                     [--evidence EVIDENCE]\n                     id\n',
 }
 USAGE_200 = {
@@ -73,7 +73,7 @@ USAGE_200 = {
     'decisions batch': 'usage: decisions batch [-h] [--root ROOT] [--since SINCE] [--answered] [--source SOURCE] [--date DATE]\n',
     'decisions find': 'usage: decisions find [-h] [--root ROOT] [--path PATH] [--topic TOPIC] [--all] [TERM ...]\n',
     'findings': 'usage: findings [-h] {new,move} ...\n',
-    'findings new': 'usage: findings new [-h] --source SOURCE --severity SEVERITY --owner-kind OWNER_KIND --by BY --class CLASS_ [--plan PLAN] [--task TASK] [--number NUMBER] [--parent PARENT] [--root ROOT]\n                    [--cite CITE]\n',
+    'findings new': 'usage: findings new [-h] --source SOURCE --severity SEVERITY --owner-kind OWNER_KIND --by BY --class CLASS_ [--plan PLAN] [--task TASK] [--number NUMBER] [--parent PARENT] [--root ROOT]\n                    [--review-round REVIEW_ROUND] [--caused-by-change CAUSED_BY_CHANGE] [--dimension DIMENSION] [--cite CITE]\n',
     'findings move': 'usage: findings move [-h] --to TO --by BY [--ruling RULING] [--pin-test PIN_TEST] [--pin-transcript PIN_TRANSCRIPT] [--resolved-by RESOLVED_BY] [--root ROOT] [--evidence EVIDENCE] id\n',
 }
 USAGE_20 = {
@@ -90,7 +90,7 @@ USAGE_20 = {
     'decisions batch': 'usage: decisions batch\n       [-h]\n       [--root ROOT]\n       [--since SINCE]\n       [--answered]\n       [--source SOURCE]\n       [--date DATE]\n',
     'decisions find': 'usage: decisions find\n       [-h]\n       [--root ROOT]\n       [--path PATH]\n       [--topic TOPIC]\n       [--all]\n       [TERM ...]\n',
     'findings': 'usage: findings\n       [-h]\n       {new,move}\n       ...\n',
-    'findings new': 'usage: findings new\n       [-h]\n       --source\n       SOURCE\n       --severity\n       SEVERITY\n       --owner-kind\n       OWNER_KIND\n       --by BY\n       --class\n       CLASS_\n       [--plan PLAN]\n       [--task TASK]\n       [--number NUMBER]\n       [--parent PARENT]\n       [--root ROOT]\n       [--cite CITE]\n',
+    'findings new': 'usage: findings new\n       [-h]\n       --source\n       SOURCE\n       --severity\n       SEVERITY\n       --owner-kind\n       OWNER_KIND\n       --by BY\n       --class\n       CLASS_\n       [--plan PLAN]\n       [--task TASK]\n       [--number NUMBER]\n       [--parent PARENT]\n       [--root ROOT]\n       [--review-round REVIEW_ROUND]\n       [--caused-by-change CAUSED_BY_CHANGE]\n       [--dimension DIMENSION]\n       [--cite CITE]\n',
     'findings move': 'usage: findings move\n       [-h] --to\n       TO --by BY\n       [--ruling RULING]\n       [--pin-test PIN_TEST]\n       [--pin-transcript PIN_TRANSCRIPT]\n       [--resolved-by RESOLVED_BY]\n       [--root ROOT]\n       [--evidence EVIDENCE]\n       id\n',
 }
 # Widths at which a boundary of 3.9.6's wrapping decides (found by sweeping COLUMNS 8..130 over the 14 parsers;
@@ -105,7 +105,7 @@ EDGE_USAGE = {
     (22, 'findings'): 'usage: findings [-h]\n                {new,move}\n                ...\n',
     (30, 'decisions find'): 'usage: decisions find [-h]\n                      [--root ROOT]\n                      [--path PATH]\n                      [--topic TOPIC]\n                      [--all]\n                      [TERM ...]\n',
     (18, 'findings move'): 'usage: findings move\n       [-h] --to\n       TO --by\n       BY\n       [--ruling RULING]\n       [--pin-test PIN_TEST]\n       [--pin-transcript PIN_TRANSCRIPT]\n       [--resolved-by RESOLVED_BY]\n       [--root ROOT]\n       [--evidence EVIDENCE]\n       id\n',
-    (22, 'findings new'): 'usage: findings new\n       [-h] --source\n       SOURCE\n       --severity\n       SEVERITY\n       --owner-kind\n       OWNER_KIND\n       --by BY\n       --class\n       CLASS_\n       [--plan PLAN]\n       [--task TASK]\n       [--number NUMBER]\n       [--parent PARENT]\n       [--root ROOT]\n       [--cite CITE]\n',
+    (22, 'findings new'): 'usage: findings new\n       [-h] --source\n       SOURCE\n       --severity\n       SEVERITY\n       --owner-kind\n       OWNER_KIND\n       --by BY\n       --class\n       CLASS_\n       [--plan PLAN]\n       [--task TASK]\n       [--number NUMBER]\n       [--parent PARENT]\n       [--root ROOT]\n       [--review-round REVIEW_ROUND]\n       [--caused-by-change CAUSED_BY_CHANGE]\n       [--dimension DIMENSION]\n       [--cite CITE]\n',
     (27, 'decisions ask'): 'usage: decisions ask\n       [-h] [--root ROOT]\n       --class CLS\n       --question\n       QUESTION --option\n       OPTION\n       [--topic TOPIC]\n       [--applies-to APPLIES_TO]\n       --effect EFFECT\n       [--supersedes SUPERSEDES]\n       --by BY\n       [--plan PLAN]\n       [--program PROGRAM]\n       [--stream STREAM]\n',
     (27, 'decisions withdraw'): 'usage: decisions withdraw\n       [-h] [--root ROOT]\n       --reason REASON\n       ID\n',
     (34, 'check schema'): 'usage: schema [-h] [--root ROOT]\n',
@@ -878,8 +878,8 @@ class Captured(GateError):
     pass
 
 
-TESTED_VALUE_OPTIONS = 55  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register/run_all 2 each,
-# ask 12, decide 4, withdraw 2, batch 4, find 3, findings 0, findings new 11, findings move 8
+TESTED_VALUE_OPTIONS = 58  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register/run_all 2 each,
+# ask 12, decide 4, withdraw 2, batch 4, find 3, findings 0, findings new 14, findings move 8
 
 
 def production_parsers():
