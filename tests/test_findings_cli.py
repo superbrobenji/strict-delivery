@@ -998,5 +998,158 @@ class TestDuplicateReferents(Base):
                 self.assertEqual(self.refused(*self.closing(F, s7, e)), "findings move: %s\n" % want)
 
 
+# ================================================================ L: --review-round, --caused-by-change, --dimension
+# Rows RR*, CC*, D*, X* of task-findings-fields-domain.md.
+
+class TestNewLoopFields(Base):
+    BASE_KEYS = {"schema", "id", "status", "source", "severity", "class", "siblings", "cites", "repro", "owner", "pin",
+                 "ruling", "evidence", "history"}
+
+    def keys(self, row, *extra):
+        """The record holds exactly the base keys and ``extra``: a mutant writing one more key fails (row X2)."""
+        self.assertEqual(set(row), self.BASE_KEYS | set(extra))
+
+    def usage(self, *flag_args):
+        """The call exits 2 with the usage on stderr, nothing on stdout, no file changed."""
+        err = self.refused("new", *(self.new_args() + list(flag_args)), code=2)
+        self.assertIn("usage: findings new", err)
+        return err
+
+    def made(self, *flag_args):
+        return self.rec(self.new_raw(*(self.new_args() + list(flag_args))))
+
+    def test_rr1_absent(self):
+        row = self.made()
+        self.keys(row)
+
+    def test_rr2_accepted(self):
+        for text, want in (("1", 1), ("7", 7), ("99", 99), ("100", 100)):
+            with self.subTest(text=text):
+                row = self.made("--review-round", text)
+                self.keys(row, "review_round")
+                self.assertIs(type(row["review_round"]), int)
+                self.assertEqual(row["review_round"], want)
+
+    def test_rr4_refused(self):
+        bad = ["0", "00", "01", "007", "+1", "-1", " 1", "1 ", "1\n", "1\t", "", "1.0", "1e2", "0x1", "1_0", "abc",
+               "١", "１", "1١"]
+        for text in bad:
+            with self.subTest(text=text):
+                self.usage("--review-round", text)
+
+    def test_rr11_twice(self):
+        self.usage("--review-round", "1", "--review-round", "2")
+
+    def test_rr12_equals_form(self):
+        self.assertEqual(self.made("--review-round=3")["review_round"], 3)
+
+    def test_rr13_missing_value(self):
+        self.refused("new", *(self.new_args() + ["--review-round"]), code=2)
+
+    def test_rr14_digits_over_1000(self):
+        # PC1: 4300 and 4301 digits (int() limit on 3.11+ only), and 1001 digits: all exit 2, no int() runs
+        for n in (1001, 4300, 4301):
+            with self.subTest(digits=n):
+                self.usage("--review-round", "1" + "0" * (n - 1))
+
+    def test_rr16_digits_1000(self):
+        text = "1" + "0" * 999
+        self.assertEqual(self.made("--review-round", text)["review_round"], int(text))
+
+    def test_cc1_absent(self):
+        self.keys(self.made("--review-round", "1"), "review_round")
+
+    def test_cc2_yes_no(self):
+        for text, want in (("yes", True), ("no", False)):
+            with self.subTest(text=text):
+                row = self.made("--caused-by-change", text)
+                self.keys(row, "caused_by_change")
+                self.assertIs(row["caused_by_change"], want)
+
+    def test_cc4_refused(self):
+        for text in ("Yes", "YES", "No", "NO", "true", "false", "1", "0", "y", "n", "on", "off", "", " yes", "yes ",
+                     "yes\n", "ｙes"):
+            with self.subTest(text=text):
+                self.usage("--caused-by-change", text)
+
+    def test_cc7_twice(self):
+        self.usage("--caused-by-change", "yes", "--caused-by-change", "no")
+
+    def test_cc8_missing_value(self):
+        self.refused("new", *(self.new_args() + ["--caused-by-change"]), code=2)
+
+    def test_d1_absent(self):
+        self.keys(self.made("--caused-by-change", "yes"), "caused_by_change")
+
+    def test_d2_accepted(self):
+        for text in ("interface-contract", "a b"):
+            with self.subTest(text=text):
+                row = self.made("--dimension", text)
+                self.keys(row, "dimension")
+                self.assertEqual(row["dimension"], text)
+
+    def test_d3_yaml_hostile(self):
+        for text in ("true", "null", "123", "a: b", "# c", '"q"', "- x", "~"):
+            with self.subTest(text=text):
+                self.assertEqual(self.made("--dimension", text)["dimension"], text)
+
+    def test_d4_refused(self):
+        for text, want in (("", "--dimension: must not be empty\n"),
+                           (" a", "--dimension: must not start or end with a space\n"),
+                           ("a ", "--dimension: must not start or end with a space\n"),
+                           ("a\tb", "--dimension: U+0009 is not allowed %s\n" % TEXT_ONLY),
+                           ("a\nb", "--dimension: U+000A is not allowed %s\n" % TEXT_ONLY),
+                           ("a\x7fb", "--dimension: U+007F is not allowed %s\n" % TEXT_ONLY),
+                           ("a\x80b", "--dimension: U+0080 is not allowed %s\n" % TEXT_ONLY),
+                           ("café", "--dimension: U+00E9 is not allowed %s\n" % TEXT_ONLY)):
+            with self.subTest(text=text):
+                err = self.refused("new", *(self.new_args() + ["--dimension", text]))
+                self.assertEqual(err, "findings new: " + want)
+
+    def test_d8_unicode_version_difference(self):
+        # U+1FAE8 is assigned in Unicode 15 (3.13) and unassigned in Unicode 13 (3.9); U+0378 is unassigned in both.
+        # The refusal is by range, so the message is the same text on both interpreters.
+        for cp in (0x1FAE8, 0x378):
+            with self.subTest(cp=hex(cp)):
+                err = self.refused("new", *(self.new_args() + ["--dimension", "x" + chr(cp)]))
+                self.assertEqual(err, "findings new: --dimension: U+%04X is not allowed %s\n" % (cp, TEXT_ONLY))
+
+    def test_d9_twice(self):
+        self.usage("--dimension", "a", "--dimension", "b")
+
+    def test_d10_missing_value(self):
+        self.refused("new", *(self.new_args() + ["--dimension"]), code=2)
+
+    def test_x3_usage_before_content(self):
+        self.usage("--review-round", "0", "--dimension", "")
+
+    def test_x4_abbrev(self):
+        row = self.made("--review=2", "--caused-by=yes", "--dim", "d")
+        self.keys(row, "review_round", "caused_by_change", "dimension")
+        self.assertEqual((row["review_round"], row["caused_by_change"], row["dimension"]), (2, True, "d"))
+
+    def test_x4_r_ambiguous(self):
+        # F1: --review-round makes --r (once the unique prefix of --root) ambiguous: refused, exit 2
+        err = self.refused("new", *self.new_args(), "--r", self.root, code=2)
+        self.assertIn("ambiguous option: --r could match --root, --review-round", err)
+
+    def test_x1_round_trip(self):
+        from gates import loopstats as loopstats_cli
+        from gates.lib import loopstats as loopstats_lib
+        rid = self.new_raw(*(self.new_args() + ["--review-round", "1", "--caused-by-change", "yes",
+                                                "--dimension", "interface"]))
+        rows = Store(self.root, "finding", self.cfg()).load()
+        self.assertEqual([r.id for r in rows], [rid])
+        row = rows[0].row
+        self.assertEqual((row["review_round"], row["caused_by_change"], row["dimension"]), (1, True, "interface"))
+        self.assertEqual(findings.validate(row, self.cfg()), [])
+        rep = loopstats_lib.report(rows, "p", "1d.2", 1, [], self.cfg())
+        self.assertEqual((rep["X"], rep["W"]), ([1], [4]))
+        code, out, err = self.run_main(loopstats_cli.main, ["--plan", "p", "--task", "1d.2", "--rounds", "1",
+                                                            "--root", self.root, "--json"])
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn('"X": [1]', out)
+
+
 if __name__ == "__main__":
     unittest.main()
