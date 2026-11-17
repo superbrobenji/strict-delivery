@@ -518,20 +518,40 @@ class MakefileNameTests(Base):
         self.assertEqual(res, Detection((), (Problem("package.json", "Permission denied"),
                                              Problem("GNUmakefile", "Permission denied"))))
 
-    def test_makefile_vanishing_after_probe(self):  # N6: present at the probe, gone at the read
+    def vanish_after_probe(self, case_sensitive: bool) -> Detection:
+        """detect() with the Makefile present at its probe and gone at the next lstat of a Makefile name.
+        The trigger is "a probe found the file" (never a call count), so it holds on either kind of filesystem:
+        case_sensitive answers a probe of a differently cased name as ext4 does (absent); otherwise it answers
+        such a probe as found, as APFS does (the lookup is redirected to the real file)."""
         self.write("Makefile", "test:\n")
         real_lstat = os.lstat
-        calls = []
+        found = []
 
         def vanish(path, *a, **k):
-            if os.path.basename(path).lower() == "makefile":
-                calls.append(path)
-                if len(calls) > 1:
+            base = os.path.basename(path)
+            if base.lower() == "makefile":
+                if found:
                     raise FileNotFoundError(2, "No such file or directory")
+                if base != "Makefile":
+                    if case_sensitive:
+                        raise FileNotFoundError(2, "No such file or directory")
+                    path = os.path.join(os.path.dirname(path), "Makefile")
+                st = real_lstat(path, *a, **k)
+                found.append(path)
+                return st
             return real_lstat(path, *a, **k)
         with mock.patch("os.lstat", vanish):
             res = detect(self.tmp)
-        self.assertEqual(res, Detection((), (Problem("Makefile", "No such file or directory"),)))
+        self.assertEqual(len(found), 1)  # the probe found it: the vanish was reached, not skipped
+        return res
+
+    def test_makefile_vanishing_after_probe_case_sensitive_fs(self):  # N6 L1: ext4
+        self.assertEqual(self.vanish_after_probe(True),
+                         Detection((), (Problem("Makefile", "No such file or directory"),)))
+
+    def test_makefile_vanishing_after_probe_case_insensitive_fs(self):  # N6 L2: APFS
+        self.assertEqual(self.vanish_after_probe(False),
+                         Detection((), (Problem("Makefile", "No such file or directory"),)))
 
 
 class MakefileRuleTests(Base):
