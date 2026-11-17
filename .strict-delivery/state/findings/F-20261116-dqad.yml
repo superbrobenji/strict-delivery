@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261116-dqad
+status: open
+source: "F-FV3-2: .superpowers/sdd/2026-10-31-strict-delivery-framework/g0/final-verifier-3.md:53 (and :34)"
+severity: LOW
+class: "mutation survival: conditions of the self-named check that no test pins: {the e.name == name conjunct removed}"
+siblings: []
+cites:
+  - file: gates/run_all.py
+    lines: "52"
+    sha: 41cff11
+  - file: tests/test_run_all.py
+    lines: 307-337
+    sha: 41cff11
+repro: "Mutant v3-a: in gates/run_all.py:52 replace 'if e.name == name and _absent(name):' by 'if _absent(name):'; python3 and python3.13 both pass tests.test_run_all (survives). A finder raising a ModuleNotFoundError with another name on the first lookup, then None (source p2.py) gives 'import of ... raised ModuleNotFoundError' on the branch and 'fv3_otherdep_gate.py missing' under the mutant (source final-verifier-3.md:53-56; not run for this row)."
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2b.1
+pin: null
+ruling: null
+evidence: []
+review_round: 9
+caused_by_change: true
+dimension: "mutation survival"
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

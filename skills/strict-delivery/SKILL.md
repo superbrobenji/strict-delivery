@@ -26,7 +26,7 @@ Where superpowers says otherwise (for example "do not re-run the suite" for revi
 
 The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: `program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, `task_reviewer`, `final_reviewer`, `final_verifier`, `exception_reviewer`, `audit_reviewer`, `audit_verifier`, `investigator`, `plan_writer`, `plan_reviewer` and `drafter`.
 
-Every dispatch carries its role's prompt block byte for byte and names a tier, never a model; config `models.tiers` maps each tier to a model.
+Every dispatch carries its role's prompt block byte for byte and chooses a tier; its `## Model` names the model config `models.tiers` maps that tier to, and every other line of a brief or report names tiers, never a model.
 
 The dispatch call passes that model explicitly; a dispatch never inherits its dispatcher's model.
 
@@ -72,6 +72,8 @@ The input-domain method, stated in full in `playbook/review.md` section "Input d
 
 Every input-domain table carries rows for the known version differences of the project's own stack and runtime, each run on every runtime the project supports.
 
+Every input-domain table enumerates the full input class or restricts the input, so the code refuses what lies outside the enumerated class, and never samples an open grammar.
+
 ## Change kinds
 
 Each kind of change has its superpowers skill: a new rule, feature or format with no settled design goes through superpowers:brainstorming to an owner-approved design and then a spec edit; a plan change goes through superpowers:writing-plans against the spec; execution goes through superpowers:subagent-driven-development or superpowers:executing-plans under the strict prompt blocks.
@@ -106,6 +108,8 @@ A continued worker never dispatches, so its dispatcher runs the check before the
 ## Continuation
 
 Continuation is automatic: an agent that reaches a checkpoint, 80 % of its token or time budget, or a usage-limit stop writes its handoff and returns, and its dispatcher at once dispatches a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page.
+
+Before it writes that handoff, a controller dispatches nothing new and waits, inside its turn, for the handback of every child still running; a child that a usage-limit stop cuts off before its handback is listed in the handoff's `live_subagents`.
 
 Nothing continues from inherited memory, and the owner never clears the session and re-prompts.
 

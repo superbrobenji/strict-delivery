@@ -22,7 +22,7 @@ Each framework role has a prompt block, a minimum tier, a budget cap, whether it
 
 ## Model tiers
 
-A role runs at its minimum tier or above, and a dispatch names a tier, never a model: config `models.tiers` maps each tier to the model the project uses. The top tier, `tier4`, is allowed only for the roles in `top_tier_roles`, by default `final_verifier` and `exception_reviewer`. `tier4` has no default model; while it is unset, the `top_tier_roles` run at the tier `top_tier_fallback` names, default `tier3`. A small re-review that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, "Small re-review").
+A role runs at its minimum tier or above. A dispatch chooses a tier, and config `models.tiers` maps each tier to the model the project uses: the dispatch's `## Model` names that model, and every other line of a brief or report names tiers, never a model. The top tier, `tier4`, is allowed only for the roles in `top_tier_roles`, by default `final_verifier` and `exception_reviewer`. `tier4` has no default model; while it is unset, the `top_tier_roles` run at the tier `top_tier_fallback` names, default `tier3`. A small re-review that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, "Small re-review").
 
 ## Budget cap
 
