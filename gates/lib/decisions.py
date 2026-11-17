@@ -13,6 +13,7 @@ import stat
 from typing import List, Optional
 
 from gates.lib import gitinfo, migrations, print_table, schema
+from gates.lib.fold_table import FOLD
 from gates.lib.result import GateError, _raw
 
 CLASS_GRANT = "merge-grant"
@@ -333,15 +334,23 @@ def in_force(records: list) -> list:
     return out
 
 
+def _fold(s: str) -> str:
+    """``s`` case folded through the frozen Unicode 13.0.0 table, as ``str.casefold`` does on 3.9.6 (spec 14, owner
+    decision U1 (a)). The characters decide, never a ``str`` subclass's own methods; anything else is a TypeError."""
+    if not issubclass(type(s), str):
+        raise TypeError("_fold() argument must be str, not %s" % type(s).__name__)
+    return "".join(FOLD.get(ord(c), c) for c in str.__iter__(s))
+
+
 def _texts(row: dict) -> list:
     topics = row.get("topics")
     parts = [row.get("question"), row.get("answer")] + (topics if type(topics) is list else [])
-    return [p.casefold() for p in parts if type(p) is str]
+    return [_fold(p) for p in parts if type(p) is str]
 
 
 def _matches(row: dict, terms: list, path: Optional[str], topic: Optional[str]) -> bool:
     texts = _texts(row)
-    if not all(any(t.casefold() in x for x in texts) for t in terms):
+    if not all(any(_fold(t) in x for x in texts) for t in terms):
         return False
     if path is not None:
         globs = row.get("applies_to")
@@ -354,7 +363,7 @@ def _matches(row: dict, terms: list, path: Optional[str], topic: Optional[str]) 
             return False
     if topic is not None:
         topics = row.get("topics")
-        if type(topics) is not list or not any(type(x) is str and x.casefold() == topic.casefold() for x in topics):
+        if type(topics) is not list or not any(type(x) is str and _fold(x) == _fold(topic) for x in topics):
             return False
     return True
 
