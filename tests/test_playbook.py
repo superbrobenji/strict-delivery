@@ -1613,7 +1613,7 @@ class PlaybookFilesTest(unittest.TestCase):
 
     def test_finding_records_for_loopstats_and_plan_3d1_alignment(self):   # program controller input; design 5.4
         rec = ("After each review, before `loopstats` runs, a finding record (schema `finding`) is written for each "
-               "finding of that review, with its `review_round`, `caused_by_change` and `dimension`, under config "
+               "finding of that review, with `python3 -m gates findings new --review-round <k> --caused-by-change yes|no --dimension <dimension>` (plus its required flags), under config "
                "`paths.findings` on the task's branch, by the controller; within a program the program "
                "controller mints the ids, and in a plain plan the controller mints its own. The records stay on "
                "that branch while its pull request is open and merge with it, and `loopstats` counts only findings "
@@ -3431,7 +3431,7 @@ FIX2_PINS = [
      "**Block R1 end:** final review, PR to `main` (`MERGED ... stream=residual block=R1`", 1),
     ("R2-6", PLAN_DOC, R3_END_NEW, "the block rides PR-hooks, breakdown revision 7;", 1),
     ("R2-6", PLAN_DOC, R4_END_NEW, "the block rides PR-config, breakdown revision 7;", 1),
-    ("R2-7", README_DOC, "Merged pull requests: #1-#23.", "(#17, `run_all`, is open)", 1),
+    ("R2-7", README_DOC, "Merged pull requests: #1-#24.", "(#17, `run_all`, is open)", 1),
 ]
 SUB_BLOCK_PR = {"3a": "PR-runtime", "3d": "PR-package", "5a": "PR-5a", "5b": "PR-5b", "5c": "PR-5c", "6E": "PR-6E",
                 "6K": "PR-6K", "R3": "PR-R3", "R4": "PR-R4", "4e": "PR-config", "4c": "PR-4c",

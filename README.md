@@ -88,8 +88,9 @@ planned owner step.
 - The plan and the stream breakdown re-based on the owner's answers of 2026-11-10 and 2026-11-14 (revision 6, #16), and the findings register kept current (#18, #20)
 - This overview itself (#14)
 - `run_all`, every enabled gate in one command (#17), `loopstats`, the fix-loop stopping math (#22), and the git hooks tool `gates/tools/githooks.py` with the CI workflow (#23)
+- `findings new` loop fields: `--review-round`, `--caused-by-change` and `--dimension` write the finding fields `loopstats` counts (#24)
 
-Merged pull requests: #1-#23.
+Merged pull requests: #1-#24.
 
 ## Roadmap to v0.1
 

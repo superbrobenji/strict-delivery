@@ -969,6 +969,30 @@ Block 1c started from `block/b1c` at `f39e418` (owner answer (a), 2026-11-02; st
 - [ ] **Step 4: Run the test command on both interpreters and every enabled gate; run `python3 -m gates index`; expect PASS and a clean tree.**
 - [ ] **Step 5: Commit** `feat(tools): findings new and move`, then checkpoint.
 
+### Task 1d.2b: `findings new` loop fields (owner-approved 2026-11-17; merged #24, 34d0dad) — COMPLETE
+
+Complete: an owner-approved task added on 2026-11-17, outside the original plan; merged into `main` as PR #24 (`34d0dad`, 2026-11-17 20:49; branch `block/findings-fields`; breakdown revision 7, off the critical path, no figure moves). It follows Task 1d.2 and gives the controller a way to write the three optional finding fields of Task 1b.3's fix round (Owner answer Q-ES) that `loopstats` (Task 6E.3) counts. Code: `gates/tools/findings_cli.py`. Tests: `tests/test_findings_cli.py` (class `TestNewLoopFields`), `tests/test_argparse_text.py` (the usage text of `findings new`, widths 20, 40, 80, 200, and `TESTED_VALUE_OPTIONS` 55 -> 58). The text below is the task as built; do not change this code in later tasks, a defect found in it is an unrelated finding for the owner.
+
+**Produced:** `findings new` gains three optional flags, each repeatable zero times (a second use is a usage error):
+- `--review-round N`: `N` is 1 to 1000 ASCII digits with no leading zero (matched by a regular expression before `int()` runs); stored as an `int` under `review_round`.
+- `--caused-by-change yes|no`: stored as `true` or `false` under `caused_by_change`; any other text is refused.
+- `--dimension D`: stored as text under `dimension`; the text rules of the other free-text flags apply (not empty, no leading or trailing space, printable ASCII only).
+A bad `--review-round` or `--caused-by-change` is a usage error on the `findings new` parser: usage text on stderr, exit 2, nothing written. A bad `--dimension` is refused with exit 1 and the named flag, as the other text flags are. A record written without the flags holds no new key. Abbreviations are the parser's: `--review`, `--caused-by` and `--dim` work, and `--r` is now ambiguous between `--root` and `--review-round` (exit 2).
+
+**Input-domain table** (copied from the tests that merged with #24; no new tests):
+| dimension | members | expected | test |
+|---|---|---|---|
+| `--review-round` value | absent; `1`, `7`, `99`, `100`; `0`, `00`, `01`, `+1`, `-1`, spaces, newline, tab, empty, `1.0`, `1e2`, `0x1`, `1_0`, `abc`, Arabic-Indic and full-width digits; 1000 digits; 1001, 4300, 4301 digits | absent: no key; accepted: `int` stored; refused: exit 2, usage; 1000 digits stored; over 1000 refused with no `int()` run | `test_rr1_absent`, `test_rr2_accepted`, `test_rr4_refused`, `test_rr16_digits_1000`, `test_rr14_digits_over_1000` |
+| `--review-round` form | repeated; `--review-round=3`; no value | exit 2; accepted; exit 2 | `test_rr11_twice`, `test_rr12_equals_form`, `test_rr13_missing_value` |
+| `--caused-by-change` value | absent; `yes`, `no`; `Yes`, `YES`, `true`, `1`, `y`, `on`, empty, padded, full-width | no key; `true` / `false` (a `bool`); refused with exit 2 | `test_cc1_absent`, `test_cc2_yes_no`, `test_cc4_refused` |
+| `--caused-by-change` form | repeated; no value | exit 2 | `test_cc7_twice`, `test_cc8_missing_value` |
+| `--dimension` value | absent; `interface-contract`, `a b`; YAML-hostile text (`true`, `null`, `123`, `a: b`, `# c`, `- x`, `~`); empty, padded, tab, newline, DEL, U+0080, `café`; U+1FAE8 (assigned in Unicode 15, unassigned in 13) and U+0378 | no key; stored as typed; refused, exit 1, the same text on 3.9 and 3.13 | `test_d1_absent`, `test_d2_accepted`, `test_d3_yaml_hostile`, `test_d4_refused`, `test_d8_unicode_version_difference` |
+| `--dimension` form | repeated; no value | exit 2 | `test_d9_twice`, `test_d10_missing_value` |
+| interplay | usage error and content error together; abbreviations; `--r` | usage first; `--review`, `--caused-by`, `--dim` accepted; `--r` ambiguous, exit 2 | `test_x3_usage_before_content`, `test_x4_abbrev`, `test_x4_r_ambiguous` |
+| round trip | all three flags, then `loopstats` | record valid; `loopstats` counts it (X = [1], W = [4]) | `test_x1_round_trip` |
+| usage text | `findings new` at widths 20, 40, 80, 200 | the three flags listed, identical on 3.9 and 3.13 | `tests/test_argparse_text.py` |
+| PC1 skeleton rows (4300 and 4301 digits, Unicode version, `BaseExceptionGroup`) | as above | the digit rows and the Unicode row are in `test_rr14_digits_over_1000` and `test_d8_unicode_version_difference`; `BaseExceptionGroup` is not reached by this change | the two tests named |
+
 ### Task 1d.3: `decisions batch`: the printed owner batch (session-resume design §3.6-§3.8)
 
 After Task 1d.1 (SERIAL: same module). Order rule O3 is unchanged: this task adds no `COMMANDS` key (`decisions` is 1d.1's).

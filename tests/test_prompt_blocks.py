@@ -2078,7 +2078,7 @@ CONTINUATION = (   # controller "Continuation." (session-resume design 3.9; proc
     "Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then the binding "
     "Rules N and T verdict: compute it after each review (by hand until `loopstats` exists) and ledger it as the "
     "`Loopstats:` line. Before `loopstats` runs, have each finding of that review recorded as a finding record "
-    "(schema `finding`, with `review_round`, `caused_by_change` and `dimension`) under `paths.findings` on the "
+    "(schema `finding`), each with `python3 -m gates findings new --review-round <k> --caused-by-change yes|no --dimension <dimension>` (plus its required flags), under `paths.findings` on the "
     "task's branch: you write them; within a program the program controller mints the ids, and in a plain plan you "
     "mint your own. The records stay on that branch while its pull request is open and merge with it. "
     "STOP_NARROW stops the loop, and its open findings are narrowed in one last round or "
