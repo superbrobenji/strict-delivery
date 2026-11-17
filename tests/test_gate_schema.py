@@ -587,7 +587,7 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                         "gates: cites, claims, decisions, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, index\n")
+                         "gates: cites, claims, decisions, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, index, run_all\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)
