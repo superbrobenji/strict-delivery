@@ -21,7 +21,7 @@ DESCRIPTION = ("Use at the start of every session, after a compaction, and befor
 HEADINGS = ["When it applies", "Precedence", "Roles and tiers", "Decision classes", "Owner questions",
             "Verification method", "Change kinds", "Pipeline and gates", "Session resume", "Continuation",
             "Document locations", "Judgment, not gated"]
-OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close", "finding-class",
+OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
               "rule-override", "program-create", "stream-ownership", "stream-merge", "request-dispute", "program-close"]
 PRECEDENCE_KEYS = ["CLAUDE.md", "skill and prompt blocks", "project playbook", "base playbook", "superpowers"]  # spec 3
 CLASS_LINE = "Default owner-only classes: "
@@ -436,7 +436,7 @@ TEXT_MUTANTS = (   # (row, old, new, check that refuses it); each applied once t
     ("RT2", "names tiers, never a model", "names tiers, never a model such as sonnet", "forbidden"),     # U-2 (B4)
     ("U-2", "; its `## Model` names the model config `models.tiers` maps that tier to,", "", "pins"),      # the `## Model` clause
     ("U-2", "chooses a tier;", "names a tier;", "directives"),
-    ("DC1", "`finding-class`, ", "", "classes"),
+    ("DC1", "`issue-close`, ", "", "classes"),
     ("DC1", "config `decision_classes.owner_only`", "config `decision_classes`", "classes"),
     ("DC1b", "`program-close`.", "`program-close`, `profile-override`.", "classes"),
     ("DC1b", "`triage`, `spec-direction`", "`spec-direction`, `triage`", "classes"),

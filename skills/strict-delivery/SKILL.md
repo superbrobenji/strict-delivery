@@ -38,7 +38,7 @@ A question in an owner-only class is always the owner's: the agent that needs it
 
 The classes are config `decision_classes.owner_only`; a project may add its own classes and never drops a default one.
 
-Default owner-only classes: `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute`, `program-close`.
+Default owner-only classes: `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute`, `program-close`.
 
 `playbook/decisions.md` says what the owner decides in each class.
 
@@ -107,7 +107,7 @@ A session or agent that starts with no memory of the work (a compaction, a new s
 3. Dispatch one read-only `investigator` with the fixed questions of `playbook/sessions.md` (Q1-Q9; a program session G1-G4); it changes nothing.
 4. Write the ledger line `Resume check: head=<sha>; differences: <none or Q-ids>; report <path>.`
 5. Report where things stand and what comes next, with the findings, before any edit or dispatch other than the investigator's.
-6. With no difference, take over at once; with any difference, stop and wait for the owner (an agent: status NEEDS_DECISION naming each difference).
+6. With no difference, take over at once; with any difference, stop only the work the difference affects and wait for the owner on it, and take over the rest at once (an agent: status NEEDS_DECISION naming each difference).
 
 This is skill text; no hook holds the session.
 

@@ -1753,7 +1753,7 @@ EXACT_PARAGRAPHS = {
 SINGLE_SENTENCES = {
     "controller": [
         ("Owner-only decisions.",
-         "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
+         "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
         ("Merge and checkpoint.",
          "The base branch (`base_branch`, default `main`) is protected: you never merge into it locally and never push to it; it changes only by merging an approved PR."),
         ("Merge and checkpoint.",
@@ -1767,25 +1767,25 @@ SINGLE_SENTENCES = {
     ],
     "implementer": [
         ("Owner-only decisions.",
-         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "implementer_transcription": [
         ("Owner-only decisions.",
-         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "investigator": [
         ("Owner-only decisions.",
-         "If the question needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the question needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "task_reviewer": [
         ("Owner-only decisions.",
-         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
@@ -1793,7 +1793,7 @@ SINGLE_SENTENCES = {
     ],
     "final_reviewer": [
         ("Owner-only decisions.",
-         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
@@ -1803,7 +1803,7 @@ SINGLE_SENTENCES = {
         ("Adversarial scope.",
          "You run at the top tier, which only the roles in `top_tier_roles` use (by default the final verifier and the exception reviewer): `tier4`, or the configured `top_tier_fallback` when the project sets no `tier4`."),
         ("Owner-only decisions.",
-         "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; the attempts to break the branch (attempt, command, output excerpt, held or broke); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
@@ -1813,13 +1813,13 @@ SINGLE_SENTENCES = {
         ("Exception scope.",
          "You run at the top tier, which only the roles in `top_tier_roles` use (by default the final verifier and the exception reviewer): `tier4`, or the configured `top_tier_fallback` when the project sets no `tier4`."),
         ("Owner-only decisions.",
-         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "audit_reviewer": [
         ("Owner-only decisions.",
-         "If the audit needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the audit needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
         ("Coverage first.",
@@ -1831,7 +1831,7 @@ SINGLE_SENTENCES = {
     ],
     "audit_verifier": [
         ("Owner-only decisions.",
-         "If the verification needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the verification needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
@@ -1840,7 +1840,7 @@ SINGLE_SENTENCES = {
 
 EXACT_LABELS = frozenset(("Dispatch discipline.", "Zero bugs.", "Verdict.", "No out-of-scope bucket.", "No subagents."))
 OWNER_CLASSES = ("`triage`", "`spec-direction`", "`scope`", "`merge-grant`", "`model-policy`", "`issue-close`",
-                 "`finding-class`", "`rule-override`", "`program-create`", "`stream-ownership`", "`stream-merge`",
+                 "`rule-override`", "`program-create`", "`stream-ownership`", "`stream-merge`",
                  "`request-dispute`", "`program-close`")                    # gates/lib/config.py defaults, owner Q-U1 (a)
 PRECEDENCE = "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."
 TR = ("task_reviewer", "final_reviewer", "final_verifier")

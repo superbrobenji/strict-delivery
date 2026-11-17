@@ -36,7 +36,7 @@ DEFAULTS: dict = {
     "drift": {"estimate_factor_pct": 150},
     "decision_classes": {
         "owner_only": ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
-                       "finding-class", "rule-override", "program-create", "stream-ownership",
+                       "rule-override", "program-create", "stream-ownership",
                        "stream-merge", "request-dispute", "program-close"],
     },
 }

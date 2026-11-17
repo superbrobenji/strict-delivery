@@ -16,7 +16,7 @@ MISSING = ".strict-delivery/config.yml: missing; run /strict-delivery:init"
 
 # Written independently of config.DEFAULTS (from the brief), so the loader is compared with a second copy.
 OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
-              "finding-class", "rule-override", "program-create", "stream-ownership", "stream-merge",
+              "rule-override", "program-create", "stream-ownership", "stream-merge",
               "request-dispute", "program-close"]
 EXPECTED = {
     "schema": "config/1",

@@ -24,7 +24,7 @@ Decisions are the only home of lasting rules. A decision with `effect: lasting` 
 
 ## Owner-only classes
 
-A question in one of these classes is always the owner's, never a controller ruling: the agent that needs it writes the question with its options and their cost and stops. The one exception is a finding's class: a question about narrowing or widening a class is a controller ruling under the fix rule (`playbook/review.md`, "Fix loop"), logged as `Decision (controller): class -- action -- cost if wrong`, and the owner is asked only when the resolution changes shipped user-facing behaviour, the spec or scope (`spec-direction`, `scope`), or on ESCALATE with an open CRITICAL or HIGH finding. The default classes come from config `decision_classes.owner_only`; a project may add its own classes to that list, and the project's list is added to the defaults, so a project cannot drop a default class.
+A question in one of these classes is always the owner's, never a controller ruling: the agent that needs it writes the question with its options and their cost and stops. A finding's class is not an owner-only class (owner 2026-11-17, design 5.5): narrowing or widening a class is a controller ruling under the fix rule (`playbook/review.md`, "Fix loop"), logged as `Decision (controller): class -- action -- cost if wrong`, and the owner is asked only when the resolution changes shipped user-facing behaviour, the spec or scope (`spec-direction`, `scope`), or on ESCALATE with an open CRITICAL or HIGH finding. The default classes come from config `decision_classes.owner_only`; a project may add its own classes to that list, and the project's list is added to the defaults, so a project cannot drop a default class.
 
 | slug | the owner decides |
 |---|---|
@@ -34,7 +34,6 @@ A question in one of these classes is always the owner's, never a controller rul
 | merge-grant | merge grants |
 | model-policy | model and cost policy |
 | issue-close | closing an issue |
-| finding-class | narrowing or widening a finding's class |
 | rule-override | rule overrides |
 | program-create | a program, its streams, owned paths and interfaces |
 | stream-ownership | moving a path between streams or assigning an unowned path |
