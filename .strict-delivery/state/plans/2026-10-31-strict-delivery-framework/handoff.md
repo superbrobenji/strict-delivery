@@ -18,7 +18,7 @@ Resume strict-delivery as session controller from this handoff. Session-resume f
 2. Read every entry of "Required reads" in full, in order.
 3. Check each fact of "State to verify" against git, the worktrees and the files named; a read-only `investigator` agent may do it (design §3.1).
 4. Append one ledger line `RESUME head=<sha> reads=<n> diffs=<list or none>`.
-5. Report to the owner "where we are, what I will do next" with any differences. With no differences, carry on with "Next, in order". With any difference, stop and wait for the owner.
+5. Report to the owner "where we are, what I will do next" with any differences. With no differences, carry on with "Next, in order". With any difference, stop only the work the difference affects and raise it with the owner (process v2, design 5.6; MS:535); the rest carries on.
 
 ## Required reads
 - docs/strict-delivery/specs/2026-11-02-session-resume-and-questions-design.md (all; approved 2026-11-02; untracked in the main checkout): the design being planned, its Appendix S catch-up catalog and the owner's answers on it.
