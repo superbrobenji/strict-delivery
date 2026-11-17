@@ -53,8 +53,43 @@ def _run_all(args: List[str]) -> int:
     return run_all.main(args)
 
 
+def _hook(args: List[str]) -> int:
+    """Delegate to ``gates.hook.main(args)``, imported here (stream ``runtime``'s file). Fail closed with exit 2 and
+    one stderr line: ``hook.missing`` when ``gates/hook.py`` is absent, ``hook.import`` when it cannot be used (a hook
+    exit of 1 does not block). A ``BaseException`` that is not an ``Exception`` propagates."""
+    import importlib.util
+    try:
+        mod = importlib.import_module("gates.hook")
+    except ImportError as e:
+        if e.name == "gates.hook":
+            try:
+                absent = importlib.util.find_spec("gates.hook") is None
+            except Exception:
+                absent = False
+            if absent:
+                sys.stderr.write("FAIL hook.missing: gates.hook is not installed\n")
+                return 2
+        from gates.lib import result
+        shown = result.safe_text(e.name) if type(e.name) is str and e.name else result._type_name(e)
+        sys.stderr.write("FAIL hook.import: %s\n" % shown)
+        return 2
+    except Exception as e:
+        from gates.lib import result
+        sys.stderr.write("FAIL hook.import: %s\n" % result._type_name(e))
+        return 2
+    try:
+        main_fn = mod.main
+        usable = callable(main_fn)
+    except Exception:
+        usable = False
+    if not usable:
+        sys.stderr.write("FAIL hook.import: gates.hook has no callable main\n")
+        return 2
+    return main_fn(args)
+
+
 COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings,
-                                                   "index": _index, "run_all": _run_all}
+                                                   "hook": _hook, "index": _index, "run_all": _run_all}
 
 
 def main(argv: List[str]) -> int:
