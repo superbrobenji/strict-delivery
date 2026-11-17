@@ -1,7 +1,7 @@
 schema: finding/1
 id: F-20261117-3r85
 status: open
-source: "U-B4V-1 (Task B4 verifier, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/block-B4-verifier.md:90-94; severity LOW stated at source"
+source: "U-B4V-1 (Task B4 verifier, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/block-B4-verifier.md:90-94; severity LOW stated at source. Fix venue (owner Q-B4-1 (a)): one class, one fix, in stream b's next prompt-block task; the owner task is the plan task that owns each member's code."
 severity: LOW
 class: "harmless-rewording sample whose phrase another test pins verbatim: {test_skill HARMLESS \"minimum tiers and finding states\" (tests/test_skill.py:471), B3_HARMLESS \"A fork dispatch is refused.\" (tests/test_playbook.py:2802)} (one class, owner Q-B4-1 (a))"
 siblings:
@@ -17,7 +17,7 @@ repro: "Reword it on disk in playbook/roles.md and run the three modules: FAILED
 owner:
   kind: plan
   plan: 2026-10-31-strict-delivery-framework
-  task: B2.3
+  task: B2.2
 pin: null
 ruling: null
 evidence: []

@@ -7,7 +7,7 @@ class: "run_all line pass-through: a gate's FAIL line (check id, `<gate>.input`,
 siblings: []
 cites:
   - file: tests/test_githooks.py
-    lines: 173-175
+    lines: 172-174
     sha: b7afa88
   - file: tests/test_githooks.py
     lines: 497-506

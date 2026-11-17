@@ -1,7 +1,7 @@
 schema: finding/1
 id: F-20261117-ar6p
 status: open
-source: "_GateParser positional formatter_class (Task 2b.1 stream a4, G3, implementer, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a4-g3-report.md:59 (and .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a4-report.md:68); severity not stated at source"
+source: "_GateParser positional formatter_class (Task 1u.1 (F1), stream a4 G3, implementer, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a4-g3-report.md:59 (and .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a4-report.md:68); severity not stated at source"
 severity: LOW
 class: "_GateParser constructor: positional formatter_class"
 siblings: []
