@@ -1,11 +1,12 @@
 """The installed plugin's manifest: its directory, the version and the repository it names (plan Task 3d.1).
 
 ``manifest`` reads ``<framework_dir>/.claude-plugin/plugin.json`` strictly: UTF-8, JSON without duplicate keys,
-``NaN``/``Infinity`` or an integer of more than 4300 digits (the ``int()`` limit of Python 3.11 and later, applied on
+``NaN``/``Infinity`` or a number that is not finite (``1e400``), or an integer of more than 4300 digits (the ``int()`` limit of Python 3.11 and later, applied on
 every interpreter), an object at the top. Every refusal is a ``GateError`` naming the file. Standard library only."""
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import stat
@@ -47,6 +48,13 @@ def _integer(text: str) -> _IntText:
     return _IntText(text)
 
 
+def _float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):   # 1e400 parses to inf: the same class as the constant Infinity
+        raise _Refused("a number that is not finite is not allowed")
+    return value
+
+
 def framework_dir() -> str:
     """The directory holding the imported ``gates`` package: its parent, absolute."""
     import gates
@@ -55,6 +63,9 @@ def framework_dir() -> str:
 
 def manifest(framework_dir: str) -> dict:
     """The parsed ``<framework_dir>/.claude-plugin/plugin.json``; a ``GateError`` naming it for any problem."""
+    if type(framework_dir) is not str or "\x00" in framework_dir:   # before any filesystem call (decision U1)
+        raise GateError("framework_dir %s is not a str without a NUL character"
+                        % result.safe_text(_shown(framework_dir)))
     path = os.path.join(framework_dir, *MANIFEST.split("/"))
 
     def refuse(reason: str) -> GateError:
@@ -71,7 +82,8 @@ def manifest(framework_dir: str) -> dict:
     except UnicodeDecodeError:
         raise refuse("is not valid UTF-8") from None
     try:
-        data = json.loads(text, object_pairs_hook=_pairs, parse_constant=_constant, parse_int=_integer)
+        data = json.loads(text, object_pairs_hook=_pairs, parse_constant=_constant, parse_int=_integer,
+                          parse_float=_float)
     except _Refused as e:
         raise refuse(e.args[0]) from None
     except RecursionError:
@@ -111,7 +123,9 @@ def version(framework_dir: str) -> str:
 def _repository(framework_dir: str):
     value = _string(framework_dir, "repository")
     m = REPOSITORY.match(value)
-    if not m:
+    # Narrower than the plan's :3953 regex (decision of the program controller): a name made only of dots (`.`, `..`)
+    # and an owner that starts or ends with `-` are refused with the same error.
+    if not m or m.group(2).strip(".") == "" or m.group(1)[0] == "-" or m.group(1)[-1] == "-":
         raise GateError("%s: repository %s is not https://github.com/<owner>/<name>" % (MANIFEST, value))
     return value, m
 

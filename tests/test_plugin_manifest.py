@@ -24,6 +24,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 P = ".claude-plugin/plugin.json"
 DESCRIPTION = "Strict delivery process for agent-built software: roles, gates and hooks that verify every change."
 HAS_BEG = hasattr(builtins, "BaseExceptionGroup")
+# the V2 rows (version text), shared with tests/test_run_all.py so that no row can be missed there (F-3d1-R1-2)
+V2_ROWS = ["0.0.0 ", " 0.0.0", "0.0.0\n", "v0.1.0", "0.1", "0.1.0.0", "0.01.0", "00.1.0", "0.1.0-rc1",
+           "0.1.0+b", "１.0.0", "٠.0.0", "1.2.3٠", "-1.0.0", "1..0", "1.0.", "", "x.y.z", "0.0.0\x00"]
+NOT_FINITE = "a number that is not finite is not allowed"   # row M4 (decision P4)
+# the M4 bodies that are non-finite numbers (decision P4), shared with tests/test_run_all.py
+NOT_FINITE_BODIES = [b'{"a": 1e400}', b'{"a": -1e400}', b'{"a": [1e400]}', b'{"a": {"b": -1e400}}',
+                     b'{"a": 1E999}', b'{"a": 1.5e400}', b'{"a": 1e309}']
 
 
 def read(rel):
@@ -208,6 +215,30 @@ class ManifestTest(FixtureCase):
                     self.refused(plugin.manifest, self.fixture_dir((body % const).encode(), raw=True),
                                  P + ": the constant %s is not allowed" % const)
 
+    def test_m4_non_finite_numbers(self):  # M4 (decision P4)
+        for body in NOT_FINITE_BODIES:
+            with self.subTest(body=body):
+                self.refused(plugin.manifest, self.fixture_dir(body, raw=True), P + ": " + NOT_FINITE)
+
+    def test_m4_finite_numbers_are_accepted(self):  # M4 invariant: only a non-finite value is refused
+        d = self.fixture_dir(b'{"a": 1e300, "b": -1.5e-300, "c": 0.0, "d": 1E5, "e": [2.5], "f": -0.0}', raw=True)
+        self.assertEqual(sorted(plugin.manifest(d)), ["a", "b", "c", "d", "e", "f"])
+        self.assertEqual(plugin.manifest(d)["a"], 1e300)
+
+    def test_f1_framework_dir_argument(self):  # F1 (decision U1): checked before any filesystem call
+        class S(str):
+            pass
+        rows = [(None, "None"), (5, "5"), (b"/tmp", "b'/tmp'"), (["x"], "[x]"), (S("/tmp"), "/tmp"),
+                ("a\x00b", "a\\x00b"), ("\x00", "\\x00"), ("\U0001fae0\x00", "\\U0001fae0\\x00"),
+                ("/tmp/ౝ\x00", "/tmp/\\u0c5d\\x00"), (True, "True"), (1.5, "1.5"), (("x",), "[x]"),
+                (S("a\x00b"), "a\\x00b")]
+        for fn in (plugin.manifest, plugin.version, plugin.repository_url, plugin.repository_slug):
+            for value, shown in rows:
+                with self.subTest(fn=fn.__name__, value=shown):
+                    with mock.patch.object(plugin.os, "stat", side_effect=AssertionError("stat")), \
+                            mock.patch("gates.lib.plugin.open", create=True, side_effect=AssertionError("open")):
+                        self.refused(fn, value, "framework_dir %s is not a str without a NUL character" % shown)
+
     def test_m5_nesting(self):  # M5
         d = self.fixture_dir(b"[" * 100000, raw=True)
         with self.assertRaises(GateError) as cm:
@@ -290,9 +321,7 @@ class VersionTest(FixtureCase):
                      P + ": repository must be a string, got list")
 
     def test_strict_semver_only(self):  # V2
-        rows = ["0.0.0 ", " 0.0.0", "0.0.0\n", "v0.1.0", "0.1", "0.1.0.0", "0.01.0", "00.1.0", "0.1.0-rc1",
-                "0.1.0+b", "\uff11.0.0", "\u0660.0.0", "1.2.3\u0660", "-1.0.0", "1..0", "1.0.", "", "x.y.z", "0.0.0\x00"]
-        for v in rows:
+        for v in V2_ROWS:
             with self.subTest(version=v):
                 with self.assertRaises(GateError) as cm:
                     plugin.version(self.with_key("version", v))
@@ -350,6 +379,37 @@ class RepositoryTest(FixtureCase):
                 with self.subTest(repository=v, fn=fn.__name__):
                     self.refused(fn, self.with_key("repository", v),
                                  P + ": repository %s is not https://github.com/<owner>/<name>" % v)
+
+    def test_r4_name_made_only_of_dots_is_refused(self):  # R4 (decision, item 6): narrows the plan's REPOSITORY regex
+        for v in ("https://github.com/o/.", "https://github.com/o/..", "https://github.com/o/...",
+                  "https://github.com/o/...git", "https://github.com/o/..git", "https://github.com/o/....",
+                  "https://github.com/o/....git", "https://github.com/o/......................"):
+            for fn in (plugin.repository_url, plugin.repository_slug):
+                with self.subTest(repository=v, fn=fn.__name__):
+                    self.refused(fn, self.with_key("repository", v),
+                                 P + ": repository %s is not https://github.com/<owner>/<name>" % v)
+
+    def test_r5_owner_starting_or_ending_with_a_dash_is_refused(self):  # R5 (decision, item 6)
+        for v in ("https://github.com/-/n", "https://github.com/-o/n", "https://github.com/o-/n",
+                  "https://github.com/--/n", "https://github.com/-o-/n", "https://github.com/o--/n.git"):
+            for fn in (plugin.repository_url, plugin.repository_slug):
+                with self.subTest(repository=v, fn=fn.__name__):
+                    self.refused(fn, self.with_key("repository", v),
+                                 P + ": repository %s is not https://github.com/<owner>/<name>" % v)
+
+    def test_r4_r5_accepted_neighbours(self):  # R4/R5: the narrowing refuses nothing else
+        rows = [("https://github.com/o-1/n", "o-1/n"), ("https://github.com/a-b/n", "a-b/n"),
+                ("https://github.com/o/a.b", "o/a.b"), ("https://github.com/o/n.x_y", "o/n.x_y"),
+                ("https://github.com/o/.github", "o/.github"), ("https://github.com/o/.a", "o/.a"),
+                ("https://github.com/o/a..b", "o/a..b"), ("https://github.com/o/..a", "o/..a"),
+                ("https://github.com/o/a.", "o/a."), ("https://github.com/o/.git", "o/.git"),
+                ("https://github.com/o/-", "o/-"), ("https://github.com/o/_", "o/_"),
+                ("https://github.com/1/n", "1/n"), ("https://github.com/O/N.git", "O/N")]
+        for text, slug in rows:
+            with self.subTest(repository=text):
+                d = self.with_key("repository", text)
+                self.assertEqual(plugin.repository_url(d), text)
+                self.assertEqual(plugin.repository_slug(d), slug)
 
     def test_repository_readers(self):  # R3; F-B3p-19 (i)
         self.assertEqual(plugin.repository_url(REPO), real_manifest()["repository"])
@@ -435,6 +495,45 @@ class HookCommandTest(HookCase):
                 self.hook_file(body)
                 self.assertEqual(self.run_hook("PreToolUse"), (2, "", "FAIL hook.import: %s\n" % name))
 
+    def test_r1_1_import_error_name_with_a_raising_eq_fails_closed(self):  # F-3d1-R1-1
+        bodies = [
+            "class N:\n    def __eq__(self, o):\n        raise RuntimeError('eq')\n    __hash__ = None\n"
+            "raise ImportError('x', name=N())\n",
+            "class N(str):\n    def __eq__(self, o):\n        raise RuntimeError('eq')\n    __hash__ = None\n"
+            "raise ImportError('x', name=N('gates.hook'))\n",
+            "class N(str):\n    def __eq__(self, o):\n        raise RuntimeError('eq')\n    __hash__ = None\n"
+            "raise ImportError('x', name=N('other'))\n",
+            "class N:\n    pass\nraise ImportError('x', name=N())\n",
+            "class N(str):\n    pass\nraise ImportError('x', name=N('gates.hook'))\n",
+            "class N(str):\n    pass\nraise ImportError('x', name=N('other'))\n",
+        ]
+        for body in bodies:
+            with self.subTest(body=body):
+                self.hook_file(body)
+                self.assertEqual(self.run_hook("PreToolUse"), (2, "", "FAIL hook.import: ImportError\n"))
+        self.hook_file("class N:\n    def __eq__(self, o):\n        raise RuntimeError('eq')\n    __hash__ = None\n"
+                       "raise ModuleNotFoundError('x', name=N())\n")
+        self.assertEqual(self.run_hook(), (2, "", "FAIL hook.import: ModuleNotFoundError\n"))
+
+    def test_p1_systemexit_at_import_fails_closed(self):  # decision P1: plan :3266 "(fail closed)"
+        for body in ("raise SystemExit(0)\n", "raise SystemExit(1)\n", "raise SystemExit()\n", "raise SystemExit(None)\n",
+                     "import sys\nsys.exit('x')\n", "raise SystemExit(3)\n", "class E(SystemExit):\n    pass\nraise E(0)\n"):
+            with self.subTest(body=body):
+                self.hook_file(body)
+                self.assertEqual(self.run_hook("PreToolUse"), (2, "", "FAIL hook.import: SystemExit\n"
+                                                               if "class E" not in body else
+                                                               "FAIL hook.import: E\n"))
+
+    def test_main_own_exceptions_and_exits_stay_the_hooks_contract(self):  # invariant of the replaced code
+        self.hook_file("def main(args):\n    raise SystemExit(5)\n")
+        self.assertEqual(self.run_hook(), (5, "", ""))
+        self.hook_file("def main(args):\n    raise SystemExit(0)\n")
+        self.assertEqual(self.run_hook(), (0, "", ""))
+        self.hook_file("def main(args):\n    raise RuntimeError('boom')\n")
+        code, out, err = self.run_hook()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("RuntimeError: boom", err)
+
     def test_h6_no_callable_main(self):  # H6
         for body in ("x = 1\n", "main = 3\n", "main = None\n", "def __getattr__(n):\n    raise RuntimeError(n)\n"):
             with self.subTest(body=body):
@@ -496,7 +595,7 @@ class HookInProcessTest(unittest.TestCase):
     def test_h7_non_exception_baseexception_propagates(self):  # H7
         class Odd(BaseException):
             pass
-        for exc in (KeyboardInterrupt(), Odd(), GeneratorExit(), SystemExit(0)):
+        for exc in (KeyboardInterrupt(), Odd(), GeneratorExit()):
             with self.subTest(exc=type(exc).__name__):
                 with self.assertRaises(type(exc)):
                     self.call_with_import_raising(exc)

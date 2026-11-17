@@ -21,6 +21,7 @@ from gates import __main__ as gates_main
 from gates import run_all
 from gates.lib import plugin
 from gates.lib.result import GateError, Line, Result
+from tests.test_plugin_manifest import NOT_FINITE, NOT_FINITE_BODIES, V2_ROWS
 from tests.helpers import (E128, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo,
                            minimal_config, root_forms, write_record)
 
@@ -1128,19 +1129,28 @@ class VersionLineTest(RunAllCase):
             ("V1 true", b'{"version": true}', "version must be a string, got True"),
             ("V1 null", b'{"version": null}', "version must be a string, got None"),
             ("V1 list", b'{"version": ["0.0.0"]}', "version must be a string, got [0.0.0]"),
-            ("V2 trailing space", b'{"version": "0.0.0 "}', "version 0.0.0  is not of the form X.Y.Z"),
-            ("V2 newline", b'{"version": "0.0.0\\n"}', "version 0.0.0\\n is not of the form X.Y.Z"),
-            ("V2 v prefix", b'{"version": "v0.0.0"}', "version v0.0.0 is not of the form X.Y.Z"),
-            ("V2 full width", b'{"version": "\\uff11.0.0"}', "version １.0.0 is not of the form X.Y.Z"),
             ("S2 unicode 14", b'{"version": "0.0.0\\ud83e\\udee0"}',
              "version 0.0.0\\U0001fae0 is not of the form X.Y.Z"),
         ]
+        # F-3d1-R1-2: every V2 row of the plugin tests (one list), the M4 non-finite bodies (decision P4)
+        for v in V2_ROWS:
+            shown = v.replace("\\", "\\\\").replace("\n", "\\n").replace("\x00", "\\x00")   # as safe_text renders it
+            rows.append(("V2 %r" % v, json.dumps({"version": v}).encode("ascii"),
+                         "version %s is not of the form X.Y.Z" % shown))
+        for body in NOT_FINITE_BODIES:
+            rows.append(("M4 %r" % body, body, NOT_FINITE))
         for label, body, why in rows:
             with self.subTest(label):
                 self.plugin_dir(body)
                 out, code = self.run_main(["--root", root])
                 self.assertEqual(out, PASS5 + "FAIL run_all.version: %s: %s\n" % (pm, why))
                 self.assertEqual(code, 1)
+        with self.subTest("M1 .claude-plugin absent"):
+            d = os.path.join(self.tmp, "fwnodir")
+            os.mkdir(d)
+            with mock.patch.object(plugin, "framework_dir", return_value=d):
+                self.assertEqual(self.run_main(["--root", root]),
+                                 (PASS5 + "FAIL run_all.version: %s: cannot be read (FileNotFoundError)\n" % pm, 1))
         with self.subTest("M1 directory at the path"):
             d = self.plugin_dir(None)
             os.mkdir(os.path.join(d, ".claude-plugin", "plugin.json"))
@@ -1211,6 +1221,21 @@ class VersionLineTest(RunAllCase):
         self.assertEqual(out.splitlines()[-1], "PASS run_all.version")
         self.assertEqual(code, 0)
         self.assertNotIn("FAIL", out)
+
+    def test_r4_r5_repository_rows_through_run_all(self):  # R4, R5: run_all reads the version only, never repository
+        self.all_pass()
+        root = self.fixture()
+        for repo in ("https://github.com/o/..", "https://github.com/-o/n", "https://github.com/o-/n",
+                     "https://github.com/o/n", "not a url"):
+            with self.subTest(repository=repo):
+                self.plugin_dir({"version": "0.0.0", "repository": repo})
+                self.assertEqual(self.run_main(["--root", root]), (PASS5 + VERSION_PASS, 0))
+                for fn in (plugin.repository_url, plugin.repository_slug):
+                    if repo in ("https://github.com/o/n",):
+                        self.assertIn("o", fn(plugin.framework_dir()))
+                    else:
+                        with self.assertRaises(GateError):
+                            fn(plugin.framework_dir())
 
     def test_version_line_when_a_non_exception_baseexception_is_raised_by_the_plugin(self):  # S3
         class Odd(BaseException):
