@@ -25,6 +25,8 @@ _rng = random.SystemRandom()  # patched in tests to force an id collision (D-6)
 
 _OWNER_KINDS = ("plan", "issue", "roadmap")
 _NUMBER = re.compile(r"[1-9][0-9]{0,999}")  # D-19: at most yamlsub.MAX_INT_CHARS digits, ASCII only
+_ROUND = re.compile(r"[1-9][0-9]{0,999}")  # at most yamlsub.MAX_INT_CHARS digits, ASCII only, matched before int()
+_YES_NO = {"yes": True, "no": False}
 _LINES = re.compile(r"([1-9][0-9]{0,8})(?:-([1-9][0-9]{0,8}))?")  # D-19
 _PLAN = re.compile(r"[a-z0-9][a-z0-9._-]*")  # D-4
 
@@ -165,6 +167,13 @@ def _new(ns) -> tuple:
            "history": [{"status": "open", "sha": head, "by": ns.by}]}
     if ns.parent is not None:
         row["parent"] = ns.parent
+    if ns.review_round is not None:
+        row["review_round"] = int(ns.review_round)  # _usage_error matched it: 1 to 1000 ASCII digits
+    if ns.caused_by_change is not None:
+        row["caused_by_change"] = _YES_NO[ns.caused_by_change]
+    if ns.dimension is not None:
+        _text("--dimension", ns.dimension)
+        row["dimension"] = ns.dimension
     new = Record(new_id, row, fstore.path_for(new_id))
     _check(row, root, cfg, decs, frecs, frecs + [new])
     fstore.create(row)
@@ -240,9 +249,11 @@ def _parser() -> _GateParser:
     for flag in ("--source", "--severity", "--owner-kind", "--by"):
         n.add_argument(flag, required=True, default=None, action=_Once)
     n.add_argument("--class", dest="class_", required=True, default=None, action=_Once)
-    for flag in ("--plan", "--task", "--number", "--parent", "--root"):
+    for flag in ("--plan", "--task", "--number", "--parent", "--root", "--review-round", "--caused-by-change",
+                 "--dimension"):
         n.add_argument(flag, default=None, action=_Once)
     n.add_argument("--cite", action="append", default=None)
+    p.new_parser = n  # main() reports a bad --review-round or --caused-by-change through it (exit 2)
     m = subs.add_parser("move", prog="findings move")
     m.add_argument("id")
     for flag in ("--to", "--by"):
@@ -253,11 +264,25 @@ def _parser() -> _GateParser:
     return p
 
 
+def _usage_error(ns) -> Optional[str]:
+    """The usage-error text of a ``new`` value the parser cannot check (``type=`` and ``choices=`` are not allowed)."""
+    if ns.review_round is not None and _ROUND.fullmatch(ns.review_round) is None:
+        return "--review-round: must be a decimal integer from 1, 1 to 1000 ASCII digits, no leading zero"
+    if ns.caused_by_change is not None and ns.caused_by_change not in _YES_NO:
+        return "--caused-by-change: must be yes or no"
+    return None
+
+
 def main(argv: Optional[list] = None) -> int:
     """``python3 -m gates findings new|move ...``: print the record id; 2 on a usage error, 1 on a refusal."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        ns = _parser().parse_args(args)
+        p = _parser()
+        ns = p.parse_args(args)
+        if ns.sub == "new":
+            msg = _usage_error(ns)
+            if msg is not None:
+                p.new_parser.error(msg)
     except GateError:
         return 2  # the parser has written the usage or help to stderr
     prog = "findings " + ns.sub
