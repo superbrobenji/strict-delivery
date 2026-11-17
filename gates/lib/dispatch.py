@@ -43,7 +43,10 @@ CLAUDE_DEFAULT_DEPTH = 3
 CLAUDE_DEFAULT_CONCURRENT = 20
 ENV_DEPTH = "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"
 ENV_CONCURRENT = "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
-MAX_DIGITS = 4300  # the int() digit limit of Python 3.11 and later, applied on every interpreter (Decision D15)
+# One cap on every decimal text this PR converts with int() and every integer it prints: 600 digits, below 640 (the
+# lowest PYTHONINTMAXSTRDIGITS CPython 3.11+ accepts, sys.int_info.str_digits_check_threshold) with room for the ``+ 1``
+# sums, so int() and %d never raise under any setting and 3.9 and 3.13 print the same bytes (Decision D15, narrowed).
+MAX_DIGITS = 600
 
 LEVELS_BELOW: dict = {"program_controller": 2, "stream_controller": 1, "controller": 1}
 

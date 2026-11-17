@@ -7,6 +7,7 @@ import posixpath
 import re
 
 from gates.lib import print_table, yamlsub
+from gates.lib.dispatch import MAX_DIGITS
 from gates.lib.gitinfo import LONG_HEX, _require_toplevel
 from gates.lib.result import GateError
 
@@ -107,6 +108,8 @@ def _unknown(full: str) -> GateError:
 def _int_min(v: object, key: str, least: int) -> None:
     if type(v) is not int or v < least:
         raise _bad(key, "must be an integer of at least %d" % least)
+    if v >= 10 ** MAX_DIGITS:  # compared as numbers: no str() or int() of text, so no int string-conversion limit applies
+        raise _bad(key, "must be an integer of at most %d digits" % MAX_DIGITS)
 
 
 def _check_glob(key: str, item: object) -> None:

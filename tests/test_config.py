@@ -10,7 +10,8 @@ from unittest import mock
 from gates.lib import config, migrations, yamlsub
 from gates.lib.result import GateError, Result, gate_args, run_gate
 from gates.lib.yamlsub import emit
-from tests.helpers import E128, TOP, GitIsolatedTestCase, check_root_forms, make_repo, minimal_config, root_forms
+from tests.helpers import (E128, INT_LIMITS, TOP, GitIsolatedTestCase, check_root_forms, int_limit, make_repo,
+                           minimal_config, root_forms)
 
 MISSING = ".strict-delivery/config.yml: missing; run /strict-delivery:init"
 
@@ -656,7 +657,7 @@ class Config2Test(ConfigCase):
                 self.bad(mc({"stream_controller": bad}), "limits.max_children.stream_controller",
                          "must be an integer of at least 1")
         self.assertEqual(self.with_extra(mc({"a": 1, "b": 2}))["limits"]["max_children"], {"a": 1, "b": 2})
-        big = "9" * 1000
+        big = "9" * 600                                  # the 600-digit cap (I6); 601 or more is refused, tested above
         self.assertEqual(self.raw("limits:\n  max_children:\n    a: %s\n" % big)["limits"]["max_children"],
                          {"a": int(big)})
 
@@ -666,7 +667,7 @@ class Config2Test(ConfigCase):
             for ok in (1, 5):
                 with self.subTest(key=key, ok=ok):
                     self.assertEqual(self.with_extra({"limits": {key: ok}})["limits"], {key: ok})
-            big = "9" * 1000
+            big = "9" * 600                              # the 600-digit cap (I6); 601 or more is refused, tested above
             self.assertEqual(self.raw("limits:\n  %s: %s\n" % (key, big))["limits"], {key: int(big)})
             for bad in NOT_INT_AT_LEAST_1:
                 with self.subTest(key=key, bad=bad):
@@ -792,20 +793,64 @@ class Config2Test(ConfigCase):
         self.assertEqual(cfg["schema"], TAG)
 
     # ---- version rows
-    def test_new_int_keys_digit_limits(self):  # V1, PC1 skeleton row: 4300 and 4301 digits, and the 1000-char cap
-        cases = (("limits:\n  max_depth: %s\n", lambda c: c["limits"]["max_depth"]),
-                 ("escape_cost:\n  CRITICAL: 1\n  HIGH: 1\n  MEDIUM: 1\n  LOW: %s\n",
+    def test_new_int_keys_digit_limits(self):  # I6, K1 (G1-G4 class): 600 digits accepted, 601 or more refused
+        """One cap of 600 digits on every integer key config/2 reads, whatever PYTHONINTMAXSTRDIGITS is. Texts of 601
+        to 1000 digits reach the key check when the interpreter converts them and name the key; under the limit 640
+        yamlsub's own conversion refuses texts of 641 or more digits first, and texts of 1001 or more digits are always
+        refused there (yamlsub.MAX_INT_CHARS): a GateError either way, never the interpreter's own message."""
+        cases = (("limits.max_depth", "limits:\n  max_depth: %s\n", lambda c: c["limits"]["max_depth"]),
+                 ("limits.max_concurrent", "limits:\n  max_concurrent: %s\n", lambda c: c["limits"]["max_concurrent"]),
+                 ("limits.max_children.controller", "limits:\n  max_children:\n    controller: %s\n",
+                  lambda c: c["limits"]["max_children"]["controller"]),
+                 ("escape_cost.LOW", "escape_cost:\n  CRITICAL: 1\n  HIGH: 1\n  MEDIUM: 1\n  LOW: %s\n",
                   lambda c: c["escape_cost"]["LOW"]),
-                 ("reviews:\n  small:\n    max_lines: %s\n", lambda c: c["reviews"]["small"]["max_lines"]))
-        for template, get in cases:
-            for digits in (1000, 1001, 4300, 4301):
-                with self.subTest(template=template.split(":")[0], digits=digits):
-                    body = template % ("7" * digits)
-                    if digits == 1000:
-                        self.assertEqual(get(self.raw(body)), int("7" * digits))
-                    else:
-                        msg = self.refused_raw(body)
-                        self.assertRegex(msg, r"\A\.strict-delivery/config\.yml: integer too large \(line [0-9]+\)\Z")
+                 ("escape_cost.CRITICAL", "escape_cost:\n  CRITICAL: %s\n  HIGH: 1\n  MEDIUM: 1\n  LOW: 1\n",
+                  lambda c: c["escape_cost"]["CRITICAL"]),
+                 ("reviews.small.max_lines", "reviews:\n  small:\n    max_lines: %s\n",
+                  lambda c: c["reviews"]["small"]["max_lines"]),
+                 ("reviews.small.max_files", "reviews:\n  small:\n    max_files: %s\n",
+                  lambda c: c["reviews"]["small"]["max_files"]),
+                 ("context.max_lines", "context:\n  max_lines: %s\n", lambda c: c["context"]["max_lines"]),
+                 ("context.max_bytes", "context:\n  max_bytes: %s\n", lambda c: c["context"]["max_bytes"]))
+        too_large = r"\A\.strict-delivery/config\.yml: integer too large \(line [0-9]+\)\Z"
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for key, template, get in cases:
+                    for digits in (600, 601, 1000, 1001, 4300, 4301):
+                        with self.subTest(limit=lim, key=key, digits=digits):
+                            body = template % ("7" * digits)
+                            if digits == 600:
+                                self.assertEqual(get(self.raw(body)), int("7" * digits))
+                            elif digits > 1000 or (lim == 640 and digits > 640):
+                                self.assertRegex(self.refused_raw(body), too_large)
+                            else:
+                                self.assertEqual(self.refused_raw(body),
+                                                 ".strict-delivery/config.yml: %s: must be an integer of at most 600 "
+                                                 "digits" % key)
+
+    def test_new_int_keys_non_ascii_digits(self):  # K2: no isdigit/isdecimal decides; U+1FAE8 is So on 3.13, Cn on 3.9
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for text in ("٥", "５", "\U0001FAE8", "5٥"):
+                    with self.subTest(limit=lim, text=text):
+                        self.assertEqual(self.refused_raw("limits:\n  max_depth: %s\n" % text),
+                                         ".strict-delivery/config.yml: limits.max_depth: must be an integer of at "
+                                         "least 1")
+
+    def test_new_int_keys_digit_cap_no_conversion(self):  # I6: the cap reads the number without str() or int() of text
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for key, data in (("limits.max_depth", {"limits": {"max_depth": 10 ** 600}}),
+                                  ("escape_cost.HIGH", {"escape_cost": {"CRITICAL": 1, "HIGH": 10 ** 700,
+                                                                        "MEDIUM": 1, "LOW": 1}})):
+                    with self.subTest(limit=lim, key=key):
+                        with self.assertRaises(GateError) as e:
+                            self.with_data(data)
+                        self.assertEqual(str(e.exception), ".strict-delivery/config.yml: %s: must be an integer of at "
+                                         "most 600 digits" % key)
+                with self.subTest(limit=lim, key="largest accepted"):
+                    self.assertEqual(self.with_data({"limits": {"max_depth": 10 ** 600 - 1}})["limits"]["max_depth"],
+                                     10 ** 600 - 1)
 
     def test_new_keys_unicode_version_independent(self):  # V2, PC1 skeleton row
         """Measured on 3.9 (Unicode 13) and 3.13: yamlsub accepts a key holding U+0870 (assigned in Unicode 14) and

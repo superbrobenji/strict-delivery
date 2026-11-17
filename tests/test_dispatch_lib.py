@@ -9,7 +9,8 @@ from gates.lib.dispatch import (CONTROLLER_ROLES, DISPATCHERS, HEADINGS, LEVELS_
                                 block_errors, depth_ok, limits_of, min_tier, model_line, parse, role_of, small_errors,
                                 small_line, small_tier, tier_of)
 from gates.lib.result import GateError
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
+from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config,
+                           write_record)
 
 WORKERS = ("implementer", "implementer_transcription", "task_reviewer", "final_reviewer", "final_verifier",
            "exception_reviewer", "audit_reviewer", "audit_verifier", "investigator", "plan_writer", "plan_reviewer",
@@ -130,13 +131,29 @@ class LimitsTest(unittest.TestCase):
         self.assertEqual(limits_of({"limits": {"max_depth": 5, "max_concurrent": 30}}, {}), (3, 20))      # E6
 
     def test_limits_env_refused(self):                              # E4
-        for bad in ("0", "-1", "abc", "", " 5", "5 ", "05", "+5", "5.0", "٥", "1_0", "5\n", "9" * 4301):
+        for bad in ("0", "-1", "abc", "", " 5", "5 ", "05", "+5", "5.0", "٥", "５", "1_0", "5\n", "\U0001FAE8"):
             for name in (self.D, self.C):
                 with self.subTest(name=name, value=bad[:12]):
                     with self.assertRaises(ValueError) as e:
                         limits_of({}, {name: bad})
                     self.assertIn(name, str(e.exception))
-        self.assertEqual(limits_of({}, {self.C: "9" * 4300})[1], int("9" * 4300))     # 4300 digits accepted (V1)
+
+    def test_limits_env_digit_cap(self):                            # I4, K1: 600 digits accepted, 601 or more refused
+        """G3: one cap of 600 digits, below 640 (the lowest PYTHONINTMAXSTRDIGITS CPython accepts), so int() never
+        raises and the verdict is the same under every limit setting."""
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for name in (self.D, self.C):
+                    for n in (601, 700, 4300, 4301):
+                        with self.subTest(limit=lim, name=name, digits=n):
+                            with self.assertRaises(ValueError) as e:
+                                limits_of({}, {name: "9" * n})
+                            self.assertEqual(str(e.exception), "%s must be a decimal integer of at least 1 (digits 0-9 "
+                                             "only, no sign, space or leading zero, at most 600 digits)" % name)
+                with self.subTest(limit=lim, digits=600, name="concurrent"):
+                    self.assertEqual(limits_of({}, {self.C: "9" * 600})[1], 10 ** 600 - 1)
+                with self.subTest(limit=lim, digits=600, name="depth"):
+                    self.assertEqual(limits_of({}, {self.D: "9" * 600})[0], 10 ** 600)    # d + 1 has 601 digits
 
     def test_limits_effective_minimum(self):                        # E5
         for cfgv, env, want in ((5, "5", 5), (6, "5", 6), (7, "5", 6), (2, "5", 2), (3, None, 3), (1, None, 1)):
@@ -363,28 +380,40 @@ class SmallLineTest(unittest.TestCase):
             small_line(ok + "\n" + ok)                                                  # S4
         self.assertEqual(small_line(ok.replace("round=2", "round=5"))["round"], 5)       # parses; refused by S8
 
-    def test_round_and_narrowed_digits(self):                       # F-2c3-R1-4: [1-9][0-9]* of up to 4300 digits
+    def test_round_and_narrowed_digits(self):                       # I1, I2, K1: [1-9][0-9]* of up to 600 digits (G1)
         ok = LINE % (A7, B40)
-        for n in (9, 10, 11, 4300):
-            digits = "1" + "0" * (n - 1)
-            with self.subTest(n=n, key="round"):
-                got = small_line(ok.replace("round=2", "round=" + digits))
-                self.assertEqual((len(str(got["round"])), got["round"] == 10 ** (n - 1)), (n, True))
-            with self.subTest(n=n, key="narrowed one"):
-                got = small_line(ok.replace("narrowed=none", "narrowed=" + digits))
-                self.assertEqual(got["narrowed"], [digits])
-            with self.subTest(n=n, key="narrowed list"):
-                got = small_line(ok.replace("narrowed=none", "narrowed=3,%s,%s" % (digits, digits)))
-                self.assertEqual(got["narrowed"], ["3", digits, digits])
-        long_ = "1" + "0" * 4300                                     # 4301 digits
-        for key, text in (("round", ok.replace("round=2", "round=" + long_)),
-                          ("narrowed", ok.replace("narrowed=none", "narrowed=" + long_)),
-                          ("narrowed", ok.replace("narrowed=none", "narrowed=2,%s" % long_)),
-                          ("narrowed", ok.replace("narrowed=none", "narrowed=%s,2" % long_))):
-            with self.subTest(key=key, shape=text[40:60]):
-                with self.assertRaises(ValueError) as e:
-                    small_line(text)
-                self.assertEqual(str(e.exception), "small-re-review: key %s is malformed" % key)
+        for lim in INT_LIMITS:
+          with int_limit(lim):
+            for n in (1, 9, 10, 11, 600):
+                digits = "1" + "0" * (n - 1)
+                with self.subTest(limit=lim, n=n, key="round"):
+                    got = small_line(ok.replace("round=2", "round=" + digits))
+                    self.assertEqual((len(str(got["round"])), got["round"] == 10 ** (n - 1)), (n, True))
+                with self.subTest(limit=lim, n=n, key="narrowed one"):
+                    got = small_line(ok.replace("narrowed=none", "narrowed=" + digits))
+                    self.assertEqual(got["narrowed"], [digits])
+                with self.subTest(limit=lim, n=n, key="narrowed list"):
+                    got = small_line(ok.replace("narrowed=none", "narrowed=3,%s,%s" % (digits, digits)))
+                    self.assertEqual(got["narrowed"], ["3", digits, digits])
+            for n in (601, 700, 4300, 4301):
+                long_ = "1" + "0" * (n - 1)
+                for key, text in (("round", ok.replace("round=2", "round=" + long_)),
+                                  ("narrowed", ok.replace("narrowed=none", "narrowed=" + long_)),
+                                  ("narrowed", ok.replace("narrowed=none", "narrowed=2,%s" % long_)),
+                                  ("narrowed", ok.replace("narrowed=none", "narrowed=%s,2" % long_))):
+                    with self.subTest(limit=lim, n=n, key=key, shape=text[40:60]):
+                        with self.assertRaises(ValueError) as e:
+                            small_line(text)
+                        self.assertEqual(str(e.exception), "small-re-review: key %s is malformed" % key)
+            for key, text in (("round", ok.replace("round=2", "round=٥")),
+                              ("round", ok.replace("round=2", "round=５")),
+                              ("round", ok.replace("round=2", "round=\U0001FAE8")),
+                              ("narrowed", ok.replace("narrowed=none", "narrowed=1,\U0001FAE8")),
+                              ("narrowed", ok.replace("narrowed=none", "narrowed=1,٥"))):   # K2: ASCII digits only
+                with self.subTest(limit=lim, key=key, shape="non-ASCII digit"):
+                    with self.assertRaises(ValueError) as e:
+                        small_line(text)
+                    self.assertEqual(str(e.exception), "small-re-review: key %s is malformed" % key)
         for key, text in (("round", ok.replace("round=2", "round=0" + "1" * 10)),
                           ("narrowed", ok.replace("narrowed=none", "narrowed=1,0" + "1" * 10))):
             with self.subTest(key=key, shape="leading zero"):

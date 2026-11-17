@@ -12,7 +12,8 @@ from unittest import mock
 
 from gates import __main__ as gates_main
 from gates.lib import claims as claims_lib, config, dispatch, migrations
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
+from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config,
+                           write_record)
 
 ENV_D, ENV_C = "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
 ALL_PASS = ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar", "PASS dispatch.role",
@@ -502,28 +503,42 @@ class SmallGateTest(GateCase):
             self.assertTrue(any(ln.startswith("FAIL dispatch.small") for ln in out), out)
             self.assertEqual(code, 1)
 
-    def test_small_line_long_numbers(self):                         # F-2c3-R1-4
+    def test_small_line_long_numbers(self):                         # F-2c3-R1-4, I1, I2, K1 (G1)
         ln = LINE % (self.a[:12], self.b[:12])
-        for n in (9, 10, 11, 4300):                                 # narrowed ids of any length up to 4300 digits pass
-            with self.subTest(n=n, key="narrowed"):
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                self.small_line_long_numbers(ln, lim)
+
+    def small_line_long_numbers(self, ln, lim):
+        for n in (1, 9, 10, 11, 600):                               # narrowed ids of any length up to 600 digits pass
+            with self.subTest(limit=lim, n=n, key="narrowed"):
                 out, code = self.lines(self.small(line=ln.replace("narrowed=none", "narrowed=1,%s" % ("7" * n))))
                 self.assertEqual(code, 0, out)
                 self.assertIn("PASS dispatch.small", out)
                 self.assertIn("PASS dispatch.tier", out)
-        for n in (9, 10, 11, 4300):                                 # a long round is parsed, then refused as a reason
-            with self.subTest(n=n, key="round"):
+        for n in (1, 9, 10, 11, 600):                               # a long round is parsed, then refused as a reason
+            with self.subTest(limit=lim, n=n, key="round"):
                 out, code = self.lines(self.small(line=ln.replace("round=2", "round=%s" % ("7" * n))))
                 self.assertEqual(code, 1)
                 self.assertIn("FAIL dispatch.small: round %s: only rounds 1-4 may be small; round 5 always runs at "
                               "the minimum tier" % ("7" * n), out)
                 self.assertIn("FAIL dispatch.tier: tier2 is below the minimum tier3 of task_reviewer", out)
-        for key, text in (("round", ln.replace("round=2", "round=" + "7" * 4301)),
-                          ("narrowed", ln.replace("narrowed=none", "narrowed=" + "7" * 4301))):
-            with self.subTest(n=4301, key=key):
+        for n in (601, 700, 4300, 4301):
+            for key, text in (("round", ln.replace("round=2", "round=" + "7" * n)),
+                              ("narrowed", ln.replace("narrowed=none", "narrowed=" + "7" * n)),
+                              ("narrowed", ln.replace("narrowed=none", "narrowed=1," + "7" * n))):
+                with self.subTest(limit=lim, n=n, key=key):
+                    out, code = self.lines(self.small(line=text))
+                    self.assertEqual(code, 1)
+                    self.assertIn("FAIL dispatch.small: small-re-review: key %s is malformed" % key, out)
+                    self.assertTrue(any(x.startswith("FAIL dispatch.tier") for x in out), out)
+        for key, text in (("round", ln.replace("round=2", "round=٥")),
+                          ("round", ln.replace("round=2", "round=５")),
+                          ("narrowed", ln.replace("narrowed=none", "narrowed=٥"))):        # K2
+            with self.subTest(limit=lim, key=key, shape="non-ASCII digit"):
                 out, code = self.lines(self.small(line=text))
                 self.assertEqual(code, 1)
                 self.assertIn("FAIL dispatch.small: small-re-review: key %s is malformed" % key, out)
-                self.assertTrue(any(x.startswith("FAIL dispatch.tier") for x in out), out)
 
     def test_malformed_below_min_fails_both(self):                  # S3
         out, _ = self.lines(self.small(line="small-re-review: plan=p"))
@@ -617,7 +632,50 @@ class RegisterTest(GateCase):
 
 
 class VersionTest(GateCase):
-    def test_digit_limits_same_on_both(self):                       # V1
+    def test_digit_limits_same_on_both(self):                       # V1, I3, I4, K1 (G2, G3)
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                self.digit_limits_same_on_both(lim)
+
+    def test_derived_max_depth_printed_in_full(self):               # I5 (G4): max_depth = env depth + 1 has 601 digits
+        nines, ten = "9" * 600, "1" + "0" * 600
+        want_depth = ("FAIL dispatch.depth: dispatcher depth %s + 1 + 1 level(s) below controller exceeds max_depth %s"
+                      % (nines, ten))
+        raw = json.dumps({"prompt": prompt("controller", model="sonnet"), "model": "sonnet", "program_live": False,
+                          "dispatcher": {"id": "session", "depth": 0, "live_children": 0, "live_total": 0}})
+        raw = raw.replace('"depth": 0', '"depth": ' + nines)
+        outs = []
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                os.environ[ENV_D] = nines
+                with self.subTest(limit=lim):
+                    out, code = self.run_gate(self.write_input(raw.encode()))
+                    outs.append(out)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(len(out.splitlines()), 14, out)
+                    self.assertIn(want_depth, out.splitlines())
+        self.assertEqual(len(set(outs)), 1)                          # the same bytes under every limit setting
+        os.environ.pop(ENV_D)
+
+    def test_non_ascii_digits_in_integers(self):                    # K2: no isdigit/isdecimal decides
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for text in ('"٥"', '"５"', '"\U0001FAE8"'):
+                    with self.subTest(limit=lim, text=text):
+                        d = json.dumps(self.base()).replace('"depth": 0', '"depth": ' + text)
+                        out, code = self.run_gate(self.write_input(d.encode()))
+                        self.assertEqual((out.count("\n"), code), (1, 1))
+                        self.assertTrue(out.startswith("FAIL dispatch.input: input: dispatcher.depth must be"), out)
+                for name in (ENV_D, ENV_C):
+                    for val in ("٥", "５"):
+                        os.environ[name] = val
+                        with self.subTest(limit=lim, env=name, value=val):
+                            out, code = self.run_gate(self.base())
+                            self.assertEqual(code, 1)
+                            self.assertTrue(out.startswith("FAIL dispatch.input: input: %s must be a decimal" % name), out)
+                        os.environ.pop(name)
+
+    def digit_limits_same_on_both(self, lim):
         """The whole output, not a prefix: the reason text is the gate's own on both interpreters (F-2c3-R1-5)."""
         def raw(field, text):
             disp = {"depth": "0", "live_children": "0", "live_total": "0"}
@@ -627,43 +685,44 @@ class VersionTest(GateCase):
                                                                    disp["live_children"], disp["live_total"])).encode()
 
         def refused(path):                      # the gate's own text, written here, with no interpreter wording in it
-            return "FAIL dispatch.input: input: %s: not valid UTF-8 JSON (an integer of more than 4300 digits)\n" % path
+            return "FAIL dispatch.input: input: %s: not valid UTF-8 JSON (an integer of more than 600 digits)\n" % path
 
         for field in ("depth", "live_children", "live_total"):
-            for text in ("9" * 4301, "-" + "9" * 4301, "1" + "0" * 4300, "9" * 4301 + "0" * 3):
-                with self.subTest(field=field, digits=len(text.lstrip("-")), sign=text[0]):
+            for text in ("9" * 601, "-" + "9" * 601, "1" + "0" * 699, "9" * 4300, "9" * 4301, "-" + "9" * 4301,
+                         "1" + "0" * 4300, "9" * 4301 + "0" * 3):
+                with self.subTest(limit=lim, field=field, digits=len(text.lstrip("-")), sign=text[0]):
                     path = self.write_input(raw(field, text))
                     self.assertEqual(self.run_gate(path), (refused(path), 1))
-            with self.subTest(field=field, digits=4300, sign="-"):       # parsed (the sign is no digit), then negative
-                self.assertEqual(self.run_gate(self.write_input(raw(field, "-" + "9" * 4300))),
+            with self.subTest(limit=lim, field=field, digits=600, sign="-"):  # parsed (the sign is no digit), then negative
+                self.assertEqual(self.run_gate(self.write_input(raw(field, "-" + "9" * 600))),
                                  ("FAIL dispatch.input: input: dispatcher.%s must be an integer of at least 0\n" % field,
                                   1))
-            with self.subTest(field=field, digits=4300):                 # 4300 digits parse, then the line judges them
-                out, code = self.lines(self.write_input(raw(field, "9" * 4300)))
+            with self.subTest(limit=lim, field=field, digits=600):       # 600 digits parse, then the line judges them
+                out, code = self.lines(self.write_input(raw(field, "9" * 600)))
                 self.assertEqual(out, {
                     "depth": ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar", "PASS dispatch.role",
                               "PASS dispatch.dispatcher", "FAIL dispatch.depth: dispatcher depth %s + 1 + 0 "
-                              "level(s) below implementer exceeds max_depth 3" % ("9" * 4300), "PASS dispatch.concurrency",
+                              "level(s) below implementer exceeds max_depth 3" % ("9" * 600), "PASS dispatch.concurrency",
                               "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
                               "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
                               "PASS dispatch.decisions"],
                     "live_children": ALL_PASS,
                     "live_total": ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar",
                                    "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.depth",
-                                   "FAIL dispatch.concurrency: %s running + 1 exceeds max_concurrent 20" % ("9" * 4300),
+                                   "FAIL dispatch.concurrency: %s running + 1 exceeds max_concurrent 20" % ("9" * 600),
                                    "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
                                    "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
                                    "PASS dispatch.decisions"]}[field])
                 self.assertEqual(code, 0 if field == "live_children" else 1)
         for name, text in ((ENV_D, "depth"), (ENV_C, "concurrency")):
-            for n in (4301, 5000):
+            for n in (601, 700, 4300, 4301, 5000):
                 os.environ[name] = "9" * n
-                with self.subTest(env=name, digits=n):
+                with self.subTest(limit=lim, env=name, digits=n):
                     self.assertEqual(self.run_gate(self.base()), (
                         "FAIL dispatch.input: input: %s must be a decimal integer of at least 1 (digits 0-9 only, no sign, "
-                        "space or leading zero, at most 4300 digits)\n" % name, 1))
-            os.environ[name] = "9" * 4300
-            with self.subTest(env=name, digits=4300):                    # accepted, min with the default
+                        "space or leading zero, at most 600 digits)\n" % name, 1))
+            os.environ[name] = "9" * 600
+            with self.subTest(limit=lim, env=name, digits=600):          # accepted, min with the default
                 self.assertEqual(self.lines(self.base()), (ALL_PASS, 0))
             os.environ.pop(name)
         big = prompt("implementer").replace("tokens=1000", "tokens=" + "1" * 4301)
