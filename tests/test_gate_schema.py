@@ -1,4 +1,5 @@
 """Tests of gates/gate_schema.py through run_gate on real fixture repositories; rows K, P, C, N, A, F, M, E."""
+import builtins
 import contextlib
 import importlib.util
 import io
@@ -70,6 +71,22 @@ fields:
     type: str
 ''',
 }
+SCHEMA_TEXT["handoff"] = '''kind: handoff
+version: 1
+format: front-matter
+files:
+  - dir: plan_state
+    glob: "*/handoff.md"
+fields:
+  schema:
+    type: str
+  plan:
+    type: str
+  ref:
+    type: id
+    id_kind: decision
+    required: false
+'''  # a front-matter kind; the real handoff.yml is Task P1.2's, this one is the test's own
 _MD_VERSION = 1
 for _k in ("in-force", "overview", "decision-index", "finding-index"):
     SCHEMA_TEXT[_k] = '''kind: %s
@@ -89,6 +106,9 @@ def _tag(kind):
 TAG = "<!-- schema: %s -->" % _tag("in-force")
 DTAG = _tag("decision")
 CTXTAG = _tag("context")
+HTAG = _tag("handoff")
+PS = ".strict-delivery/state/plans"  # config.DEFAULTS paths.plan_state, written out by hand
+HOK = "---\nschema: %s\nplan: p\n---\nbody\n" % HTAG
 
 
 class GateCase(GitIsolatedTestCase):
@@ -855,6 +875,139 @@ class CitesDispatchTest(GitIsolatedTestCase):
         code, out, err = self.run_main(["check", "--json", "cites"])
         self.assertEqual((code, out), (2, ""))
         self.assertIn("gates: cites, claims, decisions, dispatch, register, schema\n", err)
+
+
+HEAD = ["PASS schema.kinds", "PASS schema.config"]
+NOT_REG = "is not a regular file (a directory, symlink or other entry is never followed)"
+
+
+class FrontMatterKind(GateCase):
+    """Producer 7 of the P1.1 table (rows GS1-GS11): ``gate_schema`` on a front-matter kind."""
+
+    def setUp(self):
+        super().setUp()
+        self.kinds("handoff")
+
+    def hid(self, rel):
+        return "schema.handoff.%s/%s" % (PS, rel)
+
+    def test_front_matter_kind_not_checked_unless_produced(self):  # GS1
+        self.put(PS + "/a/handoff.md", "bad")
+        self.assertEqual(self.run_g(), ("PASS schema.kinds\nPASS schema.config\n", 0))
+
+    def test_front_matter_kind_valid_passes(self):  # GS2
+        self.put(PS + "/a/handoff.md", HOK)
+        self.put(PS + "/b/handoff.md", HOK.replace("plan: p\n", "plan: p\nref: %s\n" % ID1) + "---\nx: 1\n")
+        self.assertEqual(self.lines(producers=["prod_handoff"]), (HEAD + ["PASS schema.handoff"], 0))
+
+    def test_front_matter_kind_checked_once_produced(self):  # GS3, plan Step 1
+        self.put(PS + "/a/handoff.md", "---\nschema: %s\nzzz: 1\n---\n" % HTAG)
+        self.put(PS + "/b/handoff.md", HOK)
+        self.put(PS + "/c/handoff.md", "---\nschema: %s\n" % HTAG)
+        out, code = self.run_g(producers=["prod_handoff"])
+        self.assertIn("FAIL schema.handoff.", out)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), HEAD + [
+            "FAIL %s: plan: required key is missing" % self.hid("a/handoff.md"),
+            "FAIL %s: zzz: unknown key" % self.hid("a/handoff.md"),
+            "FAIL %s: front matter: no closing '---' line" % self.hid("c/handoff.md")])
+
+    def test_front_matter_kind_symlinked_directory_fails(self):  # GS4
+        self.put(PS + "/a/handoff.md", HOK)
+        os.makedirs(os.path.join(self.tmp, "elsewhere"))
+        os.symlink(os.path.join(self.tmp, "elsewhere"), os.path.join(self.root, PS, "link"))
+        self.assertEqual(self.lines(producers=["prod_handoff"]), (HEAD + [
+            "FAIL %s: is a symlink; directories must be real directories" % self.hid("link")], 1))
+
+    def test_front_matter_kind_non_regular_entries(self):  # GS5
+        base = os.path.join(self.root, PS)
+        self.put("real.md", HOK)
+        os.makedirs(base + "/a/handoff.md")
+        os.makedirs(base + "/b")
+        os.symlink(os.path.join(self.root, "real.md"), base + "/b/handoff.md")
+        os.makedirs(base + "/c")
+        os.mkfifo(base + "/c/handoff.md")
+        os.makedirs(base + "/d")
+        os.symlink("nowhere", base + "/d/handoff.md")
+        self.assertEqual(self.lines(producers=["prod_handoff"]),
+                         (HEAD + ["FAIL %s: %s" % (self.hid(x + "/handoff.md"), NOT_REG) for x in "abcd"], 1))
+
+    def test_front_matter_kind_file_encodings(self):  # GS6 (D-Q14)
+        first = "front matter: first line must be '---'"
+        self.put(PS + "/a/handoff.md", "﻿" + HOK)
+        self.put(PS + "/b/handoff.md", HOK.replace("\n", "\r\n"))
+        self.put(PS + "/c/handoff.md", b"---\n\xff\n---\n")
+        self.put(PS + "/d/handoff.md", b"")
+        self.put(PS + "/e/handoff.md", "---\nschema: %s\n---\n" % ("9" * 4301))
+        want = ["FAIL %s: %s" % (self.hid("a/handoff.md"), first), "FAIL %s: %s" % (self.hid("b/handoff.md"), first),
+                "FAIL %s: %s/c/handoff.md: not valid UTF-8" % (self.hid("c/handoff.md"), PS),
+                "FAIL %s: %s" % (self.hid("d/handoff.md"), first),
+                "FAIL %s: front matter: line 2: integer too large" % self.hid("e/handoff.md")]
+        self.assertEqual(self.lines(producers=["prod_handoff"]), (HEAD + want, 1))
+
+    def test_front_matter_kind_missing_path_file(self):  # GS7
+        self.kinds("handoff", extra={"handoff": SCHEMA_TEXT["handoff"].replace(
+            "  - dir: plan_state\n    glob: \"*/handoff.md\"\n", "  - path: context\n")})
+        self.assertEqual(self.lines(producers=["prod_handoff"]),
+                         (HEAD + ["FAIL schema.handoff.%s: missing" % CTX], 1))
+        self.put(CTX, HOK)
+        self.assertEqual(self.lines(producers=["prod_handoff"]), (HEAD + ["PASS schema.handoff"], 0))
+
+    def test_front_matter_kind_empty_passes(self):  # GS8
+        self.assertEqual(self.lines(producers=["prod_handoff"]), (HEAD + ["PASS schema.handoff"], 0))
+        self.put(PS + "/c/notes.md", "x")
+        os.makedirs(os.path.join(self.root, PS, "d"))
+        self.assertEqual(self.lines(producers=["prod_handoff"]), (HEAD + ["PASS schema.handoff"], 0))
+
+    def test_front_matter_unknown_dir_key(self):  # GS9
+        self.kinds("handoff", extra={"handoff": SCHEMA_TEXT["handoff"].replace("plan_state", "stat")})
+        out, code = self.run_g(producers=["prod_handoff"])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines()[2], "FAIL schema.kinds.handoff: %s: files: 'stat' is not a key of paths"
+                         % os.path.join(self.sdir, "handoff.yml"))
+
+    def test_gate_dispatch_by_format(self):  # GS10, GS11: yaml, markdown and front-matter kinds in one run
+        self.kinds("claim", "in-force")
+        self.put(PS + "/a/handoff.md", HOK)
+        self.put(".strict-delivery/state/claims/x.yml", "schema: other/1\n")
+        self.assertEqual(self.lines(producers=["prod_claim_handoff"]), (HEAD + [
+            "FAIL schema.claim..strict-delivery/state/claims/x.yml: schema: expected %s, got other/1" % _tag("claim"),
+            "PASS schema.handoff"], 1))
+        self.put(INDEX, TAG + "\n| x |\n")
+        self.assertEqual(self.lines(producers=["prod_inforce"]), (HEAD + ["PASS schema.in-force"], 0))
+
+    def test_front_matter_kind_through_gates_main(self):  # the command form: python3 -m gates check schema --root
+        self.put(PS + "/a/handoff.md", "---\nschema: %s\n---\n" % HTAG)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch("gates.producers.PRODUCER_MODULES", ("tests.fixtures.prod_handoff",)), \
+                mock.patch.object(schema, "SCHEMAS_DIR", self.sdir):
+            code = gates_main.main(["check", "schema", "--root", self.root])
+        self.assertEqual((code, err.getvalue()), (1, ""))
+        self.assertEqual(out.getvalue().splitlines(), HEAD + ["FAIL %s: plan: required key is missing" % self.hid("a/handoff.md")])
+
+    def test_exception_groups(self):  # V3, the gate half
+        beg = getattr(builtins, "BaseExceptionGroup", None)
+        eg = getattr(builtins, "ExceptionGroup", None)
+        if beg is None:
+            self.skipTest("BaseExceptionGroup is absent on this interpreter (3.9)")
+        self.put(PS + "/a/handoff.md", "---\nschema: %s\nplan: p\nboom: 1\n---\n" % HTAG)
+        real = yamlsub.parse
+
+        def parse(text):
+            if "boom" in text:
+                raise self.exc
+            return real(text)
+        self.exc = eg("x", [ValueError()])
+        with mock.patch.object(yamlsub, "parse", side_effect=parse):
+            out, code = self.run_g(producers=["prod_handoff"])
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith("FAIL schema.input: ExceptionGroup: "), out)
+        self.exc = beg("x", [KeyboardInterrupt()])
+        with mock.patch.object(yamlsub, "parse", side_effect=parse):
+            with self.assertRaises(beg) as cm:
+                self.run_g(producers=["prod_handoff"])
+        self.assertIs(cm.exception, self.exc)
 
 
 if __name__ == "__main__":
