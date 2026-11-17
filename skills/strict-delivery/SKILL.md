@@ -24,7 +24,7 @@ Where superpowers says otherwise (for example "do not re-run the suite" for revi
 
 ## Roles and tiers
 
-The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: `program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, `task_reviewer`, `final_reviewer`, `final_verifier`, `exception_reviewer`, `audit_reviewer`, `audit_verifier` and `investigator`.
+The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: `program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, `task_reviewer`, `final_reviewer`, `final_verifier`, `exception_reviewer`, `audit_reviewer`, `audit_verifier`, `investigator`, `plan_writer`, `plan_reviewer` and `drafter`.
 
 Every dispatch carries its role's prompt block byte for byte and chooses a tier; its `## Model` names the model config `models.tiers` maps that tier to, and every other line of a brief or report names tiers, never a model.
 

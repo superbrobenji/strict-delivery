@@ -16,6 +16,9 @@ Each framework role has a prompt block, a minimum tier, a budget cap, whether it
 | audit_reviewer | skills/strict-delivery/prompts/audit_reviewer.md | tier3 | yes | open |
 | audit_verifier | skills/strict-delivery/prompts/audit_verifier.md | tier3 | yes | open |
 | investigator | skills/strict-delivery/prompts/investigator.md | tier3 | yes | none |
+| plan_writer | skills/strict-delivery/prompts/plan_writer.md | tier3 | yes | none |
+| plan_reviewer | skills/strict-delivery/prompts/plan_reviewer.md | tier3 | yes | open |
+| drafter | skills/strict-delivery/prompts/drafter.md | tier2 | yes | none |
 
 ## Model tiers
 

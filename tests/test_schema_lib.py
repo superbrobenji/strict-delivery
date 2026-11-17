@@ -72,6 +72,8 @@ def _ref_match(name: str, pat: str) -> bool:
 CFG = copy.deepcopy(config.DEFAULTS)
 BASE = {"kind": "thing", "version": 1, "format": "yaml", "files": [{"path": "config"}],
         "fields": {"schema": {"type": "str"}}}
+THING = "thing/%d" % BASE["version"]  # the tag of every record checked against a schema built from BASE
+MD_VERSION = 1  # the version of the markdown schema md() builds
 
 
 class Dirs(unittest.TestCase):
@@ -103,8 +105,8 @@ class Dirs(unittest.TestCase):
         return path, str(cm.exception)
 
     def md(self, **over):
-        d = {"kind": "in-force", "version": 1, "format": "markdown", "files": [{"path": "config"}],
-             "first_line": "<!-- schema: in-force/1 -->"}
+        d = {"kind": "in-force", "version": MD_VERSION, "format": "markdown", "files": [{"path": "config"}],
+             "first_line": "<!-- schema: in-force/%d -->" % MD_VERSION}
         d.update(over)
         return load_schema(self.put("in-force.yml", d))
 
@@ -393,7 +395,7 @@ class Types(Dirs):
         s = self.sch({"v": dict(spec, required=False)}, **kw)
         for value, expected in cases:
             with self.subTest(spec=spec["type"], value=repr(value)):
-                self.assertEqual(validate(s, {"schema": "thing/1", "v": value}, CFG),
+                self.assertEqual(validate(s, {"schema": THING, "v": value}, CFG),
                                  [e if e.startswith("v.") else "v: " + e for e in expected])
 
     def test_T1_str(self):
@@ -464,8 +466,8 @@ class Types(Dirs):
         cfg = copy.deepcopy(CFG)
         cfg["ids"]["finding"] = "FX"
         s = self.sch({"v": {"type": "id", "id_kind": "finding"}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "v": "FX-20261031-k3f9"}, cfg), [])  # prefix from cfg
-        self.assertEqual(len(validate(s, {"schema": "thing/1", "v": "F-20261031-k3f9"}, cfg)), 1)
+        self.assertEqual(validate(s, {"schema": THING, "v": "FX-20261031-k3f9"}, cfg), [])  # prefix from cfg
+        self.assertEqual(len(validate(s, {"schema": THING, "v": "F-20261031-k3f9"}, cfg)), 1)
 
     def test_T10_sha(self):
         m = "must be 7 to 40 lowercase hex digits"
@@ -535,20 +537,20 @@ class Types(Dirs):
     def test_T14_none(self):
         s = self.sch({"n": {"type": "str", "nullable": True, "required": False},
                       "z": {"type": "str", "required": False}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "n": None}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "z": None}, CFG), ["z: must not be null"])
+        self.assertEqual(validate(s, {"schema": THING, "n": None}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "z": None}, CFG), ["z: must not be null"])
 
     def test_T15_nested_depth(self):
         s = self.sch({"a": {"type": "list", "items": {"type": "map", "fields": {"b": {"type": "int"}}}},
                       "m": {"type": "any-map", "required": False}})
-        self.assertEqual(validate(s, rt({"schema": "thing/1", "a": [{"b": 1}, {"b": "x"}]}), CFG),
+        self.assertEqual(validate(s, rt({"schema": THING, "a": [{"b": 1}, {"b": "x"}]}), CFG),
                          ["a.1.b: must be an integer"])
         deep = cur = {}
         for _ in range(1000):
             cur["k"] = {}
             cur = cur["k"]
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": [], "m": deep}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": [], "m": {"x": [1, {"y": 2}]}}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": [], "m": deep}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": [], "m": {"x": [1, {"y": 2}]}}, CFG), [])
 
     def test_T16_top_level_not_a_mapping(self):
         s = self.sch()
@@ -559,9 +561,9 @@ class Types(Dirs):
 class Conditions(Dirs):
     def test_R1_required_nullable(self):
         s = self.sch({"a": {"type": "str"}, "b": {"type": "str", "required": False}})
-        self.assertEqual(validate(s, {"schema": "thing/1"}, CFG), ["a: required key is missing"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x", "b": None}, CFG), ["b: must not be null"])
+        self.assertEqual(validate(s, {"schema": THING}, CFG), ["a: required key is missing"])
+        self.assertEqual(validate(s, {"schema": THING, "a": "x"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": "x", "b": None}, CFG), ["b: must not be null"])
 
     def cond(self):
         return self.sch({"status": {"type": "enum", "values": ["open", "answered", "x"]},
@@ -570,22 +572,22 @@ class Conditions(Dirs):
 
     def test_R2_required_when_top_level(self):
         s = self.cond()
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "answered"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "answered"}, CFG),
                          ["answer: required key is missing (required_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "answered", "answer": "y"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x"}, CFG), [])  # not matched: optional
+        self.assertEqual(validate(s, {"schema": THING, "status": "answered", "answer": "y"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "status": "x"}, CFG), [])  # not matched: optional
         s2 = self.sch({"status": {"type": "str"}, "a": {"type": "str", "required": True,
                                                          "required_when": [{"status": ["z"]}]}})
-        self.assertEqual(validate(s2, {"schema": "thing/1", "status": "y"}, CFG), [])  # required: true is overridden
+        self.assertEqual(validate(s2, {"schema": THING, "status": "y"}, CFG), [])  # required: true is overridden
 
     def test_R3_absent_when_top_level(self):
         s = self.cond()
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "open", "answer": "x"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "open", "answer": "x"}, CFG),
                          ["answer: must be absent (absent_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "open", "answer": None}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "open", "answer": None}, CFG),
                          ["answer: must be absent (absent_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "open"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x", "answer": "y"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "status": "open"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "status": "x", "answer": "y"}, CFG), [])
 
     def nested(self):
         return self.sch({"o": {"type": "map", "fields": {
@@ -595,7 +597,7 @@ class Conditions(Dirs):
 
     def test_R4_conditions_inside_nested_map(self):
         s = self.nested()
-        v = lambda o: validate(s, {"schema": "thing/1", "o": o}, CFG)
+        v = lambda o: validate(s, {"schema": THING, "o": o}, CFG)
         self.assertEqual(v({"kind": "issue", "number": 3}), [])
         self.assertEqual(v({"kind": "issue"}), ["o.number: required key is missing (required_when matches)"])
         self.assertEqual(v({"kind": "issue", "number": 3, "plan": "p"}), ["o.plan: must be absent (absent_when matches)"])
@@ -603,50 +605,50 @@ class Conditions(Dirs):
 
     def test_R5_condition_sibling_absent(self):
         s = self.cond()
-        self.assertEqual(validate(s, {"schema": "thing/1"}, CFG), ["status: required key is missing"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "answer": "y"}, CFG), ["status: required key is missing"])
+        self.assertEqual(validate(s, {"schema": THING}, CFG), ["status: required key is missing"])
+        self.assertEqual(validate(s, {"schema": THING, "answer": "y"}, CFG), ["status: required key is missing"])
 
     def test_R6_condition_sibling_of_other_type(self):
         s = self.sch({"status": {"type": "any-map", "required": False},
                       "a": {"type": "str", "required_when": [{"status": ["1"]}]},
                       "b": {"type": "str", "required_when": [{"status": [1]}]}})
         for status in (1, True, [1], {"x": 1}, None):
-            errs = validate(s, {"schema": "thing/1", "status": status}, CFG)
+            errs = validate(s, {"schema": THING, "status": status}, CFG)
             self.assertNotIn("a: required key is missing (required_when matches)", errs, status)
         self.assertIn("b: required key is missing (required_when matches)",
-                      validate(s, {"schema": "thing/1", "status": 1}, CFG))
+                      validate(s, {"schema": THING, "status": 1}, CFG))
         self.assertNotIn("b: required key is missing (required_when matches)",
-                         validate(s, {"schema": "thing/1", "status": True}, CFG))
+                         validate(s, {"schema": THING, "status": True}, CFG))
         s2 = self.sch({"status": {"type": "str", "required": False},
                        "a": {"type": "str", "required_when": [{"status": ["1"]}]}})
-        self.assertEqual(validate(s2, {"schema": "thing/1", "status": "1"}, CFG),
+        self.assertEqual(validate(s2, {"schema": THING, "status": "1"}, CFG),
                          ["a: required key is missing (required_when matches)"])
-        self.assertEqual(validate(s2, {"schema": "thing/1", "status": 1}, CFG), ["status: must be a non-empty string"])
+        self.assertEqual(validate(s2, {"schema": THING, "status": 1}, CFG), ["status: must be a non-empty string"])
 
     def test_R7_several_conditions(self):
         s = self.sch({"status": {"type": "str"},
                       "a": {"type": "str", "required_when": [{"status": ["x"]}, {"status": ["y"]}]}})
         for st, n in (("x", 1), ("y", 1), ("z", 0)):
-            self.assertEqual(len(validate(s, {"schema": "thing/1", "status": st}, CFG)), n, st)
+            self.assertEqual(len(validate(s, {"schema": THING, "status": st}, CFG)), n, st)
         s = self.sch({"status": {"type": "str"}, "a": {"type": "str", "required": False, "absent_when": [
             {"status": ["x"]}, {"status": ["y"]}]}})
-        self.assertEqual(len(validate(s, {"schema": "thing/1", "status": "y", "a": "q"}, CFG)), 1)
-        self.assertEqual(len(validate(s, {"schema": "thing/1", "status": "x", "a": "q"}, CFG)), 1)
+        self.assertEqual(len(validate(s, {"schema": THING, "status": "y", "a": "q"}, CFG)), 1)
+        self.assertEqual(len(validate(s, {"schema": THING, "status": "x", "a": "q"}, CFG)), 1)
 
     def test_R8_condition_with_several_siblings(self):
         s = self.sch({"a": {"type": "str"}, "b": {"type": "str"},
                       "c": {"type": "str", "required_when": [{"a": ["x"], "b": ["y"]}]}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x", "b": "n"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "n", "b": "y"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x", "b": "y"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "a": "x", "b": "n"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": "n", "b": "y"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": "x", "b": "y"}, CFG),
                          ["c: required key is missing (required_when matches)"])
 
     def test_R9_both_rules_match(self):
         s = self.sch({"status": {"type": "str"}, "a": {"type": "str", "required_when": [{"status": ["x"]}],
                                                       "absent_when": [{"status": ["x"]}]}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x", "a": "v"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "x", "a": "v"}, CFG),
                          ["a: must be absent (absent_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "x"}, CFG),
                          ["a: required key is missing (required_when matches)"])
 
 
@@ -661,7 +663,7 @@ class Tag(Dirs):
         s2 = self.sch(kind="decision", version=2)
         self.assertEqual(validate(s2, {"schema": "decision/1"}, CFG),
                          ["schema: expected decision/2, got decision/1; run /strict-delivery:upgrade"])
-        self.assertEqual(validate(s, {"schema": "decision/1", "v": 1}, CFG), [])
+        self.assertEqual(validate(s, {"schema": "decision/%d" % s.version, "v": 1}, CFG), [])
 
     def test_G2_wrong_kind_malformed_or_missing(self):
         s = self.dec()
@@ -681,7 +683,7 @@ class Tag(Dirs):
 
 
 class Markdown(Dirs):
-    TAG = "<!-- schema: in-force/1 -->"
+    TAG = "<!-- schema: in-force/%d -->" % MD_VERSION
 
     def test_M1_first_line(self):
         s = self.md()

@@ -18,7 +18,7 @@ import sys
 import unittest
 
 from gates import __main__ as gates_main
-from gates.lib import config, yamlsub
+from gates.lib import config, migrations, yamlsub
 from gates.tools import githooks
 from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo
 
@@ -84,7 +84,7 @@ class ConfigTest(GitIsolatedTestCase):
         self.assertNotIn("tier4", raw.get("models", {}).get("tiers", {}))
         self.assertNotIn("top_tier_fallback", raw)
 
-    def test_config_only_two_keys_added(self):  # G3
+    def test_config_only_three_keys_added(self):  # G3: commands, top_tier_roles and (config/2) reviews
         p = subprocess.run(["git", "-C", REPO, "show", "%s:%s" % (BASE, CONFIG)], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)
         self.assertEqual(p.returncode, 0, p.stderr.decode("utf-8", "replace"))
@@ -92,15 +92,21 @@ class ConfigTest(GitIsolatedTestCase):
         with open(base_path, "wb") as fh:
             fh.write(p.stdout)
         base = yamlsub.load(base_path, CONFIG)
+        # exempt literal (P:32): the content of the config at BASE, read from git; its tag is that commit's own
         self.assertEqual(base, {"schema": "config/1", "framework_version": "0.0.0", "profile": "strict"})
         current = dict(self.load_raw())
-        self.assertEqual(sorted(set(current) - set(base)), ["commands", "top_tier_roles"])
-        for key in ("commands", "top_tier_roles"):
+        self.assertEqual(sorted(set(current) - set(base)), ["commands", "reviews", "top_tier_roles"])
+        for key in ("commands", "reviews", "top_tier_roles"):
             del current[key]
-        self.assertEqual(current, base)
-        # append only: the base's three lines open the file unchanged, the two keys follow
+        # this repository is migrated to config/2 (Task 2c.2): the base keys under the migrated tag
+        self.assertEqual(current, migrations.migrate("config", base))
+        # append only: the base's lines open the file unchanged but for the first line's tag, the new keys follow
+        old_text = p.stdout.decode("utf-8")
+        first, nl, rest = old_text.partition("\n")
+        self.assertEqual((first, nl), ("schema: config/1", "\n"))
+        tag = "config/%d" % migrations.current_version("config")
         text = read_text(os.path.join(REPO, CONFIG))
-        self.assertTrue(text.startswith(p.stdout.decode("utf-8")))
+        self.assertTrue(text.startswith("schema: " + tag + "\n" + rest))
 
 
 class CopyCase(GitIsolatedTestCase):

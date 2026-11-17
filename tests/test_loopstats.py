@@ -15,7 +15,7 @@ import unittest
 from fractions import Fraction
 
 from gates import __main__ as gates_main
-from gates.lib import config
+from gates.lib import config, migrations
 from gates.lib.loopstats import (ev, geo_fit, report, rule_n, small_signals, trend, verdict)
 from gates.lib.result import GateError
 from gates.lib.store import Record
@@ -71,7 +71,7 @@ def fid(i):
 
 def frow(i, rnd, sev="MEDIUM", dim=None, caused=True, plan="p", task="1x.1", **over):
     """A valid finding row owned by ``plan``/``task`` with the Rule N and T fields (any may be dropped via over)."""
-    row = {"schema": "finding/1", "id": fid(i), "status": "open", "source": "review", "severity": sev,
+    row = {"schema": "finding/%d" % migrations.current_version("finding"), "id": fid(i), "status": "open", "source": "review", "severity": sev,
            "class": "bug", "siblings": [], "cites": [{"file": "src/x.py", "lines": "1-2", "sha": SHA}],
            "repro": None, "owner": {"kind": "plan", "plan": plan, "task": task}, "pin": None, "ruling": None,
            "evidence": [], "history": [{"status": "open", "sha": SHA, "by": "agent"}],
@@ -330,17 +330,47 @@ class TestCli(Fixture):
         self.put(bad)
         self.assertIn(bad["id"], self.refused(self.base(), "severity"))
 
-    def test_escape_cost_shape_refused(self):  # E2: config.load refuses the key (config/1)
+    def test_escape_cost_shape_refused(self):
+        # E2: under config/2 config.load refuses a malformed escape_cost with its own message; a well-formed one is
+        # refused by loopstats itself (fail closed) until the registered follow-up "6E.3 escape_cost read after
+        # config/2" reads it. Every shape exits 1 with one stderr line.
         self.golden_fixture()
         full = {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}
-        shapes = {"valid": full, "missing LOW": {k: 1 for k in ("CRITICAL", "HIGH", "MEDIUM")},
-                  "INFO": dict(full, INFO=1), "negative": dict(full, LOW=-1), "bool": dict(full, LOW=True),
-                  "string": dict(full, LOW="2"), "zeros": {k: 0 for k in full}}
-        for name, shape in shapes.items():
+        cfg = ".strict-delivery/config.yml"
+        lead = "loopstats: " + cfg + ": "
+        closed = ("loopstats: escape_cost is set, but loopstats does not read it yet "
+                  "(follow-up task 6E.3 escape_cost read after config/2)")
+        low = lead + "escape_cost.LOW: must be an integer of at least 0"
+        digits_cap = lead + "escape_cost.LOW: must be an integer of at most 600 digits"
+        shapes = {
+            "valid": (full, closed),
+            "missing LOW": ({k: 1 for k in ("CRITICAL", "HIGH", "MEDIUM")}, lead + "escape_cost.LOW: required key is missing"),
+            "INFO": (dict(full, INFO=1), lead + "unknown key 'escape_cost.INFO'"),
+            "negative": (dict(full, LOW=-1), low), "bool": (dict(full, LOW=True), low),
+            "string": (dict(full, LOW="2"), low), "zeros": ({k: 0 for k in full}, closed),
+            "U+1FAE8 key": (dict(full, **{"\U0001FAE8": 1}), lead + "unknown key 'escape_cost.\\U0001fae8'"),
+        }
+        # PC1: emit refuses an integer over yamlsub.MAX_INT_CHARS, so the digit rows are written as text; the parser's
+        # own cap refuses them before config.load's 600-digit cap and before int()'s 4300-digit text limit matter.
+        yaml_cap = lead + "integer too large (line 8)"
+        big = {"4300 digits": ("9" * 4300, yaml_cap), "4301 digits": ("9" * 4301, yaml_cap),
+               "1001 digits": ("9" * 1001, yaml_cap), "1000 digits": ("9" * 1000, digits_cap),
+               "601 digits": ("9" * 601, digits_cap)}
+        for name, (shape, line) in shapes.items():
             with self.subTest(name):
-                write_record(self.root, ".strict-delivery/config.yml", dict(minimal_config(), escape_cost=shape))
+                write_record(self.root, cfg, dict(minimal_config(), escape_cost=shape))
                 err = self.refused(self.base(), "escape_cost")
-                self.assertIn("unknown key", err)
+                self.assertEqual(err.splitlines()[-1], line)
+        for name, (text, line) in big.items():
+            with self.subTest(name):
+                path = write_record(self.root, cfg, dict(minimal_config(), escape_cost=full))
+                with open(path, encoding="utf-8") as fh:
+                    body = fh.read()
+                self.assertEqual(body.count("LOW: 1\n"), 1)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body.replace("LOW: 1\n", "LOW: " + text + "\n"))
+                err = self.refused(self.base(), "")
+                self.assertEqual(err.splitlines()[-1], line)
 
     def test_module_main_golden(self):  # A9
         self.golden_fixture()
@@ -348,7 +378,6 @@ class TestCli(Fixture):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual((p.returncode, p.stdout.decode(), p.stderr.decode()), (0, GOLDEN, ""))
 
-    @unittest.skipUnless("loopstats" in gates_main.COMMANDS, "Rq-6-1 not on this branch")
     def test_loopstats_command_registered(self):  # A10
         self.golden_fixture()
         p = subprocess.run([sys.executable, "-m", "gates", "loopstats"] + self.base("--narrowed", "2"), cwd=ROOT,

@@ -5,6 +5,7 @@ from typing import Callable, Dict, List
 
 GATES: Dict[str, str] = {"cites": "gates.gate_cites", "claims": "gates.gate_claims",
                          "decisions": "gates.gate_decisions",
+                         "dispatch": "gates.gate_dispatch",
                          "register": "gates.gate_register",
                          "schema": "gates.gate_schema"}  # gate name -> module defining check(args)
 _OWNER: Dict[str, str] = {"cites": " (stream C, Task C2.2)"}  # who delivers a gate module that may be absent
@@ -46,6 +47,11 @@ def _decisions(args: List[str]) -> int:
 def _findings(args: List[str]) -> int:
     from gates.tools import findings_cli
     return findings_cli.main(args)
+
+
+def _loopstats(args: List[str]) -> int:
+    from gates import loopstats
+    return loopstats.main(args)
 
 
 def _run_all(args: List[str]) -> int:
@@ -106,7 +112,7 @@ def _hook(args: List[str]) -> int:
 
 COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings,
                                                    "githook": _githook, "githooks": _githooks, "hook": _hook,
-                                                   "index": _index, "run_all": _run_all}
+                                                   "index": _index, "loopstats": _loopstats, "run_all": _run_all}
 
 
 def main(argv: List[str]) -> int:

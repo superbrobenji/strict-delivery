@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261117-jjpf
+status: open
+source: "PR-2c3 final review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g2/final-review-1.md F-1 (fixed in cbc4474)"
+severity: LOW
+class: "stale config-version statements in loopstats after config/2: gates/lib/loopstats.py:7, :152, :220; gates/loopstats.py:98; tests/test_loopstats.py:341"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2c.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: cbc4474813eeb09a2e90e27a2a026ffc729c1a7a
+    by: stream-a8
+review_round: 1
+caused_by_change: true
+dimension: user-facing refusal text vs the shipped config version

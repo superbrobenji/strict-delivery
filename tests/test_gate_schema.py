@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -24,7 +25,7 @@ DEC = ".strict-delivery/state/decisions"
 CTX = ".strict-delivery/context.yml"
 ID1 = "DEC-20261031-k3f9"
 ID2 = "DEC-20261031-m4n5"
-TAG = "<!-- schema: in-force/1 -->"
+CURRENT = minimal_config()["schema"]  # the config tag the gate expects (test_minimal_config_is_current pins it)
 
 SCHEMA_TEXT = {
     "decision": '''kind: decision
@@ -69,14 +70,25 @@ fields:
     type: str
 ''',
 }
+_MD_VERSION = 1
 for _k in ("in-force", "overview", "decision-index", "finding-index"):
     SCHEMA_TEXT[_k] = '''kind: %s
-version: 1
+version: %d
 format: markdown
 files:
   - path: index
-first_line: "<!-- schema: %s/1 -->"
-''' % (_k, _k)
+first_line: "<!-- schema: %s/%d -->"
+''' % (_k, _MD_VERSION, _k, _MD_VERSION)
+
+
+def _tag(kind):
+    """The tag of the schema this file builds for ``kind``: its kind and the version line of SCHEMA_TEXT[kind]."""
+    return "%s/%s" % (kind, re.search(r"^version: (\d+)$", SCHEMA_TEXT[kind], re.M).group(1))
+
+
+TAG = "<!-- schema: %s -->" % _tag("in-force")
+DTAG = _tag("decision")
+CTXTAG = _tag("context")
 
 
 class GateCase(GitIsolatedTestCase):
@@ -130,6 +142,138 @@ class GateCase(GitIsolatedTestCase):
         raise AssertionError("config.load accepted the tree")
 
 
+class Config2Schema(GateCase):
+    """Rows S1-S7 of Task 2c.2: the production schema file through ``check schema``; expected texts by hand."""
+
+    def out(self, extra):
+        write_record(self.root, CFGFILE, dict(minimal_config(), **extra))
+        return self.lines(schemas_dir=False)
+
+    def fail_line(self, dotted, problem):
+        return "FAIL schema.config..strict-delivery/config.yml: %s: %s" % (dotted, problem)
+
+    def test_config_schema_is_version_2(self):  # S1
+        self.assertEqual(schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "config.yml")).version, 2)
+
+    def test_schema_file_new_keys_optional(self):  # S2
+        spec = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "config.yml")).fields
+        for key in ("limits", "merge", "escape_cost", "reviews", "context"):
+            with self.subTest(key=key):
+                self.assertIn(key, spec)
+                self.assertEqual(spec[key]["required"], False)
+        self.assertEqual(self.out({}), (["PASS schema.kinds", "PASS schema.config"], 0))
+
+    def test_schema_file_accepts_reviews_and_context(self):  # S3
+        self.assertNotIn("FAIL", "\n".join(self.out({"reviews": {"small": {"max_lines": 10}},
+                                                      "context": {"max_lines": 50}})[0]))
+        self.assertEqual(self.out({"reviews": {"small": {"max_lines": 10}}, "context": {"max_lines": 50}})[1], 0)
+        lines, _ = self.out({"reviews": {"extra": 1}})
+        self.assertIn(self.fail_line("reviews.extra", "unknown key"), lines)
+
+    def test_schema_file_accepts_limits_merge_escape_cost(self):  # S3
+        for extra in ({"limits": {"max_children": {"stream_controller": 4}, "max_depth": 3, "max_concurrent": 20}},
+                      {"merge": {"mode": "controller"}},
+                      {"escape_cost": {"CRITICAL": 8, "HIGH": 4, "MEDIUM": 2, "LOW": 1}},
+                      {"reviews": {"small": {"exclude": ["docs/**"], "tier": "tier3", "max_files": 1}}}):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.out(extra), (["PASS schema.kinds", "PASS schema.config"], 0))
+
+    def test_schema_file_refuses_unknown_nested_keys(self):  # S4
+        full = {"CRITICAL": 8, "HIGH": 4, "MEDIUM": 2, "LOW": 1}
+        for extra, dotted in (({"reviews": {"extra": 1}}, "reviews.extra"),
+                              ({"reviews": {"small": {"extra": 1}}}, "reviews.small.extra"),
+                              ({"context": {"extra": 1}}, "context.extra"), ({"merge": {"extra": 1}}, "merge.extra"),
+                              ({"limits": {"extra": 1}}, "limits.extra"),
+                              ({"escape_cost": dict(full, INFO=1)}, "escape_cost.INFO")):
+            with self.subTest(dotted=dotted):
+                lines, code = self.out(extra)
+                self.assertEqual((lines[1:], code), ([self.fail_line(dotted, "unknown key")], 1))
+
+    def test_schema_file_escape_cost_all_four(self):  # S5
+        full = {"CRITICAL": 8, "HIGH": 4, "MEDIUM": 2, "LOW": 1}
+        for left_out in full:
+            with self.subTest(left_out=left_out):
+                lines, code = self.out({"escape_cost": {k: v for k, v in full.items() if k != left_out}})
+                self.assertEqual((lines[1:], code),
+                                 ([self.fail_line("escape_cost." + left_out, "required key is missing")], 1))
+
+    def test_schema_file_int_minimums(self):  # S6: every int field, at its minimum minus one
+        cases = [({"reviews": {"small": {"max_lines": 0}}}, "reviews.small.max_lines", 1),
+                 ({"reviews": {"small": {"max_files": 0}}}, "reviews.small.max_files", 1),
+                 ({"context": {"max_lines": 0}}, "context.max_lines", 1),
+                 ({"context": {"max_bytes": 0}}, "context.max_bytes", 1),
+                 ({"limits": {"max_depth": 0}}, "limits.max_depth", 1),
+                 ({"limits": {"max_concurrent": 0}}, "limits.max_concurrent", 1)]
+        for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+            cases.append(({"escape_cost": dict({"CRITICAL": 8, "HIGH": 4, "MEDIUM": 2, "LOW": 1}, **{sev: -1})},
+                          "escape_cost." + sev, 0))
+        for extra, dotted, low in cases:
+            with self.subTest(dotted=dotted):
+                lines, code = self.out(extra)
+                self.assertEqual((lines[1:], code), ([self.fail_line(dotted, "must be at least %d" % low)], 1))
+        for extra, dotted in ((cases[0][0], "reviews.small.max_lines"), (cases[4][0], "limits.max_depth")):
+            with self.subTest(at_min=dotted):  # the minimum itself passes
+                ok = {"reviews": {"small": {"max_lines": 1}}} if "reviews" in extra else {"limits": {"max_depth": 1}}
+                self.assertEqual(self.out(ok)[1], 0)
+
+    def test_schema_file_enums(self):  # S7
+        for extra, dotted, vals in (({"merge": {"mode": "auto"}}, "merge.mode", "host, controller"),
+                                    ({"reviews": {"small": {"tier": "tier5"}}}, "reviews.small.tier",
+                                     "tier1, tier2, tier3, tier4")):
+            with self.subTest(dotted=dotted):
+                lines, code = self.out(extra)
+                self.assertEqual((lines[1:], code), ([self.fail_line(dotted, "must be one of " + vals)], 1))
+        for mode in ("host", "controller"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.out({"merge": {"mode": mode}})[1], 0)
+        for tier in ("tier1", "tier2", "tier3", "tier4"):
+            with self.subTest(tier=tier):
+                self.assertEqual(self.out({"reviews": {"small": {"tier": tier}}})[1], 0)
+
+    def test_schema_file_each_nested_key_alone(self):  # S2 for the nested keys: every one is optional
+        for extra in ({"limits": {"max_children": {"a": 1}}}, {"limits": {"max_depth": 2}},
+                      {"limits": {"max_concurrent": 2}}, {"merge": {"mode": "host"}},
+                      {"reviews": {"small": {"max_lines": 2}}}, {"reviews": {"small": {"max_files": 2}}},
+                      {"reviews": {"small": {"exclude": ["a"]}}}, {"reviews": {"small": {"tier": "tier1"}}},
+                      {"context": {"max_lines": 2}}, {"context": {"max_bytes": 2}}):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.out(extra), (["PASS schema.kinds", "PASS schema.config"], 0))
+
+    def test_schema_file_list_and_map_types(self):  # shapes the schema file alone refuses
+        for extra, dotted in (({"reviews": {"small": {"exclude": "x"}}}, "reviews.small.exclude"),
+                              ({"limits": {"max_children": 3}}, "limits.max_children"),
+                              ({"reviews": {"small": {"exclude": [3]}}}, "reviews.small.exclude.0")):
+            with self.subTest(dotted=dotted):
+                lines, code = self.out(extra)
+                self.assertEqual(code, 1)
+                self.assertTrue(lines[1].startswith("FAIL schema.config..strict-delivery/config.yml: " + dotted + ": "),
+                                lines)
+
+    def test_schema_file_exclude_items_are_globs(self):  # F-2c2-R1-1: the item type of reviews.small.exclude
+        """Exact lines, written by hand from schema.py's ``glob`` type: a non-str or empty item gives ``must be a
+        non-empty glob``, null gives ``must not be null``, a bracket expression outside the grammar gives
+        ``must be a supported glob: the bracket expression [..] holds <problem>``. ``[!]`` has no closing ``]``
+        once the leading ``!`` and ``]`` are read, so fnmatch takes it as literal text and it is accepted."""
+        allowed = (r"which is not allowed: inside [ ] use an optional leading ! then characters or ranges x-y "
+                   r"(x <= y) of printable ASCII other than ! - [ \\ ] ^ & ~ |")  # Result.render escapes `\` once
+        pre = "FAIL schema.config..strict-delivery/config.yml: reviews.small.exclude.%d: "
+        cases = [("[z-a]", "must be a supported glob: the bracket expression [z-a] holds the reversed range z-a"),
+                 ("[a-]", "must be a supported glob: the bracket expression [a-] holds U+002D, " + allowed),
+                 ("[^a]", "must be a supported glob: the bracket expression [^a] holds U+005E, " + allowed),
+                 ("[é]", "must be a supported glob: the bracket expression [é] holds U+00E9, " + allowed),
+                 (3, "must be a non-empty glob"), ("", "must be a non-empty glob"), (None, "must not be null")]
+        for item, why in cases:
+            for pos in (0, 1):
+                with self.subTest(item=item, pos=pos):
+                    items = ["ok/**"] * pos + [item]
+                    lines, code = self.out({"reviews": {"small": {"exclude": items}}})
+                    self.assertEqual((lines[1:], code), ([(pre % pos) + why], 1))
+        for item in ("[!]", "[a]", "[!a]", "a/*.py", "CLAUDE.md"):
+            with self.subTest(accepted=item):
+                self.assertEqual(self.out({"reviews": {"small": {"exclude": [item]}}}),
+                                 (["PASS schema.kinds", "PASS schema.config"], 0))
+
+
 class Config(GateCase):
     def test_C15_valid_config_passes(self):
         self.assertEqual(self.lines(schemas_dir=False), (["PASS schema.kinds", "PASS schema.config"], 0))
@@ -167,7 +311,7 @@ class Config(GateCase):
                 os.rmdir(path) if make == "dir" else os.replace(path, os.path.join(self.tmp, "gone"))
 
     def test_F5_symlinked_config_is_read(self):
-        self.put("real-config.yml", "schema: config/1\nframework_version: \"0.0.0\"\nprofile: strict\n")
+        self.put("real-config.yml", "schema: %s\nframework_version: \"0.0.0\"\nprofile: strict\n" % CURRENT)
         os.replace(os.path.join(self.root, CFGFILE), os.path.join(self.tmp, "old"))
         os.symlink("../real-config.yml", os.path.join(self.root, CFGFILE))
         self.assertEqual(self.lines(), (["PASS schema.kinds", "PASS schema.config"], 0))
@@ -195,12 +339,14 @@ class Config(GateCase):
             got = self.lines()[0]
             self.assertIn("FAIL schema.config..strict-delivery/config.yml: %s: required key is missing" % key
                           if key != "schema" else
-                          "FAIL schema.config..strict-delivery/config.yml: schema: expected config/1, got (missing)", got)
+                          "FAIL schema.config..strict-delivery/config.yml: schema: expected %s, got (missing)"
+                          % CURRENT, got)
 
-    def test_C5_schema_tag(self):
-        pre = "FAIL schema.config..strict-delivery/config.yml: schema: expected config/1, got "
-        for tag, tail in (("config/2", "config/2; run /strict-delivery:upgrade"), ("decision/1", "decision/1"),
-                          ("1", "1"), ("config/1 ", "config/1 ")):
+    def test_C5_schema_tag(self):  # S8: old-version refusal and malformed-tag test, the tags are its subject
+        pre = "FAIL schema.config..strict-delivery/config.yml: schema: expected %s, got " % CURRENT
+        for tag, tail in (("config/1", "config/1; run /strict-delivery:upgrade"),
+                          ("config/3", "config/3; run /strict-delivery:upgrade"), ("decision/1", "decision/1"),
+                          ("1", "1"), (CURRENT + " ", CURRENT + " ")):
             write_record(self.root, CFGFILE, dict(minimal_config(), schema=tag))
             self.assertEqual(self.lines()[0][1:], [pre + tail], tag)
         self.cfg_text("schema: 1\nframework_version: x\nprofile: strict\n")
@@ -418,7 +564,7 @@ class Generated(GateCase):
         self.kinds("context")
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:],
                          ["FAIL schema.context.%s: missing" % CTX])
-        self.put(CTX, "schema: context/1\nx: y\n")
+        self.put(CTX, "schema: " + CTXTAG + "\nx: y\n")
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:], ["PASS schema.context"])
 
     def test_N4_dangling_symlink_path_file_is_a_read_failure_not_missing(self):
@@ -445,19 +591,19 @@ class Generated(GateCase):
         self.kinds("decision")
         rec = DEC + "/" + ID1 + ".yml"
         pre = "FAIL schema.decision." + rec + ": "
-        self.put(rec, "schema: decision/1\nid: %s\nstatus: [open\n" % ID1)
+        self.put(rec, "schema: " + DTAG + "\nid: %s\nstatus: [open\n" % ID1)
         got = self.lines(producers=["prod_decision"])[0][2]
         self.assertTrue(got.startswith(pre + rec + ": ") and got.endswith(" (line 3)"), got)
         self.put(rec, b"schema: \xff\n")
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], [pre + rec + ": not valid UTF-8"])
         self.put(rec, "- a\n")
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], [pre + "top level: must be a mapping"])
-        self.put(rec, "schema: decision/1\nid: DEC-20261031-K3F9\nstatus: done\nzzz: 1\n")
+        self.put(rec, "schema: " + DTAG + "\nid: DEC-20261031-K3F9\nstatus: done\nzzz: 1\n")
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], [
             pre + "id: id does not match the form; expected DEC-<YYYYMMDD>-<xxxx>: a valid calendar date and "
                   "four characters from 23456789abcdefghijkmnpqrstuvwxyz",
             pre + "status: must be one of open, answered", pre + "zzz: unknown key"])
-        self.put(rec, "schema: decision/1\nid: %s\nstatus: open\n" % ID1)
+        self.put(rec, "schema: " + DTAG + "\nid: %s\nstatus: open\n" % ID1)
         self.put(DEC + "/index.yml", "not: a record\n")  # excluded by the schema
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], ["PASS schema.decision"])
 
@@ -465,7 +611,7 @@ class Generated(GateCase):
         self.kinds("decision")
         d = os.path.join(self.root, DEC)
         os.makedirs(d)
-        self.put(DEC + "/real.yml", "schema: decision/1\nid: %s\nstatus: open\n" % ID1)
+        self.put(DEC + "/real.yml", "schema: " + DTAG + "\nid: %s\nstatus: open\n" % ID1)
         os.symlink("real.yml", os.path.join(d, "link.yml"))
         os.symlink("nowhere", os.path.join(d, "dangling.yml"))
         os.mkfifo(os.path.join(d, "fifo.yml"))
@@ -493,8 +639,8 @@ class Generated(GateCase):
 
     def test_A6_all_pass_line_set(self):
         self.kinds("decision", "claim", "context")
-        self.put(DEC + "/" + ID1 + ".yml", "schema: decision/1\nid: %s\nstatus: answered\n" % ID1)
-        self.put(CTX, "schema: context/1\nx: y\n")
+        self.put(DEC + "/" + ID1 + ".yml", "schema: " + DTAG + "\nid: %s\nstatus: answered\n" % ID1)
+        self.put(CTX, "schema: " + CTXTAG + "\nx: y\n")
         self.assertEqual(self.lines(producers=["prod_claim_decision", "prod_context"]), ([
             "PASS schema.kinds", "PASS schema.config", "PASS schema.decision", "PASS schema.claim",
             "PASS schema.context"], 0))
@@ -567,10 +713,10 @@ class Args(GateCase):
 class Enabling(unittest.TestCase):
     def test_E1_this_repository_config_and_check(self):
         with open(os.path.join(REPO, CFGFILE), encoding="utf-8") as fh:
-            self.assertTrue(fh.read().startswith('schema: config/1\nframework_version: "0.0.0"\nprofile: strict\n'))
+            self.assertTrue(fh.read().startswith('schema: %s\nframework_version: "0.0.0"\nprofile: strict\n' % CURRENT))
         loaded = yamlsub.load(os.path.join(REPO, CFGFILE), CFGFILE)
         self.assertEqual({k: loaded[k] for k in ("schema", "framework_version", "profile")},
-                         {"schema": "config/1", "framework_version": "0.0.0", "profile": "strict"})
+                         {"schema": CURRENT, "framework_version": "0.0.0", "profile": "strict"})
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "CLAUDE_PROJECT_DIR"}
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         p = subprocess.run([sys.executable, "-m", "gates", "check", "schema", "--root", REPO], cwd=REPO, env=env,
@@ -580,6 +726,15 @@ class Enabling(unittest.TestCase):
         self.assertEqual(lines[:2], ["PASS schema.kinds", "PASS schema.config"])
         self.assertTrue(all(ln.startswith("PASS ") for ln in lines), lines)
 
+    def test_this_repo_config_is_current(self):  # S9, G5
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "CLAUDE_PROJECT_DIR"}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "schema", "--root", REPO], cwd=REPO, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.assertIn("PASS schema.config", p.stdout.decode().splitlines())
+        self.assertNotIn("FAIL", p.stdout.decode())
+
     def test_E2_check_command_form(self):
         err, out = io.StringIO(), io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
@@ -588,7 +743,7 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                         "gates: cites, claims, decisions, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, githook, githooks, hook, index, run_all\n")
+                         "gates: cites, claims, decisions, dispatch, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, githook, githooks, hook, index, loopstats, run_all\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)
@@ -699,7 +854,7 @@ class CitesDispatchTest(GitIsolatedTestCase):
     def test_json_flag_position(self):  # D8
         code, out, err = self.run_main(["check", "--json", "cites"])
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("gates: cites, claims, decisions, register, schema\n", err)
+        self.assertIn("gates: cites, claims, decisions, dispatch, register, schema\n", err)
 
 
 if __name__ == "__main__":

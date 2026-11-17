@@ -23,6 +23,7 @@ import sys
 import time
 import unittest
 
+from gates.lib import migrations
 from tests.helpers import GitIsolatedTestCase, git, make_repo, write_record
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -289,7 +290,7 @@ class GateLinearScanTest(GitIsolatedTestCase):
         self.put(root, "d.md", "".join("[x](t.md#h%d)\n" % i for i in range(2000)))
         entries = ["t.md#h%d" % i for i in range(2000)]
         write_record(root, ".strict-delivery/state/decisions/DEC-20261031-k3f9.yml",
-                     {"schema": "decision/1", "id": "DEC-20261031-k3f9", "status": "answered", "landed_in": entries})
+                     {"schema": "decision/%d" % migrations.current_version("decision"), "id": "DEC-20261031-k3f9", "status": "answered", "landed_in": entries})
         self.assertEqual(self.gate(root), (0, self.PASS4))
 
 

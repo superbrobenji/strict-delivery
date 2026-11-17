@@ -71,7 +71,7 @@ def grant(id_):
 
 
 def fnd(id_, status="open", **over):
-    r = {"schema": "finding/1", "id": id_, "status": status, "source": "review", "severity": "HIGH",
+    r = {"schema": _tag("finding"), "id": id_, "status": status, "source": "review", "severity": "HIGH",
          "class": "bug", "siblings": [], "cites": [], "repro": None,
          "owner": {"kind": "plan", "plan": "p", "task": "1a.2"}, "pin": None, "ruling": None, "evidence": [],
          "history": [{"status": s, "sha": SHA, "by": "agent"} for s in PATHS_OF[status]]}
@@ -317,7 +317,7 @@ class RootArgvConfig(Base):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.assertEqual(gates_main.main(["bogus"]), 2)
-        self.assertEqual(err.getvalue(), "usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, githook, githooks, hook, index, run_all\n")
+        self.assertEqual(err.getvalue(), "usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, githook, githooks, hook, index, loopstats, run_all\n")
 
 
 # ---------------------------------------------------------------- G: registers
@@ -674,16 +674,16 @@ class Shapes(Base):
     def test_F13_index_schemas_reject_bad_entries(self):
         s = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "decision-index.yml"))
         good = {"id": DA, "file": "x", "status": "superseded", "class": "scope", "topics": []}
-        self.assertEqual(schema.validate(s, {"schema": "decision-index/1", "decisions": [good]}, self.cfg_d()), [])
-        self.assertEqual(schema.validate(s, {"schema": "decision-index/1", "decisions": [
+        self.assertEqual(schema.validate(s, {"schema": _tag("decision-index"), "decisions": [good]}, self.cfg_d()), [])
+        self.assertEqual(schema.validate(s, {"schema": _tag("decision-index"), "decisions": [
             dict(good, status="closed", extra=1)]}, self.cfg_d()),
             ["decisions.0.status: must be one of open, answered, withdrawn, superseded", "decisions.0.extra: unknown key"])
         f = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "finding-index.yml"))
         fgood = {"id": FA, "file": "x", "status": "merged", "severity": "INFO", "owner": "issue:3"}
-        self.assertEqual(schema.validate(f, {"schema": "finding-index/1", "findings": [fgood]}, self.cfg_d()), [])
-        self.assertEqual(schema.validate(f, {"schema": "finding-index/1", "findings": [dict(fgood, id=DA)]},
+        self.assertEqual(schema.validate(f, {"schema": _tag("finding-index"), "findings": [fgood]}, self.cfg_d()), [])
+        self.assertEqual(schema.validate(f, {"schema": _tag("finding-index"), "findings": [dict(fgood, id=DA)]},
                                          self.cfg_d())[0][:14], "findings.0.id:")
-        self.assertEqual(schema.validate(f, {"schema": "finding-index/1"}, self.cfg_d()),
+        self.assertEqual(schema.validate(f, {"schema": _tag("finding-index")}, self.cfg_d()),
                          ["findings: required key is missing"])
 
     def cfg_d(self):
@@ -1099,8 +1099,8 @@ class Integration(Base):
         index.regenerate(root, self.cfg)
         res = gate_schema.check(["--root", root])
         self.assertTrue(res.ok(), res.render(False))
-        self.put(INDEX_MD, "<!-- schema: overview/1 -->\n## Architecture\n")
-        self.put(DEC_INDEX, "schema: decision-index/1\n")
+        self.put(INDEX_MD, "<!-- schema: %s -->\n## Architecture\n" % _tag("overview"))
+        self.put(DEC_INDEX, "schema: %s\n" % _tag("decision-index"))
         res = gate_schema.check(["--root", root]).render(False)
         self.assertIn("FAIL schema.overview.%s: headings:" % INDEX_MD, res)
         self.assertIn("FAIL schema.decision-index.%s: decisions: required key is missing" % DEC_INDEX, res)

@@ -15,7 +15,7 @@ from gates.lib.decisions import (FIXED_RULES, KNOWN_RULES, current, find, in_for
 from gates.lib.migrations import migrate
 from gates.lib.result import GateError, Result, run_check
 from gates.lib.store import Record
-from tests.helpers import GitIsolatedTestCase, commit_all, make_repo, write_record
+from tests.helpers import GitIsolatedTestCase, commit_all, make_repo, minimal_config, write_record
 from tests.test_fold_table import FORTY, FORTY_TARGET_313
 
 # The tag of every record built here comes from the schema it is checked against, never a literal (Global
@@ -491,8 +491,7 @@ class ClassTests(RowTestCase):
         self.assertEqual(validate(hw, self.cfg), [])
 
     def test_config_added_class_through_config_load(self):  # C2 through config.load
-        make_repo(self.work, {**{"schema": "config/1", "framework_version": "0", "profile": "strict"},
-                              "decision_classes": {"owner_only": ["hardware"]}})
+        make_repo(self.work, {**minimal_config(), "decision_classes": {"owner_only": ["hardware"]}})
         self.assertEqual(validate({**OPEN, "class": "hardware"}, config.load(self.work)), [])
 
     def test_unknown_and_case(self):  # C3, C4

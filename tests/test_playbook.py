@@ -1088,7 +1088,7 @@ class PlaceholderTest(unittest.TestCase):
 
     def test_b_owned_markdown_has_no_placeholder(self):     # A6, Q-B22v2-3 (a): every B-owned markdown file
         files = b_owned_markdown()
-        self.assertEqual(files[:10], ["%s/%s.md" % (pc.PROMPTS_DIR, r) for r in pc.B_ROLES])
+        self.assertEqual(files[:13], ["%s/%s.md" % (pc.PROMPTS_DIR, r) for r in pc.B_ROLES])   # Task 2c.3: 13
         self.assertIn(RULES, files)
         for rel in files:
             with self.subTest(rel=rel):
@@ -1316,7 +1316,8 @@ STATES = {"controller": CTRL, "program_controller": CTRL, "stream_controller": C
 TIERS = {"implementer_transcription": "tier1", "implementer": "tier2",
          "controller": "tier3", "program_controller": "tier3", "stream_controller": "tier3", "task_reviewer": "tier2",
          "final_reviewer": "tier3", "audit_reviewer": "tier3", "audit_verifier": "tier3", "investigator": "tier3",
-         "final_verifier": "tier4", "exception_reviewer": "tier4"}
+         "final_verifier": "tier4", "exception_reviewer": "tier4",
+         "plan_writer": "tier3", "plan_reviewer": "tier3", "drafter": "tier2"}
 ROLES_HEADER = "| role | prompt block | minimum tier | needs brief | finding states |"
 ROLES_SECTIONS = ["Model tiers", "Budget cap", "Dispatch contract", "Report contract"]     # layout proposed (PC3)
 OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
@@ -1671,8 +1672,8 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
     ("skills/strict-delivery/SKILL.md",
      "The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: "
      "`program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, "
-     "`task_reviewer`, `final_reviewer`, `final_verifier`, `exception_reviewer`, `audit_reviewer`, `audit_verifier` "
-     "and `investigator`.",
+     "`task_reviewer`, `final_reviewer`, `final_verifier`, `exception_reviewer`, `audit_reviewer`, `audit_verifier`, "
+     "`investigator`, `plan_writer`, `plan_reviewer` and `drafter`.",
      "the role list"),
 ]   # a unit is exempt only verbatim: any edit in place or any added text makes it a member
 # The class members, hand-listed: (file, the start of the paragraph that states the verifier as a block-end step).
@@ -2051,7 +2052,7 @@ class VerifierRoundTest(unittest.TestCase):
 
     def test_real_b_owned_files_pass_the_restriction(self):       # M9: all 17 files, no refusal, no hit
         files = b_owned_markdown()
-        self.assertEqual(len(files), 17)
+        self.assertEqual(len(files), 20)     # Task 2c.3: the three plan-role and drafter prompt blocks
         for rel in files:
             with self.subTest(rel=rel):
                 self.assertEqual(pc.placeholder_hits(read(rel)), [])
@@ -2309,7 +2310,7 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
         rels = sorted("%s/%s" % (pc.PROMPTS_DIR, n) for n in os.listdir(pc.prompts_dir()))
         rels += sorted("playbook/" + n for n in os.listdir(os.path.join(pc.REPO_ROOT, "playbook")))
         rels.append("skills/strict-delivery/SKILL.md")
-        self.assertEqual(len(rels), 17)
+        self.assertEqual(len(rels), 20)     # Task 2c.3: the three plan-role and drafter prompt blocks
         for rel in rels:
             with self.subTest(rel=rel):
                 t = read(rel)

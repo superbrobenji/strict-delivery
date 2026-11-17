@@ -981,11 +981,12 @@ class ConfigTest(RunAllCase):
 
     def test_yaml_error_is_input_fail(self):  # C2
         self.all_pass()
-        head = 'schema: config/1\nframework_version: "0"\nprofile: strict\n'
-        cases = [('schema: "config/1\nframework_version: "0\nprofile: strict\n',
+        tag = minimal_config()["schema"]
+        head = 'schema: %s\nframework_version: "0"\nprofile: strict\n' % tag
+        cases = [('schema: "%s\nframework_version: "0\nprofile: strict\n' % tag,
                   "unterminated quoted scalar (line 1)"),
                  (head + "commands:\n\tx: 1\n", "tab in indentation (line 5)"),
-                 ("schema: config/1\nschema: config/1\nframework_version: \"0\"\nprofile: strict\n",
+                 ("schema: %s\nschema: %s\nframework_version: \"0\"\nprofile: strict\n" % (tag, tag),
                   "duplicate key 'schema' (line 2)")]
         for text, why in cases:
             with self.subTest(why=why):
@@ -997,7 +998,7 @@ class ConfigTest(RunAllCase):
     def test_invalid_config_is_input_fail(self):  # C3
         self.all_pass()
         cases = [(dict(minimal_config(), bogus=1), ".strict-delivery/config.yml: unknown key 'bogus'"),
-                 ({"schema": "config/1", "framework_version": "0"},
+                 ({k: v for k, v in minimal_config().items() if k != "profile"},
                   ".strict-delivery/config.yml: profile: required key is missing")]
         for cfg, why in cases:
             with self.subTest(why=why):
@@ -1293,7 +1294,8 @@ class Pc1Test(RunAllCase):
                         num = quote + "7" * n + quote
                         fv, prof = ('"0"', num) if key == "profile" else (num, "strict")
                         with open(os.path.join(root, CONFIG), "w", encoding="utf-8") as fh:
-                            fh.write("schema: config/1\nframework_version: %s\nprofile: %s\n" % (fv, prof))
+                            fh.write("schema: %s\nframework_version: %s\nprofile: %s\n"
+                                     % (minimal_config()["schema"], fv, prof))
                         if not quote:
                             line = 3 if key == "profile" else 2
                             self.expect(["--root", root],
