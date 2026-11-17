@@ -48,7 +48,13 @@ def _findings(args: List[str]) -> int:
     return findings_cli.main(args)
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings, "index": _index}
+def _run_all(args: List[str]) -> int:
+    from gates import run_all
+    return run_all.main(args)
+
+
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings,
+                                                   "index": _index, "run_all": _run_all}
 
 
 def main(argv: List[str]) -> int:
