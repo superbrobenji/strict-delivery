@@ -1,0 +1,25 @@
+schema: finding/1
+id: F-20261117-mqm2
+status: open
+source: "U-R2-2 (Task 2b.2 review 2, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/g1/task-2b.2-review-2.md:135-137; severity LOW stated at source"
+severity: LOW
+class: "producer output uniqueness: unmerged paths (stages 1-3), for unstaged_paths and `_staged_paths`"
+siblings: []
+cites:
+  - file: gates/lib/gitinfo.py
+    lines: "366"
+    sha: b7afa88
+repro: "During a merge conflict `unstaged_paths` returns an unmerged path once per diff entry: probe2 gave `['a.txt', 'a.txt']`; pre-push dedupes (githooks.py:310) and pre-commit never runs then (source task-2b.2-review-2.md:135-136; not run for this row)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+review_round: 2
+caused_by_change: false
+dimension: "producer output uniqueness"
+history:
+  - status: open
+    sha: 23fcff0c0369c98ea95cb1b81e299e97f75544fd
+    by: docs-reg8

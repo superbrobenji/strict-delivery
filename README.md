@@ -49,7 +49,7 @@ only), so the target project can be in any language.
 | dispatch contract and model tiers enforced | no | yes | yes |
 | adversarial top-tier verifier per block | no | no | yes |
 | mutation proof that tests can fail | no | per finding | every pin |
-| pre-commit | schema, register, decisions gates | `run_all` (every gate) | `run_all` plus the gate suite on every supported runtime |
+| pre-commit | schema, register, decisions gates | `run_all` (every gate) | `run_all`, then `commands.test` |
 | tasks per block | no cap | 5 | 3 |
 
 This repository is configured as `strict` and follows it by hand for now: `run_all`, the git

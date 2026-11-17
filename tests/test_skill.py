@@ -49,8 +49,9 @@ SKILL_PHRASES = {   # heading -> key phrases (case-insensitive), each from the s
 PINS = {
     "When it applies": ["start of every session", "before every change", "`playbook/`"],
     "Precedence": ["highest first"] + PRECEDENCE_KEYS + ["the higher layer wins"],
-    "Roles and tiers": ["`playbook/roles.md`", "names a tier, never a model", "workers never dispatch",
-                        "never inherits its dispatcher's model"],                                  # G2
+    "Roles and tiers": ["`playbook/roles.md`", "names tiers, never a model", "workers never dispatch",
+                        "never inherits its dispatcher's model",                                   # G2
+                        "its `## Model` names the model config `models.tiers` maps that tier to"],  # U-2 (B4)
     "Decision classes": ["always the owner's", "`decision_classes.owner_only`", CLASS_LINE.strip(),
                          "`playbook/decisions.md`", "only inside an approved plan",
                          "The one exception is a small point", "The owner keeps work added or removed"],  # G1, F-2
@@ -59,7 +60,8 @@ PINS = {
                         "`model-policy`", "one batch", "restarts as soon as every question with its `source`",
                         "only the session writes decision records"],
     "Verification method": ["by contradiction", "no executable check", "input-domain table", "`playbook/review.md`",
-                            "Input domains", "known version differences"],                          # G3
+                            "Input domains", "known version differences",                           # G3
+                            "never samples an open grammar"],                                       # U-4 (B4)
     "Change kinds": ["superpowers:brainstorming", "dispatches no writer"],
     "Pipeline and gates": ["register row", "final verifier", "`python3 -m gates run_all`", "owner's approval",
                            "where the profile enables it (strict), a top-tier final verifier"],   # F-B23R-1; spec 12
@@ -70,7 +72,8 @@ PINS = {
                      "handoff is complete", "`git status --porcelain --untracked-files=all`", "handoff field check",
                      "background-job check", "bounded timeout", "own command line", "completion record",
                      "waiting on its own background work", "Handoffs and continuation",
-                     "never ends its turn while a child", "its handback arrives"],                  # G4
+                     "never ends its turn while a child", "its handback arrives",                    # G4
+                     "dispatches nothing new and waits"],                                           # U-5 (B4)
     "Document locations": ["`docs/strict-delivery/specs/`", "override"],
     "Judgment, not gated": ["`judgment`", "`rule-override`"],
 }
@@ -192,13 +195,15 @@ def section_sentences(body):
 
 
 def check_pins(t):                               # stream rule; WA1, PR3, OQ2, OQ4, VM2, CK1, SR2, CO2, CO3
+    # U-6 (B4): a pin is a whole token (pc.whole_token, case-insensitive), never a substring of a longer word
     for h in HEADINGS:
         body = section(t, h)
         low = body.lower()
         for pin in PINS[h]:
-            need(pin.lower() in low, "pin: %s %r absent" % (h, pin))
+            need(pc.whole_token(pin.lower(), low), "pin: %s %r absent" % (h, pin))
         for s in section_sentences(body):
-            need(any(pin.lower() in s.lower() for pin in PINS[h]), "pin: %s unpinned sentence %r" % (h, s[:50]))
+            need(any(pc.whole_token(pin.lower(), s.lower()) for pin in PINS[h]),
+                 "pin: %s unpinned sentence %r" % (h, s[:50]))
 
 
 def check_forbidden(t):                          # plan test_no_forbidden_strings_in_skill; HD3, FM4, RT2, DL2
@@ -249,7 +254,35 @@ DIRECTIVE_TOKENS = (("Decision classes", "owner delegation"), ("Decision classes
                     ("Continuation", "handed back"), ("Continuation", "handback"))
 
 
+U2_LINE = ("Every dispatch carries its role's prompt block byte for byte and chooses a tier; its `## Model` names the "
+           "model config `models.tiers` maps that tier to, and every other line of a brief or report names tiers, "
+           "never a model.")
+OPEN_GRAMMAR = ("Every input-domain table enumerates the full input class or restricts the input, so the code refuses "
+                "what lies outside the enumerated class, and never samples an open grammar.")
+LIVE_CHILDREN = ("Before it writes that handoff, a controller dispatches nothing new and waits, inside its turn, for the "
+                 "handback of every child still running; a child that a usage-limit stop cuts off before its handback "
+                 "is listed in the handoff's `live_subagents`.")
+B4_LINES = (   # Task B4 (id, section, the line before it (its start), the line, the line after it (its start) or None)
+    ("U-2", "Roles and tiers", "The roles, with their prompt blocks", U2_LINE, EXPLICIT_MODEL),
+    ("U-4", "Verification method", VERSION_ROWS, OPEN_GRAMMAR, None),
+    ("U-5", "Continuation", "Continuation is automatic: an agent", LIVE_CHILDREN, "Nothing continues from inherited memory"),
+)
+
+
+def check_b4(t):                                 # Task B4 U-2, U-4, U-5 (FV-1: counted over the whole file)
+    for ident, h, before, line, after in B4_LINES:
+        body = section(t, h)
+        found = [l for l in body.split("\n") if l.startswith(before)]
+        need(len(found) == 1, "b4: %s anchor lines: %d" % (ident, len(found)))
+        chain = found[0] + "\n\n" + line
+        need(chain in body, "b4: %s not directly after its anchor, on its own line" % ident)
+        tail = body.split(chain, 1)[1]
+        need(tail.startswith("\n\n" + after) if after else tail.strip("\n") == "", "b4: %s what follows" % ident)
+        need(t.count(line) == 1, "b4: %s occurs %d times" % (ident, t.count(line)))
+
+
 def check_directives(t):                         # Task B3 G1-G4: each sentence once, on its own line, after its anchor
+    check_b4(t)
     for ident, h, start, lines in DIRECTIVES:
         body = section(t, h)
         found = [l for l in body.split("\n") if l.startswith(start)]
@@ -392,7 +425,9 @@ TEXT_MUTANTS = (   # (row, old, new, check that refuses it); each applied once t
     ("PR3", "the higher layer wins", "the lower layer wins", "precedence"),
     ("RT1", "`implementer_transcription`, ", "", "roles"),
     ("RT1", "`playbook/roles.md`", "`playbook/role.md`", "roles"),
-    ("RT2", "names a tier, never a model", "names a tier, never a model such as sonnet", "forbidden"),
+    ("RT2", "names tiers, never a model", "names tiers, never a model such as sonnet", "forbidden"),     # U-2 (B4)
+    ("U-2", "; its `## Model` names the model config `models.tiers` maps that tier to,", "", "pins"),      # the `## Model` clause
+    ("U-2", "chooses a tier;", "names a tier;", "directives"),
     ("DC1", "`finding-class`, ", "", "classes"),
     ("DC1", "config `decision_classes.owner_only`", "config `decision_classes`", "classes"),
     ("DC1b", "`program-close`.", "`program-close`, `profile-override`.", "classes"),
@@ -433,7 +468,7 @@ HARMLESS = (   # unpinned rewordings: every check passes (stream rule: a harmles
     ("within the configured depth and concurrency limits", "inside the configured depth and concurrency limits"),
     ("A question found answered is cited, not asked.", "A question found answered is cited and not asked."),
     ("ledgers each ruling as", "records each ruling as"),                      # the anchor lines of G1-G4, an unpinned word
-    ("maps each tier to a model", "maps every tier to a model"),
+    ("minimum tiers and finding states", "minimum tiers and the finding states"),   # B4: line 29 is now pinned whole (U-2)
     ("an implementer lists every unstated behaviour", "an implementer lists each unstated behaviour"),
     ("it lists the child's background job ids", "it reads the child's background job ids"),
 )
@@ -461,11 +496,44 @@ class SkillMutantTest(unittest.TestCase):
             with self.subTest(row=row, new=new[:40]):
                 self.assertNotIn(check, failed(changed(t, old, new).encode("utf-8")))
 
-    def test_harmless_rewordings_pass(self):
-        t = read(SKILL)
+    def skill_text(self):
+        """The text the harmless rows run on; the row-2 test replaces it with a reworded copy (FR-1, U-3)."""
+        return read(SKILL)
+
+    def test_harmless_rewordings_pass(self):                      # spec section 14; FR-1, U-3 (B4): absent = visible skip
+        t = self.skill_text()
+        self.harmless_ran = []
         for old, new in HARMLESS:
             with self.subTest(new=new):
+                if old not in t:
+                    self.skipTest("FR-1/U-3: %r is reworded on disk; unpinned, so never a failure" % old)
                 self.assertEqual(failed(changed(t, old, new).encode("utf-8")), [])
+                self.harmless_ran.append(old)
+
+    def test_harmless_row_absent_on_disk_is_skipped_not_failed(self):   # B4 rows 2, 3 (FR-1, U-3)
+        t = read(SKILL)
+        absent = [old for old, new in HARMLESS if old not in t]
+        for i, (old, new) in enumerate(HARMLESS):
+            with self.subTest(reworded=old):
+                case = SkillMutantTest("test_harmless_rewordings_pass")
+                reworded = t.replace(old, new, 1) if old in t else t
+                case.skill_text = lambda text=reworded: text
+                result = unittest.TestResult()
+                case.run(result)
+                gone = absent + ([old] if old in t else [])
+                self.assertEqual((result.failures, result.errors), ([], []))
+                self.assertTrue(result.wasSuccessful())
+                self.assertEqual(len(result.skipped), len(gone), result.skipped)
+                self.assertEqual(case.harmless_ran, [o for o, _ in HARMLESS if o not in gone])
+        case = SkillMutantTest("test_harmless_rewordings_pass")      # every row reworded at once: all skipped, none fails
+        every = t
+        for old, new in HARMLESS:
+            every = every.replace(old, new, 1)
+        case.skill_text = lambda: every
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertEqual((result.failures, result.errors), ([], []))
+        self.assertEqual(len(result.skipped), len(HARMLESS), result.skipped)
 
     def test_each_phrase_absent_or_in_another_section(self):     # plan dimension SKILL_PHRASES; OQ1 VM1 PG1 SR1 CO1 DL1
         t = read(SKILL)
@@ -659,8 +727,8 @@ class SkillDirectiveTest(unittest.TestCase):
                 glued = changed(t, SMALL_POINT, SMALL_POINT + " " + "9" * n)
                 self.assertIn("directives", failed(glued.encode("utf-8")))
 
-    def test_unassigned_code_point_refused_by_the_character_check(self):   # row 14 (U+2C2F: Cn on 3.9, Ll on 3.13)
-        t = read(SKILL)
+    def test_version_dependent_code_point_refused_by_the_character_check(self):   # row 14 (U+2C2F: Cn on 3.9, Lu on 3.13)
+        t = read(SKILL)                                           # FV-2 (B4): the name is true on both interpreters
         c = chr(0x2C2F)
         for ident, h, start, lines in DIRECTIVES:
             with self.subTest(id=ident):
@@ -668,6 +736,132 @@ class SkillDirectiveTest(unittest.TestCase):
                 got = failed(bad)
                 self.assertIn("bytes", got)
                 self.assertIn("directives", got)
+        for ident, h, before, line, after in B4_LINES:
+            with self.subTest(id=ident, kind="b4"):
+                got = failed(changed(t, line, line.replace("e", c, 1)).encode("utf-8"))
+                self.assertIn("bytes", got)
+                self.assertIn("directives", got)
+
+
+class SkillB4Test(unittest.TestCase):
+    """Task B4 (U-2, U-4, U-5 lines; FV-1 file-wide count; U-6 whole-token pins), input-domain rows 4-6, 8-14."""
+
+    def test_new_lines_in_place_on_disk(self):                    # rows 8, 10, 11, 16
+        check_b4(read(SKILL))
+        self.assertEqual(failed(read_bytes(SKILL)), [])
+        for ident, h, before, line, after in B4_LINES:
+            self.assertEqual(read(SKILL).count(line), 1)
+            line.encode("ascii")
+
+    def test_old_unqualified_phrase_gone(self):                   # row 9
+        self.assertNotRegex(read(SKILL), r"names a tier, never a model[;.:]")
+
+    def test_deleted_line_refused_by_the_pin_and_the_placement(self):   # rows 8, 10, 11
+        t = read(SKILL)
+        for ident, h, before, line, after in B4_LINES:
+            with self.subTest(id=ident):
+                got = failed(changed(t, "\n\n" + line, "").encode("utf-8"))
+                self.assertIn("directives", got)
+                self.assertIn("pins", got)
+
+    def test_moved_copied_or_doubled_refused(self):               # rows 4, 5, 10, 11: file-wide count
+        t = read(SKILL)
+        for ident, h, before, line, after in B4_LINES:
+            gone = changed(t, "\n\n" + line, "")
+            for name, bad in (
+                    ("moved", in_section(gone, "Document locations", lambda b: b.rstrip("\n") + "\n\n" + line + "\n")),
+                    ("copied", in_section(t, "Document locations", lambda b: b.rstrip("\n") + "\n\n" + line + "\n")),
+                    ("copied into its own section", in_section(t, h, lambda b: b.rstrip("\n") + "\n\n" + line + "\n")),
+                    ("doubled", changed(t, line, line + "\n\n" + line)),
+                    ("doubled in a line", changed(t, line, line + " " + line))):
+                with self.subTest(id=ident, case=name):
+                    self.assertIn("directives", failed(bad.encode("utf-8")))
+        for ident, h, start, lines in DIRECTIVES:                  # row 4: every earlier new line likewise
+            for s in lines:
+                with self.subTest(id=ident, line=s[:30], case="copied"):
+                    bad = in_section(t, "Document locations", lambda b: b.rstrip("\n") + "\n\n" + s + "\n")
+                    self.assertIn("directives", failed(bad.encode("utf-8")))
+
+    def test_misplaced_refused(self):                             # rows 8, 10, 11
+        t = read(SKILL)
+        for ident, h, before, line, after in B4_LINES:
+            anchor = [l for l in section(t, h).split("\n") if l.startswith(before)][0]
+            with self.subTest(id=ident, case="before the anchor"):
+                bad = changed(t, anchor + "\n\n" + line, line + "\n\n" + anchor)
+                self.assertIn("directives", failed(bad.encode("utf-8")))
+            with self.subTest(id=ident, case="glued to the anchor line"):
+                bad = changed(t, anchor + "\n\n" + line, anchor + " " + line)
+                self.assertIn("directives", failed(bad.encode("utf-8")))
+            with self.subTest(id=ident, case="unpinned line after it"):
+                bad = changed(t, line, line + "\n\nAlso do the opposite.")
+                self.assertIn("pins", failed(bad.encode("utf-8")))
+
+    def test_each_new_line_pin_dropped_refused(self):             # rows 8, 10, 11: the `## Model` clause and the others
+        t = read(SKILL)
+        for h, pin in (("Roles and tiers", "its `## Model` names the model config `models.tiers` maps that tier to"),
+                       ("Roles and tiers", "names tiers, never a model"),
+                       ("Verification method", "never samples an open grammar"),
+                       ("Continuation", "dispatches nothing new and waits")):
+            with self.subTest(heading=h, pin=pin):
+                bad = in_section(t, h, lambda b: b.replace(pin, "zzz"))
+                self.assertIn("pins", failed(bad.encode("utf-8")))
+
+    def test_digit_runs_refused_the_same(self):                   # row 13 (no int() on text)
+        t = read(SKILL)
+        for ident, h, before, line, after in B4_LINES:
+            got = []
+            for n in (4300, 4301):
+                with self.subTest(id=ident, digits=n):
+                    bad = changed(t, line, line + " " + "9" * n).encode("utf-8")
+                    self.assertEqual(byte_problems(bad), [])
+                    got.append(failed(bad))
+                    self.assertIn("directives", got[-1])
+            self.assertEqual(got[0], got[1])
+
+    def test_control_and_non_ascii_bytes_in_a_new_line_refused(self):   # row 8
+        raw = read_bytes(SKILL)
+        for ident, h, before, line, after in B4_LINES:
+            s = line.encode("ascii")
+            for name, new in (("cr", s + b"\r"), ("tab", s + b"\t"), ("non-ascii", s.replace(b"e", "é".encode("utf-8"), 1))):
+                with self.subTest(id=ident, case=name):
+                    self.assertTrue(byte_problems(raw.replace(s, new, 1)))
+
+    def test_pins_are_whole_tokens(self):                         # U-6 (B4), row 12: through check_pins on the real file
+        t = read(SKILL)
+        pin = "never inherits its dispatcher's model"
+        check_pins(t)
+
+        def with_line(sentence):
+            return in_section(t, "Roles and tiers", lambda b: b.rstrip("\n") + "\n\n" + sentence + "\n" +
+                              b[len(b.rstrip("\n")) + 1:])
+        for name, sentence in (("joined before", "x" + pin + "."), ("joined after", pin + "x."),
+                               ("plural", pin + "s."), ("both", "x" + pin + "x."), ("digit after", pin + "9."),
+                               ("hyphen after", pin + "-x."), ("underscore before", "_" + pin + ".")):
+            with self.subTest(case=name):
+                with self.assertRaises(AssertionError):
+                    check_pins(with_line(sentence))
+        for name, sentence in (("sentence start", pin + " always."), ("before a full stop", "A dispatch " + pin + "."),
+                               ("before a comma", "A dispatch " + pin + ", always."),
+                               ("before a semicolon", "A dispatch " + pin + "; always."),
+                               ("before a backtick", "A dispatch " + pin + "`x`."),
+                               ("before a closing parenthesis", "(A dispatch " + pin + ") always."),
+                               ("upper case", "A dispatch " + pin.upper() + ".")):
+            with self.subTest(case=name):
+                check_pins(with_line(sentence))
+        with self.subTest(case="handbacks"):                      # the plural of a pin word is not the pin
+            bad = in_section(t, "Continuation", lambda b: b.replace("its handback arrives", "its handbacks arrive"))
+            with self.assertRaises(AssertionError):
+                check_pins(bad)
+        with self.subTest(case="absent pin"):
+            bad = in_section(t, "Roles and tiers", lambda b: b.replace(pin, "x" + pin))
+            with self.assertRaises(AssertionError):
+                check_pins(bad)
+        with self.subTest(case="section-level check alone"):       # its sentence still holds another pin ("names tiers, ...")
+            bad = in_section(t, "Roles and tiers", lambda b: b.replace("; its `## Model`", "; xits `## Model`"))
+            self.assertIn("names tiers, never a model", bad)
+            with self.assertRaises(AssertionError) as ctx:
+                check_pins(bad)
+            self.assertIn("absent", str(ctx.exception))
 
 
 if __name__ == "__main__":
