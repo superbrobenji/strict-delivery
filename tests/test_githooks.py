@@ -202,7 +202,7 @@ class ArgumentsTest(HookCase):
             with self.subTest(argv=argv):
                 rc, out, err = self.hook(argv)
                 self.assertEqual((rc, err), (0, ""))
-                self.assertEqual(out, "".join("PASS %s.ok\n" % g for g in GATES5))
+                self.assertEqual(out, "".join("PASS %s.ok\n" % g for g in GATES5) + "PASS run_all.version\n")
 
     def test_githook_bad_root(self):  # A3
         top = self.repo()
@@ -539,7 +539,7 @@ class PreCommitTest(HookCase):
                       "expected decision/2, got decision/999; run /strict-delivery:upgrade", lines)
         self.assertIn("FAIL decisions.store.name..strict-delivery/state/decisions/DEC-20261031-k3f9.yml: file name "
                       "DEC-20261031-k3f9.yml differs from the record id None", lines)
-        self.assertEqual(lines[-1], "PASS cites.landed")
+        self.assertEqual(lines[-2:], ["PASS cites.landed", "PASS run_all.version"])  # Task 3d.1's line comes last
         self.assertEqual([ln for ln in lines if ln.startswith("FAIL githook")], [])  # a gate keeps its own id
         self.assertEqual([ln for ln in lines if not ln.startswith(("PASS ", "FAIL "))], [])
         self.assertNotIn("githook.test", out)  # fail fast: commands.test not run
@@ -1105,7 +1105,7 @@ class PrePushTest(HookCase):
         git(e, "checkout", "-q", "--detach")
         rc, out, err = self.push(e, self.push_line("HEAD", self.head(e), "refs/heads/x"))
         self.assertEqual((rc, err), (0, ""))
-        self.assertEqual(out, "".join("PASS %s.ok\n" % g for g in GATES5))
+        self.assertEqual(out, "".join("PASS %s.ok\n" % g for g in GATES5) + "PASS run_all.version\n")
 
     def test_pre_push_staged_path_not_utf8(self):  # the same decoding rule as gitinfo's readers (U12)
         d = self.repo()
@@ -1715,7 +1715,7 @@ class DispatchTest(HookCase):
         with mock.patch.object(sys, "stdout", out):
             self.assertEqual(gates_main.main(["githook", "pre-commit", "--root", d]), 0)
             self.assertEqual(gates_main.main(["githooks", "status", "--root", d]), 1)
-        self.assertEqual(out.getvalue(), "".join("PASS %s.ok\n" % g for g in GATES5)
+        self.assertEqual(out.getvalue(), "".join("PASS %s.ok\n" % g for g in GATES5) + "PASS run_all.version\n"
                          + "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
 
 
