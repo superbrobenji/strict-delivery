@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -24,7 +25,6 @@ DEC = ".strict-delivery/state/decisions"
 CTX = ".strict-delivery/context.yml"
 ID1 = "DEC-20261031-k3f9"
 ID2 = "DEC-20261031-m4n5"
-TAG = "<!-- schema: in-force/1 -->"
 CURRENT = minimal_config()["schema"]  # the config tag the gate expects (test_minimal_config_is_current pins it)
 
 SCHEMA_TEXT = {
@@ -70,14 +70,25 @@ fields:
     type: str
 ''',
 }
+_MD_VERSION = 1
 for _k in ("in-force", "overview", "decision-index", "finding-index"):
     SCHEMA_TEXT[_k] = '''kind: %s
-version: 1
+version: %d
 format: markdown
 files:
   - path: index
-first_line: "<!-- schema: %s/1 -->"
-''' % (_k, _k)
+first_line: "<!-- schema: %s/%d -->"
+''' % (_k, _MD_VERSION, _k, _MD_VERSION)
+
+
+def _tag(kind):
+    """The tag of the schema this file builds for ``kind``: its kind and the version line of SCHEMA_TEXT[kind]."""
+    return "%s/%s" % (kind, re.search(r"^version: (\d+)$", SCHEMA_TEXT[kind], re.M).group(1))
+
+
+TAG = "<!-- schema: %s -->" % _tag("in-force")
+DTAG = _tag("decision")
+CTXTAG = _tag("context")
 
 
 class GateCase(GitIsolatedTestCase):
@@ -553,7 +564,7 @@ class Generated(GateCase):
         self.kinds("context")
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:],
                          ["FAIL schema.context.%s: missing" % CTX])
-        self.put(CTX, "schema: context/1\nx: y\n")
+        self.put(CTX, "schema: " + CTXTAG + "\nx: y\n")
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:], ["PASS schema.context"])
 
     def test_N4_dangling_symlink_path_file_is_a_read_failure_not_missing(self):
@@ -580,19 +591,19 @@ class Generated(GateCase):
         self.kinds("decision")
         rec = DEC + "/" + ID1 + ".yml"
         pre = "FAIL schema.decision." + rec + ": "
-        self.put(rec, "schema: decision/1\nid: %s\nstatus: [open\n" % ID1)
+        self.put(rec, "schema: " + DTAG + "\nid: %s\nstatus: [open\n" % ID1)
         got = self.lines(producers=["prod_decision"])[0][2]
         self.assertTrue(got.startswith(pre + rec + ": ") and got.endswith(" (line 3)"), got)
         self.put(rec, b"schema: \xff\n")
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], [pre + rec + ": not valid UTF-8"])
         self.put(rec, "- a\n")
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], [pre + "top level: must be a mapping"])
-        self.put(rec, "schema: decision/1\nid: DEC-20261031-K3F9\nstatus: done\nzzz: 1\n")
+        self.put(rec, "schema: " + DTAG + "\nid: DEC-20261031-K3F9\nstatus: done\nzzz: 1\n")
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], [
             pre + "id: id does not match the form; expected DEC-<YYYYMMDD>-<xxxx>: a valid calendar date and "
                   "four characters from 23456789abcdefghijkmnpqrstuvwxyz",
             pre + "status: must be one of open, answered", pre + "zzz: unknown key"])
-        self.put(rec, "schema: decision/1\nid: %s\nstatus: open\n" % ID1)
+        self.put(rec, "schema: " + DTAG + "\nid: %s\nstatus: open\n" % ID1)
         self.put(DEC + "/index.yml", "not: a record\n")  # excluded by the schema
         self.assertEqual(self.lines(producers=["prod_decision"])[0][2:], ["PASS schema.decision"])
 
@@ -600,7 +611,7 @@ class Generated(GateCase):
         self.kinds("decision")
         d = os.path.join(self.root, DEC)
         os.makedirs(d)
-        self.put(DEC + "/real.yml", "schema: decision/1\nid: %s\nstatus: open\n" % ID1)
+        self.put(DEC + "/real.yml", "schema: " + DTAG + "\nid: %s\nstatus: open\n" % ID1)
         os.symlink("real.yml", os.path.join(d, "link.yml"))
         os.symlink("nowhere", os.path.join(d, "dangling.yml"))
         os.mkfifo(os.path.join(d, "fifo.yml"))
@@ -628,8 +639,8 @@ class Generated(GateCase):
 
     def test_A6_all_pass_line_set(self):
         self.kinds("decision", "claim", "context")
-        self.put(DEC + "/" + ID1 + ".yml", "schema: decision/1\nid: %s\nstatus: answered\n" % ID1)
-        self.put(CTX, "schema: context/1\nx: y\n")
+        self.put(DEC + "/" + ID1 + ".yml", "schema: " + DTAG + "\nid: %s\nstatus: answered\n" % ID1)
+        self.put(CTX, "schema: " + CTXTAG + "\nx: y\n")
         self.assertEqual(self.lines(producers=["prod_claim_decision", "prod_context"]), ([
             "PASS schema.kinds", "PASS schema.config", "PASS schema.decision", "PASS schema.claim",
             "PASS schema.context"], 0))

@@ -6,7 +6,7 @@ import hashlib
 import os
 import unittest
 
-from gates.lib import config, decisions, gitinfo, schema, yamlsub
+from gates.lib import config, decisions, gitinfo, migrations, schema, yamlsub
 from gates.lib.findings import (RESOLVED, SEVERITIES, STATUSES, TRANSITIONS, epic_errors, evidence_errors,
                                 is_resolved, may_delete, transition_errors, validate)
 from gates.lib.result import GateError
@@ -24,7 +24,7 @@ DC = "DEC-20261031-p6q7"
 SHA = "a1b2c3d"
 DTAG = "decision/%d" % decisions._schema().version  # Global Constraints "Test fixtures"
 OWNER = {"kind": "plan", "plan": "p", "task": "1a.2"}
-FINDING = {"schema": "finding/1", "id": F1, "status": "open", "source": "review", "severity": "HIGH",
+FINDING = {"schema": "finding/%d" % migrations.current_version("finding"), "id": F1, "status": "open", "source": "review", "severity": "HIGH",
            "class": "bug", "siblings": [], "cites": [{"file": "src/x.py", "lines": "1-2", "sha": SHA}],
            "repro": None, "owner": OWNER, "pin": None, "ruling": None, "evidence": [],
            "history": [{"status": "open", "sha": SHA, "by": "agent"}]}

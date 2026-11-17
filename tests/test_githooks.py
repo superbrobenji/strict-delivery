@@ -599,7 +599,7 @@ class PreCommitTest(HookCase):
             self.skipTest("BaseExceptionGroup is absent before Python 3.11 (row K3)")
 
     def test_real_commit_with_unreadable_config_refused(self):  # C13: run_all raises GateError in a real commit
-        d = self.repo(config={"schema": "config/1", "framework_version": "0.0.0", "profile": "bogus"}, install=True)
+        d = self.repo(config=dict(minimal_config(), profile="bogus"), install=True)
         write_file(d, "a.txt", "two\n")
         git(d, "add", "a.txt")
         before = self.head(d)
@@ -619,7 +619,7 @@ class PreCommitTest(HookCase):
 
     def test_root_ignores_claude_project_dir(self):  # A5
         d = self.repo(install=True)
-        bad = self.repo(config={"schema": "config/1", "framework_version": "0.0.0", "profile": "bogus"})
+        bad = self.repo(config=dict(minimal_config(), profile="bogus"))
         for label, value in (("another repository with a failing gate", bad), ("empty", ""),
                              ("not a directory", os.path.join(self.tmp, "nowhere"))):
             with self.subTest(label):

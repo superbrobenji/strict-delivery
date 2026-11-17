@@ -15,7 +15,7 @@ import unittest
 from fractions import Fraction
 
 from gates import __main__ as gates_main
-from gates.lib import config
+from gates.lib import config, migrations
 from gates.lib.loopstats import (ev, geo_fit, report, rule_n, small_signals, trend, verdict)
 from gates.lib.result import GateError
 from gates.lib.store import Record
@@ -71,7 +71,7 @@ def fid(i):
 
 def frow(i, rnd, sev="MEDIUM", dim=None, caused=True, plan="p", task="1x.1", **over):
     """A valid finding row owned by ``plan``/``task`` with the Rule N and T fields (any may be dropped via over)."""
-    row = {"schema": "finding/1", "id": fid(i), "status": "open", "source": "review", "severity": sev,
+    row = {"schema": "finding/%d" % migrations.current_version("finding"), "id": fid(i), "status": "open", "source": "review", "severity": sev,
            "class": "bug", "siblings": [], "cites": [{"file": "src/x.py", "lines": "1-2", "sha": SHA}],
            "repro": None, "owner": {"kind": "plan", "plan": plan, "task": task}, "pin": None, "ruling": None,
            "evidence": [], "history": [{"status": "open", "sha": SHA, "by": "agent"}],

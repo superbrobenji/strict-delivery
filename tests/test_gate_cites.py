@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from gates import gate_cites
+from gates.lib import migrations
 from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
 
 DEC = ".strict-delivery/state/decisions"
@@ -29,7 +30,7 @@ def put(root, rel, text, binary=False):
 
 
 def dec(id_=DEC_ID, status="answered", **more):
-    r = {"schema": "decision/1", "id": id_, "status": status}
+    r = {"schema": "decision/%d" % migrations.current_version("decision"), "id": id_, "status": status}
     r.update(more)
     return r
 
