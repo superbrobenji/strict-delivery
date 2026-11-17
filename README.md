@@ -88,7 +88,7 @@ planned owner step.
 - The plan and the stream breakdown re-based on the owner's answers of 2026-11-10 and 2026-11-14 (revision 6, #16), and the findings register kept current (#18, #20)
 - This overview itself (#14)
 
-Merged pull requests: #1-#16 and #18-#21 (#17, `run_all`, is open).
+Merged pull requests: #1-#21.
 
 ## Roadmap to v0.1
 

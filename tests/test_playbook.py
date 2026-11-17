@@ -3235,15 +3235,8 @@ FIX1_PINS = [
     ("R1-5", "skills/strict-delivery/SKILL.md", "after touched-area tests, a final branch review and one full suite "
      "on the pull request head;", "after touched-area tests, one full suite on the pull request head and a final "
      "branch review;", 1),
-    ("R1-6", BD_DOC, ONE_PR_DECISION, None, 1),
-    ("R1-6", PLAN_DOC, "recorded in the breakdown's revision 7: each program stream keeps its one pull request, "
-     "opened on demand when a task of another stream consumes one of its sub-blocks, and a consumed sub-block does "
-     "not open a pull request of its own (breakdown revision 7, section 6.1).",
-     "a sub-block opens its own pull request only when another stream consumes it, and otherwise rides its stream's "
-     "final pull request.", 1),
-    ("R1-6", PLAN_DOC, "the block rides PR-records, breakdown revision 7;", "opened because stream `docs` consumes R1, D7;", 1),
-    ("R1-6", PLAN_DOC, "the block rides PR-hooks, breakdown revision 7;", "opened because Task 6R.1 consumes R3, D7;", 1),
-    ("R1-6", PLAN_DOC, "the block rides PR-config, breakdown revision 7;", "opened because Task 6R.1 consumes R4, D7;", 1),
+    # The five R1-6 pins that stood here (one PR per program stream) were withdrawn by the controller in fix round 2
+    # (plan review 2, R2-2: they contradicted design 5.2); FIX2_PINS below holds their corrected form.
     ("R1-7", BD_DOC, CONFIG_V_DECISION, None, 1),
     ("R1-7", BD_DOC, "= 60.0 working hours from t = 0.**", "= 61.5 working hours from t = 0.**", 1),
     ("R1-7", BD_DOC, "-> the Rq commits (49.25) -> PR-config (52.0) -> 6R.1, 6R.2 (56.25) -> stream `release`'s V (57.75) -> "
@@ -3351,6 +3344,207 @@ class FixRound1Test(unittest.TestCase):
                         continue
                     for m in re.finditer(r"(?:stream-end|its) adversarial review", unit):
                         self.assertIn("where the profile enables it", unit[m.start():m.start() + 120], (rel, unit[:60]))
+
+
+# Fix round 2 of the process-v2 roll-in (plan review 2, R2-1..R2-7; design 5.2, 5.9; controller rulings of
+# 2026-11-17). The same pin form as FIX1_PINS: (id, file, new text, the flagged old text, how often the new text occurs).
+PROMPTS = "skills/strict-delivery/prompts/"
+V_RULE_PLAN = ("the stream-end verifier (once per stream, after its last block; no on-demand pull request waits for "
+               "it, and its fixes go in the stream's final pull request or, when every block already merged on "
+               "demand, in a small follow-up pull request, which is then the final one; design 5.2; owner 2026-11-17)")
+R3_END_NEW = ("the block opens its own pull request on demand, D7, because Task 6R.1 consumes it (PR-R3, breakdown "
+              "revision 7)")
+R4_END_NEW = ("the block opens its own pull request on demand, D7, because Task 6R.1 consumes it (PR-R4, breakdown "
+              "revision 7)")
+FIX2_PINS = [
+    ("R2-1", PROMPTS + "controller.md", "the final verifier (where the profile enables it, strict) runs once per "
+     "stream, at its end,", "the final verifier runs once per stream, at its end,", 1),
+    ("R2-1", PROMPTS + "final_reviewer.md", "go to the final verifier where the profile enables it, strict).",
+     "go to the final verifier).", 1),
+    ("R2-1", MS_DOC, "The final verifier (where the profile enables it, strict) runs once per stream, at its end, over "
+     "everything the stream delivered, including what it already merged", "The final verifier runs once per stream, "
+     "at its end, over everything the stream delivered, including what it already merged", 1),
+    ("R2-1", MS_DOC, "after the stream-end final verifier (where the profile enables it, strict) has run",
+     "after the stream-end final verifier has run", 1),
+    ("R2-1", SR_DOC, "and in the verifier (where the profile enables it, strict; design 5.1; owner 2026-11-17)",
+     "and in the verifier (design 5.1; owner 2026-11-17)", 1),
+    ("R2-2", BD_DOC, "- Withdrawn 2026-11-17 by the controller: it contradicted design 5.2 (plan review 2, R2-2)",
+     ONE_PR_DECISION, 1),
+    ("R2-2", BD_DOC, "opens its own on-demand PR as soon as it is ready when a task of another stream consumes it",
+     "a consumed sub-block does not open a PR of its own", 1),
+    ("R2-2", PLAN_DOC, "recorded in the breakdown's revision 7 (section 6.1): a sub-block that another stream consumes "
+     "opens its own pull request as soon as it is ready, and the other sub-blocks ride their stream's final pull "
+     "request.", "each program stream keeps its one pull request, opened on demand when a task of another stream "
+     "consumes one of its sub-blocks, and a consumed sub-block does not open a pull request of its own", 1),
+    ("R2-3", PD_DOC, "runs once at the stream's end, after its last block, over everything the stream delivered; no "
+     "on-demand pull request waits for it, and its fixes go in the stream's final pull request or, when every block "
+     "already merged on demand, in a small follow-up pull request, which is then the final one (design 5.2; owner "
+     "2026-11-17).", "runs once at the stream's end, before the stream's final pull request, over everything the "
+     "stream delivered (design 5.2; owner 2026-11-17).", 1),
+    ("R2-3", "playbook/streams.md", "(where the profile enables it, strict; `playbook/review.md`), which runs after "
+     "the stream's last block and which no on-demand pull request waits for. A defect that review finds in "
+     "already-merged code is fixed in that pull request or, when every block of the stream already merged on demand, "
+     "in a small follow-up pull request, which is then the final one, and a consumer stream takes the fix",
+     "`playbook/review.md`). A defect that review finds in already-merged code is fixed in that pull request or in a "
+     "small follow-up pull request, and a consumer stream takes the fix", 1),
+    ("R2-3", MS_DOC, "has run, which it does after the stream's last block, no on-demand pull request waiting for it, "
+     "and a stream whose every block already merged on demand opens a small follow-up pull request for the "
+     "verifier's fixes, which is then its final one; a block another stream consumes", "(where the profile enables "
+     "it, strict) has run; a block another stream consumes", 1),
+    ("R2-3", BD_DOC, "It runs after the stream's last block (after that block's merge when it merged on demand); no "
+     "on-demand PR waits for it, and its fixes go in the stream's final PR or, when every block already merged on "
+     "demand, in a small follow-up PR (opened only if V finds a defect), which is then the final PR.",
+     "It sits before the stream's final PR, or, when the stream's last part already merged on demand, before a small "
+     "final PR.", 1),
+    ("R2-3", PLAN_DOC, V_RULE_PLAN, "the stream-end verifier (once per stream, before its final pull request; design "
+     "5.2; owner 2026-11-17)", 1),
+    ("R2-3", PLAN_DOC, "Then final review and the PR flow, which is on demand because Task 6R.1 consumes 4e "
+     "(breakdown revision 7); the stream-end verifier (design 5.2; owner 2026-11-17) runs after it and does not "
+     "delay it.", "Then final review, the stream-end verifier (design 5.2; owner 2026-11-17) and the PR flow.", 1),
+    ("R2-3", BD_DOC, "on demand (consumer: `release` 6R.1, edge 4e.3 -> 6R.1); it carries every block of `config` "
+     "except R4", "R4.1 -> 6R.1) and the stream's final PR", 1),
+    ("R2-4", BD_DOC, "-- why: V runs after the stream's last block and no on-demand PR waits for it, for every "
+     "stream alike", "-- why: PR-config is on demand (consumer `release` 6R.1), its gate holds no verifier", 1),
+    ("R2-5", BD_DOC, "6R.1 waits for PR-config's merge (P:4799)", "6R.1 waits for PR-config's merge (P:5537)", 1),
+    ("R2-6", PLAN_DOC, "**Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at "
+     "the stream's end: design 5.2; the block rides PR-records, breakdown revision 7, and has no PR of its own, since "
+     "only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.",
+     "**Block R1 end:** final review, PR to `main` (`MERGED ... stream=residual block=R1`", 1),
+    ("R2-6", PLAN_DOC, R3_END_NEW, "the block rides PR-hooks, breakdown revision 7;", 1),
+    ("R2-6", PLAN_DOC, R4_END_NEW, "the block rides PR-config, breakdown revision 7;", 1),
+    ("R2-7", README_DOC, "Merged pull requests: #1-#21.", "(#17, `run_all`, is open)", 1),
+]
+SUB_BLOCK_PR = {"3a": "PR-runtime", "3d": "PR-package", "5a": "PR-5a", "5b": "PR-5b", "5c": "PR-5c", "6E": "PR-6E",
+                "6K": "PR-6K", "R3": "PR-R3", "R4": "PR-R4", "4e": "PR-config"}   # D7, from the breakdown's edges
+
+
+def bd_yaml():
+    text = read(BD_DOC)
+    start = text.index("schema: breakdown/1")                 # section 6's block, not the max_concurrent one of section 1
+    return text[start:text.index("```", start)]
+
+
+def bd_streams_and_edges():
+    """(task -> stream, [(from, to)]) of the breakdown's section 6 YAML, read with a regex (the production reader,
+    P2.2's breakdown loader, does not exist yet)."""
+    y = bd_yaml()
+    owner = {}
+    for m in re.finditer(r"\{id: (\w+),.*?tasks: \[([^\]]*)\]", y, re.S):
+        for t in m.group(2).split(","):
+            owner[t.strip()] = m.group(1)
+    edges = re.findall(r"\{from: ([\w.]+), to: ([\w.]+)\}", y)
+    return owner, edges
+
+
+def bd_rev7_rows():
+    """name -> merge figure of every PR row of the revision 7 tables (section 4 and section 6.1)."""
+    bd = read(BD_DOC)
+    a = bd[bd.index("### Revision 7 per-PR table"):bd.index("**Revision 6 table (history")]
+    b = bd[bd.index("### 6.1 Program PRs"):bd.index("Revision 6 (history): one row per program PR")]
+    out = {}
+    for line in (a + "\n" + b).split("\n"):
+        if line.startswith("| PR-"):
+            cells = [c.strip() for c in line.strip().strip("|").split(" | ")]
+            out[cells[0].split(" ")[0]] = (float(re.findall(r"\*\*([0-9.]+)\*\*", cells[-1])[0]), line)
+    return out
+
+
+def bd_queue():
+    bd = read(BD_DOC)
+    s = bd.index("The merge-queue order, with the merge times of this section and of section 4: ")
+    e = bd.index(". The streams still run unregistered", s)
+    items = bd[s:e].split(": ", 1)[1].split(", ")
+    return [(i.rsplit(" ", 1)[0], float(i.rsplit(" ", 1)[1])) for i in items]
+
+
+class FixRound2Test(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIX2_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIX2_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, old), new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIX2_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_the_old_one_pr_per_stream_rule_is_gone_from_every_document(self):          # R2-2, whole class
+        for rel in (BD_DOC, PLAN_DOC, "playbook/streams.md", MS_DOC, PD_DOC):
+            with self.subTest(rel=rel):
+                text = read(rel)
+                self.assertNotIn("does not open a PR of its own", text)
+                self.assertNotIn("does not open a pull request of its own", text)
+                self.assertNotIn("keeps its one pull request", text)
+                self.assertNotIn("and is the stream's final PR in every case", text)
+
+    def test_every_consumed_sub_block_has_its_own_on_demand_row(self):                  # R2-2, direct and by edges
+        owner, edges = bd_streams_and_edges()
+        consumed = {a.split(".")[0] for a, b in edges if owner[a] != owner[b]}
+        self.assertEqual(consumed, set(SUB_BLOCK_PR))                       # no sub-block outside the list is consumed
+        rows = bd_rev7_rows()
+        for sub, pr in SUB_BLOCK_PR.items():
+            with self.subTest(sub=sub):
+                self.assertIn(pr, rows)
+                self.assertIn("on demand", rows[pr][1].split(" | ")[1])
+        for riding in ("R1", "3b", "3c"):                                   # consumed only inside their own stream
+            self.assertNotIn(riding, consumed)
+        for pr in ("PR-hooks", "PR-records", "PR-residual/R5"):
+            self.assertIn("stream final PR", rows[pr][1].split(" | ")[1])
+
+    def test_the_merge_queue_figures_re_add(self):                                         # R2-2, R2-3
+        rows = bd_rev7_rows()
+        queue = bd_queue()
+        self.assertEqual([n for n, _ in queue], sorted(rows, key=lambda n: rows[n][0]))
+        for (n, t) in queue:
+            self.assertEqual(rows[n][0], t, n)
+        for (_, a), (_, b) in zip(queue, queue[1:]):
+            self.assertGreaterEqual(b - a, 0.75)          # one merge at a time, each at least U + T after the one before
+        sec4 = read(BD_DOC)
+        s4 = sec4.index("The program's PRs and their V are in section 6.1 (")
+        listed = [(i.rsplit(" ", 1)[0], float(i.rsplit(" ", 1)[1])) for i in
+                  sec4[s4:sec4.index(").", s4)].split("(", 1)[1].split(", ")]
+        self.assertEqual(listed, [q for q in queue if q[1] > 33.0 and q[0] != "PR-a-final"])    # the program's PRs, as in section 6.1
+        at = dict(queue)
+        prev = {n: queue[i - 1][1] for i, (n, _) in enumerate(queue) if i}
+        m = lambda tasks_end, r, n: max(tasks_end + 0.25 + r + 0.5, prev[n] + 0.75)    # clean U + T after the queue
+        v_hooks, v_records = at["PR-R3"] + 1.5, at["PR-6K"] + 1.5
+        want = {"PR-runtime": m(27.75, 1.0, "PR-runtime"), "PR-6E": m(20.0, 1.0, "PR-6E"),
+                "PR-5a": m(30.75, 1.0, "PR-5a"), "PR-5b": m(37.25, 1.0, "PR-5b"), "PR-5c": m(37.25, 1.0, "PR-5c"),
+                "PR-6K": m(39.25, 1.0, "PR-6K"), "PR-R3": m(39.5, 1.0, "PR-R3"),
+                "PR-records": m(v_records, 1.5, "PR-records"), "PR-hooks": m(v_hooks, 1.25, "PR-hooks"),
+                "PR-residual/R5": prev["PR-residual/R5"] + 0.75, "PR-R4": m(46.5, 1.0, "PR-R4"),
+                "PR-config": m(49.25, 2.0, "PR-config")}
+        for n, t in want.items():
+            self.assertEqual(at[n], t, n)
+        self.assertEqual(at["PR-hooks"], 45.5)
+        self.assertEqual(prev["PR-hooks"], at["PR-records"])
+        self.assertEqual(prev["PR-residual/R5"], at["PR-hooks"])        # the enablement follows the hooks stream's last PR
+
+    def test_every_wave_is_at_or_under_the_cap_of_25(self):                                # R2-2, section 6.2
+        bd = read(BD_DOC)
+        sec = bd[bd.index("**Revision 7 waves"):bd.index("**Revision 6 waves (history).**")]
+        peaks = [int(m.group(1)) for m in re.finditer(r"^\| PW\d \|.*\| \*\*(\d+)\*\*", sec, re.M)]
+        self.assertEqual(len(peaks), 8)
+        self.assertTrue(all(p <= 25 for p in peaks), peaks)
+
+    def test_every_stream_end_verifier_sentence_names_the_condition(self):                   # R2-1, whole class
+        # the cadence sentences; "A defect the stream-end verifier finds ..." (MS "Verifier and merges") states no cadence
+        stream_end = re.compile(r"stream-end final verifier|final verifier(?: \(where[^)]*\))? runs once per stream|go "
+                                r"to the final verifier|in the verifier \(")
+        for rel in (MS_DOC, SR_DOC, PROMPTS + "controller.md", PROMPTS + "final_reviewer.md"):
+            found = 0
+            for unit in prose_units(read(rel)):
+                for sentence in re.split(r"(?<=\.) (?=[A-Z`(])", unit):
+                    if stream_end.search(sentence):
+                        found += 1
+                        self.assertIn("where the profile enables it", sentence, (rel, sentence[:80]))
+            with self.subTest(rel=rel):
+                self.assertGreaterEqual(found, 1)
 
 
 if __name__ == "__main__":

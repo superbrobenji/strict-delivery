@@ -1195,6 +1195,7 @@ B13_CONTENT = {
        ("Merge and checkpoint.", "a block another stream consumes"),
        ("Merge and checkpoint.", "touched-area tests"), ("Merge and checkpoint.", "stays on the stream branch"),
        ("Merge and checkpoint.", "once per stream"), ("Merge and checkpoint.", "is not re-run after its own fixes"),
+       ("Merge and checkpoint.", "the final verifier (where the profile enables it, strict) runs once per stream"),  # R2-1
        ("Continuation.", "wake-up"), ("Continuation.", "account-wide")],
     "audit_reviewer": [("Owner-only decisions.", s) for s in TRIAGE]
     + [("Coverage first.", "coverage list"), ("Coverage first.", "progress file")],
@@ -1646,7 +1647,7 @@ EXACT_PARAGRAPHS = {
         )),
         ("Verdict.", (
             "Verdict.",
-            "You judge whether the branch may open its pull request (and, at a stream's end, go to the final verifier).",
+            "You judge whether the branch may open its pull request (and, at a stream's end, go to the final verifier where the profile enables it, strict).",
             "Report status DONE when every claim and gate re-ran clean at the tip and the change itself holds no finding (here the whole branch).",
             "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
             "Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`, naming the task it belongs to.",
