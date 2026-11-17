@@ -886,5 +886,22 @@ class SkillB4Test(unittest.TestCase):
             self.assertIn("absent", str(ctx.exception))
 
 
+class RepoSkillTest(unittest.TestCase):
+    """Verifier V-1: this repository's interim project skill states the v2 rules, not the superseded ones."""
+    REPO_SKILL = ".claude/skills/strict-delivery-repo/SKILL.md"
+
+    def test_superseded_rules_gone_and_new_rules_stated(self):
+        t = read(self.REPO_SKILL)
+        for old in ("until a clean pass", "then an owner question", "stop and wait for the owner (an agent"):
+            with self.subTest(old=old):
+                self.assertNotIn(old, t)
+        for new in ("until the binding Rules N and T verdict stops the loop",
+                    "then the binding Rules N and T verdict stops the loop",
+                    "a document re-review reads the whole document, an edit corrects only what was flagged",
+                    "stop only the work the difference affects"):
+            with self.subTest(new=new):
+                self.assertEqual(t.count(new), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

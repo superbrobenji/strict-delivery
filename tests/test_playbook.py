@@ -1612,10 +1612,12 @@ class PlaybookFilesTest(unittest.TestCase):
         self.assertNotIn("never block a fix", body)
 
     def test_finding_records_for_loopstats_and_plan_3d1_alignment(self):   # program controller input; design 5.4
-        rec = ("After each review, before `loopstats` runs, the controller writes each finding of that review, with "
-               "its `review_round`, `caused_by_change` and `dimension`, as a finding record (schema `finding`) under "
-               "config `paths.findings` on the task's branch; the records stay on that branch while its pull request "
-               "is open and merge with it, and `loopstats` counts only findings that have a record.")
+        rec = ("After each review, before `loopstats` runs, a finding record (schema `finding`) is written for each "
+               "finding of that review, with its `review_round`, `caused_by_change` and `dimension`, under config "
+               "`paths.findings` on the task's branch, by whoever mints ids: within a program, the program "
+               "controller, at the stream controller's request; in a plain plan, its controller. The records stay on "
+               "that branch while its pull request is open and merge with it, and `loopstats` counts only findings "
+               "that have a record.")
         spec = " ".join(read("docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md").split())
         self.assertEqual(spec.count(rec), 1)
         self.assertEqual(" ".join(pc.section(read("playbook/review.md"), "Rules N and T").split()).count(rec), 1)
@@ -3253,8 +3255,8 @@ FIX1_PINS = [
     # (plan review 2, R2-2: they contradicted design 5.2); FIX2_PINS below holds their corrected form.
     ("R1-7", BD_DOC, CONFIG_V_DECISION, None, 1),
     ("R1-7", BD_DOC, "= 60.0 working hours from t = 0.**", "= 61.5 working hours from t = 0.**", 1),
-    ("R1-7", BD_DOC, "-> the Rq commits (49.25) -> PR-config (52.0) -> 6R.1, 6R.2 (56.25) -> stream `release`'s V (57.75) -> "
-     "PR-release (59.25) -> 6R.3, the tag (60.0)", "-> the Rq commits (49.25) -> stream `config`'s V (50.75) -> "
+    ("R1-7", BD_DOC, "-> the Rq commits (49.25) -> PR-config (52.0) -> 6R.1, 6R.2 (56.25) -> PR-release's final review "
+     "(57.25) -> stream `release`'s V (58.75) -> PR-release (59.25) -> 6R.3, the tag (60.0)", "-> the Rq commits (49.25) -> stream `config`'s V (50.75) -> "
      "PR-config (53.5)", 1),
     ("R1-7", BD_DOC, "PR-config 52.0, PR-release 59.25", "PR-config 53.5, PR-release 60.75", 2),
     ("R1-7", BD_DOC, "| **v0.1.0 tag (6R.3)** | **60.0** | 59.25 + 0.75 | **Fri 20 Nov 02:00** | **Fri 27 Nov 10:00** |",
@@ -3317,8 +3319,8 @@ class FixRound1Test(unittest.TestCase):
         steps = [("PR-unicode", 1.5), ("PR-2b1", 1.75), ("PR-2b-rest", 2.25), ("PR-2c3", 2.25), ("cut", 0.25),
                  ("P1", 6.0), ("PR-P1", 1.75), ("cut", 0.25), ("P2", 7.0), ("PR-P2", 1.5), ("cut", 0.25),
                  ("P3 tasks", 6.5), ("PR-P3", 1.75), ("cut", 0.25), ("4d", 7.0), ("4d end", 1.0), ("4e", 7.0),
-                 ("Rq", 1.0), ("PR-config", 2.75), ("cut", 0.25), ("6R.1-6R.2", 4.0), ("V release", 1.5),
-                 ("PR-release", 1.5), ("6R.3", 0.75)]
+                 ("Rq", 1.0), ("PR-config", 2.75), ("cut", 0.25), ("6R.1-6R.2", 4.0), ("PR-release R", 1.0),
+                 ("V release", 1.5), ("PR-release", 0.5), ("6R.3", 0.75)]       # V-4: final review, V, then T
         # the on-path steps before the 4d end re-add as 41.25 (section 7), the P3 tasks tie with PR-runtime
         forward, at = {}, 0.0
         for name, cost in steps:
@@ -3335,7 +3337,8 @@ class FixRound1Test(unittest.TestCase):
         self.assertEqual(forward["PR-config"], 52.0)
         self.assertEqual(forward["6R.1-6R.2"], 56.25)
         self.assertEqual(forward["PR-release"], 59.25)
-        self.assertNotIn("V config", forward)                                 # config's V is not a path step
+        self.assertEqual((forward["PR-release R"], forward["V release"]), (57.25, 58.75))        # V-4
+        self.assertNotIn("V config", forward)                                # config's V is not a path step
         kinds = 38.5 + 1.0 + 17.0 + 1.5 + 1.25 + 0.75                           # tasks, end, PR ends, V, cuts, tag
         self.assertEqual(kinds, 60.0)
         bd = read(BD_DOC)
@@ -3422,7 +3425,8 @@ FIX2_PINS = [
      "stream alike", "-- why: PR-config is on demand (consumer `release` 6R.1), its gate holds no verifier", 1),
     ("R2-5", BD_DOC, "6R.1 waits for PR-config's merge (P:4799)", "6R.1 waits for PR-config's merge (P:5537)", 1),
     ("R2-6", PLAN_DOC, "**Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at "
-     "the stream's end: design 5.2; the block rides PR-5c, breakdown revision 7, and has no PR of its own, since "
+     "the stream's end: design 5.2; the block rides PR-5b, breakdown revision 7 (the R1 end is on the stream branch "
+     "before the 5b group is cut), and has no PR of its own, since "
      "only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.",
      "**Block R1 end:** final review, PR to `main` (`MERGED ... stream=residual block=R1`", 1),
     ("R2-6", PLAN_DOC, R3_END_NEW, "the block rides PR-hooks, breakdown revision 7;", 1),
@@ -3434,7 +3438,8 @@ SUB_BLOCK_PR = {"3a": "PR-runtime", "3d": "PR-package", "5a": "PR-5a", "5b": "PR
                 "4d": "PR-4d"}   # D7: the breakdown's edges, and for 4c and 4d the `Consumes:` lines of Tasks 6R.1-6R.2
 CONSUMES_ONLY = {"4c", "4d"}      # consumed through D7's `Consumes:` clause, with no edge in the breakdown's YAML (R3-4)
 # what each on-demand PR carries besides the sub-block it is named for (a work branch is never rebased; R3-3)
-CARRIES = {"PR-R3": ("3b", "3c"), "PR-R4": ("4b",), "PR-4d": ("4a",), "PR-5c": ("R1",), "PR-6E": ("6E.3b",)}
+CARRIES = {"PR-R3": ("3b", "3c"), "PR-R4": ("4b",), "PR-4d": ("4a",), "PR-5b": ("R1",), "PR-5a": ("3b.1",),
+           "PR-6E": ("6E.3b",)}      # V-6: 3b.1 is on hooks/main before the 5a cut, R1 before the 5b cut
 
 
 def bd_yaml():
@@ -3543,17 +3548,19 @@ class FixRound2Test(unittest.TestCase):
         m = lambda tasks_end, r, n: max(tasks_end + 0.25 + r + 0.5, prev[n] + 0.75)    # clean U + T after the queue
         v_hooks, v_records = at["PR-R3"] + 1.5, at["PR-6K"] + 1.5
         # R is 1.0 for a PR with one sub-block or V's fixes only, the stream's larger figure when it carries earlier
-        # sub-blocks (section 1; R3-3): PR-6E carries 6E.3b, PR-5c R1, PR-R3 3b and 3c, PR-4d 4a, PR-R4 4b
+        # sub-blocks (section 1; R3-3; V-6): PR-6E carries 6E.3b, PR-5a 3b.1, PR-5b R1, PR-R3 3b and 3c, PR-4d 4a,
+        # PR-R4 4b; 6K.2 is held to 38.25 (V-5: the end of PR-5c's R, 37.25 + 1.0 = 38.25)
         want = {"PR-runtime": m(27.75, 1.0, "PR-runtime"), "PR-6E": m(20.0, 1.5, "PR-6E"),
-                "PR-5a": m(30.75, 1.0, "PR-5a"), "PR-4c": m(16.0, 1.0, "PR-4c"), "PR-5b": m(37.25, 1.0, "PR-5b"),
-                "PR-5c": m(37.25, 1.5, "PR-5c"), "PR-6K": m(39.25, 1.0, "PR-6K"), "PR-R3": m(39.5, 1.25, "PR-R3"),
+                "PR-5a": m(30.75, 1.25, "PR-5a"), "PR-4c": m(16.0, 1.0, "PR-4c"), "PR-5b": m(37.25, 1.5, "PR-5b"),
+                "PR-5c": m(37.25, 1.0, "PR-5c"), "PR-6K": m(38.25 + 2.0, 1.0, "PR-6K"), "PR-R3": m(39.5, 1.25, "PR-R3"),
                 "PR-4d": m(40.25, 2.0, "PR-4d"),
                 "PR-records": m(v_records, 1.0, "PR-records"), "PR-hooks": m(v_hooks, 1.0, "PR-hooks"),
                 "PR-residual/R5": prev["PR-residual/R5"] + 0.75, "PR-R4": m(46.5, 2.0, "PR-R4"),
                 "PR-config": m(49.25, 2.0, "PR-config")}
         for n, t in want.items():
             self.assertEqual(at[n], t, n)
-        self.assertEqual(at["PR-hooks"], 45.0)
+        self.assertEqual(at["PR-hooks"], 47.0)
+        self.assertEqual((at["PR-5b"], at["PR-5c"], at["PR-6K"]), (39.5, 40.25, 42.0))      # V-6, V-5
         self.assertEqual(at["PR-4c"], at["PR-5a"] + 0.75)                  # R3-4: in the gap after PR-P3, with PR-6E, PR-5a
         self.assertEqual(at["PR-R4"], at["PR-config"] - 2.75)               # R3-3: PR-R4 merges as PR-config's U starts
         self.assertEqual(prev["PR-hooks"], at["PR-records"])
@@ -3595,11 +3602,11 @@ FIX3_PINS = [
      "merged:records", 1),
     ("R3-2", BD_DOC, "R4.1 after the 4b end and PR-loopstats, the 6E.3 merge (P078:5329);", "R4.1 after the 4b end and "
      "merged:records (P078:5329);", 1),
-    ("R3-2", BD_DOC, "The `unblock` strings of the YAML for R2.1, R2.2, R2.3 and R4.1 already name the consumed "
-     "sub-block's merge", "(4) the `unblock` strings that wait for a stream's merge", 1),
+    ("R3-2", BD_DOC, "The `unblock` strings of the YAML for R2.1, R2.2, R2.3 and R4.1, rewritten by revision 7, name "
+     "the consumed sub-block's merge", "(4) the `unblock` strings that wait for a stream's merge", 1),
     ("R3-3", BD_DOC, "| PR-R3 (3b, 3c, R3.1, R3.2) |", "| PR-R3 (R3.1, R3.2) |", 1),
     ("R3-3", BD_DOC, "| PR-R4 (4b, R4.1) |", "| PR-R4 (R4.1) |", 1),
-    ("R3-3", BD_DOC, "| PR-5c (R1, 5c.1, 5c.2) |", "| PR-5c (5c.1, 5c.2) |", 1),
+    ("R3-3", BD_DOC, "| PR-5b (R1, 5b.1, 5b.2) |", "| PR-5b (5b.1, 5b.2) |", 1),     # V-6: R1 rides PR-5b
     ("R3-3", BD_DOC, "| PR-hooks (V's fixes) |", "| PR-hooks (3b, 3c) |", 1),
     ("R3-3", BD_DOC, "| PR-records (V's fixes) |", "| PR-records (R1, 6E.3b) |", 1),
     ("R3-3", BD_DOC, "| PR-config (4e, R2) |", "| PR-config (4a-4e, R2) |", 1),
@@ -3668,6 +3675,85 @@ class FixRound3Test(unittest.TestCase):
         head = plan.index("### Task 6E.3: `loopstats`")
         self.assertIn("COMPLETE", plan[head:plan.index("\n", head)])
         self.assertIn("PR #22", plan[head:head + 600])
+
+
+DESIGN_DOC = "docs/strict-delivery/specs/2026-11-17-delivery-process-changes-design.md"
+FIXV_PINS = [   # the final verifier's findings V-3..V-7 (V-1: tests.test_skill.RepoSkillTest; V-3's record sentence: its own tests)
+    ("V-4", BD_DOC, "6R.2 54.25 + 2.0 = 56.25; final review R 1.0 -> 57.25; V 1.5 -> 58.75; T 0.5 -> 59.25",
+     "6R.2 54.25 + 2.0 = 56.25; V 1.5 -> 57.75; R 1.0 + T 0.5 = 1.5 -> 59.25", 1),
+    ("V-4", BD_DOC, "after PR-P3 33.0: R 1.0 -> 34.0; V 1.5 -> 35.5; U 0.25 + T 0.5 = 0.75 -> 36.25",
+     "after V 34.5: U 0.25 + R 1.0 + T 0.5 = 1.75 -> 36.25", 1),
+    ("V-4", BD_DOC, "PR-release's final review (57.25) -> stream `release`'s V (58.75) -> PR-release (59.25)",
+     "-> stream `release`'s V (57.75) -> PR-release (59.25)", 1),
+    ("V-4", BD_DOC, "+ 1.0 (R) + 1.5 (V) + 0.5 (T) = 59.25; + 0.75 (6R.3) = 60.0.",
+     "+ 1.5 (V) + 1.5 (R 1.0 + T 0.5) = 59.25", 1),
+    ("V-4", BD_DOC, "- 0.5 (PR-release T) = 58.75; - 1.5 (V release) = 57.25; - 1.0 (PR-release R) = 56.25;",
+     "- 1.5 (PR-release R + T) = 57.75; - 1.5 (V release) = 56.25;", 1),
+    ("V-5", BD_DOC, "6K.2 38.25 + 2.0 = 40.25; R 1.0 -> 41.25; after PR-5c (40.25): clean U 0.25 + T 0.5 = 0.75 -> 42.0",
+     "6K.2 37.25 + 2.0 = 39.25; R 1.0 -> 40.25; after PR-5c (39.75)", 1),
+    ("V-5", BD_DOC, "the other windows have at most 3, `a` at 1.75-2.75 among them: F1b group 1 and PR-2b1's end 2)",
+     "the 4e and R2 groups with PR-R4's end; the other windows have at most 3).", 1),
+    ("V-5", BD_DOC, "at 38.5: hooks 6, records 6 (controller 1, the 6K.2 group 3, PR-5b's end 2), residual 3, config 4)",
+     "at 38.5: hooks 6, records 6 with PR-5b's end, residual 3, config 4)", 1),
+    ("V-6", BD_DOC, "PR-5a carries 3b.1 (merged into `20261110-v01/hooks/main` as `3194b4f`, not on `main`, before the "
+     "5a group is cut at 24.75)", "PR-5c carries R1 (on the stream branch before 5c", 1),
+    ("V-6", BD_DOC, "PR-5b carries R1 (the R1 end, 32.5, is on the stream branch before the 5b group is cut at 33.25;",
+     "PR-5c carries R1", 1),
+    ("V-6", BD_DOC, "R 1.5 (R1 and 5b) -> 38.75; after PR-a-final (36.25): clean U 0.25 + T 0.5 = 0.75 -> 39.5 | **39.5** |",
+     "R 1.0 -> 38.25; after PR-a-final (36.25): clean U 0.25 + T 0.5 = 0.75 -> 39.0 | **39.0** |", 1),
+    ("V-6", BD_DOC, "5c 33.25 + 4.0 = 37.25; R 1.0 -> 38.25; after PR-5b (39.5): clean U 0.25 + T 0.5 = 0.75 -> 40.25 | "
+     "**40.25** |", "R 1.5 (R1 and 5c) -> 38.75", 1),
+    ("V-6", BD_DOC, "R 1.25 (5a and 3b.1) -> 32.0;", "5a.1-5a.3 24.75 + 6.0 = 30.75; R 1.0 -> 31.75;", 1),
+    ("V-7", BD_DOC, "The section 6 YAML is changed by revision 7 only in the `unblock` strings of R2.1, R2.2, R2.3 and "
+     "R4.1 (below):", "The section 6 YAML is not rewritten by revision 7", 1),
+    ("V-7", BD_DOC, "R5.1 (S) 38.25 + 1.0 = 39.25; R 1.0 -> 40.25; V 1.5 -> 41.75;", "V 1.5 -> 40.75", 1),
+    ("V-7", DESIGN_DOC, "Status: approved by the owner, 2026-11-17 (\"approved, roll it in\").",
+     "Status: draft for owner approval", 1),
+]
+
+
+class FixRoundVTest(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIXV_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIXV_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, old), new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIXV_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_the_final_review_comes_before_the_verifier_at_a_stream_final_pr(self):       # V-4, whole class
+        for name, rest in bd_rev7_rows().items():
+            if name not in ("PR-a-final", "PR-residual/R5", "PR-release"):
+                continue
+            cell = rest[1].split(" | ")[3]
+            r, v = re.search(r"\bR 1\.0\b", cell), re.search(r"\bV 1\.5\b", cell)
+            with self.subTest(pr=name):
+                self.assertTrue(r and v and r.start() < v.start(), cell)
+        self.assertNotIn("after V 34.5", read(BD_DOC))
+
+    def test_the_sums_of_the_reordered_cells_re_add(self):                                  # V-4: the totals do not move
+        rows = bd_rev7_rows()
+        self.assertEqual(33.0 + 1.0 + 1.5 + 0.25 + 0.5, rows["PR-a-final"][0])
+        self.assertEqual(56.25 + 1.0 + 1.5 + 0.5, rows["PR-release"][0])
+        self.assertEqual(rows["PR-5b"][0], 37.25 + 1.5 + 0.25 + 0.5)                       # V-6
+        self.assertEqual(rows["PR-5c"][0], rows["PR-5b"][0] + 0.75)
+        self.assertEqual(rows["PR-6K"][0], 38.25 + 2.0 + 1.0 + 0.75)                       # V-5
+        self.assertEqual(rows["PR-R3"][0], rows["PR-4d"][0] + 0.75)
+
+    def test_no_stream_exceeds_four_children_in_the_window_the_verifier_found(self):       # V-5: records 37.25-38.75
+        rows = bd_rev7_rows()
+        r_5c_end = 37.25 + 1.0                       # PR-5c's R ends (the PR-5c cell: R 1.0 -> 38.25)
+        self.assertIn("R 1.0 -> 38.25", rows["PR-5c"][1])
+        k2_start = float(re.search(r"6K\.2 ([0-9.]+) \+ 2\.0", rows["PR-6K"][1]).group(1))
+        # 1 (6K.2 group) + 2 (PR-5b's end) + 2 (PR-5c's R) is 5 while the three overlap; the group starts when R ends
+        self.assertGreaterEqual(k2_start, r_5c_end)
 
 
 if __name__ == "__main__":

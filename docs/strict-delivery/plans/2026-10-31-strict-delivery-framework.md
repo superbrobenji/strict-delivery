@@ -6282,7 +6282,7 @@ Owner answer Q-BD-4 (a) (2026-11-02): stream A's residual ownership becomes a pr
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Edit the prompt file.**
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
-- [ ] **Step 5: Commit** `docs(prompts): program controller sync steps (Rq-5-5)`, then checkpoint. **Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at the stream's end: design 5.2; the block rides PR-5c, breakdown revision 7, and has no PR of its own, since only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.
+- [ ] **Step 5: Commit** `docs(prompts): program controller sync steps (Rq-5-5)`, then checkpoint. **Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at the stream's end: design 5.2; the block rides PR-5b, breakdown revision 7 (the R1 end is on the stream branch before the 5b group is cut), and has no PR of its own, since only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.
 
 ### Block R2: registry requests
 

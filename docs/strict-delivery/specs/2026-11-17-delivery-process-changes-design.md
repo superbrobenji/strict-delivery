@@ -1,6 +1,6 @@
 # Delivery process changes: design
 
-Date: 2026-11-17. Status: draft for owner approval. Changes: the main design spec (`2026-10-31-strict-delivery-framework-design.md`, "MS"), the programs and streams design (`2026-10-31-programs-and-streams-design.md`, "PD"), the session-resume design (`2026-11-02-session-resume-and-questions-design.md`, "SR"), the base playbook, the skill and its prompt blocks, and this repository's plan and breakdown.
+Date: 2026-11-17. Status: approved by the owner, 2026-11-17 ("approved, roll it in"). Changes: the main design spec (`2026-10-31-strict-delivery-framework-design.md`, "MS"), the programs and streams design (`2026-10-31-programs-and-streams-design.md`, "PD"), the session-resume design (`2026-11-02-session-resume-and-questions-design.md`, "SR"), the base playbook, the skill and its prompt blocks, and this repository's plan and breakdown.
 
 ## 1. Intent
 
