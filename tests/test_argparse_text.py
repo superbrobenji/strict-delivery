@@ -827,6 +827,8 @@ class TestParserSites(unittest.TestCase):
             # names are the base the allowlist compares with), and the two super() calls of the build hooks
             ("gates/lib/result.py", "ArgumentParser"), ("gates/lib/result.py", "_GateParser"),
             ("gates/lib/result.py", "add_parser"), ("gates/lib/result.py", "add_subparsers"),
+            # run_all builds its parser through gate_args (Task 2b.1)
+            ("gates/run_all.py", "gate_args"),
             ("gates/tools/decisions_cli.py", "gate_args"), ("gates/tools/findings_cli.py", "_GateParser"),
             ("gates/tools/findings_cli.py", "add_parser"), ("gates/tools/findings_cli.py", "add_parser"),
             ("gates/tools/findings_cli.py", "add_subparsers"), ("gates/tools/index.py", "gate_args")])
