@@ -34,13 +34,15 @@ A controller dispatches workers within the configured depth and concurrency limi
 
 ## Decision classes
 
-A question in an owner-only class is always the owner's: the agent that needs it writes the question with its options and their cost, and that path halts until the owner answers.
+A question in an owner-only class is always the owner's: the agent that needs it writes the question with its options and their cost, and only the work that depends on the answer waits until the owner answers, while every independent task continues. No agent decides an owner-only question because the owner is away.
 
 The classes are config `decision_classes.owner_only`; a project may add its own classes and never drops a default one.
 
-Default owner-only classes: `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute`, `program-close`.
+Default owner-only classes: `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute`, `program-close`.
 
 `playbook/decisions.md` says what the owner decides in each class.
+
+A question to narrow or widen a finding class is the controller's: it rules under the fix rule and logs `Decision (controller): class -- action -- cost if wrong`, and the owner is asked only when the resolution changes shipped user-facing behaviour, the spec or scope (`spec-direction`, `scope`), or on an ESCALATE verdict with an open CRITICAL or HIGH finding.
 
 A controller rules only inside an approved plan, only on a plan-vs-spec or task-vs-task conflict the spec settles, and ledgers each ruling as `Ruling: what -- why -- cost if wrong -- spec cite`; every other open point is an owner question.
 
@@ -56,7 +58,7 @@ A question found answered is cited, not asked.
 
 A printed question shows, in this order: id, class, the question, the recommended option with its cost, every alternative with its cost, effect, topics and `applies_to`; a question in class `model-policy` carries no recommended option, and the record's `source` names the report or handoff the question came from.
 
-Questions wait for the next stop and go as one batch, never one at a time: `decisions batch --since` with the last cut-off commit prints the new questions and, under `Also open`, every earlier open question given whole, grouped by `source`.
+Questions wait for the next stop and go as one batch, never one at a time, and nothing independent waits on the batch: `decisions batch --since` with the last cut-off commit prints the new questions and, under `Also open`, every earlier open question given whole, grouped by `source`.
 
 An agent restarts as soon as every question with its `source` has an answered record, while others in the batch may still be open.
 
@@ -84,9 +86,15 @@ A controller that has not invoked the skill for the change in its current contex
 
 Every change, any size, is a register row before work starts.
 
-Each task runs an implementer, a task review and the fix loop until a clean pass; each block ends with a final review and, where the profile enables it (strict), a top-tier final verifier.
+Each task runs an implementer, a task review and the fix loop until the binding Rules N and T verdict stops it, and a fix only narrows or corrects; each block ends with a final review, and where the profile enables it (strict), one top-tier final verifier per stream runs at the stream's end over everything the stream delivered, merged parts included, and is not re-run after its own fixes.
 
-Before every commit, `python3 -m gates run_all` and the test command in config `commands.test` are green, with a clean tree.
+A block another stream consumes opens its pull request when it is ready, after touched-area tests, a final branch review and one full suite on the pull request head; the other blocks go out with the stream's final pull request.
+
+Before every commit, `python3 -m gates run_all` and the touched-area tests (the test modules of each changed file, plus every test module that imports a changed module) are green on every supported runtime, with a clean tree.
+
+The full suite runs on each pull request's head, at a stream's end before its adversarial review (where the profile enables it, strict), and in that review.
+
+The strict pre-commit hook still runs `python3 -m gates run_all` and then the test command in config `commands.test`, and a project's `commands.test` decides what that covers.
 
 The base branch is protected: every change reaches it by a pull request on all-green, merged by merge commit on the owner's approval, and the ledger records each merge as a `MERGED` line.
 
@@ -99,7 +107,7 @@ A session or agent that starts with no memory of the work (a compaction, a new s
 3. Dispatch one read-only `investigator` with the fixed questions of `playbook/sessions.md` (Q1-Q9; a program session G1-G4); it changes nothing.
 4. Write the ledger line `Resume check: head=<sha>; differences: <none or Q-ids>; report <path>.`
 5. Report where things stand and what comes next, with the findings, before any edit or dispatch other than the investigator's.
-6. With no difference, take over at once; with any difference, stop and wait for the owner (an agent: status NEEDS_DECISION naming each difference).
+6. With no difference, take over at once; with any difference, stop only the work the difference affects and wait for the owner on it, and take over the rest at once (an agent: status NEEDS_DECISION naming each difference).
 
 This is skill text; no hook holds the session.
 
@@ -107,7 +115,7 @@ A continued worker never dispatches, so its dispatcher runs the check before the
 
 ## Continuation
 
-Continuation is automatic: an agent that reaches a checkpoint, 80 % of its token or time budget, or a usage-limit stop writes its handoff and returns, and its dispatcher at once dispatches a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page.
+Continuation is automatic: an agent that reaches a checkpoint, 80 % of its token or time budget, or a usage-limit stop writes its handoff and returns, and its dispatcher dispatches a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page, at once after a checkpoint or a budget stop.
 
 Before it writes that handoff, a controller dispatches nothing new and waits, inside its turn, for the handback of every child still running; a child that a usage-limit stop cuts off before its handback is listed in the handoff's `live_subagents`.
 
@@ -124,6 +132,8 @@ Before a controller ledgers a child's result, it lists the child's background jo
 A controller never ends its turn while a child or a background job it started still runs: it waits inside its turn, in the foreground, and returns only after every child has handed back.
 
 A child has finished only when its handback arrives, never because its report file already holds a status line.
+
+After a usage-limit stop the limit is account-wide, so the dispatcher waits for the reset: the session that owns the program schedules a wake-up at the reset time the limit message names, with Claude Code's scheduled wake-up or cron tool, and re-dispatches from the handoffs; with neither, the handoff names the resume command and the owner runs it.
 
 The handoff fields are in `playbook/sessions.md` section "Handoffs and continuation".
 
