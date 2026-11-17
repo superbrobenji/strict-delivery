@@ -66,7 +66,7 @@ class ConstantsTest(unittest.TestCase):
 
     def test_min_tiers_literal(self):                               # K2
         self.assertEqual(MIN_TIERS, {"implementer_transcription": 1, "implementer": 2, "controller": 3,
-                                     "program_controller": 3, "stream_controller": 3, "task_reviewer": 3,
+                                     "program_controller": 3, "stream_controller": 3, "task_reviewer": 2,
                                      "final_reviewer": 3, "audit_reviewer": 3, "audit_verifier": 3, "investigator": 3,
                                      "final_verifier": 4, "exception_reviewer": 4, "plan_writer": 3,
                                      "plan_reviewer": 3, "drafter": 2})

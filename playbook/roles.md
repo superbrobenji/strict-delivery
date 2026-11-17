@@ -9,7 +9,7 @@ Each framework role has a prompt block, a minimum tier, a budget cap, whether it
 | controller | skills/strict-delivery/prompts/controller.md | tier3 | yes | open, planned, in-progress, deferred, closed |
 | implementer | skills/strict-delivery/prompts/implementer.md | tier2 | yes | fixed-unpinned, pinned |
 | implementer_transcription | skills/strict-delivery/prompts/implementer_transcription.md | tier1 | yes | fixed-unpinned, pinned |
-| task_reviewer | skills/strict-delivery/prompts/task_reviewer.md | tier3 | yes | open |
+| task_reviewer | skills/strict-delivery/prompts/task_reviewer.md | tier2 | yes | open |
 | final_reviewer | skills/strict-delivery/prompts/final_reviewer.md | tier3 | yes | open |
 | final_verifier | skills/strict-delivery/prompts/final_verifier.md | tier4 | yes | open |
 | exception_reviewer | skills/strict-delivery/prompts/exception_reviewer.md | tier4 | yes | none |

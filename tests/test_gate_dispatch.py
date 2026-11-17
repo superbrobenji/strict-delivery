@@ -449,6 +449,16 @@ class ModelTierTest(GateCase):
         self.assertIn("FAIL dispatch.tier: tier1 is below the minimum tier2 of drafter", out)
         self.assertEqual(code, 1)
 
+    def test_task_reviewer_minimum_is_tier2(self):                  # owner model-policy 2026-11-17: task reviewers on tier2
+        self.assertEqual(dispatch.MIN_TIERS["task_reviewer"], 2)
+        for model, want in (("haiku", "FAIL dispatch.tier: tier1 is below the minimum tier2 of task_reviewer"),
+                            ("sonnet", "PASS dispatch.tier"), ("opus", "PASS dispatch.tier")):
+            with self.subTest(model=model):
+                d = self.base("task_reviewer", model=model, prompt=prompt("task_reviewer", model=model))
+                self.assertEqual(self.only(d, "tier"), want)
+        for role in ("final_reviewer", "final_verifier"):           # unchanged: the final roles keep their minimum
+            self.assertEqual(dispatch.MIN_TIERS[role], {"final_reviewer": 3, "final_verifier": 4}[role])
+
 
 class SmallGateTest(GateCase):
     def setUp(self):
@@ -461,8 +471,10 @@ class SmallGateTest(GateCase):
         with open(os.path.join(self.root, "x.txt"), "w") as f:
             f.write("x\n")
         self.b = commit_all(self.root, "fix")
+        # task_reviewer's minimum is tier2 (owner 2026-11-17), so the only tier a small re-review can save is tier1
+        self.set_config(reviews={"small": {"tier": "tier1"}})
 
-    def small(self, role="task_reviewer", model="sonnet", line=None, findings=None, **over):
+    def small(self, role="task_reviewer", model="haiku", line=None, findings=None, **over):
         line = LINE % (self.a[:12], self.b[:12]) if line is None else line
         findings = self.fid if findings is None else findings
         return self.base(role, model=model, prompt=prompt(role, model=model, brief="intro\n" + line + "\nend",
@@ -482,18 +494,19 @@ class SmallGateTest(GateCase):
                 out, code = self.lines(self.small(**kw))
                 self.assertEqual(code, 1)
                 self.assertTrue(any(ln.startswith("FAIL dispatch.small: ") for ln in out), out)
-                self.assertTrue(any(ln.startswith("FAIL dispatch.tier: tier2 is below") for ln in out), out)
+                self.assertTrue(any(ln.startswith("FAIL dispatch.tier: tier1 is below") for ln in out), out)
 
     def test_small_tier_variants(self):                             # S13
+        # a small tier at or above the minimum (tier2) is allowed and saves nothing: tier2 passes on its own
         for cfgtier, tier, ok in (("tier1", 1, True), ("tier1", 2, True), ("tier2", 1, False), ("tier2", 2, True),
-                                  ("tier3", 2, False), ("tier3", 3, True)):
+                                  ("tier3", 1, False), ("tier3", 2, True), ("tier3", 3, True)):
             with self.subTest(cfgtier=cfgtier, tier=tier):
                 self.set_config(reviews={"small": {"tier": cfgtier}})
                 a = git(self.root, "rev-parse", "HEAD~1")
                 b = git(self.root, "rev-parse", "HEAD")
                 d = self.small(model=MODELS[tier], line=LINE % (self.a[:12], self.b[:12]))
                 got = self.only(d, "tier")
-                self.assertEqual(got.startswith("PASS"), ok or tier >= 3, got)
+                self.assertEqual(got.startswith("PASS"), ok, got)
                 del a, b
 
     def test_small_line_at_min_tier(self):                          # S15, D11
@@ -522,7 +535,7 @@ class SmallGateTest(GateCase):
                 self.assertEqual(code, 1)
                 self.assertIn("FAIL dispatch.small: round %s: only rounds 1-4 may be small; round 5 always runs at "
                               "the minimum tier" % ("7" * n), out)
-                self.assertIn("FAIL dispatch.tier: tier2 is below the minimum tier3 of task_reviewer", out)
+                self.assertIn("FAIL dispatch.tier: tier1 is below the minimum tier2 of task_reviewer", out)
         for n in (601, 700, 4300, 4301):
             for key, text in (("round", ln.replace("round=2", "round=" + "7" * n)),
                               ("narrowed", ln.replace("narrowed=none", "narrowed=" + "7" * n)),
@@ -550,7 +563,7 @@ class SmallGateTest(GateCase):
             out, _ = self.lines(self.small(role=role, model="haiku"))
             self.assertFalse(any("dispatch.small" in ln for ln in out), out)
             self.assertTrue(any(ln.startswith("FAIL dispatch.tier") for ln in out))
-        out, _ = self.lines(self.small(role="task_reviewer", model="sonnet", line="no small line here"))
+        out, _ = self.lines(self.small(role="task_reviewer", model="haiku", line="no small line here"))
         self.assertFalse(any("dispatch.small" in ln for ln in out))
         self.assertTrue(any(ln.startswith("FAIL dispatch.tier") for ln in out))
 

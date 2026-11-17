@@ -28,7 +28,7 @@ ROLES: tuple = ("program_controller", "stream_controller", "controller", "implem
                 "audit_verifier", "investigator", "plan_writer", "plan_reviewer", "drafter")
 CONTROLLER_ROLES: tuple = ("program_controller", "stream_controller", "controller")
 MIN_TIERS: dict = {"implementer_transcription": 1, "implementer": 2, "controller": 3, "program_controller": 3,
-                   "stream_controller": 3, "task_reviewer": 3, "final_reviewer": 3, "audit_reviewer": 3,
+                   "stream_controller": 3, "task_reviewer": 2, "final_reviewer": 3, "audit_reviewer": 3,
                    "audit_verifier": 3, "investigator": 3, "final_verifier": 4, "exception_reviewer": 4,
                    "plan_writer": 3, "plan_reviewer": 3, "drafter": 2}
 SMALL_ROLES: tuple = ("task_reviewer",)

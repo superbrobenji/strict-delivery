@@ -1310,7 +1310,7 @@ STATES = {"controller": CTRL, "program_controller": CTRL, "stream_controller": C
           "audit_reviewer": "open", "audit_verifier": "open", "investigator": "none", "exception_reviewer": "none",
           "plan_writer": "none", "plan_reviewer": "open", "drafter": "none"}  # fifteen: DB-2's twelve plus Task 2c.3's three
 TIERS = {"implementer_transcription": "tier1", "implementer": "tier2",
-         "controller": "tier3", "program_controller": "tier3", "stream_controller": "tier3", "task_reviewer": "tier3",
+         "controller": "tier3", "program_controller": "tier3", "stream_controller": "tier3", "task_reviewer": "tier2",
          "final_reviewer": "tier3", "audit_reviewer": "tier3", "audit_verifier": "tier3", "investigator": "tier3",
          "final_verifier": "tier4", "exception_reviewer": "tier4",
          "plan_writer": "tier3", "plan_reviewer": "tier3", "drafter": "tier2"}
