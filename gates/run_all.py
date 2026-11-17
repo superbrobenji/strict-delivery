@@ -1,11 +1,12 @@
 """``python3 -m gates run_all [--json] [--root R] [--base REF]``: run the profile's gates and keep every line
-(spec 12, 13; plan Task 2b.1). Not a gate in ``GATES``; it has no version line in block 2 (Q-B2plan-24 (a))."""
+(spec 12, 13; plan Task 2b.1). Not a gate in ``GATES``; its last line is ``run_all.version`` (plan Task 3d.1, which
+Q-B2plan-24 (a) foresaw): the target's ``framework_version`` against the installed plugin's version."""
 from __future__ import annotations
 
 import importlib
 import importlib.util
 
-from gates.lib import config, result
+from gates.lib import config, plugin, result
 
 PROFILE_GATES: dict = {
     "light": ("schema", "register", "decisions"),
@@ -65,6 +66,23 @@ def _load(gate: str):
     return fn, None
 
 
+def _version_line(cfg: dict) -> result.Line:
+    """``PASS run_all.version`` when the target's ``framework_version`` is the installed plugin's version, else a
+    FAIL line naming both and ``/strict-delivery:upgrade``; a manifest problem is that line's reason (fail closed)."""
+    res = result.Result("run_all")
+    try:
+        want = plugin.version(plugin.framework_dir())
+    except result.GateError as e:
+        res.fail("run_all.version", str(e))
+        return res.lines[0]
+    if cfg["framework_version"] == want:
+        res.passed("run_all.version")
+    else:
+        res.fail("run_all.version", "framework_version %s does not match the plugin version %s; "
+                 "run /strict-delivery:upgrade" % (cfg["framework_version"], want))
+    return res.lines[0]
+
+
 def check(args: list) -> result.Result:
     ns = _args(args)
     root = ns.root if ns.root is not None else result.repo_root()
@@ -79,6 +97,7 @@ def check(args: list) -> result.Result:
                 gate_args.append("--base=" + ns.base)
             lines = result.run_check(gate, fn, gate_args).lines
         res.lines.extend(lines)
+    res.lines.append(_version_line(cfg))
     return res
 
 

@@ -9,6 +9,7 @@ import io
 import itertools
 import json
 import os
+import shutil
 import subprocess
 import sys
 import types
@@ -18,7 +19,9 @@ from unittest import mock
 
 from gates import __main__ as gates_main
 from gates import run_all
+from gates.lib import plugin
 from gates.lib.result import GateError, Line, Result
+from tests.test_plugin_manifest import NOT_FINITE, NOT_FINITE_BODIES, V2_ROWS
 from tests.helpers import (E128, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo,
                            minimal_config, root_forms, write_record)
 
@@ -29,6 +32,7 @@ CONFIG = ".strict-delivery/config.yml"
 UNSET = object()
 HAS_EG = hasattr(builtins, "ExceptionGroup")
 PASS5 = "".join("PASS %s.ok\n" % g for g in FIVE)
+VERSION_PASS = "PASS run_all.version\n"   # Task 3d.1: the last line; config framework_version "0.0.0" = the plugin's
 # the 31 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
 REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\n"
              "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\n"
@@ -146,8 +150,10 @@ class RunAllCase(GitIsolatedTestCase):
         return p.stdout.decode("utf-8"), p.returncode
 
     def expect(self, argv, text, code, called=None):
+        """``text`` is the gates' lines; the version line (Task 3d.1) follows them, except after a ``run_all.input``
+        failure, which has no version line (plan Task 3d.1, missing config)."""
         out, got = self.run_main(argv)
-        self.assertEqual(out, text)
+        self.assertEqual(out, text if text.startswith("FAIL run_all.input:") else text + VERSION_PASS)
         self.assertEqual(got, code)
         if called is not None:
             self.assertEqual(self.called(), called)
@@ -706,7 +712,7 @@ class BaseTest(RunAllCase):
                                 command=("check", g))
             want += alone
         out, code = self.run_main(["--root", root, "--base", "nosuchref"])
-        self.assertEqual(out.splitlines(), want.splitlines())
+        self.assertEqual(out.splitlines(), want.splitlines() + ["PASS run_all.version"])
         self.assertEqual(code, 1)
         for g in BASE_ONES:
             self.assertIn("FAIL %s.input: git merge-base failed (exit 128)\n" % g, out)
@@ -766,7 +772,7 @@ class BaseTest(RunAllCase):
                         # one real `python3 -m gates check` process, the path the sub-gate's argv really takes
                         text, rc = self.sub(argv, command=("check", "schema"), cwd=parent, env=env)
                         self.assertEqual((text, rc), (alone.split("PASS register.")[0], 0))
-                        self.assertEqual(out, alone)
+                        self.assertEqual(out, alone + VERSION_PASS)
                         self.assertEqual(code, 0)
                         self.assertNotIn("expected one argument", out)
 
@@ -780,7 +786,7 @@ class BaseTest(RunAllCase):
                 want = (schema + "".join("FAIL %s.input: %s\n" % (g, why) for g in ("register", "decisions", "claims"))
                         + cites)
                 out, code = self.run_main(["--root", root, "--base=" + value])
-                self.assertEqual(out, want)
+                self.assertEqual(out, want + VERSION_PASS)
                 self.assertEqual(code, 1)
                 self.assertNotIn("expected one argument", out)
                 alone = ""
@@ -788,7 +794,7 @@ class BaseTest(RunAllCase):
                     text, rc = self.alone_in_process(
                         g, ["--root", root] + (["--base=" + value] if g in BASE_ONES else []))
                     alone += text
-                self.assertEqual(out, alone)
+                self.assertEqual(out, alone + VERSION_PASS)
                 text, rc = self.sub(["--root", root, "--base=" + value], command=("check", "decisions"))
                 self.assertEqual((text, rc), ("FAIL decisions.input: %s\n" % why, 1))
 
@@ -805,6 +811,7 @@ class ArgvTest(RunAllCase):
                 lines = [{"status": "PASS", "id": g + ".ok", "reason": ""} for g in ("schema", "register", "decisions")]
                 lines.append({"status": "FAIL", "id": "claims.x", "reason": "a\\b\nc"})
                 lines.append({"status": "PASS", "id": "cites.ok", "reason": ""})
+                lines.append({"status": "PASS", "id": "run_all.version", "reason": ""})
                 self.assertEqual(json.loads(out), {"gate": "run_all", "ok": False, "lines": lines})
                 self.assertTrue(out.endswith("}\n"))
                 self.assertEqual(out.count("\n"), 1)
@@ -817,7 +824,8 @@ class ArgvTest(RunAllCase):
         out, code = self.run_main(["--json", "--root", root])
         self.assertEqual(out, '{"gate": "run_all", "ok": true, "lines": [{"status": "PASS", "id": "schema.ok", '
                               '"reason": ""}, {"status": "PASS", "id": "register.ok", "reason": ""}, '
-                              '{"status": "PASS", "id": "decisions.ok", "reason": ""}]}\n')
+                              '{"status": "PASS", "id": "decisions.ok", "reason": ""}, '
+                              '{"status": "PASS", "id": "run_all.version", "reason": ""}]}\n')
         self.assertEqual(code, 0)
 
     def test_json_later_refused(self):  # A2
@@ -866,7 +874,7 @@ class ArgvTest(RunAllCase):
                 with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": env}):
                     self.assertEqual(result.repo_root(), env)
                     out, code = self.run_main([])
-                self.assertEqual((out, code), (PASS5, 0))
+                self.assertEqual((out, code), (PASS5 + VERSION_PASS, 0))
                 self.assertEqual(self.args_of(), {g: ["--root=" + env] for g in FIVE})
         del self.seen[:]
         os.chdir(root)
@@ -896,7 +904,7 @@ class ArgvTest(RunAllCase):
                 del self.seen[:]
                 out, code = self.run_main(["--root", path])
                 if verdict == "ok":
-                    self.assertEqual(out, PASS5)
+                    self.assertEqual(out, PASS5 + VERSION_PASS)
                     self.assertEqual(code, 0)
                     self.assertEqual(self.args_of(), {g: ["--root=" + path] for g in FIVE})
                 else:
@@ -941,7 +949,7 @@ class ArgvTest(RunAllCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(gates_main.main(["run_all", "--root", root]), 0)
-        self.assertEqual(out.getvalue(), PASS5)
+        self.assertEqual(out.getvalue(), PASS5 + VERSION_PASS)
 
     def test_module_run_end_to_end(self):  # A9
         root = self.fixture()
@@ -954,7 +962,7 @@ class ArgvTest(RunAllCase):
                 self.assertEqual(got, want)
         out, code = self.sub(["--root", root, "--base", "HEAD"])
         self.assertEqual(code, 0)
-        self.assertEqual(len(out.splitlines()), 31)
+        self.assertEqual(len(out.splitlines()), 32)   # the 31 real-gate lines and the version line
 
 
 class ConfigTest(RunAllCase):
@@ -1014,15 +1022,6 @@ class OutputTest(RunAllCase):
                 want = "".join(("FAIL %s.bad: nope\n" % g) if g == bad else "PASS %s.ok\n" % g for g in FIVE)
                 self.expect(["--root", root], want, 1, list(FIVE))
 
-    def test_version_line(self):  # O3  (Q-B2plan-24 (a): no version line in block 2)
-        self.all_pass()
-        root = self.fixture()
-        out, code = self.run_main(["--root", root])
-        self.assertNotIn("run_all.version", out)
-        self.assertNotIn("run_all.", out)
-        out, code = self.run_main(["--root", root, "--base", "HEAD"])
-        self.assertNotIn("run_all.version", out)
-
     def test_real_gates_pass_on_fixture_repo(self):  # O4
         root = self.fixture()
         out, code = self.run_main(["--root", root, "--base", "HEAD"])
@@ -1036,8 +1035,228 @@ class OutputTest(RunAllCase):
                 "PASS claims.schema\nPASS claims.store\nPASS claims.document\nPASS claims.stale\n"
                 "PASS claims.base\n"
                 "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n")
-        self.assertEqual(out, want)
+        self.assertEqual(out, want + VERSION_PASS)
         self.assertEqual(code, 0)
+
+
+class VersionLineTest(RunAllCase):
+    """Task 3d.1 rows A1-A8 and the version rows of S: ``run_all.version`` is the last line, compares the target's
+    ``framework_version`` with the installed plugin's version, and fails closed on a bad manifest."""
+    MISMATCH = ("FAIL run_all.version: framework_version 0.1.0 does not match the plugin version 0.0.0; "
+                "run /strict-delivery:upgrade\n")
+    PM = ".claude-plugin/plugin.json"
+
+    def plugin_dir(self, body, name="fw"):
+        """A framework directory whose plugin.json is ``body`` (bytes, or an object dumped as JSON; None: no file);
+        ``plugin.framework_dir`` is patched to it for the rest of the test."""
+        d = os.path.join(self.tmp, name + str(next(self._dirs)))
+        os.makedirs(os.path.join(d, ".claude-plugin"))
+        if body is not None:
+            data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
+            with open(os.path.join(d, ".claude-plugin", "plugin.json"), "wb") as fh:
+                fh.write(data)
+        patcher = mock.patch.object(plugin, "framework_dir", return_value=d)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return d
+
+    def test_version_line_passes_when_equal(self):  # A1; Q-B2plan-24 (a)
+        self.all_pass()
+        for profile, gates in (("light", ("schema", "register", "decisions")), ("standard", FIVE), ("strict", FIVE)):
+            with self.subTest(profile=profile):
+                root = self.fixture(profile)
+                out, code = self.run_main(["--root", root])
+                self.assertEqual(out, ok_lines(*gates) + "PASS run_all.version\n")
+                self.assertEqual(code, 0)
+                self.assertEqual(out.splitlines()[-1], "PASS run_all.version")
+                out, code = self.run_main(["--root", root, "--base", "HEAD"])
+                self.assertEqual((out, code), (ok_lines(*gates) + "PASS run_all.version\n", 0))
+
+    def test_version_line_last_after_a_failed_or_missing_gate(self):  # A2
+        root = self.fixture()
+        self.all_pass(schema=[Line("FAIL", "schema.bad", "nope")])
+        self.put(gates_main.GATES, "claims", UNSET)
+        out, code = self.run_main(["--root", root])
+        self.assertEqual(out, "FAIL schema.bad: nope\nPASS register.ok\nPASS decisions.ok\n"
+                              "FAIL run_all.missing.claims: not registered in gates.__main__.GATES\n"
+                              "PASS cites.ok\nPASS run_all.version\n")
+        self.assertEqual(code, 1)
+
+    def test_version_mismatch_names_upgrade(self):  # A3
+        self.all_pass()
+        root = self.fixture(config=dict(minimal_config(), framework_version="0.1.0"))
+        out, code = self.run_main(["--root", root])
+        self.assertEqual(out, PASS5 + self.MISMATCH)
+        self.assertEqual(code, 1)
+        self.assertIn("/strict-delivery:upgrade", out)
+
+    def test_version_mismatch_is_exact_string_comparison(self):  # A3 siblings
+        self.all_pass()
+        for fv in ("0.0.1", "1.0.0", "0.0", "v0.0.0", "0.0.0 ", "00.0.0", "a\nb"):
+            with self.subTest(framework_version=fv):
+                root = self.fixture(config=dict(minimal_config(), framework_version=fv))
+                out, code = self.run_main(["--root", root])
+                shown = fv.replace("\n", "\\n")
+                self.assertEqual(out, PASS5 + "FAIL run_all.version: framework_version %s does not match the plugin "
+                                              "version 0.0.0; run /strict-delivery:upgrade\n" % shown)
+                self.assertEqual(code, 1)
+
+    def test_bad_manifest_fails_closed(self):  # A4: each M and V row, through a patched framework_dir
+        self.all_pass()
+        root = self.fixture()
+        pm = self.PM
+        good = {"name": "strict-delivery", "version": "0.0.0"}
+        rows = [
+            ("M1 absent", None, "cannot be read (FileNotFoundError)"),
+            ("M2 not utf-8", b'{"version": "\xff"}', "is not valid UTF-8"),
+            ("M2 bom", b"\xef\xbb\xbf" + json.dumps(good).encode(), "is not valid JSON"),
+            ("M2 empty", b"", "is not valid JSON"),
+            ("M3 invalid", b'{"version": ', "is not valid JSON"),
+            ("M3 list", b'["0.0.0"]', "the top level must be an object"),
+            ("M3 string", b'"0.0.0"', "the top level must be an object"),
+            ("M3 null", b"null", "the top level must be an object"),
+            ("M3 number", b"0", "the top level must be an object"),
+            ("M3 duplicate", b'{"version": "0.0.0", "version": "0.0.0"}', "duplicate key 'version'"),
+            ("M3 nested duplicate", b'{"version": "0.0.0", "x": {"a": 1, "a": 2}}', "duplicate key 'a'"),
+            ("M4 NaN", b'{"version": "0.0.0", "x": NaN}', "the constant NaN is not allowed"),
+            ("M4 Infinity", b'{"version": "0.0.0", "x": Infinity}', "the constant Infinity is not allowed"),
+            ("M4 -Infinity", b'{"version": "0.0.0", "x": -Infinity}', "the constant -Infinity is not allowed"),
+            ("M5 nesting", b"[" * 100000, "nesting is too deep"),
+            ("S1 long int", b'{"version": "0.0.0", "x": ' + b"1" * 4301 + b"}",
+             "an integer of more than 4300 digits is not allowed"),
+            ("V1 absent", b'{"name": "x"}', "version is missing"),
+            ("V1 empty", b'{"version": ""}', "version  is not of the form X.Y.Z"),
+            ("V1 int", b'{"version": 0}', "version must be a string, got 0"),
+            ("V1 true", b'{"version": true}', "version must be a string, got True"),
+            ("V1 null", b'{"version": null}', "version must be a string, got None"),
+            ("V1 list", b'{"version": ["0.0.0"]}', "version must be a string, got [0.0.0]"),
+            ("S2 unicode 14", b'{"version": "0.0.0\\ud83e\\udee0"}',
+             "version 0.0.0\\U0001fae0 is not of the form X.Y.Z"),
+        ]
+        # F-3d1-R1-2: every V2 row of the plugin tests (one list), the M4 non-finite bodies (decision P4)
+        for v in V2_ROWS:
+            shown = v.replace("\\", "\\\\").replace("\n", "\\n").replace("\x00", "\\x00")   # as safe_text renders it
+            rows.append(("V2 %r" % v, json.dumps({"version": v}).encode("ascii"),
+                         "version %s is not of the form X.Y.Z" % shown))
+        for body in NOT_FINITE_BODIES:
+            rows.append(("M4 %r" % body, body, NOT_FINITE))
+        for label, body, why in rows:
+            with self.subTest(label):
+                self.plugin_dir(body)
+                out, code = self.run_main(["--root", root])
+                self.assertEqual(out, PASS5 + "FAIL run_all.version: %s: %s\n" % (pm, why))
+                self.assertEqual(code, 1)
+        with self.subTest("M1 .claude-plugin absent"):
+            d = os.path.join(self.tmp, "fwnodir")
+            os.mkdir(d)
+            with mock.patch.object(plugin, "framework_dir", return_value=d):
+                self.assertEqual(self.run_main(["--root", root]),
+                                 (PASS5 + "FAIL run_all.version: %s: cannot be read (FileNotFoundError)\n" % pm, 1))
+        with self.subTest("M1 directory at the path"):
+            d = self.plugin_dir(None)
+            os.mkdir(os.path.join(d, ".claude-plugin", "plugin.json"))
+            self.assertEqual(self.run_main(["--root", root]),
+                             (PASS5 + "FAIL run_all.version: %s: is not a regular file\n" % pm, 1))
+
+    def test_bad_manifest_as_subprocess_has_no_traceback(self):  # A4
+        root = self.fixture()
+        copy = os.path.join(self.tmp, "copy")
+        shutil.copytree(os.path.join(REPO, "gates"), os.path.join(copy, "gates"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        os.makedirs(os.path.join(copy, ".claude-plugin"))
+        with open(os.path.join(copy, ".claude-plugin", "plugin.json"), "wb") as fh:
+            fh.write(b"[" * 100000)
+        env = dict(os.environ, PYTHONPATH="", PYTHONDONTWRITEBYTECODE="1")
+        p = subprocess.run([sys.executable, "-m", "gates", "run_all", "--root", root], cwd=copy, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(p.stderr, b"")
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.stdout.decode().splitlines()[-1],
+                         "FAIL run_all.version: .claude-plugin/plugin.json: nesting is too deep")
+
+    def test_root_is_another_tree_than_the_plugin(self):  # A5
+        self.all_pass()
+        self.plugin_dir({"version": "0.1.0"})
+        equal = self.fixture(config=dict(minimal_config(), framework_version="0.1.0"))
+        self.assertEqual(self.run_main(["--root", equal]), (PASS5 + VERSION_PASS, 0))
+        other = self.fixture()   # framework_version 0.0.0 against the installed 0.1.0
+        want = ("FAIL run_all.version: framework_version 0.0.0 does not match the plugin version 0.1.0; "
+                "run /strict-delivery:upgrade\n")
+        self.assertEqual(self.run_main(["--root", other]), (PASS5 + want, 1))
+        self.assertNotEqual(os.path.realpath(plugin.framework_dir()), os.path.realpath(other))
+
+    def test_missing_config_has_no_version_line(self):  # A6
+        self.all_pass()
+        d = os.path.join(self.tmp, "noconf2")
+        os.mkdir(d)
+        git(d, "init", "-q", "-b", "main")
+        commit_all(d, "empty")
+        out, code = self.run_main(["--root", d])
+        self.assertEqual(out, input_fail(".strict-delivery/config.yml: missing; run /strict-delivery:init"))
+        self.assertNotIn("run_all.version", out)
+        self.assertEqual((code, self.seen), (1, []))
+        self.plugin_dir(b"not json")      # a bad manifest does not add a line either
+        out, code = self.run_main(["--root", d])
+        self.assertEqual(out, input_fail(".strict-delivery/config.yml: missing; run /strict-delivery:init"))
+
+    def test_json_output_ends_with_the_version_line(self):  # A7
+        self.all_pass()
+        root = self.fixture()
+        out, code = self.run_main(["--json", "--root", root])
+        doc = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertTrue(doc["ok"])
+        self.assertEqual(doc["lines"][-1], {"status": "PASS", "id": "run_all.version", "reason": ""})
+        self.assertEqual(len(doc["lines"]), 6)
+        bad = self.fixture(config=dict(minimal_config(), framework_version="0.1.0"))
+        out, code = self.run_main(["--json", "--root", bad])
+        doc = json.loads(out)
+        self.assertEqual(code, 1)
+        self.assertFalse(doc["ok"])
+        self.assertEqual(doc["lines"][-1], {
+            "status": "FAIL", "id": "run_all.version",
+            "reason": "framework_version 0.1.0 does not match the plugin version 0.0.0; run /strict-delivery:upgrade"})
+
+    def test_real_repo_passes_with_the_version_line_last(self):  # A8
+        # only the version line is pinned: the other gates' verdicts on the real tree depend on its git state (a copy
+        # with no local main, as test_self_adoption runs the suite, fails a base gate), not on this task
+        out, code = self.sub([])
+        self.assertEqual(out.splitlines()[-1], "PASS run_all.version")
+        self.assertNotIn("run_all.version:", out)
+        # F-1: the exit code agrees with the lines (not asserted to be 0: see the comment above)
+        self.assertEqual(code, 1 if any(ln.startswith("FAIL ") for ln in out.splitlines()) else 0)
+
+    def test_r4_r5_repository_rows_through_run_all(self):  # R4, R5: run_all reads the version only, never repository
+        self.all_pass()
+        root = self.fixture()
+        for repo in ("https://github.com/o/..", "https://github.com/-o/n", "https://github.com/o-/n",
+                     "https://github.com/o/n", "not a url"):
+            with self.subTest(repository=repo):
+                self.plugin_dir({"version": "0.0.0", "repository": repo})
+                self.assertEqual(self.run_main(["--root", root]), (PASS5 + VERSION_PASS, 0))
+                for fn in (plugin.repository_url, plugin.repository_slug):
+                    if repo in ("https://github.com/o/n",):
+                        self.assertIn("o", fn(plugin.framework_dir()))
+                    else:
+                        with self.assertRaises(GateError):
+                            fn(plugin.framework_dir())
+
+    def test_version_line_when_a_non_exception_baseexception_is_raised_by_the_plugin(self):  # S3
+        class Odd(BaseException):
+            pass
+        self.all_pass()
+        root = self.fixture()
+        with mock.patch.object(plugin, "framework_dir", side_effect=Odd()):
+            with self.assertRaises(Odd):
+                self.run_main(["--root", root])
+
+    def test_gate_error_text_goes_through_safe_text(self):  # rendering, never a raw control character
+        self.all_pass()
+        root = self.fixture()
+        self.plugin_dir(b'{"version": "0.0.0\\u0007\\\\"}')
+        out, code = self.run_main(["--root", root])
+        self.assertEqual(out, PASS5 + "FAIL run_all.version: .claude-plugin/plugin.json: version 0.0.0\\x07\\\\ is "
+                                      "not of the form X.Y.Z\n")
 
 
 class Pc1Test(RunAllCase):
@@ -1051,7 +1270,7 @@ class Pc1Test(RunAllCase):
         cites_ok = "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n"
         why = "ref must not hold more than 40 hex digits in a row"
         want = (schema_ok + "FAIL register.input: %s\nFAIL decisions.input: %s\nFAIL claims.input: %s\n"
-                % (why, why, why) + cites_ok)
+                % (why, why, why) + cites_ok)   # expect() appends the version line
         for n in (4300, 4301):
             with self.subTest(digits=n):
                 self.expect(["--root", root, "--base", "7" * n], want, 1)
@@ -1087,8 +1306,13 @@ class Pc1Test(RunAllCase):
                                 ".strict-delivery/config.yml: profile: must be one of light, standard, strict"),
                                 1, [])
                         else:
-                            # a quoted number is a non-empty string: config.load accepts it (see the report)
-                            self.expect(["--root", root], PASS5, 0, list(FIVE))
+                            # a quoted number is a non-empty string: config.load accepts it (see the report); it is
+                            # not the plugin's version, so the version line is the mismatch
+                            out, code = self.run_main(["--root", root])
+                            self.assertEqual(out, PASS5 + "FAIL run_all.version: framework_version %s does not match "
+                                                  "the plugin version 0.0.0; run /strict-delivery:upgrade\n"
+                                                  % ("7" * n))
+                            self.assertEqual((code, self.called()), (1, list(FIVE)))
 
     def test_pc1_long_number_sub_gate_line(self):  # S4
         root = self.fixture()
@@ -1098,7 +1322,7 @@ class Pc1Test(RunAllCase):
                 self.all_pass(claims=[Line("FAIL", "c." + digits, "r" + digits)])
                 out, code = self.run_main(["--root", root])
                 self.assertEqual(out, ok_lines("schema", "register", "decisions")
-                                 + "FAIL c.%s: r%s\n" % (digits, digits) + ok_lines("cites"))
+                                 + "FAIL c.%s: r%s\n" % (digits, digits) + ok_lines("cites") + VERSION_PASS)
                 self.assertEqual(code, 1)
 
     def test_pc1_long_number_int_id_kept_as_the_gate_alone_renders_it(self):  # S4, int id
@@ -1110,7 +1334,8 @@ class Pc1Test(RunAllCase):
                 self.all_pass(claims=[line])
                 out, code = self.run_main(["--root", root])
                 alone = result.run_check("claims", lambda a: Result("claims", [line]), []).render(False)
-                self.assertEqual(out, ok_lines("schema", "register", "decisions") + alone + ok_lines("cites"))
+                self.assertEqual(out, ok_lines("schema", "register", "decisions") + alone + ok_lines("cites")
+                                 + VERSION_PASS)
                 self.assertEqual(code, 0)
                 if digits == 4300:   # renderable on both interpreters: the same digits
                     self.assertEqual(alone, "PASS 1" + "0" * 4299 + "\n")
@@ -1128,11 +1353,11 @@ class Pc1Test(RunAllCase):
         make_repo(root, minimal_config())
         out, code = self.run_main(["--root", root, "--base", ch])
         self.assertEqual(out, "FAIL schema.%s: r%s\nPASS register.ok\nFAIL decisions.echo: %s\nPASS claims.ok\n"
-                              "PASS cites.ok\n" % (esc, esc, "--base=" + esc))
+                              "PASS cites.ok\nPASS run_all.version\n" % (esc, esc, "--base=" + esc))
         self.assertEqual(code, 1)
         out, code = self.run_main(["--root", root])
         self.assertEqual(out, "FAIL schema.%s: r%s\nPASS register.ok\nFAIL decisions.echo: %s\nPASS claims.ok\n"
-                              "PASS cites.ok\n" % (esc, esc, "--root=" + root.replace(ch, esc)))
+                              "PASS cites.ok\nPASS run_all.version\n" % (esc, esc, "--root=" + root.replace(ch, esc)))
         out, code = self.run_main(["--json", "--root", root, "--base", ch])
         got = json.loads(out)["lines"]
         self.assertEqual((got[0]["id"], got[0]["reason"]), ("schema." + ch, "r" + ch))
