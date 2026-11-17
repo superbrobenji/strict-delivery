@@ -34,7 +34,7 @@ USAGE_40 = {
     'check register': 'usage: register [-h] [--root ROOT]\n                [--base BASE]\n',
     'check dispatch': 'usage: dispatch [-h] [--root ROOT]\n                [--prompts PROMPTS]\n                [--input INPUT]\n',
     'index': 'usage: index [-h] [--root ROOT]\n',
-    'decisions ask': 'usage: decisions ask [-h]\n                     [--root ROOT]\n                     --class CLS\n                     --question\n                     QUESTION --option\n                     OPTION\n                     [--topic TOPIC]\n                     [--applies-to APPLIES_TO]\n                     --effect EFFECT\n                     [--supersedes SUPERSEDES]\n                     --by BY\n                     [--plan PLAN]\n                     [--program PROGRAM]\n                     [--stream STREAM]\n',
+    'decisions ask': 'usage: decisions ask [-h]\n                     [--root ROOT]\n                     --class CLS\n                     --question\n                     QUESTION --option\n                     OPTION\n                     [--topic TOPIC]\n                     [--applies-to APPLIES_TO]\n                     --effect EFFECT\n                     [--supersedes SUPERSEDES]\n                     --by BY\n                     [--plan PLAN]\n                     [--program PROGRAM]\n                     [--stream STREAM]\n                     [--overrides OVERRIDES]\n                     [--recommend RECOMMEND]\n                     [--source SOURCE]\n',
     'decisions decide': 'usage: decisions decide [-h]\n                        [--root ROOT]\n                        --answer\n                        ANSWER\n                        [--rule RULE]\n                        [--landed-in LANDED_IN]\n                        ID\n',
     'decisions withdraw': 'usage: decisions withdraw [-h]\n                          [--root ROOT]\n                          --reason\n                          REASON\n                          ID\n',
     'decisions batch': 'usage: decisions batch [-h]\n                       [--root ROOT]\n                       [--since SINCE]\n                       [--answered]\n                       [--source SOURCE]\n                       [--date DATE]\n',
@@ -42,6 +42,9 @@ USAGE_40 = {
     'findings': 'usage: findings [-h] {new,move} ...\n',
     'findings new': 'usage: findings new [-h] --source\n                    SOURCE --severity\n                    SEVERITY\n                    --owner-kind\n                    OWNER_KIND --by BY\n                    --class CLASS_\n                    [--plan PLAN]\n                    [--task TASK]\n                    [--number NUMBER]\n                    [--parent PARENT]\n                    [--root ROOT]\n                    [--review-round REVIEW_ROUND]\n                    [--caused-by-change CAUSED_BY_CHANGE]\n                    [--dimension DIMENSION]\n                    [--cite CITE]\n',
     'findings move': 'usage: findings move [-h] --to TO --by\n                     BY\n                     [--ruling RULING]\n                     [--pin-test PIN_TEST]\n                     [--pin-transcript PIN_TRANSCRIPT]\n                     [--resolved-by RESOLVED_BY]\n                     [--root ROOT]\n                     [--evidence EVIDENCE]\n                     id\n',
+    'claims': 'usage: claims [-h] {add,verify} ...\n',
+    'claims add': 'usage: claims add [-h]\n                  [--document DOCUMENT]\n                  [--text TEXT]\n                  [--cite CITE]\n                  [--direct DIRECT]\n                  [--contradiction CONTRADICTION]\n                  [--by BY]\n                  [--root ROOT]\n',
+    'claims verify': 'usage: claims verify [-h] [--by BY]\n                     [--root ROOT]\n                     [ID ...]\n',
 }
 USAGE_80 = {
     'run_all': 'usage: run_all [-h] [--root ROOT] [--base BASE]\n',
@@ -52,7 +55,7 @@ USAGE_80 = {
     'check register': 'usage: register [-h] [--root ROOT] [--base BASE]\n',
     'check dispatch': 'usage: dispatch [-h] [--root ROOT] [--prompts PROMPTS] [--input INPUT]\n',
     'index': 'usage: index [-h] [--root ROOT]\n',
-    'decisions ask': 'usage: decisions ask [-h] [--root ROOT] --class CLS --question QUESTION\n                     --option OPTION [--topic TOPIC] [--applies-to APPLIES_TO]\n                     --effect EFFECT [--supersedes SUPERSEDES] --by BY\n                     [--plan PLAN] [--program PROGRAM] [--stream STREAM]\n',
+    'decisions ask': 'usage: decisions ask [-h] [--root ROOT] --class CLS --question QUESTION\n                     --option OPTION [--topic TOPIC] [--applies-to APPLIES_TO]\n                     --effect EFFECT [--supersedes SUPERSEDES] --by BY\n                     [--plan PLAN] [--program PROGRAM] [--stream STREAM]\n                     [--overrides OVERRIDES] [--recommend RECOMMEND]\n                     [--source SOURCE]\n',
     'decisions decide': 'usage: decisions decide [-h] [--root ROOT] --answer ANSWER [--rule RULE]\n                        [--landed-in LANDED_IN]\n                        ID\n',
     'decisions withdraw': 'usage: decisions withdraw [-h] [--root ROOT] --reason REASON ID\n',
     'decisions batch': 'usage: decisions batch [-h] [--root ROOT] [--since SINCE] [--answered]\n                       [--source SOURCE] [--date DATE]\n',
@@ -60,6 +63,9 @@ USAGE_80 = {
     'findings': 'usage: findings [-h] {new,move} ...\n',
     'findings new': 'usage: findings new [-h] --source SOURCE --severity SEVERITY --owner-kind\n                    OWNER_KIND --by BY --class CLASS_ [--plan PLAN]\n                    [--task TASK] [--number NUMBER] [--parent PARENT]\n                    [--root ROOT] [--review-round REVIEW_ROUND]\n                    [--caused-by-change CAUSED_BY_CHANGE]\n                    [--dimension DIMENSION] [--cite CITE]\n',
     'findings move': 'usage: findings move [-h] --to TO --by BY [--ruling RULING]\n                     [--pin-test PIN_TEST] [--pin-transcript PIN_TRANSCRIPT]\n                     [--resolved-by RESOLVED_BY] [--root ROOT]\n                     [--evidence EVIDENCE]\n                     id\n',
+    'claims': 'usage: claims [-h] {add,verify} ...\n',
+    'claims add': 'usage: claims add [-h] [--document DOCUMENT] [--text TEXT] [--cite CITE]\n                  [--direct DIRECT] [--contradiction CONTRADICTION] [--by BY]\n                  [--root ROOT]\n',
+    'claims verify': 'usage: claims verify [-h] [--by BY] [--root ROOT] [ID ...]\n',
 }
 USAGE_200 = {
     'run_all': 'usage: run_all [-h] [--root ROOT] [--base BASE]\n',
@@ -70,7 +76,7 @@ USAGE_200 = {
     'check register': 'usage: register [-h] [--root ROOT] [--base BASE]\n',
     'check dispatch': 'usage: dispatch [-h] [--root ROOT] [--prompts PROMPTS] [--input INPUT]\n',
     'index': 'usage: index [-h] [--root ROOT]\n',
-    'decisions ask': 'usage: decisions ask [-h] [--root ROOT] --class CLS --question QUESTION --option OPTION [--topic TOPIC] [--applies-to APPLIES_TO] --effect EFFECT [--supersedes SUPERSEDES] --by BY [--plan PLAN]\n                     [--program PROGRAM] [--stream STREAM]\n',
+    'decisions ask': 'usage: decisions ask [-h] [--root ROOT] --class CLS --question QUESTION --option OPTION [--topic TOPIC] [--applies-to APPLIES_TO] --effect EFFECT [--supersedes SUPERSEDES] --by BY [--plan PLAN]\n                     [--program PROGRAM] [--stream STREAM] [--overrides OVERRIDES] [--recommend RECOMMEND] [--source SOURCE]\n',
     'decisions decide': 'usage: decisions decide [-h] [--root ROOT] --answer ANSWER [--rule RULE] [--landed-in LANDED_IN] ID\n',
     'decisions withdraw': 'usage: decisions withdraw [-h] [--root ROOT] --reason REASON ID\n',
     'decisions batch': 'usage: decisions batch [-h] [--root ROOT] [--since SINCE] [--answered] [--source SOURCE] [--date DATE]\n',
@@ -78,6 +84,9 @@ USAGE_200 = {
     'findings': 'usage: findings [-h] {new,move} ...\n',
     'findings new': 'usage: findings new [-h] --source SOURCE --severity SEVERITY --owner-kind OWNER_KIND --by BY --class CLASS_ [--plan PLAN] [--task TASK] [--number NUMBER] [--parent PARENT] [--root ROOT]\n                    [--review-round REVIEW_ROUND] [--caused-by-change CAUSED_BY_CHANGE] [--dimension DIMENSION] [--cite CITE]\n',
     'findings move': 'usage: findings move [-h] --to TO --by BY [--ruling RULING] [--pin-test PIN_TEST] [--pin-transcript PIN_TRANSCRIPT] [--resolved-by RESOLVED_BY] [--root ROOT] [--evidence EVIDENCE] id\n',
+    'claims': 'usage: claims [-h] {add,verify} ...\n',
+    'claims add': 'usage: claims add [-h] [--document DOCUMENT] [--text TEXT] [--cite CITE] [--direct DIRECT] [--contradiction CONTRADICTION] [--by BY] [--root ROOT]\n',
+    'claims verify': 'usage: claims verify [-h] [--by BY] [--root ROOT] [ID ...]\n',
 }
 USAGE_20 = {
     'run_all': 'usage: run_all\n       [-h]\n       [--root ROOT]\n       [--base BASE]\n',
@@ -88,7 +97,7 @@ USAGE_20 = {
     'check register': 'usage: register\n       [-h]\n       [--root ROOT]\n       [--base BASE]\n',
     'check dispatch': 'usage: dispatch\n       [-h]\n       [--root ROOT]\n       [--prompts PROMPTS]\n       [--input INPUT]\n',
     'index': 'usage: index [-h]\n             [--root ROOT]\n',
-    'decisions ask': 'usage: decisions ask\n       [-h]\n       [--root ROOT]\n       --class CLS\n       --question\n       QUESTION\n       --option\n       OPTION\n       [--topic TOPIC]\n       [--applies-to APPLIES_TO]\n       --effect\n       EFFECT\n       [--supersedes SUPERSEDES]\n       --by BY\n       [--plan PLAN]\n       [--program PROGRAM]\n       [--stream STREAM]\n',
+    'decisions ask': 'usage: decisions ask\n       [-h]\n       [--root ROOT]\n       --class CLS\n       --question\n       QUESTION\n       --option\n       OPTION\n       [--topic TOPIC]\n       [--applies-to APPLIES_TO]\n       --effect\n       EFFECT\n       [--supersedes SUPERSEDES]\n       --by BY\n       [--plan PLAN]\n       [--program PROGRAM]\n       [--stream STREAM]\n       [--overrides OVERRIDES]\n       [--recommend RECOMMEND]\n       [--source SOURCE]\n',
     'decisions decide': 'usage: decisions decide\n       [-h]\n       [--root ROOT]\n       --answer\n       ANSWER\n       [--rule RULE]\n       [--landed-in LANDED_IN]\n       ID\n',
     'decisions withdraw': 'usage: decisions withdraw\n       [-h]\n       [--root ROOT]\n       --reason\n       REASON\n       ID\n',
     'decisions batch': 'usage: decisions batch\n       [-h]\n       [--root ROOT]\n       [--since SINCE]\n       [--answered]\n       [--source SOURCE]\n       [--date DATE]\n',
@@ -96,6 +105,9 @@ USAGE_20 = {
     'findings': 'usage: findings\n       [-h]\n       {new,move}\n       ...\n',
     'findings new': 'usage: findings new\n       [-h]\n       --source\n       SOURCE\n       --severity\n       SEVERITY\n       --owner-kind\n       OWNER_KIND\n       --by BY\n       --class\n       CLASS_\n       [--plan PLAN]\n       [--task TASK]\n       [--number NUMBER]\n       [--parent PARENT]\n       [--root ROOT]\n       [--review-round REVIEW_ROUND]\n       [--caused-by-change CAUSED_BY_CHANGE]\n       [--dimension DIMENSION]\n       [--cite CITE]\n',
     'findings move': 'usage: findings move\n       [-h] --to\n       TO --by BY\n       [--ruling RULING]\n       [--pin-test PIN_TEST]\n       [--pin-transcript PIN_TRANSCRIPT]\n       [--resolved-by RESOLVED_BY]\n       [--root ROOT]\n       [--evidence EVIDENCE]\n       id\n',
+    'claims': 'usage: claims [-h]\n              {add,verify}\n              ...\n',
+    'claims add': 'usage: claims add\n       [-h]\n       [--document DOCUMENT]\n       [--text TEXT]\n       [--cite CITE]\n       [--direct DIRECT]\n       [--contradiction CONTRADICTION]\n       [--by BY]\n       [--root ROOT]\n',
+    'claims verify': 'usage: claims verify\n       [-h]\n       [--by BY]\n       [--root ROOT]\n       [ID ...]\n',
 }
 # Widths at which a boundary of 3.9.6's wrapping decides (found by sweeping COLUMNS 8..130 over the 14 parsers;
 # literals from the unmodified parsers on 3.9.6).
@@ -110,7 +122,7 @@ EDGE_USAGE = {
     (30, 'decisions find'): 'usage: decisions find [-h]\n                      [--root ROOT]\n                      [--path PATH]\n                      [--topic TOPIC]\n                      [--all]\n                      [TERM ...]\n',
     (18, 'findings move'): 'usage: findings move\n       [-h] --to\n       TO --by\n       BY\n       [--ruling RULING]\n       [--pin-test PIN_TEST]\n       [--pin-transcript PIN_TRANSCRIPT]\n       [--resolved-by RESOLVED_BY]\n       [--root ROOT]\n       [--evidence EVIDENCE]\n       id\n',
     (22, 'findings new'): 'usage: findings new\n       [-h] --source\n       SOURCE\n       --severity\n       SEVERITY\n       --owner-kind\n       OWNER_KIND\n       --by BY\n       --class\n       CLASS_\n       [--plan PLAN]\n       [--task TASK]\n       [--number NUMBER]\n       [--parent PARENT]\n       [--root ROOT]\n       [--review-round REVIEW_ROUND]\n       [--caused-by-change CAUSED_BY_CHANGE]\n       [--dimension DIMENSION]\n       [--cite CITE]\n',
-    (27, 'decisions ask'): 'usage: decisions ask\n       [-h] [--root ROOT]\n       --class CLS\n       --question\n       QUESTION --option\n       OPTION\n       [--topic TOPIC]\n       [--applies-to APPLIES_TO]\n       --effect EFFECT\n       [--supersedes SUPERSEDES]\n       --by BY\n       [--plan PLAN]\n       [--program PROGRAM]\n       [--stream STREAM]\n',
+    (27, 'decisions ask'): 'usage: decisions ask\n       [-h] [--root ROOT]\n       --class CLS\n       --question\n       QUESTION --option\n       OPTION\n       [--topic TOPIC]\n       [--applies-to APPLIES_TO]\n       --effect EFFECT\n       [--supersedes SUPERSEDES]\n       --by BY\n       [--plan PLAN]\n       [--program PROGRAM]\n       [--stream STREAM]\n       [--overrides OVERRIDES]\n       [--recommend RECOMMEND]\n       [--source SOURCE]\n',
     (27, 'decisions withdraw'): 'usage: decisions withdraw\n       [-h] [--root ROOT]\n       --reason REASON\n       ID\n',
     (34, 'check schema'): 'usage: schema [-h] [--root ROOT]\n',
 }
@@ -808,6 +820,63 @@ class TestFrozenRepr(unittest.TestCase):
             self.assertEqual(self.r_of(p, action, s), want, s)
 
 
+CLAIMS_ADD_HELP = (USAGE_80["claims add"] + "\noptional arguments:\n  -h, --help            show this help message and "
+                   "exit\n  --document DOCUMENT\n  --text TEXT\n  --cite CITE\n  --direct DIRECT\n  --contradiction "
+                   "CONTRADICTION\n  --by BY\n  --root ROOT\n")
+CLAIMS_VERIFY_HELP = (USAGE_80["claims verify"] + "\npositional arguments:\n  ID\n\noptional arguments:\n  -h, --help"
+                      "   show this help message and exit\n  --by BY\n  --root ROOT\n")
+
+
+class TestClaimsText(CommandLineCase):
+    """Task 2c.1 rows R3, M11, X4: the usage, help and error text of ``claims add`` and ``claims verify`` (and the new
+    ``decisions ask`` usage, in the dicts above) is the 3.9.6 text on every interpreter, byte for byte. The ``claims``
+    parsers are not in PARSERS (their flags are checked by the tool, so the generic rows' valid argv differ); the rows
+    that name Unicode argv text, an abbreviated flag and an ambiguous flag are written here."""
+
+    def test_help_text(self):  # R3
+        for sub, want in (("add", CLAIMS_ADD_HELP), ("verify", CLAIMS_VERIFY_HELP)):
+            with self.subTest(sub=sub):
+                rc, out, err = run(["claims", sub, "--help"])
+                # help goes to stderr, as the family's. The section title is "optional arguments:" on 3.9 and
+                # "options:" on 3.10+ for every gate parser (`index --help` too: an unrelated finding, not frozen by
+                # _GateParser, which freezes usage and error text only), so that one word is normalised.
+                text = err.decode().replace("\noptions:\n", "\noptional arguments:\n")
+                self.assertEqual((rc, out, text), (2, b"", want))
+
+    def test_unrecognized_argument_text(self):  # X4: Unicode argv text in the message
+        cases = []
+        for t in TEXTS:
+            want = (USAGE_80["claims"] + "claims: error: unrecognized arguments: --nonsuch " + t.raw + "\n")
+            cases.append(("claims add --nonsuch %s" % t.name, ["claims", "add", "--nonsuch", t.argv()], "80",
+                          (2, b"", want.encode("utf-8"))))
+        self.expect_cases(cases)
+
+    def test_abbreviated_and_ambiguous_flag_text(self):  # X4
+        sub = USAGE_80["claims add"]
+        cases = [("abbreviated, no value", ["claims", "add", "--doc"], "80",
+                  (2, b"", (sub + "claims add: error: argument --document: expected one argument\n").encode())),
+                 ("ambiguous", ["claims", "add", "--c=x"], "80",
+                  (2, b"", (sub + "claims add: error: ambiguous option: --c=x could match --cite, "
+                            "--contradiction\n").encode())),
+                 ("no subcommand", ["claims"], "80",
+                  (2, b"", (USAGE_80["claims"] + "claims: error: the following arguments are required: {add,verify}\n")
+                   .encode())),
+                 ("verify extra positional", ["claims", "verify", "a", "b", "--by", "w"], "80",
+                  (2, b"", (USAGE_80["claims"] + "claims: error: unrecognized arguments: b\n").encode()))]
+        for t in TEXTS[:5]:
+            cases.append(("ambiguous --c=%s" % t.name, ["claims", "add", b"--c=" + t.argv()], "80",
+                          (2, b"", (sub + "claims add: error: ambiguous option: --c=" + t.raw
+                                    + " could match --cite, --contradiction\n").encode("utf-8"))))
+        for cols in ("20", "40", "200"):
+            cases.append(("usage wrap %s" % cols, ["claims", "add", "--doc"], cols,
+                          (2, b"", (USAGE[cols]["claims add"]
+                                    + "claims add: error: argument --document: expected one argument\n").encode())))
+            cases.append(("verify usage wrap %s" % cols, ["claims", "verify", "--by"], cols,
+                          (2, b"", (USAGE[cols]["claims verify"]
+                                    + "claims verify: error: argument --by: expected one argument\n").encode())))
+        self.expect_cases(cases)
+
+
 class TestParserSites(unittest.TestCase):
     def test_parser_sites_enumerated(self):  # P2, K1
         names = {"_GateParser", "gate_args", "ArgumentParser", "add_subparsers", "add_parser"}
@@ -842,6 +911,8 @@ class TestParserSites(unittest.TestCase):
             ("gates/lib/result.py", "add_parser"), ("gates/lib/result.py", "add_subparsers"),
             # run_all builds its parser through gate_args (Task 2b.1)
             ("gates/run_all.py", "gate_args"),
+            ("gates/tools/claims_cli.py", "_GateParser"), ("gates/tools/claims_cli.py", "add_parser"),
+            ("gates/tools/claims_cli.py", "add_parser"), ("gates/tools/claims_cli.py", "add_subparsers"),
             ("gates/tools/decisions_cli.py", "gate_args"), ("gates/tools/findings_cli.py", "_GateParser"),
             ("gates/tools/findings_cli.py", "add_parser"), ("gates/tools/findings_cli.py", "add_parser"),
             ("gates/tools/findings_cli.py", "add_subparsers"), ("gates/tools/index.py", "gate_args")])
@@ -854,7 +925,7 @@ class TestParserSites(unittest.TestCase):
 # command-line rows are 3.9.6's form (measured with the unmodified parsers, 2026-11-16, equal on 3.13 except `=--`, whose
 # 3.13 value `--` is rule E9's form).
 # =====================================================================================================================
-ASK_OK = ["--class", "c", "--question", "q", "--option", "a::b", "--effect", "lasting", "--by", "b"]
+ASK_OK = ["--class", "c", "--question", "q", "--option", "a::b", "--effect", "lasting", "--by", "b", "--recommend", "a"]
 NONEXISTENT_ROOT = "/nonexistent-f1-root"
 ROOT_FAIL = "git rev-parse --show-toplevel failed (exit 128); run /strict-delivery:init"  # a root that is no directory
 RUN_ALL_ROOT_FAIL = "git rev-parse --show-toplevel failed (exit 128)"  # run_all and dispatch add no `; run /strict-delivery:init` hint (dispatch: Task 2c.3)
@@ -885,8 +956,8 @@ class Captured(GateError):
     pass
 
 
-TESTED_VALUE_OPTIONS = 61  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register/run_all 2 each, dispatch 3,
-# ask 12, decide 4, withdraw 2, batch 4, find 3, findings 0, findings new 14, findings move 8
+TESTED_VALUE_OPTIONS = 64  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register/run_all 2 each, dispatch 3,
+# ask 15 (with --overrides, --recommend, --source), decide 4, withdraw 2, batch 4, find 3, findings 0, findings new 14, findings move 8
 
 
 def production_parsers():
