@@ -80,7 +80,7 @@ Workers dispatch no agents, workflows or other agent tasks. They may start backg
 
 ## Commits
 
-A worker commits only with no unstaged or untracked path and no assume-unchanged or skip-worktree flag on a tracked file. A red line or a missing interpreter blocks the commit. It stages its own files by name. A fix round adds a new commit and never amends. A doc change and the test that pins it are one commit. Every commit carries the harness's `Co-Authored-By:` line for the model that wrote it. The two commit hooks refuse a commit while a tracked file has unstaged changes.
+The commit gate is the test modules of the changed files plus every test module that imports a changed module, on every supported runtime, every enabled gate check, and a clean tree; the full suite is not a per-commit gate (design 5.1). A worker commits only with no unstaged or untracked path and no assume-unchanged or skip-worktree flag on a tracked file. A red line or a missing interpreter blocks the commit. It stages its own files by name. A fix round adds a new commit and never amends. A doc change and the test that pins it are one commit. Every commit carries the harness's `Co-Authored-By:` line for the model that wrote it. The two commit hooks refuse a commit while a tracked file has unstaged changes.
 
 ## Planning
 

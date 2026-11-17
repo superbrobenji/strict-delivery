@@ -1629,7 +1629,7 @@ EXACT_PARAGRAPHS = {
             "No out-of-scope bucket.",
             "Every defect you see is reported, whether the diff touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
             "A seeming exclusion is a class-narrowing question for the controller, never your reason to drop a finding.",
-            "Widening a fix's behaviour is out of scope for a fix round, never for a finding: the dimension is re-checked.",
+            "Widening a fix's behaviour is out of scope for a fix round, and a fix diff that widens it is a finding; the dimension is re-checked.",
             "A missing input-domain table is a finding.",
         )),
         ("No subagents.", (
@@ -2225,7 +2225,7 @@ U2_CTRL = ("Name tiers in every brief and report, never a model, except under `#
            "`models.tiers` maps the chosen tier to.")
 OPEN_GRAMMAR = ("A table enumerates the full input class or restricts the input, so the code refuses what lies outside "
                 "the enumerated class, and never samples an open grammar.")
-FIX_WHOLE = "A row without a test is a finding, and the fix covers the whole dimension the row names, not only the listed values."
+FIX_WHOLE = "A row without a test is a finding, and the fix re-checks the whole dimension the row names, by narrowing, not by widening behaviour."
 LIVE_CTRL = ("Before you write your handoff, dispatch nothing new and wait, inside your turn, for the handback of every "
              "child still running; a child that a usage-limit stop cuts off before its handback is listed in your "
              "handoff's `live_subagents`.")

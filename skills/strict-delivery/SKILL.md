@@ -88,11 +88,11 @@ Every change, any size, is a register row before work starts.
 
 Each task runs an implementer, a task review and the fix loop until the binding Rules N and T verdict stops it, and a fix only narrows or corrects; each block ends with a final review, and where the profile enables it (strict), one top-tier final verifier per stream runs at the stream's end over everything the stream delivered, merged parts included, and is not re-run after its own fixes.
 
-A block another stream consumes opens its pull request when it is ready, after touched-area tests, one full suite on the pull request head and a final branch review; the other blocks go out with the stream's final pull request.
+A block another stream consumes opens its pull request when it is ready, after touched-area tests, a final branch review and one full suite on the pull request head; the other blocks go out with the stream's final pull request.
 
 Before every commit, `python3 -m gates run_all` and the touched-area tests (the test modules of each changed file, plus every test module that imports a changed module) are green on every supported runtime, with a clean tree.
 
-The full suite runs on each pull request's head, at a stream's end before its adversarial review, and in that review.
+The full suite runs on each pull request's head, at a stream's end before its adversarial review (where the profile enables it, strict), and in that review.
 
 The strict pre-commit hook still runs `python3 -m gates run_all` and then the test command in config `commands.test`, and a project's `commands.test` decides what that covers.
 

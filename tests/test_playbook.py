@@ -7,6 +7,7 @@ change each, and assert their exact problem kinds."""
 import os
 import random
 import re
+import sys
 import tempfile
 import unicodedata
 import unittest
@@ -1347,7 +1348,8 @@ PLAYBOOK_SECTIONS = {   # file stem -> [(heading, key phrases)]; each phrase is 
                                   "`what -- why -- cost if wrong -- spec cite`", "both quotes"]),       # spec §8a
                  ("Agent rules", ["background shell jobs", "DENIED", "does not re-run the denied action",
                                   "external code"]),                                                   # spec §10
-                 ("Commits", ["assume-unchanged", "by name", "never amends", "`Co-Authored-By:`"]),     # spec §8a
+                 ("Commits", ["assume-unchanged", "by name", "never amends", "`Co-Authored-By:`",
+                           "every test module that imports a changed module", "is not a per-commit gate"]),     # spec §8a
                  ("Planning", ["planned in full before", "stream breakdown", "as they unblock",
                                "superpowers:brainstorming", "superpowers:writing-plans",
                                "superpowers:subagent-driven-development", "superpowers:executing-plans",
@@ -1650,16 +1652,6 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
      "that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, \"Small "
      "re-review\").",
      "tier rule: `final_verifier` is one of `top_tier_roles`"),
-    ("playbook/rules.md",
-     "| SD-R9 | Reviewers execute every claim and re-run every gate themselves, on a clean copy of the reviewed head: a "
-     "`git archive` export or a detached worktree, with `pwd -P` and `git rev-parse --show-toplevel` checked inside "
-     "it and no tracked file flagged assume-unchanged or skip-worktree (`git ls-files -v`). Before a review the "
-     "controller trial-merges the branch with the base (`git merge-tree`) and runs the test modules of the changed "
-     "files plus every test module that imports a changed module on the merged tree; the full suite runs on the "
-     "head of each pull request, at a stream's end and in the stream-end adversarial review. The verifier runs the suite with `GIT_*`, `TZ` and `LANG` polluted. | A result seen only in the "
-     "author's checkout can depend on that checkout's state. | judgment | light, standard, strict | no | "
-     "spec §8 |",
-     "rule row: how the verifier runs the suite, not when it runs"),
     ("skills/strict-delivery/SKILL.md",
      "The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: "
      "`program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, "
@@ -1671,6 +1663,7 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
 VERIFIER_STEP_MEMBERS = [
     ("playbook/review.md", "Before a pull request opens, a `final_reviewer`"),
     ("playbook/review.md", "Once per stream, at its end, after a clean final review"),
+    ("playbook/rules.md", "| SD-R9 | Reviewers execute every claim"),    # R1-4: no longer exempt, it names the condition
     ("playbook/sessions.md", "One block per agent context"),
     ("skills/strict-delivery/SKILL.md", "Each task runs an implementer"),
 ]
@@ -3138,6 +3131,27 @@ BROKEN_VARIANTS = (   # (file, new text, old text it must not be restored to)
 )
 
 
+def runs_clean(case, name, files):
+    """Run the one existing test method `name` of `case` with `read` serving `files` (rel -> text) in place of the
+    repository files, and say whether it passed: the production pin checker on a replaced file."""
+    real = read
+
+    def fake(rel):
+        return files[rel] if rel in files else real(rel)
+    with mock.patch.object(sys.modules[__name__], "read", fake):
+        result = unittest.TestResult()
+        case(name).run(result)
+    return result.wasSuccessful()
+
+
+VARIANT_PINS = {   # (file, new text) -> the existing tests (class, method) that pin it; written by hand (R1-12)
+    BROKEN_VARIANTS[0][:2]: [(PlaybookFilesTest, "test_signals_keep_the_low_plateau_exception")],
+    BROKEN_VARIANTS[1][:2]: [(VerifierProfileTest, "test_verifier_paragraph_conditioned")],
+    BROKEN_VARIANTS[2][:2]: [(PlaybookFilesTest, "test_playbook_sections_and_key_phrases")],
+    BROKEN_VARIANTS[3][:2]: [(RealFileTest, "test_every_sentence_pinned")],
+}
+
+
 class ProcessV2PlaybookTest(unittest.TestCase):
     def test_superseded_sentences_are_gone(self):
         for stem in NEW_PLAYBOOKS + ("rules",):
@@ -3147,6 +3161,8 @@ class ProcessV2PlaybookTest(unittest.TestCase):
                     self.assertNotIn(old, text)
 
     def test_broken_variant_of_each_new_text_is_caught(self):
+        # R1-12: the pin that holds each new text is run, unchanged, on the file restored to the old text, and must
+        # fail there; on the real file it passes (the control), so a failure is the broken text and not the harness.
         for rel, new, old in BROKEN_VARIANTS:
             text = read(rel)
             with self.subTest(rel=rel, new=new[:40]):
@@ -3154,6 +3170,11 @@ class ProcessV2PlaybookTest(unittest.TestCase):
                 broken = text.replace(new, old)
                 self.assertNotIn(new, broken)
                 self.assertIn(old, broken)
+                pins = VARIANT_PINS[(rel, new)]
+                self.assertTrue(pins)
+                for case, name in pins:
+                    self.assertTrue(runs_clean(case, name, {}), (case.__name__, name))             # control
+                    self.assertFalse(runs_clean(case, name, {rel: broken}), (case.__name__, name))
 
     def test_verifier_opening_restored_to_the_old_wording_fails_the_class_check(self):
         text = read("playbook/review.md")
@@ -3168,6 +3189,168 @@ class ProcessV2PlaybookTest(unittest.TestCase):
                   "passes on the fix commit's parent and fails on the fix commit", "a violation is itself a finding",
                   "needs new behaviour is first narrowed in the fix round"):
             self.assertIn(s, body)
+
+# Fix round 1 of the process-v2 roll-in (plan review 1, R1-1..R1-13; design 5.9): each corrected text is pinned
+# as (id, file, new text, the flagged old text, how often the new text occurs); the old text must be gone.
+MS_DOC = "docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md"
+SR_DOC = "docs/strict-delivery/specs/2026-11-02-session-resume-and-questions-design.md"
+PD_DOC = "docs/strict-delivery/specs/2026-10-31-programs-and-streams-design.md"
+PLAN_DOC = "docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md"
+BLOCK_END_GATE = ("The commit gate is the test modules of the changed files plus every test module that imports a "
+                  "changed module, on every supported runtime, every enabled gate check, and a clean tree; the full "
+                  "suite is not a per-commit gate (design 5.1).")
+ADVERSARIAL_COND = "(where the profile enables it, strict)"
+BD_DOC = ".strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md"
+README_DOC = "README.md"
+ONE_PR_DECISION = ("Decision (owner delegation 2026-11-09): each program stream keeps its one pull request (revision "
+                   "6's folding, Q-SPD-1 (a), Q-SPD-2 (a)), opened on demand when a task of another stream consumes "
+                   "one of its sub-blocks; a consumed sub-block does not open a PR of its own, since every such "
+                   "consumer has slack (R2 0.75 h; release waits for PR-config) -- cost if wrong: one more PR per "
+                   "consumed sub-block, no critical-path change")
+CONFIG_V_DECISION = ("Decision (owner delegation 2026-11-09): stream `config`'s V runs after PR-config, beside "
+                     "`release`")
+FIX1_PINS = [
+    ("R1-1", MS_DOC, "with any difference it stops only the work the difference affects, waits for the owner on it, "
+     "and takes over the rest at once.", "with any difference it stops and waits for the owner.", 1),
+    ("R1-1", SR_DOC, "With any difference, it stops only the work the difference affects and waits for the owner on "
+     "it, and takes over the rest at once (skill text", "With any difference, it stops and waits for the owner (skill "
+     "text", 1),
+    ("R1-1", PLAN_DOC, "with any difference stops only the work the difference affects and waits for the owner on "
+     "it, and takes over the rest at once (an agent", "with any difference stops and waits for the owner (an agent", 1),
+    ("R1-3", "playbook/sessions.md", BLOCK_END_GATE, None, 1),
+    ("R1-4", "playbook/rules.md", "in the stream-end adversarial review " + ADVERSARIAL_COND + ".",
+     "in the stream-end adversarial review.", 1),
+    ("R1-4", "playbook/streams.md", "the stream-end adversarial review (where the profile enables it, strict; "
+     "`playbook/review.md`)", "the stream-end adversarial review (`playbook/review.md`)", 1),
+    ("R1-4", "playbook/review.md", "before its adversarial review " + ADVERSARIAL_COND + ", and in that review",
+     "before its adversarial review, and in that review", 1),
+    ("R1-4", "skills/strict-delivery/SKILL.md", "before its adversarial review " + ADVERSARIAL_COND +
+     ", and in that review", "before its adversarial review, and in that review", 1),
+    ("R1-4", MS_DOC, "at a stream's end before the verifier " + ADVERSARIAL_COND + ", and in the verifier",
+     "at a stream's end before the verifier, and in the verifier", 2),
+    ("R1-5", "playbook/review.md", "A block ends with this review on its stream branch.", None, 1),
+    ("R1-5", PD_DOC, "after the touched-area tests, in this order: the final branch review (a `final_reviewer`), one "
+     "full suite on the pull request head, the owner's approval", "in this order: touched-area tests, one full suite "
+     "on the pull request head, the final branch review (a `final_reviewer`)", 1),
+    ("R1-5", "skills/strict-delivery/SKILL.md", "after touched-area tests, a final branch review and one full suite "
+     "on the pull request head;", "after touched-area tests, one full suite on the pull request head and a final "
+     "branch review;", 1),
+    ("R1-6", BD_DOC, ONE_PR_DECISION, None, 1),
+    ("R1-6", PLAN_DOC, "recorded in the breakdown's revision 7: each program stream keeps its one pull request, "
+     "opened on demand when a task of another stream consumes one of its sub-blocks, and a consumed sub-block does "
+     "not open a pull request of its own (breakdown revision 7, section 6.1).",
+     "a sub-block opens its own pull request only when another stream consumes it, and otherwise rides its stream's "
+     "final pull request.", 1),
+    ("R1-6", PLAN_DOC, "the block rides PR-records, breakdown revision 7;", "opened because stream `docs` consumes R1, D7;", 1),
+    ("R1-6", PLAN_DOC, "the block rides PR-hooks, breakdown revision 7;", "opened because Task 6R.1 consumes R3, D7;", 1),
+    ("R1-6", PLAN_DOC, "the block rides PR-config, breakdown revision 7;", "opened because Task 6R.1 consumes R4, D7;", 1),
+    ("R1-7", BD_DOC, CONFIG_V_DECISION, None, 1),
+    ("R1-7", BD_DOC, "= 60.0 working hours from t = 0.**", "= 61.5 working hours from t = 0.**", 1),
+    ("R1-7", BD_DOC, "-> the Rq commits (49.25) -> PR-config (52.0) -> 6R.1, 6R.2 (56.25) -> stream `release`'s V (57.75) -> "
+     "PR-release (59.25) -> 6R.3, the tag (60.0)", "-> the Rq commits (49.25) -> stream `config`'s V (50.75) -> "
+     "PR-config (53.5)", 1),
+    ("R1-7", BD_DOC, "PR-config 52.0, PR-release 59.25", "PR-config 53.5, PR-release 60.75", 2),
+    ("R1-7", BD_DOC, "| **v0.1.0 tag (6R.3)** | **60.0** | 59.25 + 0.75 | **Fri 20 Nov 02:00** | **Fri 27 Nov 10:00** |",
+     "| **v0.1.0 tag (6R.3)** | **61.5** | 60.75 + 0.75 |", 1),
+    ("R1-7", README_DOC, "Target: about 60.0 hours of work", "Target: about 61.5 hours of work", 1),
+    ("R1-8", PLAN_DOC, "`FIX_ROUND_CAP = 5` (spec §10: \"rounds 4-5 a fresh agent one tier up, then the Rules N and T "
+     "verdict\")", "`FIX_ROUND_CAP = 5` (spec §10: \"rounds 4-5 a fresh agent one tier up, then an owner question\")", 1),
+    ("R1-8", PLAN_DOC, "PC3's \"The full suites run once per commit\" (as on origin/main)",
+     "PC3's \"The full suites run once per commit\")", 1),
+    ("R1-8", PLAN_DOC, "\"dispatch waits for the answers\" (as on origin/main) in \"Owner questions are batched\"",
+     "\"dispatch waits for the answers\" in \"Owner questions are batched\"", 1),
+    ("R1-9", PLAN_DOC, "(P:50: the test command on both interpreters plus every enabled `python3 -m gates check <gate>`, "
+     "with a clean tree; P:1134)", "(P:39: the test command on both interpreters plus every enabled `python3 -m gates "
+     "check <gate>`, with a clean tree; P:1123)", 1),
+    ("R1-10", SR_DOC, "Rules N and T: advisory until 2026-11-17, binding on the controller from design 5.4",
+     "Rules N and T: advisory (binding on the controller from design 5.4; owner 2026-11-17)", 1),
+    ("R1-11", "playbook/streams.md", "an edge in the breakdown goes from one of its tasks",
+     "an edge in the breakdown (section 3.2 or 6) goes from one of its tasks", 1),
+]
+
+
+def fix1_problems(text, new, old, n):
+    """The new text occurs n times and the flagged old text (when there is one) is gone."""
+    out = []
+    if text.count(new) != n:
+        out.append("new text %d times, not %d" % (text.count(new), n))
+    if old is not None and old in text:
+        out.append("flagged old text present")
+    return out
+
+
+class FixRound1Test(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIX1_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIX1_PINS:
+            if old is None:
+                continue
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                broken = read(rel).replace(new, old)
+                self.assertTrue(fix1_problems(broken, new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIX1_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_the_old_resume_wording_is_gone_from_every_document(self):          # R1-1: the whole class
+        for rel in (MS_DOC, SR_DOC, PLAN_DOC, "playbook/sessions.md", "skills/strict-delivery/SKILL.md"):
+            with self.subTest(rel=rel):
+                self.assertNotIn("stops and waits for the owner", read(rel))
+                self.assertNotIn("stop and wait for the owner (an", read(rel))
+
+    def test_config_v_placement_figures_re_add_forward_and_backward(self):       # R1-7
+        # The chain's steps, written by hand from the unit costs (breakdown section 1); the documents are compared
+        # with the sums, which the test computes both ways.
+        steps = [("PR-unicode", 1.5), ("PR-2b1", 1.75), ("PR-2b-rest", 2.25), ("PR-2c3", 2.25), ("cut", 0.25),
+                 ("P1", 6.0), ("PR-P1", 1.75), ("cut", 0.25), ("P2", 7.0), ("PR-P2", 1.5), ("cut", 0.25),
+                 ("P3 tasks", 6.5), ("PR-P3", 1.75), ("cut", 0.25), ("4d", 7.0), ("4d end", 1.0), ("4e", 7.0),
+                 ("Rq", 1.0), ("PR-config", 2.75), ("cut", 0.25), ("6R.1-6R.2", 4.0), ("V release", 1.5),
+                 ("PR-release", 1.5), ("6R.3", 0.75)]
+        # the on-path steps before the 4d end re-add as 41.25 (section 7), the P3 tasks tie with PR-runtime
+        forward, at = {}, 0.0
+        for name, cost in steps:
+            at += cost
+            forward[name] = at
+        backward, back = [], at
+        for name, cost in reversed(steps):
+            back -= cost
+            backward.append(back)
+        self.assertEqual(at, 60.0)
+        self.assertEqual(back, 0.0)
+        self.assertEqual(backward[-1], 0.0)
+        self.assertEqual(forward["Rq"], 49.25)
+        self.assertEqual(forward["PR-config"], 52.0)
+        self.assertEqual(forward["6R.1-6R.2"], 56.25)
+        self.assertEqual(forward["PR-release"], 59.25)
+        self.assertNotIn("V config", forward)                                 # config's V is not a path step
+        kinds = 38.5 + 1.0 + 17.0 + 1.5 + 1.25 + 0.75                           # tasks, end, PR ends, V, cuts, tag
+        self.assertEqual(kinds, 60.0)
+        bd = read(BD_DOC)
+        sec7 = bd[bd.index("## 7. Critical path"):]
+        for fig in ("= 49.25; + 2.75 (PR-config U 0.25 + R 2.0 + T 0.5) = 52.0", "= 56.25;", "= 59.25;", "= 60.0.",
+                    "- 4.0 (6R.1, 6R.2) = 52.25; - 0.25 (cut) = 52.0; - 2.75 (PR-config) = 49.25",
+                    "38.5 + 1.0 + 17.0 + 1.5 + 1.25 + 0.75 = 60.0"):
+            self.assertIn(fig, sec7, fig)
+        for stale in ("= 61.5.", "= 50.75; + 2.75", "= 53.75;", "= 53.5;"):
+            self.assertNotIn(stale, sec7, stale)
+
+    def test_streams_md_carries_no_section_number_of_this_repository_breakdown(self):     # R1-11
+        self.assertNotIn("section 3.2 or 6", read("playbook/streams.md"))
+
+    def test_every_stream_end_adversarial_review_sentence_names_the_condition(self):      # R1-4, whole class
+        for rel in ("playbook/rules.md", "playbook/streams.md", "playbook/review.md", "skills/strict-delivery/SKILL.md"):
+            with self.subTest(rel=rel):
+                for unit in prose_units(read(rel)):
+                    if "counts as review 1" in unit:      # review.md "Fix loop": applies only when that review runs
+                        continue
+                    for m in re.finditer(r"(?:stream-end|its) adversarial review", unit):
+                        self.assertIn("where the profile enables it", unit[m.start():m.start() + 120], (rel, unit[:60]))
 
 
 if __name__ == "__main__":

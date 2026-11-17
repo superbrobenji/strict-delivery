@@ -101,7 +101,7 @@ Merged pull requests: #1-#16 and #18-#21 (#17, `run_all`, is open).
 
 A few smaller follow-up blocks (for example Block 1d3) are registered, not yet scheduled; the plan has the full list.
 
-Target: about 61.5 hours of work from 2026-11-17 14:00 to the v0.1.0 tag (revision 7 of the
+Target: about 60.0 hours of work from 2026-11-17 14:00 to the v0.1.0 tag (revision 7 of the
 stream breakdown, `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md`,
 section 7, after the delivery-process redesign of that day). That is Friday 2026-11-20 if the
 work ran around the clock, and Friday 2026-11-27 at eight working hours a day. The estimate
