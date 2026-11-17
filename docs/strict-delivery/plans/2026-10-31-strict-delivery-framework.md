@@ -3560,7 +3560,7 @@ The tests pin the shapes as fixtures built from these field names (synthetic val
 - Expansions: `$X`, `${X}`, `"$X"`, `'$X'` (plain), `$'..'`, `\$X` (plain).
 - Redirections: `>`, `2>&1`, `<`, `<<EOF`, `<<-'EOF'`, `<<<`.
 - Quotes: unbalanced single and double; `''` empty word; adjacent quoted parts `a'b'"c"`; a newline inside quotes (plain); `\"` inside double quotes; a backslash before an ordinary character.
-- Words: `{`, `}`, `!` alone and inside a word (`HEAD@{1}` plain); `#` at word start and mid-word (`a#b` plain).
+- Words: `{`, `}`, `!` alone and inside a word (`'HEAD@{1}'` plain); `#` at word start and mid-word (`a#b` plain).
 - Assignments: `A=1 git`, `A= git` (empty value), `1A=x` (not an assignment), `A=1` alone, an assignment after the program word (an argument).
 - Characters: tabs, non-ASCII, NUL.
 - The `cd` form: `cd /w/x && git commit -m m` (plain, `cd = /w/x`); `cd '/w/a b' && git push`; `cd /w/x; git commit`; `cd /w/x || git commit`; `cd && git commit`; `cd - && git commit`; `cd -P /w && git commit`; `cd /w/x && cd y && git commit`; `cd /w/x && git commit && git push`; `cd $W && git commit` (expansion: not plain).
@@ -8047,4 +8047,5 @@ Ledger lines are those of `origin/block/docs-resume` (`.strict-delivery/state/pl
 - **F1** a new small task in stream a: argparse error text is the same on every interpreter (owner 2026-11-10, L:803; Block 1u, Task 1u.1).
 - **U1 (a)** a frozen fold table now, a small task in stream a; Task P2.1's `Create` of `gates/lib/fold_table.py` becomes a Consume; the `isspace` sites are checked in the same task (L:804; Block 1u, Task 1u.2). Both interpreters, 3.9 and 3.13, are kept (L:804).
 - **Q-FT-1 (a)** the code's fold-table method (Python 3.9.6 `str.casefold` and `unicodedata`, Unicode 13.0.0) stands; the plan text is corrected (owner 2026-11-16, L:833; Block 1u, Task 1u.2's Divergence line; Task P2.1's `fold_table.py` bullet).
+- **Q-3b1R4-1 (a)** the shell scanner refuses every unquoted `{` and `}` and drops the brace logic; the plan example becomes `'HEAD@{1}'` (owner 2026-11-17, L:848; Block 3, Task 3b.1's input-domain row "Words").
 - **Test-only pull request** cheaper fixtures and the midnight-UTC flake, after PR-2c3 (L:803; Block 1t); **Q-1a-fin-1 kept**, no top-level cache (L:803).
