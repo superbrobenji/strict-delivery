@@ -7,9 +7,6 @@ class: "substring pins (U-6's class, joined by owner Q-B4-2 (a)): {tests/test_sk
 siblings:
   - F-20261117-gkwk
 cites:
-  - file: tests/test_playbook.py
-    lines: 201-215
-    sha: 90d967d
   - file: tests/test_skill.py
     lines: 181-185
     sha: 90d967d
