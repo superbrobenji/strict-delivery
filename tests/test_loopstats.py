@@ -205,6 +205,38 @@ class TestCli(Fixture):
             with self.subTest(name):
                 self.assertEqual(self.run_main(argv), (0, GOLDEN_JSON, ""))
 
+    def test_cli_argv_by_hand(self):  # D1-D4 argv rules without argparse (fix round 2)
+        self.golden_fixture()
+        root = ["--root", self.root]
+        core = ["--plan", "p", "--task", "1x.1", "--rounds", "4"]
+        refusals = (  # (argv, text the one stderr line must hold)
+            (core + root + ["--rou", "4"], "--rou"),                    # an abbreviation of --rounds
+            (["--plan", "p", "--task", "1x.1", "--roun", "4"] + root, "--roun"),
+            (core + root + ["--help"], "--help"),
+            (core + root + ["-h"], "-h"),
+            (core + root + ["--"], "unknown argument --"),
+            (core + root + ["stray"], "stray"),
+            (core + root + ["--bogus=1"], "--bogus=1"),
+            (["--plan", "p", "--task", "1x.1", "--root", self.root, "--rounds"], "--rounds: value missing"),
+            (["--plan"], "--plan: value missing"),
+            (["--narrowed"] + core + root, "--narrowed"),                # takes "--plan" as its value
+            (["--task", "--json", "--plan", "p", "--rounds", "4"] + root, "--task"),   # a value starting with --
+            (["--task=--json", "--plan", "p", "--rounds", "4"] + root, "--task"),
+            (core + root + ["--root", self.root], "--root given more than once"),
+            (core + root + ["--plan=q"], "--plan given more than once"),
+            (core + root + ["--json", "--json"], "--json given more than once"),
+            (core + root + ["--json=1"], "--json"),
+            (core + root + ["--narrowed", "-2"], "--narrowed"),
+            (["--task", "-x", "--plan", "p", "--rounds", "4"] + root, "--task"),
+        )
+        for argv, needle in refusals:
+            with self.subTest(argv=argv):
+                self.refused(argv, needle)
+        eq = ["--plan=p", "--task=1x.1", "--rounds=4", "--narrowed=2", "--root=" + self.root]
+        self.assertEqual(self.run_main(eq), (0, GOLDEN, ""))
+        self.assertEqual(self.run_main(core + root + ["--narrowed", "2"]), (0, GOLDEN, ""))
+        self.assertFalse(hasattr(cli, "argparse"))
+
     def test_cli_plan_arg(self):  # A1
         self.golden_fixture()
         for bad in ("", "a/b", "..", "A", "-a", "a_b", "é"):

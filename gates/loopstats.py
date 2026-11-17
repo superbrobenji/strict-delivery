@@ -6,37 +6,58 @@ errors included, exits 1 with one stderr line ``loopstats: <reason>`` and writes
 """
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
 from fractions import Fraction
+from types import SimpleNamespace
 from typing import Optional
 
 from gates.lib import config, loopstats
-from gates.lib.result import GateError, _GateParser, _Once, repo_root, safe_text
+from gates.lib.result import GateError, repo_root, safe_text
 from gates.lib.store import Store
 
 _PLAN = re.compile(r"[a-z0-9][a-z0-9-]*")
 _INT = re.compile(r"[1-9][0-9]?")  # D1: 1..99, ASCII only, matched before int() runs
 
 
-class _Parser(_GateParser):
-    """Argument errors raise GateError without writing; ``main`` writes the single refusal line."""
-
-    def error(self, message: str):
-        raise GateError(message)
+_ONCE = ("--plan", "--task", "--rounds", "--root")
 
 
-def _parser() -> argparse.ArgumentParser:
-    p = _Parser(prog="loopstats", add_help=False, allow_abbrev=False)
-    p.add_argument("--plan", default=None, action=_Once)
-    p.add_argument("--task", default=None, action=_Once)
-    p.add_argument("--rounds", default=None, action=_Once)
-    p.add_argument("--narrowed", action="append", default=[])
-    p.add_argument("--root", default=None, action=_Once)
-    p.add_argument("--json", action="store_true")
-    return p
+def _parse(args: list) -> SimpleNamespace:
+    """argv by hand (no argparse): ``--opt value`` and ``--opt=value``; ``--plan``, ``--task``, ``--rounds``,
+    ``--root`` and ``--json`` once, ``--narrowed`` repeatable. An unknown token (a positional, an abbreviation,
+    ``--help``, ``-h``, ``--``), a missing value and a value starting with ``-`` are refused with the token named."""
+    ns = SimpleNamespace(plan=None, task=None, rounds=None, root=None, narrowed=[], json=False)
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        name, eq, value = tok.partition("=")
+        if name == "--json":
+            if eq:
+                raise GateError("--json: takes no value")
+            if ns.json:
+                raise GateError("--json given more than once")
+            ns.json = True
+            continue
+        if name not in _ONCE and name != "--narrowed":
+            raise GateError("unknown argument %s" % safe_text(tok))
+        if not eq:
+            if i >= len(args):
+                raise GateError("%s: value missing" % name)
+            value = args[i]
+            i += 1
+        if value.startswith("-"):
+            raise GateError("%s: value must not start with '-'" % name)
+        if name == "--narrowed":
+            ns.narrowed.append(value)
+            continue
+        key = name[2:]
+        if getattr(ns, key) is not None:
+            raise GateError("%s given more than once" % name)
+        setattr(ns, key, value)
+    return ns
 
 
 def _number(flag: str, text: str) -> int:
@@ -105,7 +126,7 @@ def _json(r: dict, lines: list) -> str:
 
 
 def _run(args: list) -> str:
-    ns = _parser().parse_args(args)
+    ns = _parse(args)
     if ns.plan is None:
         raise GateError("--plan: required")
     if _PLAN.fullmatch(ns.plan) is None:
