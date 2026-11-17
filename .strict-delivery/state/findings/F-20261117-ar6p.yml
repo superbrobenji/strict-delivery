@@ -1,0 +1,24 @@
+schema: finding/1
+id: F-20261117-ar6p
+status: open
+source: "_GateParser positional formatter_class (Task 2b.1 stream a4, G3, implementer, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a4-g3-report.md:59 (and .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a4-report.md:68); severity not stated at source"
+severity: LOW
+class: "_GateParser constructor: positional formatter_class"
+siblings: []
+cites:
+  - file: gates/lib/result.py
+    lines: 329-330
+    sha: ad4199b
+repro: "At ad4199b (scratch worktree, detached), run 2026-11-17 with `python3 -I gp_positional.py <worktree>` on /usr/bin/python3 (3.9.6) and /opt/homebrew/bin/python3.13 (3.13.18): `result._GateParser(\"p\", None, None, None, [], argparse.RawTextHelpFormatter)` (formatter_class is the 6th argparse positional) gives 3.9.6 `TypeError: __init__() got multiple values for argument 'formatter_class'` and 3.13.18 `TypeError: ArgumentParser.__init__() got multiple values for argument 'formatter_class'`; the control `formatter_class=` by keyword constructs on both (source stream-a4-g3-report.md:59)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+caused_by_change: false
+dimension: "_GateParser constructor"
+history:
+  - status: open
+    sha: 23fcff0c0369c98ea95cb1b81e299e97f75544fd
+    by: docs-reg8

@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261117-gkwk
+status: open
+source: "U-B4TR-1 (Task B4 task review, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/block-B4-task-review.md:75-78 (confirmed again at .superpowers/sdd/2026-10-31-strict-delivery-framework/block-B4-final-review.md:103-105); severity not stated at source"
+severity: LOW
+class: "substring pins (U-6's class, joined by owner Q-B4-2 (a)): {tests/test_skill.py check_pins (U-6, fixed in B4), tests/test_playbook.py pin_problems :201-213, tests/test_skill.py check_phrases :181-185}"
+siblings:
+  - F-20261117-mizn
+cites:
+  - file: tests/test_playbook.py
+    lines: 201-213
+    sha: 90d967d
+  - file: tests/test_skill.py
+    lines: 181-185
+    sha: 90d967d
+repro: "In a scratch copy change rules.md SD-R7 \"leaves its siblings broken.\" to \"leaves its xsiblingsx broken.\"; `python3 -m unittest tests.test_playbook` gives Ran 215 tests, OK on /usr/bin/python3 and python3.13 (run 2026-11-17 at 90d967d; source block-B4-task-review.md:76)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+review_round: 1
+caused_by_change: false
+dimension: "substring pins"
+history:
+  - status: open
+    sha: 23fcff0c0369c98ea95cb1b81e299e97f75544fd
+    by: docs-reg8

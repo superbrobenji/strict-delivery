@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261117-qrbu
+status: open
+source: "F-B4V-3 (Task B4 verifier): .superpowers/sdd/2026-10-31-strict-delivery-framework/block-B4-verifier.md:80-86; severity LOW stated at source"
+severity: LOW
+class: "pronoun antecedent shifted by a U-5 insertion: playbook/sessions.md:59 \"Its dispatcher\""
+siblings: []
+cites:
+  - file: playbook/sessions.md
+    lines: "59"
+    sha: 90d967d
+repro: "`sed -n 59p playbook/sessions.md` shows the order: \"... a child that a usage-limit stop cuts off before its handback is listed in the handoff's `live_subagents`. Its dispatcher at once dispatches a fresh agent ...\" (run 2026-11-17 at 90d967d; source block-B4-verifier.md:83)."
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: B2.2
+pin: null
+ruling: null
+evidence: []
+review_round: 3
+caused_by_change: true
+dimension: "pronoun antecedent shifted by a U-5 insertion"
+history:
+  - status: open
+    sha: 23fcff0c0369c98ea95cb1b81e299e97f75544fd
+    by: docs-reg8

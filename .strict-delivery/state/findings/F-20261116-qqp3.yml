@@ -11,12 +11,13 @@ cites:
     sha: 41cff11
 repro: "A gate module file whose body is: class N with __hash__ = None and __eq__ raising ValueError('eq'), then raise ModuleNotFoundError('x', name=N()); set as GATES['claims'], then run_all.main(['--root', repo]). Gives rc 1 and only 'FAIL run_all.input: ValueError: eq' (n=1, expected n=27) on 3.9.6 and 3.13 (source final-verifier-3.md:47-50, scripts p1.py/apply.py; not run for this row)."
 owner:
-  kind: roadmap
+  kind: plan
   plan: 2026-10-31-strict-delivery-framework
+  task: 2b.1
 pin: null
 ruling: null
 evidence: []
-review_round: 3
+review_round: 9
 caused_by_change: true
 dimension: "import failure kind"
 history:
