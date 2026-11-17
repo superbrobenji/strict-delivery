@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261116-c2jx
+status: open
+source: "U-2-R2: .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a2-g3d-report.md:59-63, .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-a2-g3-log.md:50-51 (review 3 of U1, registered under LOW_PLATEAU, not fixed)"
+severity: LOW
+class: "fold_table.py header statements of the tables' source or derivation, and test comments giving why a claim is checked on some interpreters only: fold_table.py:65-66, tests/test_fold_table.py:145"
+siblings: []
+cites:
+  - file: gates/lib/fold_table.py
+    lines: 65-66
+    sha: dc1e688
+  - file: tests/test_fold_table.py
+    lines: "145"
+    sha: dc1e688
+repro: "Print sys.version, unicodedata.unidata_version, unicodedata.decomposition(chr(0xAC00)) and unicodedata.ucd_3_2_0.decomposition(chr(0xAC00)): 3.9.6 13.0.0 '' '' and 3.13.18 15.1.0 '1100 1161' '1100 1161' (checked 2026-11-16; source script g3/hangul_check2.py, not kept). So fold_table.py:65-66 is true on 3.9.6 only and the comment at tests/test_fold_table.py:145 names the wrong cause."
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 1u.2
+pin: null
+ruling: null
+evidence: []
+review_round: 3
+caused_by_change: true
+dimension: "fold_table.py header statements of the tables' source or derivation, and test comments giving why a claim is checked on some interpreters only"
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

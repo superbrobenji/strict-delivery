@@ -42,12 +42,6 @@ REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS 
 DASH_VALUES = ("-r", "-x", "-h", "--root", "--base", "--json", "--x=y", "-", "--", "-1", "^x")
 
 
-def gate_args_double_dash_value():
-    """What the shared gate parser stores for ``--root=--`` on this interpreter: ``'--'`` (3.13) or ``[]`` (3.9)."""
-    from gates.lib import result
-    return result.gate_args("probe").parse_args(["--root=--"]).root
-
-
 def ok_lines(*gates):
     return "".join("PASS %s.ok\n" % g for g in gates)
 
@@ -747,17 +741,13 @@ class BaseTest(RunAllCase):
             rc = gates_main.main(["check", gate] + list(argv))
         return buf.getvalue(), rc
 
-    def skip_double_dash_where_argparse_stores_a_list(self, value):
-        """B6 member ``--``: ``--opt=--`` gives ``[]`` (not ``'--'``) on Python < 3.13's argparse, in every gate's
-        own parser (unrelated finding U-FR-1); skipped there with that reason."""
-        if value == "--" and gate_args_double_dash_value() != "--":
-            self.skipTest("argparse of this interpreter stores %r for --root=-- (unrelated finding U-FR-1)"
-                          % (gate_args_double_dash_value(),))
+    def test_gate_args_double_dash_is_text(self):  # B6, member `--`: stored as the text `--` on every interpreter
+        from gates.lib import result
+        self.assertEqual(result.gate_args("probe").parse_args(["--root=--"]).root, "--")
 
     def test_dash_leading_root_forwarded_as_one_token(self):  # B6, --root
         for value in DASH_VALUES:
             with self.subTest(value=value):
-                self.skip_double_dash_where_argparse_stores_a_list(value)
                 parent = self.chdir_to_parent_with_repo_named(value)
                 for how in ("given", "env"):
                     with self.subTest(how=how):
@@ -786,7 +776,6 @@ class BaseTest(RunAllCase):
         cites = "".join(ln + "\n" for ln in REAL_PASS.splitlines() if ln.startswith("PASS cites."))
         for value in DASH_VALUES:
             with self.subTest(value=value):
-                self.skip_double_dash_where_argparse_stores_a_list(value)
                 why = "ref must not start with '%s'" % ("^" if value.startswith("^") else "-")   # spec 13, spec:648
                 want = (schema + "".join("FAIL %s.input: %s\n" % (g, why) for g in ("register", "decisions", "claims"))
                         + cites)
