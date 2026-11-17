@@ -3431,7 +3431,7 @@ FIX2_PINS = [
      "**Block R1 end:** final review, PR to `main` (`MERGED ... stream=residual block=R1`", 1),
     ("R2-6", PLAN_DOC, R3_END_NEW, "the block rides PR-hooks, breakdown revision 7;", 1),
     ("R2-6", PLAN_DOC, R4_END_NEW, "the block rides PR-config, breakdown revision 7;", 1),
-    ("R2-7", README_DOC, "Merged pull requests: #1-#22.", "(#17, `run_all`, is open)", 1),
+    ("R2-7", README_DOC, "Merged pull requests: #1-#23.", "(#17, `run_all`, is open)", 1),
 ]
 SUB_BLOCK_PR = {"3a": "PR-runtime", "3d": "PR-package", "5a": "PR-5a", "5b": "PR-5b", "5c": "PR-5c", "6E": "PR-6E",
                 "6K": "PR-6K", "R3": "PR-R3", "R4": "PR-R4", "4e": "PR-config", "4c": "PR-4c",

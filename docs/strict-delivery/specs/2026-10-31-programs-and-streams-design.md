@@ -148,7 +148,7 @@ checkpoint" is removed; one block per agent context stays.
 ## 6. Cross-stream requests
 
 When stream A needs a change in a file stream B owns, A never edits it. A raises a request; the
-program controller writes it as a record; B implements it in its own file.
+program controller writes it as a record; B implements it in its own file. One exception (owner answer Q-A7-1, 2026-11-17): a stream may update another stream's test literal that its own planned change makes stale, if the check stays as strict and the PR names it.
 
 - Path: `.strict-delivery/state/programs/<program>/requests/R-<YYYYMMDD>-<xxxx>.yml`.
 - Fields: `id, from_stream, to_stream, files, interface (spec section cite), need (what and why),

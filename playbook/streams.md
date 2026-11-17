@@ -17,7 +17,7 @@ Each stream owns a disjoint set of files: each stream owns a set of files disjoi
 
 ## Cross-stream requests
 
-A stream never edits another stream's file. When stream A needs a change in a file stream B owns, A raises a request; the program controller writes it as a record under the program folder on the integration branch, and B implements it in its own file. Only the program controller creates or changes a request file; a stream reads requests from `<program>/integration`.
+A stream never edits another stream's file. When stream A needs a change in a file stream B owns, A raises a request; the program controller writes it as a record under the program folder on the integration branch, and B implements it in its own file. One exception (owner standing rule Q-A7-1, 2026-11-17): a stream may update another stream's test literal that its own planned change makes stale, if the check stays as strict and the PR names it. Only the program controller creates or changes a request file; a stream reads requests from `<program>/integration`.
 
 - A request moves `open` to `accepted`, `disputed` or `withdrawn`; `accepted` to `done` or `withdrawn`; `disputed` to `accepted` or `withdrawn` with a `request-dispute` decision. `done` and `withdrawn` are final, and a request file is never deleted while the program is live.
 - B may dispute a request that conflicts with the spec or with B's work; the dispute becomes an owner question, and the owner's ruling is a decision record the request cites.
