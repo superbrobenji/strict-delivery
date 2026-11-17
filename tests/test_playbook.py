@@ -31,7 +31,8 @@ RULE_PHRASES = {   # spec section 8 bullets 9, 10, 12, 15 as extended by the spe
     "SD-R9": ["clean copy", "`git merge-tree`"], "SD-R10": ["one mutant per changed condition", "never the checkout"],
     "SD-R12": ["pull request", "owner's approval", "`checkpoint.pushed`"],
     "SD-R15": ["`mktemp -d`", "`git stash`", "heredoc", "discloses a slip"],
-    "SD-R5": ["fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred"]}  # F-B2F-1
+    "SD-R5": ["fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task "
+              "when the binding verdict (STOP_NARROW, ESCALATE) stops the loop, and otherwise never deferred"]}  # F-B2F-1, D4
 RESUME_PHRASES = {   # session-resume design 3.3-3.5
     "SD-R4": ["superpowers:brainstorming", "superpowers:executing-plans"],
     "SD-R11": ["handoff is complete", "porcelain"],
@@ -70,18 +71,20 @@ INTRO_PINS = ["what enforces it", "never overridden", "`rule-override`", "lists 
 PINS = {
     "SD-R1": (["register row", "before work starts"], ["no owner"]),
     "SD-R2": (["by contradiction", "both commands"], ["checked one way"]),
-    "SD-R3": (["Owner-only", "halts"], ["never assumes"]),
+    "SD-R3": (["Owner-only", "halts", "only the work that depends on the answer"], ["never assumes"]),
     "SD-R4": (["Report before plan", "planned in full", "stream breakdown", "dependency edges",
                "superpowers:brainstorming", "dispatches no writer", "`program create`"], ["nobody approved"]),
     "SD-R5": (["Zero bugs", "cosmetic item", "marks it cosmetic", "unrelated bug"],
-              ["defect shipped", "only a LOW registered under LOW_PLATEAU may wait"]),     # F-B2F1RR-1
+              ["defect shipped", "only a LOW registered under LOW_PLATEAU, or a finding registered against a named "
+                                 "task when a binding verdict stops the loop, may wait"]),     # F-B2F1RR-1, D4
     "SD-R6": (["deleted test"], ["hides the failure"]),
     "SD-R7": (["epic"], ["siblings"]),
     "SD-R8": (["process defect"], ["lets the defects in"]),
     "SD-R9": (["re-run every gate", "`git merge-tree`", "polluted"], ["author's checkout"]),
     "SD-R10": (["mutation transcript", "one mutant per changed condition", "surviving mutant"], ["no mutant fails"]),
     "SD-R11": (["One block per agent context", "`gate_checkpoint` counts", "Continuation is automatic",
-                "inherited memory", "rewrites the handoff", "handoff is complete", "safe to clear"], ["written handoff"]),
+                "inherited memory", "rewrites the handoff", "handoff is complete", "safe to clear",
+                "usage-limit stop (a 429 or a limit message) is the exception", "the resume command"], ["written handoff"]),
     "SD-R12": (["base branch is protected", "owner's approval", "`MERGED`", "`checkpoint.pushed`", "need no approval",
                 "conflicts"], ["lost machine"]),
     "SD-R13": (["cleanup"], ["pile up"]),
@@ -1322,16 +1325,22 @@ NEW_PLAYBOOKS = ("roles", "decisions", "sessions", "streams", "review")
 PLAYBOOK_SECTIONS = {   # file stem -> [(heading, key phrases)]; each phrase is quoted from the source cited on its line
     "decisions": [("Asking", ["`decisions ask`", "decisions find", "search before asking", "`decisions batch --since`",
                               "Also open", "`source`", "recommended option", "`model-policy`", "`batch_cut`",
-                              "corrected to the spec"]),                                       # spec §7.4, §7.1; Q-LT-1 (a)
+                              "corrected to the spec", "only the work that depends on its answer halts",
+                              "nothing independent of them waits on the batch",
+                              "until the binding Rules N and T verdict stops the loop"]),   # spec §7.4, §7.1; Q-LT-1 (a); design 5.4, 5.6
                   ("Answering", ["`decisions decide`", "`decisions withdraw`", "human"]),       # spec §7.1
                   ("Lasting decisions", ["`landed_in`", "never a spec"]),                       # spec §7.2, §7.4
-                  ("Owner-only classes", ["`decision_classes.owner_only`"])],                   # Q-B22v2-5 (a)
+                  ("Owner-only classes", ["`decision_classes.owner_only`", "`Decision (controller): class -- action -- "
+                                          "cost if wrong`", "a controller ruling under the fix rule"])],   # Q-B22v2-5 (a); design 5.5
     "sessions": [("Session kinds", ["`program`", "`program-controller`", "`sync`"]),             # design §10
                  ("Start order", ["`in-force.md`", "`python3 -m gates context", "`required_reads`", "`ledger_from`",
                                   "investigator", "Q9", "G4", "Resume check", "before any edit or dispatch"]),
-                 ("Blocks and checkpoints", ["`block.max_tasks`", "`CHECKPOINT`"]),              # spec §8, §9
+                 ("Blocks and checkpoints", ["`block.max_tasks`", "`CHECKPOINT`",
+                                             "the full suite on the pull request's head"]),       # spec §8, §9; design 5.1
                  ("Handoffs and continuation", ["handoff", "80 %", "Nothing continues from inherited memory",
-                                                "`live_subagents`", "`worktrees`", "handoff is complete", "TaskStop"]),
+                                                "`live_subagents`", "`worktrees`", "handoff is complete", "TaskStop",
+                                                "re-dispatches at the reset", "schedules a wake-up",
+                                                "the handoff names the resume command"]),            # design 5.7, D6
                  ("Agent tree", ["program controller", "workers never dispatch", "configured depth"]),
                  ("Plan format", ["fail closed", "seeded generated-input test", "expected verdict",
                                   "a row with no test is a finding",
@@ -1343,26 +1352,38 @@ PLAYBOOK_SECTIONS = {   # file stem -> [(heading, key phrases)]; each phrase is 
                                "superpowers:brainstorming", "superpowers:writing-plans",
                                "superpowers:subagent-driven-development", "superpowers:executing-plans",
                                "input-domain dimensions", "assertions as code"])],                    # spec §8, Q-PL-1 (a)
-    "streams": [("Programs and streams", ["program_controller", "stream_controller", "disjoint set of files"]),
+    "streams": [("Programs and streams", ["program_controller", "stream_controller", "disjoint set of files",
+                                          "never pauses a whole stream on a question",
+                                          "when nothing independent is left the stream checkpoints and waits"]),  # 5.6
                 ("Cross-stream requests", ["never edits", "request", "not on this branch", "before the final review"]),
                 ("Syncs", ["`sync`", "integration branch"]),                                           # design §10
                 ("Status page", ["status page"]),                                                     # design §11
-                ("Pull-request flow", ["`gh pr merge --merge --match-head-commit`", "head sha", "`MERGED`"])],
-    "review": [("Task review", ["re-run every gate"]),                                                 # spec §8
-               ("Final review", ["whole branch"]),                                                     # Task B1.2
-               ("Verifier", ["`final_verifier`", "tier4"]),                                            # DB-2
+                ("Pull-request flow", ["`gh pr merge --merge --match-head-commit`", "head sha", "`MERGED`",
+                                       "as soon as it is ready", "`Consumes:`", "the stream-end adversarial review",
+                                       "consumer streams do not stop",
+                                       "blocks only that pull request"])],                      # design 5.2, D7
+    "review": [("Task review", ["re-run every gate", "every test module that imports a changed module",
+                                "the head of each pull request", "fix commit's parent"]),              # spec §8; design 5.1, 5.3
+               ("Final review", ["whole branch", "as soon as it is ready", "goes out with the stream's final pull request"]),
+               ("Verifier", ["`final_verifier`", "tier4", "Once per stream", "the parts it already merged included",
+                             "not re-run after the fixes its findings cause"]),                        # DB-2; design 5.2
                ("Fix loop", ["rounds 1-3", "rounds 4-5", "owner question", "cosmetic", "never deferred",
-                             "LOW_PLATEAU"]),                                                 # spec §10; spec §8; DN-4
+                             "LOW_PLATEAU", "narrow", "fails closed", "parent", "Fix rule.", "new modelled behaviour",
+                             "Blame is tested", "`Decision (controller)`", "STOP_NARROW", "review 6"]),  # spec §10; §8; DN-4; 5.3, 5.4
                ("Input domains", ["input-domain table", "independent expected value", "NEEDS_DECISION",
                                   "class-narrowing question", "class: <dimension>: <members>"]),      # spec §8, Q-SDDT-5
                ("Small re-review", ["`reviews.small`", "round 5", "escalate", "Rule N", "Rule T"]),
                ("Process-defect stop", ["process defect", "stop fixing"]),                            # spec §8
-               ("Rules N and T", ["Rule N", "Rule T", "`python3 -m gates loopstats`"]),
+               ("Rules N and T", ["Rule N", "Rule T", "`python3 -m gates loopstats`", "The verdict is binding",
+                                  "STOP_NARROW and ESCALATE stop the loop"]),                        # design 5.4
                ("Review methods", ["watched red", "behaviour stub", "pre-change commit", "pasted result"]),  # spec §8a
-               ("Plan review", ["verbatim", "occurs once", "`Consumes`", "pairwise disjoint", "omission"])],  # spec §8a
+               ("Plan review", ["verbatim", "occurs once", "`Consumes`", "pairwise disjoint", "omission",
+                                "reads the whole document", "adds no new design", "one final edit pass",
+                                "one adversarial review runs at the end of planning",
+                                "never reopens the planning loop"])],                             # spec §8a; design 5.9
 }
 RESTART_END = ("Only the session writes decision records; workers never do, and never change anything for a question. "
-               "Fix and re-review rounds run until a clean pass.")      # row D9: design §3.8 without its ledger cite
+               "Fix and re-review rounds run until the binding Rules N and T verdict stops the loop.")   # row D9, design 5.4
 
 
 def headings(text):
@@ -1542,7 +1563,8 @@ class PlaybookFilesTest(unittest.TestCase):
 
     def test_review_fix_loop_zero_bugs(self):                     # DN4-1 (owner DN-4 (a), Q-CONV-1 (a), DN-1 (b))
         body = pc.section(read("playbook/review.md"), "Fix loop")
-        for s in ("a minor is a real defect", "fixed, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred",
+        for s in ("a minor is a real defect", "fixed, or registered as a LOW under LOW_PLATEAU, or registered against a "
+                  "named task when the binding verdict (STOP_NARROW, ESCALATE) stops the loop, and otherwise never deferred",
                   "two consecutive reviews", "a review with no change-caused finding counts as all-LOW",
                   "the loop ends", "registered", "always fixed"):
             self.assertIn(s.lower(), body.lower())
@@ -1578,12 +1600,14 @@ class PlaybookFilesTest(unittest.TestCase):
         hits = []
         for stem in NEW_PLAYBOOKS:
             for line in read("playbook/%s.md" % stem).split("\n"):
-                if "decide whether a found defect is fixed" in line:
+                if "The verdict is binding" in line:
                     hits.append(stem)
-                    self.assertIn("apart from the LOW_PLATEAU verdict", line, stem)
+                    self.assertIn(VERDICT_INVARIANT, line, stem)
         self.assertEqual(hits, ["review"])
         body = pc.section(read("playbook/review.md"), "Rules N and T")
-        self.assertIn("never block a fix and, apart from the LOW_PLATEAU verdict", body)   # invariant: never blocks
+        self.assertIn(VERDICT_INVARIANT, body)                    # invariant: a change-caused CRITICAL/HIGH is fixed
+        self.assertNotIn("advisory", body)                        # design 5.4: the verdict is binding, not advisory
+        self.assertNotIn("never block a fix", body)
 
     def test_review_rules_n_t_and_methods(self):                  # R3, R4, R6
         t = read("playbook/review.md")
@@ -1599,12 +1623,15 @@ class PlaybookFilesTest(unittest.TestCase):
 # F-B23R-1, class "profile: light, standard; final verifier stated as unconditional". Every expected string is written
 # here by hand from design spec section 12 ("| top-tier final verifier | no | no | yes |"), the programs spec :140 and
 # the controller's decisions D1-D3; none is read back from the files.
-BLOCK_END_ORDER = ("A block ends in this order: final review, top-tier verifier, the owner's approval, merge, "
-                   "post-merge gates, checkpoint.")                     # programs spec :140, byte for byte (D2)
+BLOCK_END_ORDER = ("A branch ends in this order: final review, the full suite on the pull request's head, the "
+                   "top-tier verifier and the review of its fix diffs (at a stream's end only), the owner's approval, "
+                   "merge, post-merge gates, checkpoint.")              # design 5.1, 5.2 (process v2), plan B1 (D2)
+VERDICT_INVARIANT = "it never stops a change-caused CRITICAL or HIGH finding from being fixed"   # design 5.4
 VERIFIER_PROFILE = ("The top-tier verifier runs only where the profile enables it, the strict profile (design spec "
                     "section 12); the light and standard profiles skip that step.")                            # D2
-VERIFIER_OPENING = ("After a clean final review, where the profile enables it (strict), the `final_verifier` tries "
-                    "to break the finished branch.")                                                           # D3
+VERIFIER_OPENING = ("Once per stream, at its end, after a clean final review and where the profile enables it "
+                    "(strict), the `final_verifier` tries to break everything the stream delivered, the parts it "
+                    "already merged included; a plain plan counts as one stream.")                  # D3; design 5.2, D2
 PROFILE_CONDITION = "where the profile enables it"
 # F-B23RR1-1: a verifier term is `final_verifier` or the word "verifier" (so "final verifier", "top-tier verifier" and
 # a bare "the verifier"); `audit_verifier` is another role and does not match. Every prose unit naming one is a member
@@ -1627,8 +1654,9 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
      "| SD-R9 | Reviewers execute every claim and re-run every gate themselves, on a clean copy of the reviewed head: a "
      "`git archive` export or a detached worktree, with `pwd -P` and `git rev-parse --show-toplevel` checked inside "
      "it and no tracked file flagged assume-unchanged or skip-worktree (`git ls-files -v`). Before a review the "
-     "controller trial-merges the branch with the base (`git merge-tree`) and runs the full suite on the merged "
-     "tree. The verifier runs the suite with `GIT_*`, `TZ` and `LANG` polluted. | A result seen only in the "
+     "controller trial-merges the branch with the base (`git merge-tree`) and runs the test modules of the changed "
+     "files plus every test module that imports a changed module on the merged tree; the full suite runs on the "
+     "head of each pull request, at a stream's end and in the stream-end adversarial review. The verifier runs the suite with `GIT_*`, `TZ` and `LANG` polluted. | A result seen only in the "
      "author's checkout can depend on that checkout's state. | judgment | light, standard, strict | no | "
      "spec §8 |",
      "rule row: how the verifier runs the suite, not when it runs"),
@@ -1641,12 +1669,12 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
 ]   # a unit is exempt only verbatim: any edit in place or any added text makes it a member
 # The class members, hand-listed: (file, the start of the paragraph that states the verifier as a block-end step).
 VERIFIER_STEP_MEMBERS = [
-    ("playbook/review.md", "At a block's end a `final_reviewer`"),
-    ("playbook/review.md", "After a clean final review"),
+    ("playbook/review.md", "Before a pull request opens, a `final_reviewer`"),
+    ("playbook/review.md", "Once per stream, at its end, after a clean final review"),
     ("playbook/sessions.md", "One block per agent context"),
     ("skills/strict-delivery/SKILL.md", "Each task runs an implementer"),
 ]
-LOW_PLATEAU_BY_HAND = "the controller applies LOW_PLATEAU and the weighted tally by hand."   # F-B22RR1-1, Q-CONV-1 (a)
+LOW_PLATEAU_BY_HAND = "the controller applies the verdict and the weighted tally by hand and ledgers the verdict."   # F-B22RR1-1, Q-CONV-1 (a), design 5.4
 
 
 def verifier_class_files():
@@ -1690,7 +1718,8 @@ def verifier_step_problems(text, rel=None):
 # names a minor with a deferral or a follow-up, also names LOW_PLATEAU (DN-4 (a); docs-owed spec section 8 wording).
 _DEFERRAL = re.compile(r"never deferred|\bminors?\b.*(?:defer|follow-up)|\bdeferred defect", re.I | re.S)
 # F-B2F1RR-1: a why cell that argues against deferral is a member too ("A deferred defect is a defect shipped").
-SD_R5_LOW_PLATEAU = "fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred"
+SD_R5_LOW_PLATEAU = ("fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named "
+                     "task when the binding verdict (STOP_NARROW, ESCALATE) stops the loop, and otherwise never deferred")
 DEFERRAL_MEMBERS = [   # (file, the start of the unit), in b_owned_markdown() order; written by hand
     ("skills/strict-delivery/prompts/controller.md", "Zero bugs. A change's own bug makes its task incomplete"),
     ("playbook/review.md", "Zero bugs: a change's own bug makes it incomplete. A minor is a real defect"),
@@ -1738,6 +1767,7 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
         body = pc.section(read("playbook/review.md"), "Fix loop")
         self.assertIn(LOW_PLATEAU_BY_HAND, body)
         self.assertNotIn("applies LOW_PLATEAU by hand", body)
+        self.assertNotIn("applies LOW_PLATEAU and the weighted tally by hand", body)   # the pre-v2 sentence is gone
 
     def test_class_every_block_end_verifier_paragraph_conditioned(self):   # FX5, whole class, through the real files
         files = verifier_class_files()
@@ -1814,8 +1844,9 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
 
     def test_sd_r5_why_cell_names_low_plateau(self):              # F-B2F1RR-1, V4
         row = [r for r in table_rows(read(RULES)) if r["id"] == "SD-R5"][0]
-        self.assertEqual(row["why"], "A deferred defect is a defect shipped, so only a LOW registered under LOW_PLATEAU "
-                                     "may wait.")
+        self.assertEqual(row["why"], "A deferred defect is a defect shipped, so only a LOW registered under LOW_PLATEAU, "
+                                     "or a finding registered against a named task when a binding verdict stops the "
+                                     "loop, may wait.")
         bare = read(RULES).replace(row["why"], "A deferred defect is a defect shipped.")
         self.assertEqual(deferral_problems(bare, RULES), ["A deferred defect is a defect shipped."])
 
@@ -1833,6 +1864,9 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
         row = [r for r in table_rows(read(RULES)) if r["id"] == "SD-R5"][0]
         self.assertIn(SD_R5_LOW_PLATEAU, row["rule"])
         self.assertNotIn("fixed in the fix round and never deferred", row["rule"])
+        self.assertNotIn("until a clean pass", row["rule"])           # design 5.9: the document re-review is bounded
+        self.assertIn("is stopped by the same binding verdict", row["rule"])
+        self.assertNotIn("under LOW_PLATEAU, and otherwise never deferred", row["rule"])   # the pre-v2 sentence is gone
         self.assertEqual(row["source"], "spec §8")
 
     def test_edited_playbook_files_ascii(self):                   # FX7 (D2): review.md and sessions.md stay ASCII
@@ -2694,8 +2728,9 @@ class RawLinkSyntaxTest(unittest.TestCase):                         # fix round 
 # Q-VER-DO-1 (a): the version-rows rule is stack-neutral). Each sentence is pinned with its place.
 B3_VERSION_ROWS = ("Every table carries rows for the known version differences of the project's own stack and "
                    "runtime, each run on every runtime the project supports.")
-B3_ASKING_ANCHOR = ("Any other open point, and every point in an owner-only class, is an owner question, and the path "
-                    "that needs it halts until it is answered.")
+B3_ASKING_ANCHOR = ("Any other open point, and every point in an owner-only class, is an owner question, and only the "
+                    "work that depends on its answer halts until it is answered; a controller never pauses a whole "
+                    "stream on a question, and when nothing independent is left the stream checkpoints and waits.")
 B3_SMALL_POINT = ("The one exception is a small point inside the plan's intent: a question of format, syntax, bytes or "
                   "whitespace, wording, layout, naming, test detail, a test-helper contract or an error-return shape "
                   "is not asked; the controller decides it, taking the option it would recommend, and ledgers it as "
@@ -2714,8 +2749,8 @@ B3_NO_LIVE_CHILD = ("A controller never ends its turn while a child or a backgro
                     "waits inside its turn, in the foreground, and returns only after every child has handed back.")
 B3_FINISHED = ("A child has finished only when its handback arrives, never because its report file already holds a "
                "status line.")
-B3_ITEM1_ANCHOR = ("A missing table blocks dispatch; a row with no test is a finding, and its fix covers the whole "
-                   "dimension.")
+B3_ITEM1_ANCHOR = ("A missing table blocks dispatch; a row with no test is a finding, and its fix re-checks the whole "
+                   "dimension without widening the behaviour (\"Fix rule\").")
 # Task B4: U-2 (tier against model), U-4 (open grammar), U-5 (no handback with live children), playbook form.
 B4_ROLES_MIN = "A role runs at its minimum tier or above."
 B4_ROLES_TIER = ("A dispatch chooses a tier, and config `models.tiers` maps each tier to the model the project uses: "
@@ -3083,6 +3118,56 @@ class OwnerDirectivePlaybookTest(unittest.TestCase):
                 self.assertTrue(b3_problems(bad, entry)[0].startswith(ident + ":"))
                 with self.assertRaises(AssertionError):
                     pc.section(bad, heading)
+
+
+# Process v2 (design 5.1-5.9): the superseded sentences are gone from every playbook file, and a file restored to
+# one of them fails the pin that now holds the new sentence (a broken variant of each new text).
+SUPERSEDED = (
+    "until a clean pass", "after round 5 the controller stops and raises an owner question", "advisory signals",
+    "never block a fix", "the path halts until the owner answers", "the path that needs it halts",
+    "runs the full suite on the merged tree", "A block ends in this order: final review, top-tier verifier",
+    "class-narrowing question for the owner", "its fix covers the whole dimension", "stop and wait for the owner (an",
+    "the controller applies LOW_PLATEAU and the weighted tally by hand")
+BROKEN_VARIANTS = (   # (file, new text, old text it must not be restored to)
+    ("playbook/review.md", "it never stops a change-caused CRITICAL or HIGH finding from being fixed",
+     "never decides whether a found defect is fixed"),
+    ("playbook/review.md", "Once per stream, at its end, after a clean final review",
+     "After a clean final review"),
+    ("playbook/decisions.md", "until the binding Rules N and T verdict stops the loop", "until a clean pass"),
+    ("playbook/rules.md", "only the work that depends on the answer halts", "the path halts"),
+)
+
+
+class ProcessV2PlaybookTest(unittest.TestCase):
+    def test_superseded_sentences_are_gone(self):
+        for stem in NEW_PLAYBOOKS + ("rules",):
+            text = read("playbook/%s.md" % stem)
+            for old in SUPERSEDED:
+                with self.subTest(stem=stem, old=old):
+                    self.assertNotIn(old, text)
+
+    def test_broken_variant_of_each_new_text_is_caught(self):
+        for rel, new, old in BROKEN_VARIANTS:
+            text = read(rel)
+            with self.subTest(rel=rel, new=new[:40]):
+                self.assertEqual(text.count(new), 1)
+                broken = text.replace(new, old)
+                self.assertNotIn(new, broken)
+                self.assertIn(old, broken)
+
+    def test_verifier_opening_restored_to_the_old_wording_fails_the_class_check(self):
+        text = read("playbook/review.md")
+        broken = text.replace(VERIFIER_OPENING, "After a clean final review, the `final_verifier` tries to break "
+                                                "the finished branch.")
+        self.assertNotIn(VERIFIER_OPENING, pc.section(broken, "Verifier"))
+        self.assertTrue(verifier_step_problems(broken, "playbook/review.md"))   # no profile condition any more
+
+    def test_fix_rule_paragraph_states_its_pass_and_fail_test(self):
+        body = pc.section(read("playbook/review.md"), "Fix loop")
+        for s in ("refuses input with a named error", "newly accepts input the code used to refuse",
+                  "passes on the fix commit's parent and fails on the fix commit", "a violation is itself a finding",
+                  "needs new behaviour is first narrowed in the fix round"):
+            self.assertIn(s, body)
 
 
 if __name__ == "__main__":
