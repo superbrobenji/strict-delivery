@@ -168,7 +168,6 @@ def report(rows: list, plan: str, task: str, rounds: int, narrowed: list, cfg: d
     """
     distinct = _check_args(rounds, narrowed, cfg)
     by_round = [[] for _ in range(rounds)]  # counted findings of review i + 1: (severity, dimension)
-    other_dims = [set() for _ in range(rounds)]  # dimensions of every in-task finding, counted or not
     for item in rows:
         rid, row = _parts(item)
         errs = findings.validate(row, cfg)
@@ -188,8 +187,6 @@ def report(rows: list, plan: str, task: str, rounds: int, narrowed: list, cfg: d
         if counted and "dimension" not in row:
             raise GateError("finding %s: dimension is missing; loopstats needs it on a counted finding"
                             % safe_text(rid))
-        if "dimension" in row:
-            other_dims[rnd - 1].add(row["dimension"])
         if counted:
             by_round[rnd - 1].append((row["severity"], row.get("dimension")))
     x = [len(r) for r in by_round]

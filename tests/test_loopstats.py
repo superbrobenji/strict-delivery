@@ -6,6 +6,7 @@ import contextlib
 import io
 import itertools
 import json
+import math
 import os
 import random
 import subprocess
@@ -149,6 +150,37 @@ class TestCli(Fixture):
         self.assertIn("X=4,1,2 W=15,1,2 N=18 S=5 narrowed=none", out)
         self.assertIn("VERDICT LOW_PLATEAU (only LOW findings in the last 2 reviews)", out)
         self.assertNotIn("NOTE", out)
+
+    def test_cli_rule_t_non_boundary(self):  # S4 (review-1 F1): the RULE-T line of a fit with q != 1/2
+        self.put_series(6, 3, 1)  # all MEDIUM: W = 12,6,2, N = 20, S = 10
+        q, _a, big_r, e_next = TestFormulas.closed_fit([12, 6, 2])
+        u = (10 - 20 * 1.0) / math.sqrt(20 * 8 / 12.0)
+        want = "RULE-T p=%s u=%+.2f q=%.3f R=%.3f E_next=%.3f" % (fmt3(brute_p([12, 6, 2])), u, q, big_r, e_next)
+        code, out, err = self.run_main(self.base(rounds="3"))
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(want + "\n", out)
+        self.assertIn("q=0.434 R=1.784 E_next=1.009\n", out)
+
+    def test_cli_half_to_even(self):  # D9 (review-1 F3): values whose x1000 ends exactly in .5
+        for i in range(8):  # q = 1/16 exactly: W = 16,1, N = 17, S = 1, m(q) = q/(1+q) = 1/17; 62.5 -> 62
+            self.put(frow(i, 1))
+        self.put(frow(8, 2, "LOW"))
+        code, out, err = self.run_main(self.base(rounds="2"))
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(" q=0.062 ", out)
+        self.assertIn("q=0.062 nu=1.000 ->", out)
+
+    def test_cli_half_to_even_rounds_up(self):  # D9: 3/16 = 0.1875: 187.5 -> 188 (even)
+        self.put(frow(0, 1, dim="a"))
+        for i in range(1, 14):
+            self.put(frow(i, 2, dim="a"))
+        for i, d in enumerate("cde", start=14):
+            self.put(frow(i, 2, dim=d))
+        code, out, err = self.run_main(self.base(rounds="2"))
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("X=1,16 ", out)
+        self.assertIn("RULE-N nu=0.188 fired=no\n", out)
+        self.assertIn(" nu=0.188 -> ", out)
 
     def test_cli_note_line(self):  # O3
         note = "NOTE CRITICAL or HIGH findings caused by the change are fixed whatever the verdict\n"
@@ -405,6 +437,12 @@ class TestRows(Fixture):
         self.assertNotIn("escape_cost", self.cfg)
         self.assertIsNone(small_signals(series(8, 4, 2, 1), "p", "1x.1", 4, [], self.cfg)["ev_below_one"])
 
+    def test_small_signals_p_exactly_alpha(self):  # S9 (review-1 F4): p == 1/10 at k = 10, one LOW in review 1
+        rows = [rec(frow(0, 1, "LOW"))]
+        self.assertEqual(self.rep(rows, rounds=10)["p"], Fraction(1, 10))
+        self.assertEqual(small_signals(rows, "p", "1x.1", 10, [], self.cfg),
+                         {"rule_n": False, "converging": True, "ev_below_one": None})
+
     def test_novelty(self):  # N1, N2, N3
         def dims(*rounds):
             rows, n = [], 0
@@ -533,6 +571,41 @@ class TestFormulas(unittest.TestCase):
         self.assertEqual((t["N"], t["S"]), (34, 52))
         self.assertAlmostEqual(trend([8, 4, 2, 1])["u"], (11 - 15 * 1.5) / (15 * 15 / 12.0) ** 0.5, places=12)
         self.assertIsNone(trend([0, 0])["u"])
+
+    @staticmethod
+    def closed_fit(counts):
+        """The k = 3 fit from the quadratic (2-r)q^2 + (1-r)q - r = 0, r = S/N (spec section 10), in floats:
+        (q, a, R, E_next)."""
+        n, s = sum(counts), counts[1] + 2 * counts[2]
+        r = s / n
+        q = (-(1 - r) + math.sqrt((1 - r) ** 2 + 4 * (2 - r) * r)) / (2 * (2 - r))
+        a = n / (1 - q ** 3)
+        return q, a, a * q ** 3, a * (1 - q) * q ** 3
+
+    def test_geo_fit_non_boundary_values(self):  # S4 (review-1 F1)
+        for counts in ([12, 6, 2], [4, 5, 3], [6, 2, 0]):
+            q, a, big_r, e_next = self.closed_fit(counts)
+            with self.subTest(counts=counts):
+                g = geo_fit(counts)
+                self.assertFalse(g["boundary"])
+                for name, got, want in (("q", g["q"], q), ("a", g["a"], a), ("R", g["R"], big_r),
+                                        ("E_next", g["E_next"], e_next)):
+                    self.assertAlmostEqual(float(got), want, places=9, msg=name)
+                    self.assertEqual(fmt3(got), "%.3f" % want, name)
+        self.assertEqual(fmt3(geo_fit([12, 6, 2])["E_next"]), "1.009")  # the reviewer's value
+
+    def test_geo_fit_stops_after_64_steps(self):  # S4 (review-1 F2): q has denominator 2**64 and brackets S/N
+        for counts in ([12, 6, 2], [4, 5, 3], [6, 2, 0], [9, 5, 2, 1]):
+            k, n, s = len(counts), sum(counts), sum(i * c for i, c in enumerate(counts))
+            target = Fraction(s, n)
+            q = geo_fit(counts)["q"]
+            d = Fraction(1, 2 ** 64)
+
+            def m(x):
+                return sum(j * x ** j for j in range(k)) / sum(x ** j for j in range(k))
+            with self.subTest(counts=counts):
+                self.assertEqual(q.denominator, 2 ** 64)
+                self.assertTrue(m(q - d) < target < m(q + d))
 
     def test_geo_fit_research_rows(self):  # S4
         g = geo_fit([8, 4, 2, 1])
