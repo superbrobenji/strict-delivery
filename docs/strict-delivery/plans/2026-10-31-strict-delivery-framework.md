@@ -3218,11 +3218,11 @@ Starts only after the two prompt files are on `main` and A has updated from `mai
 ## Program grouping for v0.1 (owner 2026-11-10, schedule cut 2)
 
 The program of blocks 3-6 runs as seven streams, each ending in one pull request to `main` (owner Q-SPD-1 (a), L:795; Q-M4 (a); one pull request may carry several sub-blocks, Q-F80W-2), in place of the thirteen streams and seventeen pull requests the block sections below name. Where a block section's stream, branch, period, ownership, start or pull-request text differs from this section, this section wins; tasks, sub-blocks (each at most 3 tasks), task edges, Files, Interfaces and the requests are unchanged except as stated here. Breakdown section 6 holds the record. Process v2 (design 5.2; D7; owner 2026-11-17): the pull-request list in this section is now set by merge on demand and recorded in the breakdown's revision 7 (section 6.1): a sub-block that another stream consumes opens its own pull request as soon as it is ready, and the other sub-blocks ride their stream's final pull request.
-- `package` (3d), `runtime` (3a) and `release` (6R): unchanged, each its own pull request; `package` merges first.
+- `package` (3d), `runtime` (3a) and `release` (6R): unchanged, each its own pull request; `package` merges first among them, after PR-loopstats (design 5.4; breakdown revision 7).
 - `residual`: R5 only (Q-BRV-1 (a)), and every path no other stream owns in the same window. R5 is the first program merge after the plugin enablement, and the plugin is enabled only after PR-hooks has merged and every live branch has updated from `main` (owner Q-PLP-4 (a), L:800, amending Q-BRV-3 (a)'s "first merge after runtime").
 - `hooks` (branch `<program>/hooks/main`): sub-blocks 3b, 3c, 5a and R3, each in its own group; it owns the `bash` and `tools` rows, 5a's Files and, from `merged:runtime`, R3.1's runtime files. R3 starts after the 3b, 3c and 5a ends have merged into the stream branch.
 - `records` (branch `<program>/records/main`): sub-blocks R1, 5b, 5c, 6E and 6K; it owns docs', evidence's and checkpoint's paths and R1.1's files (windows below). The 5c end waits for the R1 end in the stream branch.
-- `config` (branch `<program>/config/main`): sub-blocks 4a, 4b, 4c, 4d, 4e, R2 and R4; it owns the `cfg4`, `rules4` and `init4` rows, `CLAUDE.md`, `.gitignore` and the registry files (`gates/__main__.py`, `gates/producers.py`, `gates/run_all.py`, `tests/test_run_all.py`) on the windows below, receiving every registry request once `package` has merged (stream-ownership decision Q-SPD-2 (a), L:795, in place of `residual`'s window and Q-BD-8 (a)'s `merged:residual/R2`). 4b and 4d start after the 4a end in the stream branch, not after a `cfg4` merge (owner Q-SPD-3 (a), L:795: sub-block 4a is Tasks 4a.1-4a.2 and sub-block 4b is Tasks 4a.3, 4b.1, 4b.2; Task P2.1's `sub_block()` reads Task 4a.3 as sub-block 4a, so this regrouping is prose-only until the `config` stream plan settles that task's id, see the `rules4` note at the head of Block 4). R2 starts after `merged:hooks` and `merged:records`; R4 after the 4b end and `merged:records`; the Rq-4-2, Rq-4-5, Rq-4-3 commits after the R2 end.
+- `config` (branch `<program>/config/main`): sub-blocks 4a, 4b, 4c, 4d, 4e, R2 and R4; it owns the `cfg4`, `rules4` and `init4` rows, `CLAUDE.md`, `.gitignore` and the registry files (`gates/__main__.py`, `gates/producers.py`, `gates/run_all.py`, `tests/test_run_all.py`) on the windows below, receiving every registry request once `package` has merged (stream-ownership decision Q-SPD-2 (a), L:795, in place of `residual`'s window and Q-BD-8 (a)'s `merged:residual/R2`). 4b and 4d start after the 4a end in the stream branch, not after a `cfg4` merge (owner Q-SPD-3 (a), L:795: sub-block 4a is Tasks 4a.1-4a.2 and sub-block 4b is Tasks 4a.3, 4b.1, 4b.2; Task P2.1's `sub_block()` reads Task 4a.3 as sub-block 4a, so this regrouping is prose-only until the `config` stream plan settles that task's id, see the `rules4` note at the head of Block 4). R2.1 starts after `merged:hooks/5a` and `merged:package`, R2.2 after `merged:records/5b` and `merged:records/5c`, R2.3 after `merged:records/6E` (the sub-blocks their Consumes lines name, Tasks R2.1-R2.3); R4 after the 4b end and PR-loopstats (Task 6E.3; Task R4.1); the Rq-4-2, Rq-4-5, Rq-4-3 commits after the R2 end.
 - Each sub-block ends with its final review on its group branch (Process for this plan, "Blocks"); the final verifier runs once per stream, at the stream's end, before the stream's final pull request (design 5.2; owner 2026-11-17), and the pull request's end follows. Each stream has one stream plan (Q-F80W-14 (a)); the `MERGED` line's `block=` names the last carried sub-block (Q-F80W-8 (a)).
 - Ownership windows during the overlap with stream a (owner Q-PLP-1 (a), L:800, with Q-SPD-2 (a), L:795; the program starts before stream a's last writer of each path has merged). Stream a owns each path until its last pre-program writer of that path has merged; then the window opens:
   - `config`: `gates/lib/schema.py`, `gates/gate_schema.py`, `tests/test_schema_lib.py` and `tests/test_gate_schema.py` from PR-P2; `tests/test_config.py` from PR-P3; `gates/lib/config.py`, `skills/strict-delivery/SKILL.md`, `tests/test_skill.py` and `playbook/decisions.md` from PR-2c3; `gates/lib/dispatch.py`, `gates/gate_dispatch.py`, `tests/test_dispatch_lib.py` and `tests/test_gate_dispatch.py` from PR-P4; `gates/gate_decisions.py` and `tests/test_gate_decisions.py` from launch (no pending writer); `CLAUDE.md` and `.gitignore` from PR-P3 (Q-SPD-2 (a) said "from program start"; neither has a pending pre-program writer).
@@ -5810,7 +5810,9 @@ The owner answered this block's questions Q-B6plan-1..6 on 2026-11-02 (section "
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
 - [ ] **Step 5: Commit** `feat(gates): gate_evidence`, then checkpoint.
 
-### Task 6E.3: `loopstats` (group branch `<program>/evidence/loopstats`, PARALLEL with 6E.1-6E.2, starts now)
+### Task 6E.3: `loopstats` (group branch `<program>/evidence/loopstats`, PARALLEL with 6E.1-6E.2, starts now) — COMPLETE
+
+Complete: merged into `main` as PR #22 (`a128a39`, 2026-11-17; breakdown revision 7, PR-loopstats). Code: `gates/lib/loopstats.py`, `gates/loopstats.py`, `tests/test_loopstats.py`. Its `escape_cost` reading waits for `config/2` (Task 6E.3b of the breakdown; `gates/lib/loopstats.py` refuses a configured `escape_cost` until then). The text below is the task as dispatched; do not change this code in later tasks, a defect found in it is an unrelated finding for the owner.
 
 Process v2 (design 5.4; owner 2026-11-17): this task starts now, on group branch `20261110-v01/evidence/loopstats`, dispatched by the program controller; its `escape_cost` reading is deferred to after `config/2` lands. The verdict it prints binds the controller as a process rule; the exit-code contract (exit 0 whatever the verdict, refusals exit 1) and the printed wording below stand as written.
 
@@ -5886,7 +5888,7 @@ Process v2 (design 5.4; owner 2026-11-17): this task starts now, on group branch
   def test_trend_p_matches_research_and_brute_force():   # PC2: research table plus itertools.product enumeration
       for counts, want in RESEARCH.items():
           assert fmt3(trend(list(counts))["p"]) == want
-          assert trend(list(counts))["p"] == brute_force_p(counts)    # sum over product(range(k), repeat=N), N <= 17
+          assert trend(list(counts))["p"] == brute_force_p(counts)    # itertools.product over each half of the N draws, the halves convolved (meet in the middle; a single product(range(k), repeat=N) is infeasible at k = 4); merged test: tests/test_loopstats.py, `brute_p`
   def test_geo_fit_research_rows():
       g = geo_fit([8, 4, 2, 1]); assert g["q"] == Fraction(1, 2) and g["E_next"] == Fraction(1, 2)   # exact hit at the first midpoint
       assert fmt3(geo_fit([4, 5, 3])["q"]) == "0.882" and fmt3(geo_fit([6, 2, 0])["q"]) == "0.220"
@@ -5924,7 +5926,7 @@ Process v2 (design 5.4; owner 2026-11-17): this task starts now, on group branch
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
 - [ ] **Step 5: Commit** `feat(gates): loopstats: Rules N and T and the escape-cost verdict`, then checkpoint.
   - The stream controller merges the group branch into `<program>/evidence/main` after a clean review and green gates (spec §8).
-  - **Block 6E end:** final review, PR to `main` (`final=yes`; the verifier runs once at the end of the stream that carries 6E, `records` under "Program grouping for v0.1", before its final pull request: design 5.2; the pull-request list follows merge on demand, D7, and breakdown revision 7; owner 2026-11-17), then Rq-6-1..Rq-6-4 to the registry owner (`package` while it is live, else `residual`, Task R2.3).
+  - **Block 6E end:** final review, PR to `main` (the verifier runs once at the end of the stream that carries 6E, `records` under "Program grouping for v0.1", before its final pull request: design 5.2; the pull-request list follows merge on demand, D7, and breakdown revision 7; owner 2026-11-17), then Rq-6-1..Rq-6-4 to the registry owner (`package` while it is live, else `residual`, Task R2.3).
 
 ---
 
@@ -6086,7 +6088,7 @@ Ruling: i -- j -- k -- l
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Implement** the five lines.
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`. After the commit and push, run `python3 -m gates check checkpoint --plan <slug>`; expect PASS.**
-- [ ] **Step 5: Commit** `feat(gates): gate_checkpoint in full: block cap, records, base, files, last line`, then checkpoint. **Block 6K end:** final review, PR to `main` (`final=yes`; the verifier runs once at the end of the stream that carries 6K, `records`, before its final pull request: design 5.2; merge on demand, D7; owner 2026-11-17).
+- [ ] **Step 5: Commit** `feat(gates): gate_checkpoint in full: block cap, records, base, files, last line`, then checkpoint. **Block 6K end:** final review, PR to `main` (the verifier runs once at the end of the stream that carries 6K, `records`, before its final pull request: design 5.2; merge on demand, D7; owner 2026-11-17).
 
 ---
 
@@ -6280,7 +6282,7 @@ Owner answer Q-BD-4 (a) (2026-11-02): stream A's residual ownership becomes a pr
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Edit the prompt file.**
 - [ ] **Step 4: Run the test command on both interpreters and `python3 -m gates run_all`; expect PASS.**
-- [ ] **Step 5: Commit** `docs(prompts): program controller sync steps (Rq-5-5)`, then checkpoint. **Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at the stream's end: design 5.2; the block rides PR-records, breakdown revision 7, and has no PR of its own, since only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.
+- [ ] **Step 5: Commit** `docs(prompts): program controller sync steps (Rq-5-5)`, then checkpoint. **Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at the stream's end: design 5.2; the block rides PR-5c, breakdown revision 7, and has no PR of its own, since only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.
 
 ### Block R2: registry requests
 
@@ -6339,7 +6341,7 @@ Owner answer Q-BD-4 (a) (2026-11-02): stream A's residual ownership becomes a pr
 - [ ] **Step 2: Run the test command; expect FAIL.**
 - [ ] **Step 3: Add the lines**, one commit per request.
 - [ ] **Step 4: Run the test command on both interpreters, `python3 -m gates run_all` and `check schema`; expect PASS.**
-- [ ] **Step 5: Commit** each request; the controller marks each done; checkpoint. **Block R2 end:** final review, PR to `main` (`MERGED ... stream=residual block=R2`; no per-block verifier, it runs once at the stream's end: design 5.2; the pull-request list follows merge on demand, D7, and breakdown revision 7; owner 2026-11-17). From `merged:residual/R2`, `init4` owns the registry files, `CLAUDE.md` and `.gitignore` by its `stream-ownership` decision (Q-BD-8 (a)).
+- [ ] **Step 5: Commit** each request; the controller marks each done; checkpoint. **Block R2 end:** final review on the stream branch (no per-block verifier, it runs once at the stream's end: design 5.2; the block rides PR-config, breakdown revision 7, and has no PR of its own, since no other stream consumes it; owner 2026-11-17). From `merged:residual/R2`, `init4` owns the registry files, `CLAUDE.md` and `.gitignore` by its `stream-ownership` decision (Q-BD-8 (a)).
 
 ### Block R3: context in the hooks
 

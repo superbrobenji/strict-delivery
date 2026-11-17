@@ -3401,21 +3401,26 @@ FIX2_PINS = [
     ("R2-3", PLAN_DOC, "Then final review and the PR flow, which is on demand because Task 6R.1 consumes 4e "
      "(breakdown revision 7); the stream-end verifier (design 5.2; owner 2026-11-17) runs after it and does not "
      "delay it.", "Then final review, the stream-end verifier (design 5.2; owner 2026-11-17) and the PR flow.", 1),
-    ("R2-3", BD_DOC, "on demand (consumer: `release` 6R.1, edge 4e.3 -> 6R.1); it carries every block of `config` "
-     "except R4", "R4.1 -> 6R.1) and the stream's final PR", 1),
+    ("R2-3", BD_DOC, "on demand (consumer: `release` 6R.1, edge 4e.3 -> 6R.1); it carries what no earlier PR carried "
+     "(4e and R2), so every block of `config` has merged on demand once it merges and V's fixes go in a small "
+     "follow-up PR, which is then the stream's final PR", "R4.1 -> 6R.1) and the stream's final PR", 1),
     ("R2-4", BD_DOC, "-- why: V runs after the stream's last block and no on-demand PR waits for it, for every "
      "stream alike", "-- why: PR-config is on demand (consumer `release` 6R.1), its gate holds no verifier", 1),
     ("R2-5", BD_DOC, "6R.1 waits for PR-config's merge (P:4799)", "6R.1 waits for PR-config's merge (P:5537)", 1),
     ("R2-6", PLAN_DOC, "**Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at "
-     "the stream's end: design 5.2; the block rides PR-records, breakdown revision 7, and has no PR of its own, since "
+     "the stream's end: design 5.2; the block rides PR-5c, breakdown revision 7, and has no PR of its own, since "
      "only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.",
      "**Block R1 end:** final review, PR to `main` (`MERGED ... stream=residual block=R1`", 1),
     ("R2-6", PLAN_DOC, R3_END_NEW, "the block rides PR-hooks, breakdown revision 7;", 1),
     ("R2-6", PLAN_DOC, R4_END_NEW, "the block rides PR-config, breakdown revision 7;", 1),
-    ("R2-7", README_DOC, "Merged pull requests: #1-#21.", "(#17, `run_all`, is open)", 1),
+    ("R2-7", README_DOC, "Merged pull requests: #1-#22.", "(#17, `run_all`, is open)", 1),
 ]
 SUB_BLOCK_PR = {"3a": "PR-runtime", "3d": "PR-package", "5a": "PR-5a", "5b": "PR-5b", "5c": "PR-5c", "6E": "PR-6E",
-                "6K": "PR-6K", "R3": "PR-R3", "R4": "PR-R4", "4e": "PR-config"}   # D7, from the breakdown's edges
+                "6K": "PR-6K", "R3": "PR-R3", "R4": "PR-R4", "4e": "PR-config", "4c": "PR-4c",
+                "4d": "PR-4d"}   # D7: the breakdown's edges, and for 4c and 4d the `Consumes:` lines of Tasks 6R.1-6R.2
+CONSUMES_ONLY = {"4c", "4d"}      # consumed through D7's `Consumes:` clause, with no edge in the breakdown's YAML (R3-4)
+# what each on-demand PR carries besides the sub-block it is named for (a work branch is never rebased; R3-3)
+CARRIES = {"PR-R3": ("3b", "3c"), "PR-R4": ("4b",), "PR-4d": ("4a",), "PR-5c": ("R1",), "PR-6E": ("6E.3b",)}
 
 
 def bd_yaml():
@@ -3485,8 +3490,18 @@ class FixRound2Test(unittest.TestCase):
     def test_every_consumed_sub_block_has_its_own_on_demand_row(self):                  # R2-2, direct and by edges
         owner, edges = bd_streams_and_edges()
         consumed = {a.split(".")[0] for a, b in edges if owner[a] != owner[b]}
-        self.assertEqual(consumed, set(SUB_BLOCK_PR))                       # no sub-block outside the list is consumed
+        self.assertEqual(consumed | CONSUMES_ONLY, set(SUB_BLOCK_PR))       # no sub-block outside the list is consumed
+        self.assertFalse(consumed & CONSUMES_ONLY)                          # the two lists do not overlap
+        plan = read(PLAN_DOC)
+        for needle in ("`templates.render` and `managed.put_block` (Tasks 4c.1-4c.2)",     # R3-4: the Consumes lines
+                       "- Consumes: `plugin.version` (block 3); `managed.put_block`, `templates.render` (block 4)",
+                       "- block 4: `init` (non-interactive, answers file, profile)"):
+            self.assertIn(needle, plan, needle)
         rows = bd_rev7_rows()
+        for pr, subs in CARRIES.items():                                    # R3-3: each PR names what it carries
+            for sub in subs:
+                with self.subTest(pr=pr, sub=sub):
+                    self.assertIn(sub, rows[pr][1].split(" | ")[0] + rows[pr][1].split(" | ")[1])
         for sub, pr in SUB_BLOCK_PR.items():
             with self.subTest(sub=sub):
                 self.assertIn(pr, rows)
@@ -3513,15 +3528,20 @@ class FixRound2Test(unittest.TestCase):
         prev = {n: queue[i - 1][1] for i, (n, _) in enumerate(queue) if i}
         m = lambda tasks_end, r, n: max(tasks_end + 0.25 + r + 0.5, prev[n] + 0.75)    # clean U + T after the queue
         v_hooks, v_records = at["PR-R3"] + 1.5, at["PR-6K"] + 1.5
-        want = {"PR-runtime": m(27.75, 1.0, "PR-runtime"), "PR-6E": m(20.0, 1.0, "PR-6E"),
-                "PR-5a": m(30.75, 1.0, "PR-5a"), "PR-5b": m(37.25, 1.0, "PR-5b"), "PR-5c": m(37.25, 1.0, "PR-5c"),
-                "PR-6K": m(39.25, 1.0, "PR-6K"), "PR-R3": m(39.5, 1.0, "PR-R3"),
-                "PR-records": m(v_records, 1.5, "PR-records"), "PR-hooks": m(v_hooks, 1.25, "PR-hooks"),
-                "PR-residual/R5": prev["PR-residual/R5"] + 0.75, "PR-R4": m(46.5, 1.0, "PR-R4"),
+        # R is 1.0 for a PR with one sub-block or V's fixes only, the stream's larger figure when it carries earlier
+        # sub-blocks (section 1; R3-3): PR-6E carries 6E.3b, PR-5c R1, PR-R3 3b and 3c, PR-4d 4a, PR-R4 4b
+        want = {"PR-runtime": m(27.75, 1.0, "PR-runtime"), "PR-6E": m(20.0, 1.5, "PR-6E"),
+                "PR-5a": m(30.75, 1.0, "PR-5a"), "PR-4c": m(16.0, 1.0, "PR-4c"), "PR-5b": m(37.25, 1.0, "PR-5b"),
+                "PR-5c": m(37.25, 1.5, "PR-5c"), "PR-6K": m(39.25, 1.0, "PR-6K"), "PR-R3": m(39.5, 1.25, "PR-R3"),
+                "PR-4d": m(40.25, 2.0, "PR-4d"),
+                "PR-records": m(v_records, 1.0, "PR-records"), "PR-hooks": m(v_hooks, 1.0, "PR-hooks"),
+                "PR-residual/R5": prev["PR-residual/R5"] + 0.75, "PR-R4": m(46.5, 2.0, "PR-R4"),
                 "PR-config": m(49.25, 2.0, "PR-config")}
         for n, t in want.items():
             self.assertEqual(at[n], t, n)
-        self.assertEqual(at["PR-hooks"], 45.5)
+        self.assertEqual(at["PR-hooks"], 45.0)
+        self.assertEqual(at["PR-4c"], at["PR-5a"] + 0.75)                  # R3-4: in the gap after PR-P3, with PR-6E, PR-5a
+        self.assertEqual(at["PR-R4"], at["PR-config"] - 2.75)               # R3-3: PR-R4 merges as PR-config's U starts
         self.assertEqual(prev["PR-hooks"], at["PR-records"])
         self.assertEqual(prev["PR-residual/R5"], at["PR-hooks"])        # the enablement follows the hooks stream's last PR
 
@@ -3545,6 +3565,95 @@ class FixRound2Test(unittest.TestCase):
                         self.assertIn("where the profile enables it", sentence, (rel, sentence[:80]))
             with self.subTest(rel=rel):
                 self.assertGreaterEqual(found, 1)
+
+
+R3_PLAN_START_NEW = ("R2.1 starts after `merged:hooks/5a` and `merged:package`, R2.2 after `merged:records/5b` and "
+                     "`merged:records/5c`, R2.3 after `merged:records/6E`")
+R3_BD_UNBLOCK_NEW = ("R2.1 after merged:hooks/5a and merged:package, then R2.2 after merged:records/5b and "
+                     "merged:records/5c and R2.3 after merged:records/6E, serially")
+R3_6E3_DONE = "merged as #22 (`a128a39`, 2026-11-17, observed; the schedule keeps its figure, t = 0 does not move): **9.5** |"
+FIX3_PINS = [
+    ("R3-2", PLAN_DOC, R3_PLAN_START_NEW, "R2 starts after `merged:hooks` and `merged:records`; R4 after the 4b end and "
+     "`merged:records`", 1),
+    ("R3-2", PLAN_DOC, "R4 after the 4b end and PR-loopstats (Task 6E.3; Task R4.1)", "R4 after the 4b end and "
+     "`merged:records`", 1),
+    ("R3-2", BD_DOC, R3_BD_UNBLOCK_NEW, "R2.1 after merged:hooks and merged:package, then R2.2 and R2.3 serially after "
+     "merged:records", 1),
+    ("R3-2", BD_DOC, "R4.1 after the 4b end and PR-loopstats, the 6E.3 merge (P078:5329);", "R4.1 after the 4b end and "
+     "merged:records (P078:5329);", 1),
+    ("R3-2", BD_DOC, "The `unblock` strings of the YAML for R2.1, R2.2, R2.3 and R4.1 already name the consumed "
+     "sub-block's merge", "(4) the `unblock` strings that wait for a stream's merge", 1),
+    ("R3-3", BD_DOC, "| PR-R3 (3b, 3c, R3.1, R3.2) |", "| PR-R3 (R3.1, R3.2) |", 1),
+    ("R3-3", BD_DOC, "| PR-R4 (4b, R4.1) |", "| PR-R4 (R4.1) |", 1),
+    ("R3-3", BD_DOC, "| PR-5c (R1, 5c.1, 5c.2) |", "| PR-5c (5c.1, 5c.2) |", 1),
+    ("R3-3", BD_DOC, "| PR-hooks (V's fixes) |", "| PR-hooks (3b, 3c) |", 1),
+    ("R3-3", BD_DOC, "| PR-records (V's fixes) |", "| PR-records (R1, 6E.3b) |", 1),
+    ("R3-3", BD_DOC, "| PR-config (4e, R2) |", "| PR-config (4a-4e, R2) |", 1),
+    ("R3-3", BD_DOC, "R 1.25 (3b, 3c and R3) -> 40.75", "R 1.0 -> 40.5; clean U 0.25 + T 0.5 after PR-6K", 1),
+    ("R3-3", BD_DOC, "PR-R4 merges 49.25, as PR-config's update starts (49.25), so it has no slack",
+     "PR-R4 merges 48.25, 1.0 h before PR-config's update (49.25)", 1),
+    ("R3-4", BD_DOC, "| PR-4c (4c.1, 4c.2) |", "also name 4c and 4d modules, which go out in PR-config", 1),
+    ("R3-4", BD_DOC, "| PR-4d (4a, 4d) |", "also name 4c and 4d modules, which go out in PR-config", 1),
+    ("R3-4", BD_DOC, "which D7's `Consumes:` clause counts (plan review 3, R3-4): 4d (`init`, Task 4d.1; PR-4d) and 4c "
+     "(`managed.put_block`, `templates.render`, Tasks 4c.1-4c.2; PR-4c); twelve in all", "The edges of the YAML above give "
+     "ten consumed sub-blocks: 3a (PR-runtime), 3d (PR-package), 5a (PR-5a), 5b (PR-5b), 5c (PR-5c), 6E (6E.3 in "
+     "PR-loopstats, 6E.1-6E.2 in PR-6E), 6K (PR-6K), R3 (PR-R3), R4 (PR-R4) and 4e (PR-config, which carries 4a-4d", 1),
+    ("R3-5", PLAN_DOC, "**Block 6E end:** final review, PR to `main` (the verifier runs once at the end of the stream "
+     "that carries 6E,", "(`final=yes`; the verifier runs once at the end of the stream that carries 6E,", 1),
+    ("R3-5", PLAN_DOC, "**Block 6K end:** final review, PR to `main` (the verifier runs once at the end of the stream "
+     "that carries 6K,", "(`final=yes`; the verifier runs once at the end of the stream that carries 6K,", 1),
+    ("R3-6", PLAN_DOC, "`package` merges first among them, after PR-loopstats (design 5.4; breakdown revision 7).",
+     "each its own pull request; `package` merges first.", 1),
+    ("R3-7", PLAN_DOC, "**Block R2 end:** final review on the stream branch (no per-block verifier, it runs once at the "
+     "stream's end: design 5.2; the block rides PR-config, breakdown revision 7, and has no PR of its own, since no "
+     "other stream consumes it; owner 2026-11-17).", "**Block R2 end:** final review, PR to `main` (`MERGED ... "
+     "stream=residual block=R2`", 1),
+    ("R3-6E3", PLAN_DOC, "### Task 6E.3: `loopstats` (group branch `<program>/evidence/loopstats`, PARALLEL with "
+     "6E.1-6E.2, starts now) — COMPLETE", "PARALLEL with 6E.1-6E.2, starts now)\n", 1),
+    ("R3-6E3", PLAN_DOC, "Complete: merged into `main` as PR #22 (`a128a39`, 2026-11-17; breakdown revision 7, "
+     "PR-loopstats).", None, 1),
+    ("R3-6E3", BD_DOC, R3_6E3_DONE, "rides PR-6E | **9.5** |", 2),
+    ("R3-6E3", PLAN_DOC, "itertools.product over each half of the N draws, the halves convolved (meet in the middle;",
+     "sum over product(range(k), repeat=N), N <= 17", 1),
+]
+
+
+class FixRound3Test(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIX3_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIX3_PINS:
+            if old is None:
+                continue
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, old), new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIX3_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_no_final_yes_on_an_on_demand_block_end(self):                                 # R3-5, whole class
+        plan = read(PLAN_DOC)
+        for line in plan.split("\n"):
+            if "**Block 6E end:**" in line or "**Block 6K end:**" in line:
+                self.assertNotIn("final=yes", line)
+        self.assertIn("`final=yes` marks the plan's last PR and is not used", read(BD_DOC))
+
+    def test_the_merged_loopstats_test_has_the_meet_in_the_middle_reference(self):         # relayed item 2
+        src = read("tests/test_loopstats.py")
+        self.assertIn("def brute_p(counts):", src)
+        self.assertIn("each half of the N draws separately", src)
+        self.assertIn("dist(half), dist(n - half)", src)
+
+    def test_the_plan_names_the_merged_task_where_the_breakdown_does(self):                # relayed item 1
+        plan = read(PLAN_DOC)
+        head = plan.index("### Task 6E.3: `loopstats`")
+        self.assertIn("COMPLETE", plan[head:plan.index("\n", head)])
+        self.assertIn("PR #22", plan[head:head + 600])
 
 
 if __name__ == "__main__":
