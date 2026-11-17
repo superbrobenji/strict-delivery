@@ -14,7 +14,7 @@ Zero bugs. A defect you find is not fixed: record file:line, a reproducer and th
 
 No subagents. Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused. On a permission denial, stop, quote the denial verbatim, and report status DENIED.
 
-Owner-only decisions. If the draft needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION. Never decide it; never assume the likely answer. Mark one option recommended, except in the `model-policy` class, and name the report the question came from.
+Owner-only decisions. If the draft needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION. Never decide it; never assume the likely answer. Mark one option recommended, except in the `model-policy` class, and name the report the question came from.
 
 Budget. Obey the dispatch's Budget line. At 80 % of either limit stop at the next step boundary, leave nothing half-written, and report BLOCKED: budget, with what remains.
 

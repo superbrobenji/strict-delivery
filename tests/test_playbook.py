@@ -7,6 +7,7 @@ change each, and assert their exact problem kinds."""
 import os
 import random
 import re
+import sys
 import tempfile
 import unicodedata
 import unittest
@@ -31,7 +32,8 @@ RULE_PHRASES = {   # spec section 8 bullets 9, 10, 12, 15 as extended by the spe
     "SD-R9": ["clean copy", "`git merge-tree`"], "SD-R10": ["one mutant per changed condition", "never the checkout"],
     "SD-R12": ["pull request", "owner's approval", "`checkpoint.pushed`"],
     "SD-R15": ["`mktemp -d`", "`git stash`", "heredoc", "discloses a slip"],
-    "SD-R5": ["fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred"]}  # F-B2F-1
+    "SD-R5": ["fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task "
+              "when the binding verdict (STOP_NARROW, ESCALATE) stops the loop, and otherwise never deferred"]}  # F-B2F-1, D4
 RESUME_PHRASES = {   # session-resume design 3.3-3.5
     "SD-R4": ["superpowers:brainstorming", "superpowers:executing-plans"],
     "SD-R11": ["handoff is complete", "porcelain"],
@@ -70,18 +72,20 @@ INTRO_PINS = ["what enforces it", "never overridden", "`rule-override`", "lists 
 PINS = {
     "SD-R1": (["register row", "before work starts"], ["no owner"]),
     "SD-R2": (["by contradiction", "both commands"], ["checked one way"]),
-    "SD-R3": (["Owner-only", "halts"], ["never assumes"]),
+    "SD-R3": (["Owner-only", "halts", "only the work that depends on the answer"], ["never assumes"]),
     "SD-R4": (["Report before plan", "planned in full", "stream breakdown", "dependency edges",
                "superpowers:brainstorming", "dispatches no writer", "`program create`"], ["nobody approved"]),
     "SD-R5": (["Zero bugs", "cosmetic item", "marks it cosmetic", "unrelated bug"],
-              ["defect shipped", "only a LOW registered under LOW_PLATEAU may wait"]),     # F-B2F1RR-1
+              ["defect shipped", "only a LOW registered under LOW_PLATEAU, or a finding registered against a named "
+                                 "task when a binding verdict stops the loop, may wait"]),     # F-B2F1RR-1, D4
     "SD-R6": (["deleted test"], ["hides the failure"]),
     "SD-R7": (["epic"], ["siblings"]),
     "SD-R8": (["process defect"], ["lets the defects in"]),
     "SD-R9": (["re-run every gate", "`git merge-tree`", "polluted"], ["author's checkout"]),
     "SD-R10": (["mutation transcript", "one mutant per changed condition", "surviving mutant"], ["no mutant fails"]),
     "SD-R11": (["One block per agent context", "`gate_checkpoint` counts", "Continuation is automatic",
-                "inherited memory", "rewrites the handoff", "handoff is complete", "safe to clear"], ["written handoff"]),
+                "inherited memory", "rewrites the handoff", "handoff is complete", "safe to clear",
+                "usage-limit stop (a 429 or a limit message) is the exception", "the resume command"], ["written handoff"]),
     "SD-R12": (["base branch is protected", "owner's approval", "`MERGED`", "`checkpoint.pushed`", "need no approval",
                 "conflicts"], ["lost machine"]),
     "SD-R13": (["cleanup"], ["pile up"]),
@@ -1316,54 +1320,73 @@ TIERS = {"implementer_transcription": "tier1", "implementer": "tier2",
          "plan_writer": "tier3", "plan_reviewer": "tier3", "drafter": "tier2"}
 ROLES_HEADER = "| role | prompt block | minimum tier | needs brief | finding states |"
 ROLES_SECTIONS = ["Model tiers", "Budget cap", "Dispatch contract", "Report contract"]     # layout proposed (PC3)
-OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close", "finding-class",
+OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
               "rule-override", "program-create", "stream-ownership", "stream-merge", "request-dispute",
               "program-close"]    # row D8: hand-written, the 13 of gates/lib/config.py DEFAULTS on main
 NEW_PLAYBOOKS = ("roles", "decisions", "sessions", "streams", "review")
 PLAYBOOK_SECTIONS = {   # file stem -> [(heading, key phrases)]; each phrase is quoted from the source cited on its line
     "decisions": [("Asking", ["`decisions ask`", "decisions find", "search before asking", "`decisions batch --since`",
                               "Also open", "`source`", "recommended option", "`model-policy`", "`batch_cut`",
-                              "corrected to the spec"]),                                       # spec §7.4, §7.1; Q-LT-1 (a)
+                              "corrected to the spec", "only the work that depends on its answer halts",
+                              "nothing independent of them waits on the batch",
+                              "until the binding Rules N and T verdict stops the loop"]),   # spec §7.4, §7.1; Q-LT-1 (a); design 5.4, 5.6
                   ("Answering", ["`decisions decide`", "`decisions withdraw`", "human"]),       # spec §7.1
                   ("Lasting decisions", ["`landed_in`", "never a spec"]),                       # spec §7.2, §7.4
-                  ("Owner-only classes", ["`decision_classes.owner_only`"])],                   # Q-B22v2-5 (a)
+                  ("Owner-only classes", ["`decision_classes.owner_only`", "`Decision (controller): class -- action -- "
+                                          "cost if wrong`", "a controller ruling under the fix rule"])],   # Q-B22v2-5 (a); design 5.5
     "sessions": [("Session kinds", ["`program`", "`program-controller`", "`sync`"]),             # design §10
                  ("Start order", ["`in-force.md`", "`python3 -m gates context", "`required_reads`", "`ledger_from`",
                                   "investigator", "Q9", "G4", "Resume check", "before any edit or dispatch"]),
-                 ("Blocks and checkpoints", ["`block.max_tasks`", "`CHECKPOINT`"]),              # spec §8, §9
+                 ("Blocks and checkpoints", ["`block.max_tasks`", "`CHECKPOINT`",
+                                             "the full suite on the pull request's head"]),       # spec §8, §9; design 5.1
                  ("Handoffs and continuation", ["handoff", "80 %", "Nothing continues from inherited memory",
-                                                "`live_subagents`", "`worktrees`", "handoff is complete", "TaskStop"]),
+                                                "`live_subagents`", "`worktrees`", "handoff is complete", "TaskStop",
+                                                "re-dispatches at the reset", "schedules a wake-up",
+                                                "the handoff names the resume command"]),            # design 5.7, D6
                  ("Agent tree", ["program controller", "workers never dispatch", "configured depth"]),
                  ("Plan format", ["fail closed", "seeded generated-input test", "expected verdict",
                                   "a row with no test is a finding",
                                   "`what -- why -- cost if wrong -- spec cite`", "both quotes"]),       # spec §8a
                  ("Agent rules", ["background shell jobs", "DENIED", "does not re-run the denied action",
                                   "external code"]),                                                   # spec §10
-                 ("Commits", ["assume-unchanged", "by name", "never amends", "`Co-Authored-By:`"]),     # spec §8a
+                 ("Commits", ["assume-unchanged", "by name", "never amends", "`Co-Authored-By:`",
+                           "every test module that imports a changed module", "is not a per-commit gate"]),     # spec §8a
                  ("Planning", ["planned in full before", "stream breakdown", "as they unblock",
                                "superpowers:brainstorming", "superpowers:writing-plans",
                                "superpowers:subagent-driven-development", "superpowers:executing-plans",
                                "input-domain dimensions", "assertions as code"])],                    # spec §8, Q-PL-1 (a)
-    "streams": [("Programs and streams", ["program_controller", "stream_controller", "disjoint set of files"]),
+    "streams": [("Programs and streams", ["program_controller", "stream_controller", "disjoint set of files",
+                                          "never pauses a whole stream on a question",
+                                          "when nothing independent is left the stream checkpoints and waits"]),  # 5.6
                 ("Cross-stream requests", ["never edits", "request", "not on this branch", "before the final review"]),
                 ("Syncs", ["`sync`", "integration branch"]),                                           # design §10
                 ("Status page", ["status page"]),                                                     # design §11
-                ("Pull-request flow", ["`gh pr merge --merge --match-head-commit`", "head sha", "`MERGED`"])],
-    "review": [("Task review", ["re-run every gate"]),                                                 # spec §8
-               ("Final review", ["whole branch"]),                                                     # Task B1.2
-               ("Verifier", ["`final_verifier`", "tier4"]),                                            # DB-2
+                ("Pull-request flow", ["`gh pr merge --merge --match-head-commit`", "head sha", "`MERGED`",
+                                       "as soon as it is ready", "`Consumes:`", "the stream-end adversarial review",
+                                       "consumer streams do not stop",
+                                       "blocks only that pull request"])],                      # design 5.2, D7
+    "review": [("Task review", ["re-run every gate", "every test module that imports a changed module",
+                                "the head of each pull request", "fix commit's parent"]),              # spec §8; design 5.1, 5.3
+               ("Final review", ["whole branch", "as soon as it is ready", "goes out with the stream's final pull request"]),
+               ("Verifier", ["`final_verifier`", "tier4", "Once per stream", "the parts it already merged included",
+                             "not re-run after the fixes its findings cause"]),                        # DB-2; design 5.2
                ("Fix loop", ["rounds 1-3", "rounds 4-5", "owner question", "cosmetic", "never deferred",
-                             "LOW_PLATEAU"]),                                                 # spec §10; spec §8; DN-4
+                             "LOW_PLATEAU", "narrow", "fails closed", "parent", "Fix rule.", "new modelled behaviour",
+                             "Blame is tested", "`Decision (controller)`", "STOP_NARROW", "review 6"]),  # spec §10; §8; DN-4; 5.3, 5.4
                ("Input domains", ["input-domain table", "independent expected value", "NEEDS_DECISION",
                                   "class-narrowing question", "class: <dimension>: <members>"]),      # spec §8, Q-SDDT-5
                ("Small re-review", ["`reviews.small`", "round 5", "escalate", "Rule N", "Rule T"]),
                ("Process-defect stop", ["process defect", "stop fixing"]),                            # spec §8
-               ("Rules N and T", ["Rule N", "Rule T", "`python3 -m gates loopstats`"]),
+               ("Rules N and T", ["Rule N", "Rule T", "`python3 -m gates loopstats`", "The verdict is binding",
+                                  "STOP_NARROW and ESCALATE stop the loop"]),                        # design 5.4
                ("Review methods", ["watched red", "behaviour stub", "pre-change commit", "pasted result"]),  # spec §8a
-               ("Plan review", ["verbatim", "occurs once", "`Consumes`", "pairwise disjoint", "omission"])],  # spec §8a
+               ("Plan review", ["verbatim", "occurs once", "`Consumes`", "pairwise disjoint", "omission",
+                                "reads the whole document", "adds no new design", "one final edit pass",
+                                "one adversarial review runs at the end of planning",
+                                "never reopens the planning loop"])],                             # spec §8a; design 5.9
 }
 RESTART_END = ("Only the session writes decision records; workers never do, and never change anything for a question. "
-               "Fix and re-review rounds run until a clean pass.")      # row D9: design §3.8 without its ledger cite
+               "Fix and re-review rounds run until the binding Rules N and T verdict stops the loop.")   # row D9, design 5.4
 
 
 def headings(text):
@@ -1543,7 +1566,8 @@ class PlaybookFilesTest(unittest.TestCase):
 
     def test_review_fix_loop_zero_bugs(self):                     # DN4-1 (owner DN-4 (a), Q-CONV-1 (a), DN-1 (b))
         body = pc.section(read("playbook/review.md"), "Fix loop")
-        for s in ("a minor is a real defect", "fixed, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred",
+        for s in ("a minor is a real defect", "fixed, or registered as a LOW under LOW_PLATEAU, or registered against a "
+                  "named task when the binding verdict (STOP_NARROW, ESCALATE) stops the loop, and otherwise never deferred",
                   "two consecutive reviews", "a review with no change-caused finding counts as all-LOW",
                   "the loop ends", "registered", "always fixed"):
             self.assertIn(s.lower(), body.lower())
@@ -1579,12 +1603,30 @@ class PlaybookFilesTest(unittest.TestCase):
         hits = []
         for stem in NEW_PLAYBOOKS:
             for line in read("playbook/%s.md" % stem).split("\n"):
-                if "decide whether a found defect is fixed" in line:
+                if "The verdict is binding" in line:
                     hits.append(stem)
-                    self.assertIn("apart from the LOW_PLATEAU verdict", line, stem)
+                    self.assertIn(VERDICT_INVARIANT, line, stem)
         self.assertEqual(hits, ["review"])
         body = pc.section(read("playbook/review.md"), "Rules N and T")
-        self.assertIn("never block a fix and, apart from the LOW_PLATEAU verdict", body)   # invariant: never blocks
+        self.assertIn(VERDICT_INVARIANT, body)                    # invariant: a change-caused CRITICAL/HIGH is fixed
+        self.assertNotIn("advisory", body)                        # design 5.4: the verdict is binding, not advisory
+        self.assertNotIn("never block a fix", body)
+
+    def test_finding_records_for_loopstats_and_plan_3d1_alignment(self):   # program controller input; design 5.4
+        rec = ("After each review, before `loopstats` runs, a finding record (schema `finding`) is written for each "
+               "finding of that review, with `python3 -m gates findings new --review-round <k> --caused-by-change yes|no --dimension <dimension>` (plus its required flags), under config "
+               "`paths.findings` on the task's branch, by the controller, which mints each id with `findings new` "
+               "(owner answer Q-PV2-3 (a), 2026-11-17). The records stay on "
+               "that branch while its pull request is open and merge with it, and `loopstats` counts only findings "
+               "that have a record.")
+        spec = " ".join(read("docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md").split())
+        self.assertEqual(spec.count(rec), 1)
+        self.assertEqual(" ".join(pc.section(read("playbook/review.md"), "Rules N and T").split()).count(rec), 1)
+        self.assertIn("A finding carries `review_round`, `caused_by_change` and `dimension`. " + rec, spec)
+        plan = read(PLAN_DOC)
+        self.assertIn("`json.loads` refusing duplicate keys, keeping each JSON integer as a `str` subclass "
+                      "(PC1 S1: no `int()` runs)", plan)
+        self.assertEqual(plan.count("`plugin.repository`"), 1)      # only the sentence that says it is satisfied
 
     def test_review_rules_n_t_and_methods(self):                  # R3, R4, R6
         t = read("playbook/review.md")
@@ -1600,12 +1642,15 @@ class PlaybookFilesTest(unittest.TestCase):
 # F-B23R-1, class "profile: light, standard; final verifier stated as unconditional". Every expected string is written
 # here by hand from design spec section 12 ("| top-tier final verifier | no | no | yes |"), the programs spec :140 and
 # the controller's decisions D1-D3; none is read back from the files.
-BLOCK_END_ORDER = ("A block ends in this order: final review, top-tier verifier, the owner's approval, merge, "
-                   "post-merge gates, checkpoint.")                     # programs spec :140, byte for byte (D2)
+BLOCK_END_ORDER = ("A branch ends in this order: final review, the full suite on the pull request's head, the "
+                   "top-tier verifier and the review of its fix diffs (at a stream's end only), the owner's approval, "
+                   "merge, post-merge gates, checkpoint.")              # design 5.1, 5.2 (process v2), plan B1 (D2)
+VERDICT_INVARIANT = "it never stops a change-caused CRITICAL or HIGH finding from being fixed"   # design 5.4
 VERIFIER_PROFILE = ("The top-tier verifier runs only where the profile enables it, the strict profile (design spec "
                     "section 12); the light and standard profiles skip that step.")                            # D2
-VERIFIER_OPENING = ("After a clean final review, where the profile enables it (strict), the `final_verifier` tries "
-                    "to break the finished branch.")                                                           # D3
+VERIFIER_OPENING = ("Once per stream, at its end, after a clean final review and where the profile enables it "
+                    "(strict), the `final_verifier` tries to break everything the stream delivered, the parts it "
+                    "already merged included; a plain plan counts as one stream.")                  # D3; design 5.2, D2
 PROFILE_CONDITION = "where the profile enables it"
 # F-B23RR1-1: a verifier term is `final_verifier` or the word "verifier" (so "final verifier", "top-tier verifier" and
 # a bare "the verifier"); `audit_verifier` is another role and does not match. Every prose unit naming one is a member
@@ -1624,15 +1669,6 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
      "that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, \"Small "
      "re-review\").",
      "tier rule: `final_verifier` is one of `top_tier_roles`"),
-    ("playbook/rules.md",
-     "| SD-R9 | Reviewers execute every claim and re-run every gate themselves, on a clean copy of the reviewed head: a "
-     "`git archive` export or a detached worktree, with `pwd -P` and `git rev-parse --show-toplevel` checked inside "
-     "it and no tracked file flagged assume-unchanged or skip-worktree (`git ls-files -v`). Before a review the "
-     "controller trial-merges the branch with the base (`git merge-tree`) and runs the full suite on the merged "
-     "tree. The verifier runs the suite with `GIT_*`, `TZ` and `LANG` polluted. | A result seen only in the "
-     "author's checkout can depend on that checkout's state. | judgment | light, standard, strict | no | "
-     "spec §8 |",
-     "rule row: how the verifier runs the suite, not when it runs"),
     ("skills/strict-delivery/SKILL.md",
      "The roles, with their prompt blocks, minimum tiers and finding states, are in `playbook/roles.md`: "
      "`program_controller`, `stream_controller`, `controller`, `implementer`, `implementer_transcription`, "
@@ -1642,12 +1678,13 @@ VERIFIER_NON_STEPS = [   # (file, the whole unit verbatim, why it states no bloc
 ]   # a unit is exempt only verbatim: any edit in place or any added text makes it a member
 # The class members, hand-listed: (file, the start of the paragraph that states the verifier as a block-end step).
 VERIFIER_STEP_MEMBERS = [
-    ("playbook/review.md", "At a block's end a `final_reviewer`"),
-    ("playbook/review.md", "After a clean final review"),
+    ("playbook/review.md", "Before a pull request opens, a `final_reviewer`"),
+    ("playbook/review.md", "Once per stream, at its end, after a clean final review"),
+    ("playbook/rules.md", "| SD-R9 | Reviewers execute every claim"),    # R1-4: no longer exempt, it names the condition
     ("playbook/sessions.md", "One block per agent context"),
     ("skills/strict-delivery/SKILL.md", "Each task runs an implementer"),
 ]
-LOW_PLATEAU_BY_HAND = "the controller applies LOW_PLATEAU and the weighted tally by hand."   # F-B22RR1-1, Q-CONV-1 (a)
+LOW_PLATEAU_BY_HAND = "the controller applies the verdict and the weighted tally by hand and ledgers the verdict."   # F-B22RR1-1, Q-CONV-1 (a), design 5.4
 
 
 def verifier_class_files():
@@ -1691,7 +1728,8 @@ def verifier_step_problems(text, rel=None):
 # names a minor with a deferral or a follow-up, also names LOW_PLATEAU (DN-4 (a); docs-owed spec section 8 wording).
 _DEFERRAL = re.compile(r"never deferred|\bminors?\b.*(?:defer|follow-up)|\bdeferred defect", re.I | re.S)
 # F-B2F1RR-1: a why cell that argues against deferral is a member too ("A deferred defect is a defect shipped").
-SD_R5_LOW_PLATEAU = "fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred"
+SD_R5_LOW_PLATEAU = ("fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named "
+                     "task when the binding verdict (STOP_NARROW, ESCALATE) stops the loop, and otherwise never deferred")
 DEFERRAL_MEMBERS = [   # (file, the start of the unit), in b_owned_markdown() order; written by hand
     ("skills/strict-delivery/prompts/controller.md", "Zero bugs. A change's own bug makes its task incomplete"),
     ("playbook/review.md", "Zero bugs: a change's own bug makes it incomplete. A minor is a real defect"),
@@ -1739,6 +1777,7 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
         body = pc.section(read("playbook/review.md"), "Fix loop")
         self.assertIn(LOW_PLATEAU_BY_HAND, body)
         self.assertNotIn("applies LOW_PLATEAU by hand", body)
+        self.assertNotIn("applies LOW_PLATEAU and the weighted tally by hand", body)   # the pre-v2 sentence is gone
 
     def test_class_every_block_end_verifier_paragraph_conditioned(self):   # FX5, whole class, through the real files
         files = verifier_class_files()
@@ -1815,8 +1854,9 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
 
     def test_sd_r5_why_cell_names_low_plateau(self):              # F-B2F1RR-1, V4
         row = [r for r in table_rows(read(RULES)) if r["id"] == "SD-R5"][0]
-        self.assertEqual(row["why"], "A deferred defect is a defect shipped, so only a LOW registered under LOW_PLATEAU "
-                                     "may wait.")
+        self.assertEqual(row["why"], "A deferred defect is a defect shipped, so only a LOW registered under LOW_PLATEAU, "
+                                     "or a finding registered against a named task when a binding verdict stops the "
+                                     "loop, may wait.")
         bare = read(RULES).replace(row["why"], "A deferred defect is a defect shipped.")
         self.assertEqual(deferral_problems(bare, RULES), ["A deferred defect is a defect shipped."])
 
@@ -1834,6 +1874,9 @@ class VerifierProfileTest(unittest.TestCase):                    # F-B23R-1 (FX1
         row = [r for r in table_rows(read(RULES)) if r["id"] == "SD-R5"][0]
         self.assertIn(SD_R5_LOW_PLATEAU, row["rule"])
         self.assertNotIn("fixed in the fix round and never deferred", row["rule"])
+        self.assertNotIn("until a clean pass", row["rule"])           # design 5.9: the document re-review is bounded
+        self.assertIn("is stopped by the same binding verdict", row["rule"])
+        self.assertNotIn("under LOW_PLATEAU, and otherwise never deferred", row["rule"])   # the pre-v2 sentence is gone
         self.assertEqual(row["source"], "spec §8")
 
     def test_edited_playbook_files_ascii(self):                   # FX7 (D2): review.md and sessions.md stay ASCII
@@ -2695,8 +2738,9 @@ class RawLinkSyntaxTest(unittest.TestCase):                         # fix round 
 # Q-VER-DO-1 (a): the version-rows rule is stack-neutral). Each sentence is pinned with its place.
 B3_VERSION_ROWS = ("Every table carries rows for the known version differences of the project's own stack and "
                    "runtime, each run on every runtime the project supports.")
-B3_ASKING_ANCHOR = ("Any other open point, and every point in an owner-only class, is an owner question, and the path "
-                    "that needs it halts until it is answered.")
+B3_ASKING_ANCHOR = ("Any other open point, and every point in an owner-only class, is an owner question, and only the "
+                    "work that depends on its answer halts until it is answered; a controller never pauses a whole "
+                    "stream on a question, and when nothing independent is left the stream checkpoints and waits.")
 B3_SMALL_POINT = ("The one exception is a small point inside the plan's intent: a question of format, syntax, bytes or "
                   "whitespace, wording, layout, naming, test detail, a test-helper contract or an error-return shape "
                   "is not asked; the controller decides it, taking the option it would recommend, and ledgers it as "
@@ -2715,8 +2759,8 @@ B3_NO_LIVE_CHILD = ("A controller never ends its turn while a child or a backgro
                     "waits inside its turn, in the foreground, and returns only after every child has handed back.")
 B3_FINISHED = ("A child has finished only when its handback arrives, never because its report file already holds a "
                "status line.")
-B3_ITEM1_ANCHOR = ("A missing table blocks dispatch; a row with no test is a finding, and its fix covers the whole "
-                   "dimension.")
+B3_ITEM1_ANCHOR = ("A missing table blocks dispatch; a row with no test is a finding, and its fix re-checks the whole "
+                   "dimension without widening the behaviour (\"Fix rule\").")
 # Task B4: U-2 (tier against model), U-4 (open grammar), U-5 (no handback with live children), playbook form.
 B4_ROLES_MIN = "A role runs at its minimum tier or above."
 B4_ROLES_TIER = ("A dispatch chooses a tier, and config `models.tiers` maps each tier to the model the project uses: "
@@ -3084,6 +3128,633 @@ class OwnerDirectivePlaybookTest(unittest.TestCase):
                 self.assertTrue(b3_problems(bad, entry)[0].startswith(ident + ":"))
                 with self.assertRaises(AssertionError):
                     pc.section(bad, heading)
+
+
+# Process v2 (design 5.1-5.9): the superseded sentences are gone from every playbook file, and a file restored to
+# one of them fails the pin that now holds the new sentence (a broken variant of each new text).
+SUPERSEDED = (
+    "until a clean pass", "after round 5 the controller stops and raises an owner question", "advisory signals",
+    "never block a fix", "the path halts until the owner answers", "the path that needs it halts",
+    "runs the full suite on the merged tree", "A block ends in this order: final review, top-tier verifier",
+    "class-narrowing question for the owner", "its fix covers the whole dimension", "stop and wait for the owner (an",
+    "the controller applies LOW_PLATEAU and the weighted tally by hand")
+BROKEN_VARIANTS = (   # (file, new text, old text it must not be restored to)
+    ("playbook/review.md", "it never stops a change-caused CRITICAL or HIGH finding from being fixed",
+     "never decides whether a found defect is fixed"),
+    ("playbook/review.md", "Once per stream, at its end, after a clean final review",
+     "After a clean final review"),
+    ("playbook/decisions.md", "until the binding Rules N and T verdict stops the loop", "until a clean pass"),
+    ("playbook/rules.md", "only the work that depends on the answer halts", "the path halts"),
+)
+
+
+def runs_clean(case, name, files):
+    """Run the one existing test method `name` of `case` with `read` serving `files` (rel -> text) in place of the
+    repository files, and say whether it passed: the production pin checker on a replaced file."""
+    real = read
+
+    def fake(rel):
+        return files[rel] if rel in files else real(rel)
+    with mock.patch.object(sys.modules[__name__], "read", fake):
+        result = unittest.TestResult()
+        case(name).run(result)
+    return result.wasSuccessful()
+
+
+VARIANT_PINS = {   # (file, new text) -> the existing tests (class, method) that pin it; written by hand (R1-12)
+    BROKEN_VARIANTS[0][:2]: [(PlaybookFilesTest, "test_signals_keep_the_low_plateau_exception")],
+    BROKEN_VARIANTS[1][:2]: [(VerifierProfileTest, "test_verifier_paragraph_conditioned")],
+    BROKEN_VARIANTS[2][:2]: [(PlaybookFilesTest, "test_playbook_sections_and_key_phrases")],
+    BROKEN_VARIANTS[3][:2]: [(RealFileTest, "test_every_sentence_pinned")],
+}
+
+
+class ProcessV2PlaybookTest(unittest.TestCase):
+    def test_superseded_sentences_are_gone(self):
+        for stem in NEW_PLAYBOOKS + ("rules",):
+            text = read("playbook/%s.md" % stem)
+            for old in SUPERSEDED:
+                with self.subTest(stem=stem, old=old):
+                    self.assertNotIn(old, text)
+
+    def test_broken_variant_of_each_new_text_is_caught(self):
+        # R1-12: the pin that holds each new text is run, unchanged, on the file restored to the old text, and must
+        # fail there; on the real file it passes (the control), so a failure is the broken text and not the harness.
+        for rel, new, old in BROKEN_VARIANTS:
+            text = read(rel)
+            with self.subTest(rel=rel, new=new[:40]):
+                self.assertEqual(text.count(new), 1)
+                broken = text.replace(new, old)
+                self.assertNotIn(new, broken)
+                self.assertIn(old, broken)
+                pins = VARIANT_PINS[(rel, new)]
+                self.assertTrue(pins)
+                for case, name in pins:
+                    self.assertTrue(runs_clean(case, name, {}), (case.__name__, name))             # control
+                    self.assertFalse(runs_clean(case, name, {rel: broken}), (case.__name__, name))
+
+    def test_verifier_opening_restored_to_the_old_wording_fails_the_class_check(self):
+        text = read("playbook/review.md")
+        broken = text.replace(VERIFIER_OPENING, "After a clean final review, the `final_verifier` tries to break "
+                                                "the finished branch.")
+        self.assertNotIn(VERIFIER_OPENING, pc.section(broken, "Verifier"))
+        self.assertTrue(verifier_step_problems(broken, "playbook/review.md"))   # no profile condition any more
+
+    def test_fix_rule_paragraph_states_its_pass_and_fail_test(self):
+        body = pc.section(read("playbook/review.md"), "Fix loop")
+        for s in ("refuses input with a named error", "newly accepts input the code used to refuse",
+                  "passes on the fix commit's parent and fails on the fix commit", "a violation is itself a finding",
+                  "needs new behaviour is first narrowed in the fix round"):
+            self.assertIn(s, body)
+
+# Fix round 1 of the process-v2 roll-in (plan review 1, R1-1..R1-13; design 5.9): each corrected text is pinned
+# as (id, file, new text, the flagged old text, how often the new text occurs); the old text must be gone.
+MS_DOC = "docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md"
+SR_DOC = "docs/strict-delivery/specs/2026-11-02-session-resume-and-questions-design.md"
+PD_DOC = "docs/strict-delivery/specs/2026-10-31-programs-and-streams-design.md"
+PLAN_DOC = "docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md"
+BLOCK_END_GATE = ("The commit gate is the test modules of the changed files plus every test module that imports a "
+                  "changed module, on every supported runtime, every enabled gate check, and a clean tree; the full "
+                  "suite is not a per-commit gate (design 5.1).")
+ADVERSARIAL_COND = "(where the profile enables it, strict)"
+BD_DOC = ".strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md"
+README_DOC = "README.md"
+ONE_PR_DECISION = ("Decision (owner delegation 2026-11-09): each program stream keeps its one pull request (revision "
+                   "6's folding, Q-SPD-1 (a), Q-SPD-2 (a)), opened on demand when a task of another stream consumes "
+                   "one of its sub-blocks; a consumed sub-block does not open a PR of its own, since every such "
+                   "consumer has slack (R2 0.75 h; release waits for PR-config) -- cost if wrong: one more PR per "
+                   "consumed sub-block, no critical-path change")
+CONFIG_V_DECISION = ("Decision (owner delegation 2026-11-09): stream `config`'s V runs after PR-config, beside "
+                     "`release`")
+FIX1_PINS = [
+    ("R1-1", MS_DOC, "with any difference it stops only the work the difference affects, waits for the owner on it, "
+     "and takes over the rest at once.", "with any difference it stops and waits for the owner.", 1),
+    ("R1-1", SR_DOC, "With any difference, it stops only the work the difference affects and waits for the owner on "
+     "it, and takes over the rest at once (skill text", "With any difference, it stops and waits for the owner (skill "
+     "text", 1),
+    ("R1-1", PLAN_DOC, "with any difference stops only the work the difference affects and waits for the owner on "
+     "it, and takes over the rest at once (an agent", "with any difference stops and waits for the owner (an agent", 1),
+    ("R1-3", "playbook/sessions.md", BLOCK_END_GATE, None, 1),
+    ("R1-4", "playbook/rules.md", "in the stream-end adversarial review " + ADVERSARIAL_COND + ".",
+     "in the stream-end adversarial review.", 1),
+    ("R1-4", "playbook/streams.md", "the stream-end adversarial review (where the profile enables it, strict; "
+     "`playbook/review.md`)", "the stream-end adversarial review (`playbook/review.md`)", 1),
+    ("R1-4", "playbook/review.md", "before its adversarial review " + ADVERSARIAL_COND + ", and in that review",
+     "before its adversarial review, and in that review", 1),
+    ("R1-4", "skills/strict-delivery/SKILL.md", "before its adversarial review " + ADVERSARIAL_COND +
+     ", and in that review", "before its adversarial review, and in that review", 1),
+    ("R1-4", MS_DOC, "at a stream's end before the verifier " + ADVERSARIAL_COND + ", and in the verifier",
+     "at a stream's end before the verifier, and in the verifier", 2),
+    ("R1-5", "playbook/review.md", "A block ends with this review on its stream branch.", None, 1),
+    ("R1-5", PD_DOC, "after the touched-area tests, in this order: the final branch review (a `final_reviewer`), one "
+     "full suite on the pull request head, the owner's approval", "in this order: touched-area tests, one full suite "
+     "on the pull request head, the final branch review (a `final_reviewer`)", 1),
+    ("R1-5", "skills/strict-delivery/SKILL.md", "after touched-area tests, a final branch review and one full suite "
+     "on the pull request head;", "after touched-area tests, one full suite on the pull request head and a final "
+     "branch review;", 1),
+    # The five R1-6 pins that stood here (one PR per program stream) were withdrawn by the controller in fix round 2
+    # (plan review 2, R2-2: they contradicted design 5.2); FIX2_PINS below holds their corrected form.
+    ("R1-7", BD_DOC, CONFIG_V_DECISION, None, 1),
+    ("R1-7", BD_DOC, "= 60.0 working hours from t = 0.**", "= 61.5 working hours from t = 0.**", 1),
+    ("R1-7", BD_DOC, "-> the Rq commits (49.25) -> PR-config (52.0) -> 6R.1, 6R.2 (56.25) -> PR-release's final review "
+     "(57.25) -> stream `release`'s V (58.75) -> PR-release (59.25) -> 6R.3, the tag (60.0)", "-> the Rq commits (49.25) -> stream `config`'s V (50.75) -> "
+     "PR-config (53.5)", 1),
+    ("R1-7", BD_DOC, "PR-config 52.0, PR-release 59.25", "PR-config 53.5, PR-release 60.75", 2),
+    ("R1-7", BD_DOC, "| **v0.1.0 tag (6R.3)** | **60.0** | 59.25 + 0.75 | **Fri 20 Nov 02:00** | **Fri 27 Nov 10:00** |",
+     "| **v0.1.0 tag (6R.3)** | **61.5** | 60.75 + 0.75 |", 1),
+    ("R1-7", README_DOC, "Target: about 60.0 hours of work", "Target: about 61.5 hours of work", 1),
+    ("R1-8", PLAN_DOC, "`FIX_ROUND_CAP = 5` (spec §10: \"rounds 4-5 a fresh agent one tier up, then the Rules N and T "
+     "verdict\")", "`FIX_ROUND_CAP = 5` (spec §10: \"rounds 4-5 a fresh agent one tier up, then an owner question\")", 1),
+    ("R1-8", PLAN_DOC, "PC3's \"The full suites run once per commit\" (as on origin/main)",
+     "PC3's \"The full suites run once per commit\")", 1),
+    ("R1-8", PLAN_DOC, "\"dispatch waits for the answers\" (as on origin/main) in \"Owner questions are batched\"",
+     "\"dispatch waits for the answers\" in \"Owner questions are batched\"", 1),
+    ("R1-9", PLAN_DOC, "(P:50: the test command on both interpreters plus every enabled `python3 -m gates check <gate>`, "
+     "with a clean tree; P:1134)", "(P:39: the test command on both interpreters plus every enabled `python3 -m gates "
+     "check <gate>`, with a clean tree; P:1123)", 1),
+    ("R1-10", SR_DOC, "Rules N and T: advisory until 2026-11-17, binding on the controller from design 5.4",
+     "Rules N and T: advisory (binding on the controller from design 5.4; owner 2026-11-17)", 1),
+    ("R1-11", "playbook/streams.md", "an edge in the breakdown goes from one of its tasks",
+     "an edge in the breakdown (section 3.2 or 6) goes from one of its tasks", 1),
+]
+
+
+def fix1_problems(text, new, old, n):
+    """The new text occurs n times and the flagged old text (when there is one) is gone."""
+    out = []
+    if text.count(new) != n:
+        out.append("new text %d times, not %d" % (text.count(new), n))
+    if old is not None and old in text:
+        out.append("flagged old text present")
+    return out
+
+
+class FixRound1Test(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIX1_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIX1_PINS:
+            if old is None:
+                continue
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                broken = read(rel).replace(new, old)
+                self.assertTrue(fix1_problems(broken, new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIX1_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_the_old_resume_wording_is_gone_from_every_document(self):          # R1-1: the whole class
+        for rel in (MS_DOC, SR_DOC, PLAN_DOC, "playbook/sessions.md", "skills/strict-delivery/SKILL.md"):
+            with self.subTest(rel=rel):
+                self.assertNotIn("stops and waits for the owner", read(rel))
+                self.assertNotIn("stop and wait for the owner (an", read(rel))
+
+    def test_config_v_placement_figures_re_add_forward_and_backward(self):       # R1-7
+        # The chain's steps, written by hand from the unit costs (breakdown section 1); the documents are compared
+        # with the sums, which the test computes both ways.
+        steps = [("PR-unicode", 1.5), ("PR-2b1", 1.75), ("PR-2b-rest", 2.25), ("PR-2c3", 2.25), ("cut", 0.25),
+                 ("P1", 6.0), ("PR-P1", 1.75), ("cut", 0.25), ("P2", 7.0), ("PR-P2", 1.5), ("cut", 0.25),
+                 ("P3 tasks", 6.5), ("PR-P3", 1.75), ("cut", 0.25), ("4d", 7.0), ("4d end", 1.0), ("4e", 7.0),
+                 ("Rq", 1.0), ("PR-config", 2.75), ("cut", 0.25), ("6R.1-6R.2", 4.0), ("PR-release R", 1.0),
+                 ("V release", 1.5), ("PR-release", 0.5), ("6R.3", 0.75)]       # V-4: final review, V, then T
+        # the on-path steps before the 4d end re-add as 41.25 (section 7), the P3 tasks tie with PR-runtime
+        forward, at = {}, 0.0
+        for name, cost in steps:
+            at += cost
+            forward[name] = at
+        backward, back = [], at
+        for name, cost in reversed(steps):
+            back -= cost
+            backward.append(back)
+        self.assertEqual(at, 60.0)
+        self.assertEqual(back, 0.0)
+        self.assertEqual(backward[-1], 0.0)
+        self.assertEqual(forward["Rq"], 49.25)
+        self.assertEqual(forward["PR-config"], 52.0)
+        self.assertEqual(forward["6R.1-6R.2"], 56.25)
+        self.assertEqual(forward["PR-release"], 59.25)
+        self.assertEqual((forward["PR-release R"], forward["V release"]), (57.25, 58.75))        # V-4
+        self.assertNotIn("V config", forward)                                # config's V is not a path step
+        kinds = 38.5 + 1.0 + 17.0 + 1.5 + 1.25 + 0.75                           # tasks, end, PR ends, V, cuts, tag
+        self.assertEqual(kinds, 60.0)
+        bd = read(BD_DOC)
+        sec7 = bd[bd.index("## 7. Critical path"):]
+        for fig in ("= 49.25; + 2.75 (PR-config U 0.25 + R 2.0 + T 0.5) = 52.0", "= 56.25;", "= 59.25;", "= 60.0.",
+                    "- 4.0 (6R.1, 6R.2) = 52.25; - 0.25 (cut) = 52.0; - 2.75 (PR-config) = 49.25",
+                    "38.5 + 1.0 + 17.0 + 1.5 + 1.25 + 0.75 = 60.0"):
+            self.assertIn(fig, sec7, fig)
+        for stale in ("= 61.5.", "= 50.75; + 2.75", "= 53.75;", "= 53.5;"):
+            self.assertNotIn(stale, sec7, stale)
+
+    def test_streams_md_carries_no_section_number_of_this_repository_breakdown(self):     # R1-11
+        self.assertNotIn("section 3.2 or 6", read("playbook/streams.md"))
+
+    def test_every_stream_end_adversarial_review_sentence_names_the_condition(self):      # R1-4, whole class
+        for rel in ("playbook/rules.md", "playbook/streams.md", "playbook/review.md", "skills/strict-delivery/SKILL.md"):
+            with self.subTest(rel=rel):
+                for unit in prose_units(read(rel)):
+                    if "counts as review 1" in unit:      # review.md "Fix loop": applies only when that review runs
+                        continue
+                    for m in re.finditer(r"(?:stream-end|its) adversarial review", unit):
+                        self.assertIn("where the profile enables it", unit[m.start():m.start() + 120], (rel, unit[:60]))
+
+
+# Fix round 2 of the process-v2 roll-in (plan review 2, R2-1..R2-7; design 5.2, 5.9; controller rulings of
+# 2026-11-17). The same pin form as FIX1_PINS: (id, file, new text, the flagged old text, how often the new text occurs).
+PROMPTS = "skills/strict-delivery/prompts/"
+V_RULE_PLAN = ("the stream-end verifier (once per stream, after its last block; no on-demand pull request waits for "
+               "it, and its fixes go in the stream's final pull request or, when every block already merged on "
+               "demand, in a small follow-up pull request, which is then the final one; design 5.2; owner 2026-11-17)")
+R3_END_NEW = ("the block opens its own pull request on demand, D7, because Task 6R.1 consumes it (PR-R3, breakdown "
+              "revision 7)")
+R4_END_NEW = ("the block opens its own pull request on demand, D7, because Task 6R.1 consumes it (PR-R4, breakdown "
+              "revision 7)")
+FIX2_PINS = [
+    ("R2-1", PROMPTS + "controller.md", "the final verifier (where the profile enables it, strict) runs once per "
+     "stream, at its end,", "the final verifier runs once per stream, at its end,", 1),
+    ("R2-1", PROMPTS + "final_reviewer.md", "go to the final verifier where the profile enables it, strict).",
+     "go to the final verifier).", 1),
+    ("R2-1", MS_DOC, "The final verifier (where the profile enables it, strict) runs once per stream, at its end, over "
+     "everything the stream delivered, including what it already merged", "The final verifier runs once per stream, "
+     "at its end, over everything the stream delivered, including what it already merged", 1),
+    ("R2-1", MS_DOC, "after the stream-end final verifier (where the profile enables it, strict) has run",
+     "after the stream-end final verifier has run", 1),
+    ("R2-1", SR_DOC, "and in the verifier (where the profile enables it, strict; design 5.1; owner 2026-11-17)",
+     "and in the verifier (design 5.1; owner 2026-11-17)", 1),
+    ("R2-2", BD_DOC, "- Withdrawn 2026-11-17 by the controller: it contradicted design 5.2 (plan review 2, R2-2)",
+     ONE_PR_DECISION, 1),
+    ("R2-2", BD_DOC, "opens its own on-demand PR as soon as it is ready when a task of another stream consumes it",
+     "a consumed sub-block does not open a PR of its own", 1),
+    ("R2-2", PLAN_DOC, "recorded in the breakdown's revision 7 (section 6.1): a sub-block that another stream consumes "
+     "opens its own pull request as soon as it is ready, and the other sub-blocks ride their stream's final pull "
+     "request.", "each program stream keeps its one pull request, opened on demand when a task of another stream "
+     "consumes one of its sub-blocks, and a consumed sub-block does not open a pull request of its own", 1),
+    ("R2-3", PD_DOC, "runs once at the stream's end, after its last block, over everything the stream delivered; no "
+     "on-demand pull request waits for it, and its fixes go in the stream's final pull request or, when every block "
+     "already merged on demand, in a small follow-up pull request, which is then the final one (design 5.2; owner "
+     "2026-11-17).", "runs once at the stream's end, before the stream's final pull request, over everything the "
+     "stream delivered (design 5.2; owner 2026-11-17).", 1),
+    ("R2-3", "playbook/streams.md", "(where the profile enables it, strict; `playbook/review.md`), which runs after "
+     "the stream's last block and which no on-demand pull request waits for. A defect that review finds in "
+     "already-merged code is fixed in that pull request or, when every block of the stream already merged on demand, "
+     "in a small follow-up pull request, which is then the final one, and a consumer stream takes the fix",
+     "`playbook/review.md`). A defect that review finds in already-merged code is fixed in that pull request or in a "
+     "small follow-up pull request, and a consumer stream takes the fix", 1),
+    ("R2-3", MS_DOC, "has run, which it does after the stream's last block, no on-demand pull request waiting for it, "
+     "and a stream whose every block already merged on demand opens a small follow-up pull request for the "
+     "verifier's fixes, which is then its final one; a block another stream consumes", "(where the profile enables "
+     "it, strict) has run; a block another stream consumes", 1),
+    ("R2-3", BD_DOC, "It runs after the stream's last block (after that block's merge when it merged on demand); no "
+     "on-demand PR waits for it, and its fixes go in the stream's final PR or, when every block already merged on "
+     "demand, in a small follow-up PR (opened only if V finds a defect), which is then the final PR.",
+     "It sits before the stream's final PR, or, when the stream's last part already merged on demand, before a small "
+     "final PR.", 1),
+    ("R2-3", PLAN_DOC, V_RULE_PLAN, "the stream-end verifier (once per stream, before its final pull request; design "
+     "5.2; owner 2026-11-17)", 1),
+    ("R2-3", PLAN_DOC, "Then final review and the PR flow, which is on demand because Task 6R.1 consumes 4e "
+     "(breakdown revision 7); the stream-end verifier (design 5.2; owner 2026-11-17) runs after it and does not "
+     "delay it.", "Then final review, the stream-end verifier (design 5.2; owner 2026-11-17) and the PR flow.", 1),
+    ("R2-3", BD_DOC, "on demand (consumer: `release` 6R.1, edge 4e.3 -> 6R.1); it carries what no earlier PR carried "
+     "(4e and R2), so every block of `config` has merged on demand once it merges and V's fixes go in a small "
+     "follow-up PR, which is then the stream's final PR", "R4.1 -> 6R.1) and the stream's final PR", 1),
+    ("R2-4", BD_DOC, "-- why: V runs after the stream's last block and no on-demand PR waits for it, for every "
+     "stream alike", "-- why: PR-config is on demand (consumer `release` 6R.1), its gate holds no verifier", 1),
+    ("R2-5", BD_DOC, "6R.1 waits for PR-config's merge (P:4799)", "6R.1 waits for PR-config's merge (P:5537)", 1),
+    ("R2-6", PLAN_DOC, "**Block R1 end:** final review on the stream branch (no per-block verifier, it runs once at "
+     "the stream's end: design 5.2; the block rides PR-5b, breakdown revision 7 (the R1 end is on the stream branch "
+     "before the 5b group is cut), and has no PR of its own, since "
+     "only stream `records` consumes it; owner 2026-11-17); stream `docs`'s 5c end waits for it.",
+     "**Block R1 end:** final review, PR to `main` (`MERGED ... stream=residual block=R1`", 1),
+    ("R2-6", PLAN_DOC, R3_END_NEW, "the block rides PR-hooks, breakdown revision 7;", 1),
+    ("R2-6", PLAN_DOC, R4_END_NEW, "the block rides PR-config, breakdown revision 7;", 1),
+    ("R2-7", README_DOC, "Merged pull requests: #1-#24.", "(#17, `run_all`, is open)", 1),
+]
+SUB_BLOCK_PR = {"3a": "PR-runtime", "3d": "PR-package", "5a": "PR-5a", "5b": "PR-5b", "5c": "PR-5c", "6E": "PR-6E",
+                "6K": "PR-6K", "R3": "PR-R3", "R4": "PR-R4", "4e": "PR-config", "4c": "PR-4c",
+                "4d": "PR-4d"}   # D7: the breakdown's edges, and for 4c and 4d the `Consumes:` lines of Tasks 6R.1-6R.2
+CONSUMES_ONLY = {"4c", "4d"}      # consumed through D7's `Consumes:` clause, with no edge in the breakdown's YAML (R3-4)
+# what each on-demand PR carries besides the sub-block it is named for (a work branch is never rebased; R3-3)
+CARRIES = {"PR-R3": ("3b", "3c"), "PR-R4": ("4b",), "PR-4d": ("4a",), "PR-5b": ("R1",), "PR-5a": ("3b.1",),
+           "PR-6E": ("6E.3b",)}      # V-6: 3b.1 is on hooks/main before the 5a cut, R1 before the 5b cut
+
+
+def bd_yaml():
+    text = read(BD_DOC)
+    start = text.index("schema: breakdown/1")                 # section 6's block, not the max_concurrent one of section 1
+    return text[start:text.index("```", start)]
+
+
+def bd_streams_and_edges():
+    """(task -> stream, [(from, to)]) of the breakdown's section 6 YAML, read with a regex (the production reader,
+    P2.2's breakdown loader, does not exist yet)."""
+    y = bd_yaml()
+    owner = {}
+    for m in re.finditer(r"\{id: (\w+),.*?tasks: \[([^\]]*)\]", y, re.S):
+        for t in m.group(2).split(","):
+            owner[t.strip()] = m.group(1)
+    edges = re.findall(r"\{from: ([\w.]+), to: ([\w.]+)\}", y)
+    return owner, edges
+
+
+def bd_rev7_rows():
+    """name -> merge figure of every PR row of the revision 7 tables (section 4 and section 6.1)."""
+    bd = read(BD_DOC)
+    a = bd[bd.index("### Revision 7 per-PR table"):bd.index("**Revision 6 table (history")]
+    b = bd[bd.index("### 6.1 Program PRs"):bd.index("Revision 6 (history): one row per program PR")]
+    out = {}
+    for line in (a + "\n" + b).split("\n"):
+        if line.startswith("| PR-"):
+            cells = [c.strip() for c in line.strip().strip("|").split(" | ")]
+            out[cells[0].split(" ")[0]] = (float(re.findall(r"\*\*([0-9.]+)\*\*", cells[-1])[0]), line)
+    return out
+
+
+def bd_queue():
+    bd = read(BD_DOC)
+    s = bd.index("The merge-queue order, with the merge times of this section and of section 4: ")
+    e = bd.index(". The streams still run unregistered", s)
+    items = bd[s:e].split(": ", 1)[1].split(", ")
+    return [(i.rsplit(" ", 1)[0], float(i.rsplit(" ", 1)[1])) for i in items]
+
+
+class FixRound2Test(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIX2_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIX2_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, old), new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIX2_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_the_old_one_pr_per_stream_rule_is_gone_from_every_document(self):          # R2-2, whole class
+        for rel in (BD_DOC, PLAN_DOC, "playbook/streams.md", MS_DOC, PD_DOC):
+            with self.subTest(rel=rel):
+                text = read(rel)
+                self.assertNotIn("does not open a PR of its own", text)
+                self.assertNotIn("does not open a pull request of its own", text)
+                self.assertNotIn("keeps its one pull request", text)
+                self.assertNotIn("and is the stream's final PR in every case", text)
+
+    def test_every_consumed_sub_block_has_its_own_on_demand_row(self):                  # R2-2, direct and by edges
+        owner, edges = bd_streams_and_edges()
+        consumed = {a.split(".")[0] for a, b in edges if owner[a] != owner[b]}
+        self.assertEqual(consumed | CONSUMES_ONLY, set(SUB_BLOCK_PR))       # no sub-block outside the list is consumed
+        self.assertFalse(consumed & CONSUMES_ONLY)                          # the two lists do not overlap
+        plan = read(PLAN_DOC)
+        for needle in ("`templates.render` and `managed.put_block` (Tasks 4c.1-4c.2)",     # R3-4: the Consumes lines
+                       "- Consumes: `plugin.version` (block 3); `managed.put_block`, `templates.render` (block 4)",
+                       "- block 4: `init` (non-interactive, answers file, profile)"):
+            self.assertIn(needle, plan, needle)
+        rows = bd_rev7_rows()
+        for pr, subs in CARRIES.items():                                    # R3-3: each PR names what it carries
+            for sub in subs:
+                with self.subTest(pr=pr, sub=sub):
+                    self.assertIn(sub, rows[pr][1].split(" | ")[0] + rows[pr][1].split(" | ")[1])
+        for sub, pr in SUB_BLOCK_PR.items():
+            with self.subTest(sub=sub):
+                self.assertIn(pr, rows)
+                self.assertIn("on demand", rows[pr][1].split(" | ")[1])
+        for riding in ("R1", "3b", "3c"):                                   # consumed only inside their own stream
+            self.assertNotIn(riding, consumed)
+        for pr in ("PR-hooks", "PR-records", "PR-residual/R5"):
+            self.assertIn("stream final PR", rows[pr][1].split(" | ")[1])
+
+    def test_the_merge_queue_figures_re_add(self):                                         # R2-2, R2-3
+        rows = bd_rev7_rows()
+        queue = bd_queue()
+        self.assertEqual([n for n, _ in queue], sorted(rows, key=lambda n: rows[n][0]))
+        for (n, t) in queue:
+            self.assertEqual(rows[n][0], t, n)
+        for (_, a), (_, b) in zip(queue, queue[1:]):
+            self.assertGreaterEqual(b - a, 0.75)          # one merge at a time, each at least U + T after the one before
+        sec4 = read(BD_DOC)
+        s4 = sec4.index("The program's PRs and their V are in section 6.1 (")
+        listed = [(i.rsplit(" ", 1)[0], float(i.rsplit(" ", 1)[1])) for i in
+                  sec4[s4:sec4.index(").", s4)].split("(", 1)[1].split(", ")]
+        self.assertEqual(listed, [q for q in queue if q[1] > 33.0 and q[0] != "PR-a-final"])    # the program's PRs, as in section 6.1
+        at = dict(queue)
+        prev = {n: queue[i - 1][1] for i, (n, _) in enumerate(queue) if i}
+        m = lambda tasks_end, r, n: max(tasks_end + 0.25 + r + 0.5, prev[n] + 0.75)    # clean U + T after the queue
+        v_hooks, v_records = at["PR-R3"] + 1.5, at["PR-6K"] + 1.5
+        # R is 1.0 for a PR with one sub-block or V's fixes only, the stream's larger figure when it carries earlier
+        # sub-blocks (section 1; R3-3; V-6): PR-6E carries 6E.3b, PR-5a 3b.1, PR-5b R1, PR-R3 3b and 3c, PR-4d 4a,
+        # PR-R4 4b; 6K.2 is held to 38.25 (V-5: the end of PR-5c's R, 37.25 + 1.0 = 38.25)
+        want = {"PR-runtime": m(27.75, 1.0, "PR-runtime"), "PR-6E": m(20.0, 1.5, "PR-6E"),
+                "PR-5a": m(30.75, 1.25, "PR-5a"), "PR-4c": m(16.0, 1.0, "PR-4c"), "PR-5b": m(37.25, 1.5, "PR-5b"),
+                "PR-5c": m(37.25, 1.0, "PR-5c"), "PR-6K": m(38.25 + 2.0, 1.0, "PR-6K"), "PR-R3": m(39.5, 1.25, "PR-R3"),
+                "PR-4d": m(40.25, 2.0, "PR-4d"),
+                "PR-records": m(v_records, 1.0, "PR-records"), "PR-hooks": m(v_hooks, 1.0, "PR-hooks"),
+                "PR-residual/R5": prev["PR-residual/R5"] + 0.75, "PR-R4": m(46.5, 2.0, "PR-R4"),
+                "PR-config": m(49.25, 2.0, "PR-config")}
+        for n, t in want.items():
+            self.assertEqual(at[n], t, n)
+        self.assertEqual(at["PR-hooks"], 47.0)
+        self.assertEqual((at["PR-5b"], at["PR-5c"], at["PR-6K"]), (39.5, 40.25, 42.0))      # V-6, V-5
+        self.assertEqual(at["PR-4c"], at["PR-5a"] + 0.75)                  # R3-4: in the gap after PR-P3, with PR-6E, PR-5a
+        self.assertEqual(at["PR-R4"], at["PR-config"] - 2.75)               # R3-3: PR-R4 merges as PR-config's U starts
+        self.assertEqual(prev["PR-hooks"], at["PR-records"])
+        self.assertEqual(prev["PR-residual/R5"], at["PR-hooks"])        # the enablement follows the hooks stream's last PR
+
+    def test_every_wave_is_at_or_under_the_cap_of_25(self):                                # R2-2, section 6.2
+        bd = read(BD_DOC)
+        sec = bd[bd.index("**Revision 7 waves"):bd.index("**Revision 6 waves (history).**")]
+        peaks = [int(m.group(1)) for m in re.finditer(r"^\| PW\d \|.*\| \*\*(\d+)\*\*", sec, re.M)]
+        self.assertEqual(len(peaks), 8)
+        self.assertTrue(all(p <= 25 for p in peaks), peaks)
+
+    def test_every_stream_end_verifier_sentence_names_the_condition(self):                   # R2-1, whole class
+        # the cadence sentences; "A defect the stream-end verifier finds ..." (MS "Verifier and merges") states no cadence
+        stream_end = re.compile(r"stream-end final verifier|final verifier(?: \(where[^)]*\))? runs once per stream|go "
+                                r"to the final verifier|in the verifier \(")
+        for rel in (MS_DOC, SR_DOC, PROMPTS + "controller.md", PROMPTS + "final_reviewer.md"):
+            found = 0
+            for unit in prose_units(read(rel)):
+                for sentence in re.split(r"(?<=\.) (?=[A-Z`(])", unit):
+                    if stream_end.search(sentence):
+                        found += 1
+                        self.assertIn("where the profile enables it", sentence, (rel, sentence[:80]))
+            with self.subTest(rel=rel):
+                self.assertGreaterEqual(found, 1)
+
+
+R3_PLAN_START_NEW = ("R2.1 starts after `merged:hooks/5a` and `merged:package`, R2.2 after `merged:records/5b` and "
+                     "`merged:records/5c`, R2.3 after `merged:records/6E`")
+R3_BD_UNBLOCK_NEW = ("R2.1 after merged:hooks/5a and merged:package, then R2.2 after merged:records/5b and "
+                     "merged:records/5c and R2.3 after merged:records/6E, serially")
+R3_6E3_DONE = "merged as #22 (`a128a39`, 2026-11-17, observed; the schedule keeps its figure, t = 0 does not move): **9.5** |"
+FIX3_PINS = [
+    ("R3-2", PLAN_DOC, R3_PLAN_START_NEW, "R2 starts after `merged:hooks` and `merged:records`; R4 after the 4b end and "
+     "`merged:records`", 1),
+    ("R3-2", PLAN_DOC, "R4 after the 4b end and PR-loopstats (Task 6E.3; Task R4.1)", "R4 after the 4b end and "
+     "`merged:records`", 1),
+    ("R3-2", BD_DOC, R3_BD_UNBLOCK_NEW, "R2.1 after merged:hooks and merged:package, then R2.2 and R2.3 serially after "
+     "merged:records", 1),
+    ("R3-2", BD_DOC, "R4.1 after the 4b end and PR-loopstats, the 6E.3 merge (P078:5329);", "R4.1 after the 4b end and "
+     "merged:records (P078:5329);", 1),
+    ("R3-2", BD_DOC, "The `unblock` strings of the YAML for R2.1, R2.2, R2.3 and R4.1, rewritten by revision 7, name "
+     "the consumed sub-block's merge", "(4) the `unblock` strings that wait for a stream's merge", 1),
+    ("R3-3", BD_DOC, "| PR-R3 (3b, 3c, R3.1, R3.2) |", "| PR-R3 (R3.1, R3.2) |", 1),
+    ("R3-3", BD_DOC, "| PR-R4 (4b, R4.1) |", "| PR-R4 (R4.1) |", 1),
+    ("R3-3", BD_DOC, "| PR-5b (R1, 5b.1, 5b.2) |", "| PR-5b (5b.1, 5b.2) |", 1),     # V-6: R1 rides PR-5b
+    ("R3-3", BD_DOC, "| PR-hooks (V's fixes) |", "| PR-hooks (3b, 3c) |", 1),
+    ("R3-3", BD_DOC, "| PR-records (V's fixes) |", "| PR-records (R1, 6E.3b) |", 1),
+    ("R3-3", BD_DOC, "| PR-config (4e, R2) |", "| PR-config (4a-4e, R2) |", 1),
+    ("R3-3", BD_DOC, "R 1.25 (3b, 3c and R3) -> 40.75", "R 1.0 -> 40.5; clean U 0.25 + T 0.5 after PR-6K", 1),
+    ("R3-3", BD_DOC, "PR-R4 merges 49.25, as PR-config's update starts (49.25), so it has no slack",
+     "PR-R4 merges 48.25, 1.0 h before PR-config's update (49.25)", 1),
+    ("R3-4", BD_DOC, "| PR-4c (4c.1, 4c.2) |", "also name 4c and 4d modules, which go out in PR-config", 1),
+    ("R3-4", BD_DOC, "| PR-4d (4a, 4d) |", "also name 4c and 4d modules, which go out in PR-config", 1),
+    ("R3-4", BD_DOC, "which D7's `Consumes:` clause counts (plan review 3, R3-4): 4d (`init`, Task 4d.1; PR-4d) and 4c "
+     "(`managed.put_block`, `templates.render`, Tasks 4c.1-4c.2; PR-4c); twelve in all", "The edges of the YAML above give "
+     "ten consumed sub-blocks: 3a (PR-runtime), 3d (PR-package), 5a (PR-5a), 5b (PR-5b), 5c (PR-5c), 6E (6E.3 in "
+     "PR-loopstats, 6E.1-6E.2 in PR-6E), 6K (PR-6K), R3 (PR-R3), R4 (PR-R4) and 4e (PR-config, which carries 4a-4d", 1),
+    ("R3-5", PLAN_DOC, "**Block 6E end:** final review, PR to `main` (the verifier runs once at the end of the stream "
+     "that carries 6E,", "(`final=yes`; the verifier runs once at the end of the stream that carries 6E,", 1),
+    ("R3-5", PLAN_DOC, "**Block 6K end:** final review, PR to `main` (the verifier runs once at the end of the stream "
+     "that carries 6K,", "(`final=yes`; the verifier runs once at the end of the stream that carries 6K,", 1),
+    ("R3-6", PLAN_DOC, "`package` merges first among them, after PR-loopstats (design 5.4; breakdown revision 7).",
+     "each its own pull request; `package` merges first.", 1),
+    ("R3-7", PLAN_DOC, "**Block R2 end:** final review on the stream branch (no per-block verifier, it runs once at the "
+     "stream's end: design 5.2; the block rides PR-config, breakdown revision 7, and has no PR of its own, since no "
+     "other stream consumes it; owner 2026-11-17).", "**Block R2 end:** final review, PR to `main` (`MERGED ... "
+     "stream=residual block=R2`", 1),
+    ("R3-6E3", PLAN_DOC, "### Task 6E.3: `loopstats` (group branch `<program>/evidence/loopstats`, PARALLEL with "
+     "6E.1-6E.2, starts now) — COMPLETE", "PARALLEL with 6E.1-6E.2, starts now)\n", 1),
+    ("R3-6E3", PLAN_DOC, "Complete: merged into `main` as PR #22 (`a128a39`, 2026-11-17; breakdown revision 7, "
+     "PR-loopstats).", None, 1),
+    ("R3-6E3", BD_DOC, R3_6E3_DONE, "rides PR-6E | **9.5** |", 2),
+    ("R3-6E3", PLAN_DOC, "itertools.product over each half of the N draws, the halves convolved (meet in the middle;",
+     "sum over product(range(k), repeat=N), N <= 17", 1),
+]
+
+
+class FixRound3Test(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIX3_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIX3_PINS:
+            if old is None:
+                continue
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, old), new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIX3_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_no_final_yes_on_an_on_demand_block_end(self):                                 # R3-5, whole class
+        plan = read(PLAN_DOC)
+        for line in plan.split("\n"):
+            if "**Block 6E end:**" in line or "**Block 6K end:**" in line:
+                self.assertNotIn("final=yes", line)
+        self.assertIn("`final=yes` marks the plan's last PR and is not used", read(BD_DOC))
+
+    def test_the_merged_loopstats_test_has_the_meet_in_the_middle_reference(self):         # relayed item 2
+        src = read("tests/test_loopstats.py")
+        self.assertIn("def brute_p(counts):", src)
+        self.assertIn("each half of the N draws separately", src)
+        self.assertIn("dist(half), dist(n - half)", src)
+
+    def test_the_plan_names_the_merged_task_where_the_breakdown_does(self):                # relayed item 1
+        plan = read(PLAN_DOC)
+        head = plan.index("### Task 6E.3: `loopstats`")
+        self.assertIn("COMPLETE", plan[head:plan.index("\n", head)])
+        self.assertIn("PR #22", plan[head:head + 600])
+
+
+DESIGN_DOC = "docs/strict-delivery/specs/2026-11-17-delivery-process-changes-design.md"
+FIXV_PINS = [   # the final verifier's findings V-3..V-7 (V-1: tests.test_skill.RepoSkillTest; V-3's record sentence: its own tests)
+    ("V-4", BD_DOC, "6R.2 54.25 + 2.0 = 56.25; final review R 1.0 -> 57.25; V 1.5 -> 58.75; T 0.5 -> 59.25",
+     "6R.2 54.25 + 2.0 = 56.25; V 1.5 -> 57.75; R 1.0 + T 0.5 = 1.5 -> 59.25", 1),
+    ("V-4", BD_DOC, "after PR-P3 33.0: R 1.0 -> 34.0; V 1.5 -> 35.5; U 0.25 + T 0.5 = 0.75 -> 36.25",
+     "after V 34.5: U 0.25 + R 1.0 + T 0.5 = 1.75 -> 36.25", 1),
+    ("V-4", BD_DOC, "PR-release's final review (57.25) -> stream `release`'s V (58.75) -> PR-release (59.25)",
+     "-> stream `release`'s V (57.75) -> PR-release (59.25)", 1),
+    ("V-4", BD_DOC, "+ 1.0 (R) + 1.5 (V) + 0.5 (T) = 59.25; + 0.75 (6R.3) = 60.0.",
+     "+ 1.5 (V) + 1.5 (R 1.0 + T 0.5) = 59.25", 1),
+    ("V-4", BD_DOC, "- 0.5 (PR-release T) = 58.75; - 1.5 (V release) = 57.25; - 1.0 (PR-release R) = 56.25;",
+     "- 1.5 (PR-release R + T) = 57.75; - 1.5 (V release) = 56.25;", 1),
+    ("V-5", BD_DOC, "6K.2 38.25 + 2.0 = 40.25; R 1.0 -> 41.25; after PR-5c (40.25): clean U 0.25 + T 0.5 = 0.75 -> 42.0",
+     "6K.2 37.25 + 2.0 = 39.25; R 1.0 -> 40.25; after PR-5c (39.75)", 1),
+    ("V-5", BD_DOC, "the other windows have at most 3, `a` at 1.75-2.75 among them: F1b group 1 and PR-2b1's end 2)",
+     "the 4e and R2 groups with PR-R4's end; the other windows have at most 3).", 1),
+    ("V-5", BD_DOC, "at 38.5: hooks 6, records 6 (controller 1, the 6K.2 group 3, PR-5b's end 2), residual 3, config 4)",
+     "at 38.5: hooks 6, records 6 with PR-5b's end, residual 3, config 4)", 1),
+    ("V-6", BD_DOC, "PR-5a carries 3b.1 (merged into `20261110-v01/hooks/main` as `3194b4f`, not on `main`, before the "
+     "5a group is cut at 24.75)", "PR-5c carries R1 (on the stream branch before 5c", 1),
+    ("V-6", BD_DOC, "PR-5b carries R1 (the R1 end, 32.5, is on the stream branch before the 5b group is cut at 33.25;",
+     "PR-5c carries R1", 1),
+    ("V-6", BD_DOC, "R 1.5 (R1 and 5b) -> 38.75; after PR-a-final (36.25): clean U 0.25 + T 0.5 = 0.75 -> 39.5 | **39.5** |",
+     "R 1.0 -> 38.25; after PR-a-final (36.25): clean U 0.25 + T 0.5 = 0.75 -> 39.0 | **39.0** |", 1),
+    ("V-6", BD_DOC, "5c 33.25 + 4.0 = 37.25; R 1.0 -> 38.25; after PR-5b (39.5): clean U 0.25 + T 0.5 = 0.75 -> 40.25 | "
+     "**40.25** |", "R 1.5 (R1 and 5c) -> 38.75", 1),
+    ("V-6", BD_DOC, "R 1.25 (5a and 3b.1) -> 32.0;", "5a.1-5a.3 24.75 + 6.0 = 30.75; R 1.0 -> 31.75;", 1),
+    ("V-7", BD_DOC, "The section 6 YAML is changed by revision 7 only in the `unblock` strings of R2.1, R2.2, R2.3 and "
+     "R4.1 (below):", "The section 6 YAML is not rewritten by revision 7", 1),
+    ("V-7", BD_DOC, "R5.1 (S) 38.25 + 1.0 = 39.25; R 1.0 -> 40.25; V 1.5 -> 41.75;", "V 1.5 -> 40.75", 1),
+    ("V-7", DESIGN_DOC, "Status: approved by the owner, 2026-11-17 (\"approved, roll it in\").",
+     "Status: draft for owner approval", 1),
+]
+
+
+class FixRoundVTest(unittest.TestCase):
+    def test_every_corrected_text_is_in_place_and_the_flagged_text_gone(self):
+        for fid, rel, new, old, n in FIXV_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertEqual(fix1_problems(read(rel), new, old, n), [])
+
+    def test_each_pin_fails_on_the_file_restored_to_the_flagged_text(self):
+        for fid, rel, new, old, n in FIXV_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, old), new, old, n))
+
+    def test_each_pin_fails_on_the_file_without_the_new_text(self):
+        for fid, rel, new, old, n in FIXV_PINS:
+            with self.subTest(fid=fid, rel=rel, new=new[:40]):
+                self.assertTrue(fix1_problems(read(rel).replace(new, ""), new, old, n))
+
+    def test_the_final_review_comes_before_the_verifier_at_a_stream_final_pr(self):       # V-4, whole class
+        for name, rest in bd_rev7_rows().items():
+            if name not in ("PR-a-final", "PR-residual/R5", "PR-release"):
+                continue
+            cell = rest[1].split(" | ")[3]
+            r, v = re.search(r"\bR 1\.0\b", cell), re.search(r"\bV 1\.5\b", cell)
+            with self.subTest(pr=name):
+                self.assertTrue(r and v and r.start() < v.start(), cell)
+        self.assertNotIn("after V 34.5", read(BD_DOC))
+
+    def test_the_sums_of_the_reordered_cells_re_add(self):                                  # V-4: the totals do not move
+        rows = bd_rev7_rows()
+        self.assertEqual(33.0 + 1.0 + 1.5 + 0.25 + 0.5, rows["PR-a-final"][0])
+        self.assertEqual(56.25 + 1.0 + 1.5 + 0.5, rows["PR-release"][0])
+        self.assertEqual(rows["PR-5b"][0], 37.25 + 1.5 + 0.25 + 0.5)                       # V-6
+        self.assertEqual(rows["PR-5c"][0], rows["PR-5b"][0] + 0.75)
+        self.assertEqual(rows["PR-6K"][0], 38.25 + 2.0 + 1.0 + 0.75)                       # V-5
+        self.assertEqual(rows["PR-R3"][0], rows["PR-4d"][0] + 0.75)
+
+    def test_no_stream_exceeds_four_children_in_the_window_the_verifier_found(self):       # V-5: records 37.25-38.75
+        rows = bd_rev7_rows()
+        r_5c_end = 37.25 + 1.0                       # PR-5c's R ends (the PR-5c cell: R 1.0 -> 38.25)
+        self.assertIn("R 1.0 -> 38.25", rows["PR-5c"][1])
+        k2_start = float(re.search(r"6K\.2 ([0-9.]+) \+ 2\.0", rows["PR-6K"][1]).group(1))
+        # 1 (6K.2 group) + 2 (PR-5b's end) + 2 (PR-5c's R) is 5 while the three overlap; the group starts when R ends
+        self.assertGreaterEqual(k2_start, r_5c_end)
 
 
 if __name__ == "__main__":
