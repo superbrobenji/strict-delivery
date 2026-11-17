@@ -1314,7 +1314,7 @@ STATES = {"controller": CTRL, "program_controller": CTRL, "stream_controller": C
           "audit_reviewer": "open", "audit_verifier": "open", "investigator": "none", "exception_reviewer": "none",
           "plan_writer": "none", "plan_reviewer": "open", "drafter": "none"}  # fifteen: DB-2's twelve plus Task 2c.3's three
 TIERS = {"implementer_transcription": "tier1", "implementer": "tier2",
-         "controller": "tier3", "program_controller": "tier3", "stream_controller": "tier3", "task_reviewer": "tier3",
+         "controller": "tier3", "program_controller": "tier3", "stream_controller": "tier3", "task_reviewer": "tier2",
          "final_reviewer": "tier3", "audit_reviewer": "tier3", "audit_verifier": "tier3", "investigator": "tier3",
          "final_verifier": "tier4", "exception_reviewer": "tier4"}
 ROLES_HEADER = "| role | prompt block | minimum tier | needs brief | finding states |"
@@ -1614,8 +1614,8 @@ class PlaybookFilesTest(unittest.TestCase):
     def test_finding_records_for_loopstats_and_plan_3d1_alignment(self):   # program controller input; design 5.4
         rec = ("After each review, before `loopstats` runs, a finding record (schema `finding`) is written for each "
                "finding of that review, with `python3 -m gates findings new --review-round <k> --caused-by-change yes|no --dimension <dimension>` (plus its required flags), under config "
-               "`paths.findings` on the task's branch, by the controller; within a program the program "
-               "controller mints the ids, and in a plain plan the controller mints its own. The records stay on "
+               "`paths.findings` on the task's branch, by the controller, which mints each id with `findings new` "
+               "(owner answer Q-PV2-3 (a), 2026-11-17). The records stay on "
                "that branch while its pull request is open and merge with it, and `loopstats` counts only findings "
                "that have a record.")
         spec = " ".join(read("docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md").split())

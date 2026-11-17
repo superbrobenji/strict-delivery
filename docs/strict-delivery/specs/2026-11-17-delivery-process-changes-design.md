@@ -156,8 +156,8 @@ Most of the loss came from the design itself, not from drift:
 ### 5.8 Models follow the spec tiers
 
 - **Every dispatch names its model explicitly**, at the role's minimum tier from MS §10 (already the rule).
-  - Implementers and drafters run at tier2.
-  - Controllers, reviewers and investigators run at tier3.
+  - Implementers, drafters and task reviewers run at tier2 (owner 2026-11-17, model policy: use sonnet for task reviewers).
+  - Controllers, the other reviewers (final and audit) and investigators run at tier3.
   - The final verifier runs at the top tier or its fallback.
   - Small re-reviews run at `reviews.small.tier`.
   - Opus is never the default for every role.
