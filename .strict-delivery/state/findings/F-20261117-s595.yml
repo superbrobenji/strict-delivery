@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261117-s595
+status: open
+source: "F-R2-2 (Task 2b.2 review 2): .superpowers/sdd/2026-10-31-strict-delivery-framework/g1/task-2b.2-review-2.md:118-122 (and table row :105); severity LOW stated at source"
+severity: LOW
+class: "hook read order versus error text: pre-commit and pre-push, each producer (diff --cached, diff, ls-files -v) failing first"
+siblings: []
+cites:
+  - file: gates/tools/githooks.py
+    lines: 292-293
+    sha: b7afa88
+repro: "M07 (read `gitinfo.flagged_paths(root)` first in `_pre_commit`) survives tests.test_githooks and both full suites; with a non-UTF-8 index name the pre-commit output then changes from `git diff --name-only gave output ...` to `git ls-files -v gave output ...`; both fail closed (source task-2b.2-review-2.md:119-120; not run for this row)."
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2b.2
+pin: null
+ruling: null
+evidence: []
+review_round: 2
+caused_by_change: true
+dimension: "hook read order versus error text"
+history:
+  - status: open
+    sha: 23fcff0c0369c98ea95cb1b81e299e97f75544fd
+    by: docs-reg8

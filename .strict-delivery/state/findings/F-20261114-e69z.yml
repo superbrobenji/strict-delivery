@@ -19,6 +19,8 @@ owner:
 pin: null
 ruling: null
 evidence: []
+caused_by_change: false
+dimension: "markdown placeholder"
 history:
   - status: open
     sha: bd529d1bb2da7dc5e32750e22f6c7f6ca46bec70

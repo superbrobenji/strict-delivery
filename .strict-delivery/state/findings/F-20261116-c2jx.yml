@@ -14,8 +14,9 @@ cites:
     sha: dc1e688
 repro: "Print sys.version, unicodedata.unidata_version, unicodedata.decomposition(chr(0xAC00)) and unicodedata.ucd_3_2_0.decomposition(chr(0xAC00)): 3.9.6 13.0.0 '' '' and 3.13.18 15.1.0 '1100 1161' '1100 1161' (checked 2026-11-16; source script g3/hangul_check2.py, not kept). So fold_table.py:65-66 is true on 3.9.6 only and the comment at tests/test_fold_table.py:145 names the wrong cause."
 owner:
-  kind: roadmap
+  kind: plan
   plan: 2026-10-31-strict-delivery-framework
+  task: 1u.2
 pin: null
 ruling: null
 evidence: []

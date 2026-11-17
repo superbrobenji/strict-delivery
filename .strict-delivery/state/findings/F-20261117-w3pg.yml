@@ -1,0 +1,44 @@
+schema: finding/1
+id: F-20261117-w3pg
+status: open
+source: "F-B4FR-1 (Task B4 final review): .superpowers/sdd/2026-10-31-strict-delivery-framework/block-B4-final-review.md:60-91 (class line :91); severity LOW stated at source"
+severity: LOW
+class: "written statements about the B4 mutation run's environment, count and mutant edits: B4.txt:3 \"Per mutant ... its own mkdtemp directory\", B4.txt:115/:185/:255/:317 count lines' `mutants` key, the B4.txt U-5 \"moved into Continuation.\" label; block-B4-impl-report.md:60 and its C7 \"moving\""
+siblings: []
+cites:
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/mutations/B4.txt
+    lines: "3"
+    sha: 90d967d
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/mutations/B4.txt
+    lines: "115"
+    sha: 90d967d
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/mutations/B4.txt
+    lines: "185"
+    sha: 90d967d
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/mutations/B4.txt
+    lines: "255"
+    sha: 90d967d
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/mutations/B4.txt
+    lines: "317"
+    sha: 90d967d
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/mutations/B4-mutate.py
+    lines: "136"
+    sha: 90d967d
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework-b/mutations/B4-mutate.py
+    lines: 159-162
+    sha: 90d967d
+repro: "Run 2026-11-17 in a scratch worktree at 90d967d: `sed -n 3p B4.txt` starts \"harness: python3 B4-mutate.py 14b7432 <this file>. Per mutant: a private `git worktree add --detach` export of 14b7432 in its own mkdtemp directory\"; `grep -c '^export:' B4.txt` gives 7 and `grep -c '^mutant: ' B4.txt` gives 34; `grep -n -E 'GROUPS =|worktree\", \"add' B4-mutate.py` gives :136 and :162; `grep -n -o \"count [A-Z0-9,-]*: {'mutants': [0-9]*\" B4.txt` gives :115 22, :185 16, :255 16, :317 14 (source block-B4-final-review.md:79-84; the U-5 copy-versus-move part not run for this row)."
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 1t.1
+pin: null
+ruling: null
+evidence: []
+review_round: 2
+caused_by_change: true
+dimension: "written statements about the B4 mutation run"
+history:
+  - status: open
+    sha: 23fcff0c0369c98ea95cb1b81e299e97f75544fd
+    by: docs-reg8
