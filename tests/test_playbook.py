@@ -1614,8 +1614,8 @@ class PlaybookFilesTest(unittest.TestCase):
     def test_finding_records_for_loopstats_and_plan_3d1_alignment(self):   # program controller input; design 5.4
         rec = ("After each review, before `loopstats` runs, a finding record (schema `finding`) is written for each "
                "finding of that review, with its `review_round`, `caused_by_change` and `dimension`, under config "
-               "`paths.findings` on the task's branch, by whoever mints ids: within a program, the program "
-               "controller, at the stream controller's request; in a plain plan, its controller. The records stay on "
+               "`paths.findings` on the task's branch, by the controller; within a program the program "
+               "controller mints the ids, and in a plain plan the controller mints its own. The records stay on "
                "that branch while its pull request is open and merge with it, and `loopstats` counts only findings "
                "that have a record.")
         spec = " ".join(read("docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md").split())
