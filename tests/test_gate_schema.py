@@ -701,9 +701,11 @@ class Args(GateCase):
 
 class Enabling(unittest.TestCase):
     def test_E1_this_repository_config_and_check(self):
-        data = yamlsub.load(os.path.join(REPO, CFGFILE), CFGFILE)
-        self.assertEqual((data["schema"], data["framework_version"], data["profile"]),
-                         (CURRENT, "0.0.0", "strict"))
+        with open(os.path.join(REPO, CFGFILE), encoding="utf-8") as fh:
+            self.assertTrue(fh.read().startswith('schema: %s\nframework_version: "0.0.0"\nprofile: strict\n' % CURRENT))
+        loaded = yamlsub.load(os.path.join(REPO, CFGFILE), CFGFILE)
+        self.assertEqual({k: loaded[k] for k in ("schema", "framework_version", "profile")},
+                         {"schema": CURRENT, "framework_version": "0.0.0", "profile": "strict"})
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "CLAUDE_PROJECT_DIR"}
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         p = subprocess.run([sys.executable, "-m", "gates", "check", "schema", "--root", REPO], cwd=REPO, env=env,
@@ -730,7 +732,7 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                         "gates: cites, claims, decisions, dispatch, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, index, loopstats, run_all\n")
+                         "gates: cites, claims, decisions, dispatch, register, schema\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, decisions, findings, githook, githooks, index, loopstats, run_all\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)

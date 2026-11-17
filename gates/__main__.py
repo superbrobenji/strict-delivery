@@ -59,7 +59,18 @@ def _run_all(args: List[str]) -> int:
     return run_all.main(args)
 
 
+def _githook(args: List[str]) -> int:
+    from gates.tools import githooks
+    return githooks.main(args)
+
+
+def _githooks(args: List[str]) -> int:
+    from gates.tools import githooks
+    return githooks.manage(args)
+
+
 COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings,
+                                                   "githook": _githook, "githooks": _githooks,
                                                    "index": _index, "loopstats": _loopstats, "run_all": _run_all}
 
 

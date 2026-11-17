@@ -1,0 +1,27 @@
+name: strict-delivery
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest discover -s tests -t . -v
+      - run: python -m gates index
+      - run: python -m gates run_all --base origin/${{ github.event_name == 'pull_request' && github.base_ref || github.event.repository.default_branch }}
