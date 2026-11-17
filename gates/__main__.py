@@ -39,6 +39,11 @@ def _index(args: List[str]) -> int:
     return index.main(args)
 
 
+def _claims(args: List[str]) -> int:
+    from gates.tools import claims_cli
+    return claims_cli.main(args)
+
+
 def _decisions(args: List[str]) -> int:
     from gates.tools import decisions_cli
     return decisions_cli.main(args)
@@ -110,8 +115,8 @@ def _hook(args: List[str]) -> int:
     return rc
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "decisions": _decisions, "findings": _findings,
-                                                   "githook": _githook, "githooks": _githooks, "hook": _hook,
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "claims": _claims, "decisions": _decisions,
+                                                   "findings": _findings, "githook": _githook, "githooks": _githooks, "hook": _hook,
                                                    "index": _index, "loopstats": _loopstats, "run_all": _run_all}
 
 

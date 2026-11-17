@@ -223,7 +223,7 @@ class TestArgv(Base):
 
     def test_a3_produces(self):
         self.assertEqual(findings_cli.PRODUCES, ("finding",))
-        self.assertEqual(producers.PRODUCER_MODULES[-1], "gates.tools.findings_cli")
+        self.assertEqual(producers.PRODUCER_MODULES[2], "gates.tools.findings_cli")  # Task 2c.1 appends claims_cli after it
 
     def test_a4_each_required_flag_missing(self):
         for flag in ("source", "severity", "class", "owner_kind", "by"):

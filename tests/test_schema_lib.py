@@ -748,7 +748,7 @@ class Producers(unittest.TestCase):
             return produced_kinds()
 
     def test_P1_union(self):
-        self.assertEqual(produced_kinds(), {"decision", "decision-index", "finding", "finding-index", "in-force", "overview"})  # Tasks 1c.3, 1d.1, 1d.2
+        self.assertEqual(produced_kinds(), {"claim", "decision", "decision-index", "finding", "finding-index", "in-force", "overview"})  # Tasks 1c.3, 1d.1, 1d.2, 2c.1
         self.assertEqual(self.kinds([]), set())
         self.assertEqual(self.kinds(["prod_claim"]), {"claim"})
         self.assertEqual(self.kinds(["prod_claim_decision", "prod_decision", "prod_empty"]), {"claim", "decision"})
