@@ -25,7 +25,11 @@ from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = ".strict-delivery/config.yml"
 BASE = "b7afa88"  # Task 2b.2's reviewed head: the config at the base holds exactly three keys
-COMMANDS_TEST = "python3 -m unittest discover -s tests -t . && python3.13 -m unittest discover -s tests -t ."
+COMMANDS_TEST = (
+    "python3 -c \"import sys; sys.exit(0 if sys.version_info[:2] == (3, 9) else 'commands.test: python3 is not Python 3.9')\" "
+    "&& python3.13 -c \"import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else "
+    "'commands.test: python3.13 is not Python 3.13')\" "
+    "&& python3 -m unittest discover -s tests -t . && python3.13 -m unittest discover -s tests -t .")
 NESTED = "SD_SELF_ADOPTION_NESTED"  # set in the suite run inside a clone: the clone tests do not recurse
 UNSTAGED = "tracked file has unstaged changes; stage it or stash it, so the gates read the tree being committed"
 SHALLOW = "FAIL %s.input: git merge-base failed (exit 1)\n"
@@ -163,9 +167,10 @@ class CopyTest(CopyCase):
         clone = self.clone_copy("hooks", main=True)
         path = os.path.join(clone, CONFIG)
         text = read_text(path)
-        self.assertEqual(text.count(COMMANDS_TEST), 1)
+        raw = "'" + COMMANDS_TEST.replace("'", "''") + "'"  # the single-quoted YAML scalar of the config
+        self.assertEqual(text.count(raw), 1)
         with open(path, "w", encoding="utf-8") as fh:  # H2: a fast command, so the suite does not recurse
-            fh.write(text.replace(COMMANDS_TEST, "\"true\""))
+            fh.write(text.replace(raw, "\"true\""))
         commit_all(clone, "fast commands.test")
         real = real_hooks_dir()
         before = listing(real)

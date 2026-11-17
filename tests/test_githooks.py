@@ -23,7 +23,7 @@ from unittest import mock
 
 from gates import __main__ as gates_main
 from gates import run_all
-from gates.lib import gitinfo
+from gates.lib import config, gitinfo
 from gates.lib.result import GateError, Line, Result
 from gates.tools import githooks
 from tests.helpers import (E128, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo,
@@ -866,6 +866,73 @@ class CommandsTestTest(HookCase):
         for name in names:
             self.assertNotIn(name, seen)
         self.assertIn("GIT_CONFIG_NOSYSTEM", seen)  # only those names are removed
+
+
+PY39 = "/usr/bin/python3"
+PY313 = "/opt/homebrew/bin/python3.13"
+GUARD_39 = ("python3 -c \"import sys; sys.exit(0 if sys.version_info[:2] == (3, 9) else "
+            "'commands.test: python3 is not Python 3.9')\"")
+GUARD_313 = ("python3.13 -c \"import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else "
+             "'commands.test: python3.13 is not Python 3.13')\"")
+GUARDS = GUARD_39 + " && " + GUARD_313
+needs_both = unittest.skipUnless(os.path.exists(PY39) and os.path.exists(PY313), "needs %s and %s" % (PY39, PY313))
+
+
+class InterpreterGuardTest(HookCase):
+    """Rows F1a-F1d (PR-2b-rest final review F-1): `commands.test` of the repository opens with a guard per
+    interpreter, so a `python3` that is not 3.9 (or a `python3.13` that is not 3.13) fails the commit gate instead of
+    running one interpreter twice. The guard runs through the production path: the pre-commit hook's own
+    commands.test run (`githooks._run_commands_test`) in a fixture repository whose commands.test is the guard part."""
+
+    def run_hook(self, links, path_tail=()):
+        """Run the pre-commit hook in a fixture repository with a directory first on PATH holding the symlinks
+        ``links`` (name -> target); return (rc, stdout, stderr)."""
+        bindir = os.path.join(self.tmp, "guardbin%d" % next(self._repos))
+        os.mkdir(bindir)
+        for name, target in links.items():
+            if target == PY39 and name != "python3":  # /usr/bin/python3 is a shim that picks its interpreter by its own
+                put(os.path.join(bindir, name), "#!/bin/sh\nexec %s \"$@\"\n" % PY39)  # name: a script runs it
+                os.chmod(os.path.join(bindir, name), 0o755)
+            else:
+                os.symlink(target, os.path.join(bindir, name))
+        d = self.repo(profile="strict", commands={"test": GUARDS})
+        env = self.env()
+        env["PATH"] = os.pathsep.join([bindir] + list(path_tail))
+        p = subprocess.run([sys.executable, "-m", "gates", "githook", "pre-commit", "--root", d], cwd=FRAMEWORK,
+                           env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+
+    @needs_both
+    def test_guard_passes_for_python39_first(self):  # F1a
+        rc, out, err = self.run_hook({"python3": PY39, "python3.13": PY313}, ["/usr/bin", "/bin"])
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("PASS githook.test\n", out)
+
+    @needs_both
+    def test_guard_refuses_python3_that_is_313(self):  # F1b
+        rc, out, err = self.run_hook({"python3": PY313, "python3.13": PY313}, ["/usr/bin", "/bin"])
+        self.assertNotEqual(rc, 0, out + err)
+        self.assertIn("commands.test: python3 is not Python 3.9", err)
+        self.assertNotIn("PASS githook.test", out)
+        self.assertIn("FAIL githook.test: commands.test exited 1\n", out)
+
+    @needs_both
+    def test_guard_refuses_python313_that_is_39(self):  # F1c
+        rc, out, err = self.run_hook({"python3": PY39, "python3.13": PY39}, ["/usr/bin", "/bin"])
+        self.assertNotEqual(rc, 0, out + err)
+        self.assertIn("commands.test: python3.13 is not Python 3.13", err)
+        self.assertNotIn("PASS githook.test", out)
+
+    @needs_both
+    def test_guard_fails_closed_without_python3(self):  # F1d: PATH holds only sh, git and python3.13
+        rc, out, err = self.run_hook({"sh": "/bin/sh", "git": "/usr/bin/git", "python3.13": PY313})
+        self.assertNotEqual(rc, 0, out + err)
+        self.assertIn("FAIL githook.test: commands.test exited 127\n", out)
+        self.assertNotIn("PASS githook.test", out)
+
+    def test_real_config_opens_with_both_guards(self):  # F1a-F1c on the repository's own commands.test
+        cfg = config.load(FRAMEWORK)
+        self.assertTrue(cfg["commands"]["test"].startswith(GUARDS + " && "), cfg["commands"]["test"])
 
 
 class PrePushTest(HookCase):
