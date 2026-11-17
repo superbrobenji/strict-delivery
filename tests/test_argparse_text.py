@@ -26,6 +26,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # --- usage blocks: 3.9.6's wrapping (E4), measured on /usr/bin/python3 3.9.6 -------------------------------------
 USAGE_40 = {
+    'run_all': 'usage: run_all [-h] [--root ROOT]\n               [--base BASE]\n',
     'check schema': 'usage: schema [-h] [--root ROOT]\n',
     'check cites': 'usage: cites [-h] [--root ROOT]\n',
     'check claims': 'usage: claims [-h] [--root ROOT]\n              [--base BASE]\n',
@@ -42,6 +43,7 @@ USAGE_40 = {
     'findings move': 'usage: findings move [-h] --to TO --by\n                     BY\n                     [--ruling RULING]\n                     [--pin-test PIN_TEST]\n                     [--pin-transcript PIN_TRANSCRIPT]\n                     [--resolved-by RESOLVED_BY]\n                     [--root ROOT]\n                     [--evidence EVIDENCE]\n                     id\n',
 }
 USAGE_80 = {
+    'run_all': 'usage: run_all [-h] [--root ROOT] [--base BASE]\n',
     'check schema': 'usage: schema [-h] [--root ROOT]\n',
     'check cites': 'usage: cites [-h] [--root ROOT]\n',
     'check claims': 'usage: claims [-h] [--root ROOT] [--base BASE]\n',
@@ -58,6 +60,7 @@ USAGE_80 = {
     'findings move': 'usage: findings move [-h] --to TO --by BY [--ruling RULING]\n                     [--pin-test PIN_TEST] [--pin-transcript PIN_TRANSCRIPT]\n                     [--resolved-by RESOLVED_BY] [--root ROOT]\n                     [--evidence EVIDENCE]\n                     id\n',
 }
 USAGE_200 = {
+    'run_all': 'usage: run_all [-h] [--root ROOT] [--base BASE]\n',
     'check schema': 'usage: schema [-h] [--root ROOT]\n',
     'check cites': 'usage: cites [-h] [--root ROOT]\n',
     'check claims': 'usage: claims [-h] [--root ROOT] [--base BASE]\n',
@@ -74,6 +77,7 @@ USAGE_200 = {
     'findings move': 'usage: findings move [-h] --to TO --by BY [--ruling RULING] [--pin-test PIN_TEST] [--pin-transcript PIN_TRANSCRIPT] [--resolved-by RESOLVED_BY] [--root ROOT] [--evidence EVIDENCE] id\n',
 }
 USAGE_20 = {
+    'run_all': 'usage: run_all\n       [-h]\n       [--root ROOT]\n       [--base BASE]\n',
     'check schema': 'usage: schema [-h]\n              [--root ROOT]\n',
     'check cites': 'usage: cites [-h]\n             [--root ROOT]\n',
     'check claims': 'usage: claims [-h]\n              [--root ROOT]\n              [--base BASE]\n',
@@ -143,10 +147,11 @@ TEXTS = [
 
 
 class P:
-    def __init__(self, key, words, valid, errkey=None, positional_extras=True, root=True):
+    def __init__(self, key, words, valid, errkey=None, positional_extras=True, root=True, gate=None):
         self.key, self.words, self.valid = key, words, valid
         self.errkey = errkey or key  # the parser whose error() reports an unrecognized argument
-        self.gate = words[1] if words[0] == "check" else None
+        # `run_all` reports like a gate (a FAIL line on stdout, exit 1) though it is no `check` subcommand
+        self.gate = gate or (words[1] if words[0] == "check" else None)
         self.prog = self.gate or key
         self.positional_extras = positional_extras
         self.root = root
@@ -167,6 +172,7 @@ PARSERS = [
     P("check claims", ["check", "claims"], []),
     P("check decisions", ["check", "decisions"], []),
     P("check register", ["check", "register"], []),
+    P("run_all", ["run_all"], [], gate="run_all"),
     P("index", ["index"], []),
     P("decisions ask", ["decisions", "ask"], ASK),
     P("decisions decide", ["decisions", "decide"], ["ID1", "--answer", "a"]),
@@ -291,7 +297,7 @@ class TestEveryParser(CommandLineCase):
         cases.append(("decisions decide --=a", d.words + ["--=a"], "80", golden(d, "decisions decide", m, m)))
         self.expect_cases(cases)
 
-    def test_negative_number_digits_assigned_after_unicode_13(self):  # F-2, E7, R2-4 (M11 revised): all 14 parsers
+    def test_negative_number_digits_assigned_after_unicode_13(self):  # F-2, E7, R2-4 (M11 revised): all 15 parsers
         # `-<digit>` of Unicode 14-15 is no number, so it is an unknown option: as the value of `--root` it leaves the
         # option with no argument (a number would be the root); as a text where a positional is wanted it is no positional
         req = "the following arguments are required: {new,move}"
@@ -323,7 +329,7 @@ class TestEveryParser(CommandLineCase):
             for p in PARSERS:
                 if p.root:
                     cases.append(("%s --root control %s" % (p.key, arg), p.words + valid_ok(p) + ["--root", arg], "80",
-                                  input_fail(p, ROOT_FAIL)))
+                                  input_fail(p, root_fail(p))))
         self.expect_cases(cases)
 
     def test_ambiguous(self):  # M4
@@ -837,14 +843,21 @@ class TestParserSites(unittest.TestCase):
 
 # =====================================================================================================================
 # Fix round 2 (owner Q-G3-F1C-1 (a), Q-A2-1 (a)): the refusals of rule E8 (rows C1-C6), `--` as an explicit option value
-# (rule E9, rows D1-D3), E7 over all 14 parsers (row M11). Every expected value is written by hand: the goldens of the
+# (rule E9, rows D1-D3), E7 over all 15 parsers (row M11). Every expected value is written by hand: the goldens of the
 # command-line rows are 3.9.6's form (measured with the unmodified parsers, 2026-11-16, equal on 3.13 except `=--`, whose
 # 3.13 value `--` is rule E9's form).
 # =====================================================================================================================
 ASK_OK = ["--class", "c", "--question", "q", "--option", "a::b", "--effect", "lasting", "--by", "b"]
 NONEXISTENT_ROOT = "/nonexistent-f1-root"
 ROOT_FAIL = "git rev-parse --show-toplevel failed (exit 128); run /strict-delivery:init"  # a root that is no directory
-ROOT_NOT_TOP = "git rev-parse --show-toplevel: root must be the repository top level"  # `--root=` (an empty root)
+RUN_ALL_ROOT_FAIL = "git rev-parse --show-toplevel failed (exit 128)"  # run_all adds no `; run /strict-delivery:init` hint
+
+
+def root_fail(p):
+    return RUN_ALL_ROOT_FAIL if p.key == "run_all" else ROOT_FAIL
+
+
+ROOT_NOT_TOP ="git rev-parse --show-toplevel: root must be the repository top level"  # `--root=` (an empty root)
 
 
 def valid_ok(p):
@@ -865,12 +878,12 @@ class Captured(GateError):
     pass
 
 
-TESTED_VALUE_OPTIONS = 53  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register 2 each,
+TESTED_VALUE_OPTIONS = 55  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register/run_all 2 each,
 # ask 12, decide 4, withdraw 2, batch 4, find 3, findings 0, findings new 11, findings move 8
 
 
 def production_parsers():
-    """{key: parser} of the 14 parsers of row P1 exactly as the commands build them: ``parse_args`` is replaced by a
+    """{key: parser} of the 15 parsers of row P1 exactly as the commands build them: ``parse_args`` is replaced by a
     spy that records the parser and stops, so the command's own construction code runs and nothing else. ``findings new``
     and ``findings move`` are the subparsers of the ``findings`` parser."""
     from gates.__main__ import main
@@ -1109,7 +1122,7 @@ class TestRefusals(unittest.TestCase):
             _GateParser(prog="p").add_argument("-\U0001e4f0", action="store_true")
         self.assertEqual(str(cm.exception), "single-dash flag '-\\U0001e4f0' has no long alias (refused: F1 rule E8)")
 
-    def test_the_14_parsers_are_admitted(self):  # C6
+    def test_the_15_parsers_are_admitted(self):  # C6
         from gates.__main__ import main
         parsers = production_parsers()
         self.assertEqual(sorted(parsers), sorted(p.key for p in PARSERS))
@@ -1525,9 +1538,9 @@ class TestDoubleDashValue(CommandLineCase):
             if not p.root:
                 continue
             ok = valid_ok(p)
-            cases.append(("%s --root=--" % p.key, p.words + ok + ["--root=--"], "80", input_fail(p, ROOT_FAIL)))
+            cases.append(("%s --root=--" % p.key, p.words + ok + ["--root=--"], "80", input_fail(p, root_fail(p))))
             for tail in ("-", "---", "--x", "-- "):  # controls: not the text `--`
-                cases.append(("%s --root=%s" % (p.key, tail), p.words + ok + ["--root=" + tail], "80", input_fail(p, ROOT_FAIL)))
+                cases.append(("%s --root=%s" % (p.key, tail), p.words + ok + ["--root=" + tail], "80", input_fail(p, root_fail(p))))
             cases.append(("%s --root=" % p.key, p.words + ok + ["--root="], "80", input_fail(p, ROOT_NOT_TOP)))
             if p.gate in ("claims", "decisions", "register"):
                 cases.append(("%s --base=--" % p.key, p.words + ok + ["--base=--"], "80",
@@ -1810,7 +1823,7 @@ class TestAllowlist(unittest.TestCase):
                 self.assertIn(name, m)
         self.assertRaises(result.ParserRefused, _GateParser(prog="p").add_argument, "--x", action="version", version="v")
 
-    def test_argument_keywords_admitted(self):  # A6 controls: the keywords of the 14 parsers
+    def test_argument_keywords_admitted(self):  # A6 controls: the keywords of the 15 parsers
         p = _GateParser(prog="p")
         p.add_argument("--class", dest="cls", required=True, metavar="CLS", help="the class (a b-c, d.e)")
         p.add_argument("--root", default=None, help="h")
