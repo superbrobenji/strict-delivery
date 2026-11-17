@@ -1239,7 +1239,7 @@ Two small tasks in stream a, on branch `block/a-unicode` cut from `main` at 2ab8
 | D6 | lone surrogate | term U+DC80, topic U+DC80, row text holding U+DC80 | folds to itself; matches only itself | test_fold_surrogate |
 | D7 | empty string | term `""` (matches every row with a text), topic `""` against topics `[""]` and `["a"]` | as str.casefold on 3.9: `""` in any text matches; topic `""` matches only `""` | test_fold_empty |
 | D8 | non-str inputs | row texts that are not str (int, None, list) are skipped (the existing `type(p) is str`); a non-str term or topic | skipped / TypeError (G3) | test_fold_non_str |
-| D9 | str subclass | row text a str subclass with lying `casefold`, `__iter__`, `__eq__` | folded from its exact characters | test_fold_str_subclass |
+| D9 | str subclass | row text a str subclass with lying `casefold`, `__iter__`, `__eq__` | skipped: the existing `type(p) is str` guard (gates/lib/decisions.py) is unchanged; a term or topic that is a str subclass folds from its exact characters (controller decision under the owner delegation of 2026-11-09, logged 2026-11-10; unicode final review UF-D9) | test_fold_str_subclass |
 | D10 | CLI reachability | `decisions find` and `ask` with each of the 40 as a term or `--topic` | refused by the argv whitelist (exit 2 or 1 with the existing message), identical on both | test_cli_forty_refused |
 | D11 | no case method, no unicodedata in decisions.py | ast of decisions.py | no Attribute call in the G4 list; no unicodedata import | test_decisions_no_case_method |
 | D12 | existing semantics, Q-1b2-5 (a) | `tests/test_decisions_lib.py:1301` `test_topic_exact_after_casefold` and every existing find test | unchanged, pass on both | existing tests |
