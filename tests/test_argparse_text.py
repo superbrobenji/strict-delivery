@@ -32,6 +32,7 @@ USAGE_40 = {
     'check claims': 'usage: claims [-h] [--root ROOT]\n              [--base BASE]\n',
     'check decisions': 'usage: decisions [-h] [--root ROOT]\n                 [--base BASE]\n',
     'check register': 'usage: register [-h] [--root ROOT]\n                [--base BASE]\n',
+    'check dispatch': 'usage: dispatch [-h] [--root ROOT]\n                [--prompts PROMPTS]\n                [--input INPUT]\n',
     'index': 'usage: index [-h] [--root ROOT]\n',
     'decisions ask': 'usage: decisions ask [-h]\n                     [--root ROOT]\n                     --class CLS\n                     --question\n                     QUESTION --option\n                     OPTION\n                     [--topic TOPIC]\n                     [--applies-to APPLIES_TO]\n                     --effect EFFECT\n                     [--supersedes SUPERSEDES]\n                     --by BY\n                     [--plan PLAN]\n                     [--program PROGRAM]\n                     [--stream STREAM]\n',
     'decisions decide': 'usage: decisions decide [-h]\n                        [--root ROOT]\n                        --answer\n                        ANSWER\n                        [--rule RULE]\n                        [--landed-in LANDED_IN]\n                        ID\n',
@@ -49,6 +50,7 @@ USAGE_80 = {
     'check claims': 'usage: claims [-h] [--root ROOT] [--base BASE]\n',
     'check decisions': 'usage: decisions [-h] [--root ROOT] [--base BASE]\n',
     'check register': 'usage: register [-h] [--root ROOT] [--base BASE]\n',
+    'check dispatch': 'usage: dispatch [-h] [--root ROOT] [--prompts PROMPTS] [--input INPUT]\n',
     'index': 'usage: index [-h] [--root ROOT]\n',
     'decisions ask': 'usage: decisions ask [-h] [--root ROOT] --class CLS --question QUESTION\n                     --option OPTION [--topic TOPIC] [--applies-to APPLIES_TO]\n                     --effect EFFECT [--supersedes SUPERSEDES] --by BY\n                     [--plan PLAN] [--program PROGRAM] [--stream STREAM]\n',
     'decisions decide': 'usage: decisions decide [-h] [--root ROOT] --answer ANSWER [--rule RULE]\n                        [--landed-in LANDED_IN]\n                        ID\n',
@@ -66,6 +68,7 @@ USAGE_200 = {
     'check claims': 'usage: claims [-h] [--root ROOT] [--base BASE]\n',
     'check decisions': 'usage: decisions [-h] [--root ROOT] [--base BASE]\n',
     'check register': 'usage: register [-h] [--root ROOT] [--base BASE]\n',
+    'check dispatch': 'usage: dispatch [-h] [--root ROOT] [--prompts PROMPTS] [--input INPUT]\n',
     'index': 'usage: index [-h] [--root ROOT]\n',
     'decisions ask': 'usage: decisions ask [-h] [--root ROOT] --class CLS --question QUESTION --option OPTION [--topic TOPIC] [--applies-to APPLIES_TO] --effect EFFECT [--supersedes SUPERSEDES] --by BY [--plan PLAN]\n                     [--program PROGRAM] [--stream STREAM]\n',
     'decisions decide': 'usage: decisions decide [-h] [--root ROOT] --answer ANSWER [--rule RULE] [--landed-in LANDED_IN] ID\n',
@@ -83,6 +86,7 @@ USAGE_20 = {
     'check claims': 'usage: claims [-h]\n              [--root ROOT]\n              [--base BASE]\n',
     'check decisions': 'usage: decisions\n       [-h]\n       [--root ROOT]\n       [--base BASE]\n',
     'check register': 'usage: register\n       [-h]\n       [--root ROOT]\n       [--base BASE]\n',
+    'check dispatch': 'usage: dispatch\n       [-h]\n       [--root ROOT]\n       [--prompts PROMPTS]\n       [--input INPUT]\n',
     'index': 'usage: index [-h]\n             [--root ROOT]\n',
     'decisions ask': 'usage: decisions ask\n       [-h]\n       [--root ROOT]\n       --class CLS\n       --question\n       QUESTION\n       --option\n       OPTION\n       [--topic TOPIC]\n       [--applies-to APPLIES_TO]\n       --effect\n       EFFECT\n       [--supersedes SUPERSEDES]\n       --by BY\n       [--plan PLAN]\n       [--program PROGRAM]\n       [--stream STREAM]\n',
     'decisions decide': 'usage: decisions decide\n       [-h]\n       [--root ROOT]\n       --answer\n       ANSWER\n       [--rule RULE]\n       [--landed-in LANDED_IN]\n       ID\n',
@@ -172,6 +176,7 @@ PARSERS = [
     P("check claims", ["check", "claims"], []),
     P("check decisions", ["check", "decisions"], []),
     P("check register", ["check", "register"], []),
+    P("check dispatch", ["check", "dispatch"], ["--input", "d.json"]),
     P("run_all", ["run_all"], [], gate="run_all"),
     P("index", ["index"], []),
     P("decisions ask", ["decisions", "ask"], ASK),
@@ -297,7 +302,7 @@ class TestEveryParser(CommandLineCase):
         cases.append(("decisions decide --=a", d.words + ["--=a"], "80", golden(d, "decisions decide", m, m)))
         self.expect_cases(cases)
 
-    def test_negative_number_digits_assigned_after_unicode_13(self):  # F-2, E7, R2-4 (M11 revised): all 15 parsers
+    def test_negative_number_digits_assigned_after_unicode_13(self):  # F-2, E7, R2-4 (M11 revised): all 16 parsers
         # `-<digit>` of Unicode 14-15 is no number, so it is an unknown option: as the value of `--root` it leaves the
         # option with no argument (a number would be the root); as a text where a positional is wanted it is no positional
         req = "the following arguments are required: {new,move}"
@@ -827,7 +832,9 @@ class TestParserSites(unittest.TestCase):
                             keywords.append((os.path.relpath(path, REPO).replace(os.sep, "/"), k.arg))
         self.assertEqual(sorted(found), [
             ("gates/gate_cites.py", "gate_args"), ("gates/gate_claims.py", "gate_args"),
-            ("gates/gate_decisions.py", "gate_args"), ("gates/gate_register.py", "gate_args"),
+            ("gates/gate_decisions.py", "gate_args"),
+            ("gates/gate_dispatch.py", "gate_args"),  # Task 2c.3 (after F1): `--root`, `--prompts`, `--input`
+            ("gates/gate_register.py", "gate_args"),
             ("gates/gate_schema.py", "gate_args"),
             # inside _GateParser itself (E10): the registry snapshot of a plain parser that never parses (its action
             # names are the base the allowlist compares with), and the two super() calls of the build hooks
@@ -843,18 +850,18 @@ class TestParserSites(unittest.TestCase):
 
 # =====================================================================================================================
 # Fix round 2 (owner Q-G3-F1C-1 (a), Q-A2-1 (a)): the refusals of rule E8 (rows C1-C6), `--` as an explicit option value
-# (rule E9, rows D1-D3), E7 over all 15 parsers (row M11). Every expected value is written by hand: the goldens of the
+# (rule E9, rows D1-D3), E7 over all 16 parsers (row M11). Every expected value is written by hand: the goldens of the
 # command-line rows are 3.9.6's form (measured with the unmodified parsers, 2026-11-16, equal on 3.13 except `=--`, whose
 # 3.13 value `--` is rule E9's form).
 # =====================================================================================================================
 ASK_OK = ["--class", "c", "--question", "q", "--option", "a::b", "--effect", "lasting", "--by", "b"]
 NONEXISTENT_ROOT = "/nonexistent-f1-root"
 ROOT_FAIL = "git rev-parse --show-toplevel failed (exit 128); run /strict-delivery:init"  # a root that is no directory
-RUN_ALL_ROOT_FAIL = "git rev-parse --show-toplevel failed (exit 128)"  # run_all adds no `; run /strict-delivery:init` hint
+RUN_ALL_ROOT_FAIL = "git rev-parse --show-toplevel failed (exit 128)"  # run_all and dispatch add no `; run /strict-delivery:init` hint (dispatch: Task 2c.3)
 
 
 def root_fail(p):
-    return RUN_ALL_ROOT_FAIL if p.key == "run_all" else ROOT_FAIL
+    return RUN_ALL_ROOT_FAIL if p.key in ("run_all", "check dispatch") else ROOT_FAIL
 
 
 ROOT_NOT_TOP ="git rev-parse --show-toplevel: root must be the repository top level"  # `--root=` (an empty root)
@@ -878,12 +885,12 @@ class Captured(GateError):
     pass
 
 
-TESTED_VALUE_OPTIONS = 55  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register/run_all 2 each,
+TESTED_VALUE_OPTIONS = 58  # by hand from the parsers' option lists: schema/cites/index 1 each, claims/decisions/register/run_all 2 each, dispatch 3,
 # ask 12, decide 4, withdraw 2, batch 4, find 3, findings 0, findings new 11, findings move 8
 
 
 def production_parsers():
-    """{key: parser} of the 15 parsers of row P1 exactly as the commands build them: ``parse_args`` is replaced by a
+    """{key: parser} of the 16 parsers of row P1 exactly as the commands build them: ``parse_args`` is replaced by a
     spy that records the parser and stops, so the command's own construction code runs and nothing else. ``findings new``
     and ``findings move`` are the subparsers of the ``findings`` parser."""
     from gates.__main__ import main
@@ -1823,7 +1830,7 @@ class TestAllowlist(unittest.TestCase):
                 self.assertIn(name, m)
         self.assertRaises(result.ParserRefused, _GateParser(prog="p").add_argument, "--x", action="version", version="v")
 
-    def test_argument_keywords_admitted(self):  # A6 controls: the keywords of the 15 parsers
+    def test_argument_keywords_admitted(self):  # A6 controls: the keywords of the 16 parsers
         p = _GateParser(prog="p")
         p.add_argument("--class", dest="cls", required=True, metavar="CLS", help="the class (a b-c, d.e)")
         p.add_argument("--root", default=None, help="h")
