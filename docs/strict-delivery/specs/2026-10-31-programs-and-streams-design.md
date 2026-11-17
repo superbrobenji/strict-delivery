@@ -101,9 +101,10 @@ A stream is not one agent at a time. It runs as a tree of worktrees:
 ### 4.2 How agents run in Claude Code (verified 2026-10-31)
 
 - An agent can dispatch its own agents, which run in the background. Measured 2026-11-01: with `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` unset, subagents at levels 1-2 carry the dispatch tool and level 3 is a leaf; set to N, levels 1-N carry it. With `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` unset, a launch beyond 20 concurrent subagents is refused, not queued; the variable raises the limit (30 let 25 run at once). `init` writes both into the project's `.claude/settings.json` (main spec section 4).
-- An agent stays alive while any of its children run. So a controller never returns to its
-  parent while its children work. Questions and progress go up as messages (`SendMessage` to the
-  parent, or to the main session), not as returns.
+- A controller waits for its children inside its turn, and a child counts as finished only on its
+  handback: an agent that ends its turn while any of its children run is forced to hand back. So a
+  controller never returns to its parent while its children work. Questions and progress go up as
+  messages (`SendMessage` to the parent, or to the main session), not as returns.
 - The program controller refreshes itself (budget or lifetime) only at a sync, when every stream
   is at a checkpoint. It never hands off while children are mid-block, so nothing is orphaned. A program session acting as program controller does not refresh; it stays lean as section 4.4 says.
 
