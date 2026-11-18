@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-94tj
+status: open
+source: "PR-P2 final review: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/final-review-P2.md F-4"
+severity: LOW
+class: "interface text: plan P:2643/:2637/:2689 still give status_errors(rows, streams) and an absolute worktrees_dir compare; D-A6 (task-P2.1-domain.md:571) built the keyword-only form and the relative worktree_of compare and names the plan edit"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c76520077fa4bb9833572b065d2f63e97dc1ee06
+    by: stream-a13
+review_round: 3
+caused_by_change: true
+dimension: interfaces (plan text vs D-A6)

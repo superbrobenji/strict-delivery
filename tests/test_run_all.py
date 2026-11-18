@@ -35,6 +35,7 @@ PASS5 = "".join("PASS %s.ok\n" % g for g in FIVE)
 VERSION_PASS = "PASS run_all.version\n"   # Task 3d.1: the last line; config framework_version "0.0.0" = the plugin's
 # the 32 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
 REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
+             "PASS schema.request\nPASS schema.streams\nPASS schema.status\nPASS schema.sync-log\nPASS schema.merged-log\nPASS schema.breakdown\n"
              "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\n"
              "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
              "PASS register.evidence\nPASS register.epic\nPASS register.report\n"
@@ -962,7 +963,7 @@ class ArgvTest(RunAllCase):
                 self.assertEqual(got, want)
         out, code = self.sub(["--root", root, "--base", "HEAD"])
         self.assertEqual(code, 0)
-        self.assertEqual(len(out.splitlines()), 33)   # the 32 real-gate lines and the version line
+        self.assertEqual(len(out.splitlines()), 39)   # the 38 real-gate lines (six more kinds, P2.2) and the version line
 
 
 class ConfigTest(RunAllCase):
@@ -1026,6 +1027,8 @@ class OutputTest(RunAllCase):
         root = self.fixture()
         out, code = self.run_main(["--root", root, "--base", "HEAD"])
         want = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
+                "PASS schema.request\nPASS schema.streams\nPASS schema.status\nPASS schema.sync-log\n"
+                "PASS schema.merged-log\nPASS schema.breakdown\n"
                 "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
                 "PASS schema.finding-index\n"
                 "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
@@ -1265,6 +1268,8 @@ class Pc1Test(RunAllCase):
     def test_pc1_long_number_base(self):  # S1
         root = self.fixture()
         schema_ok = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
+                     "PASS schema.request\nPASS schema.streams\nPASS schema.status\nPASS schema.sync-log\n"
+                     "PASS schema.merged-log\nPASS schema.breakdown\n"
                      "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
                      "PASS schema.finding-index\n")
         cites_ok = "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n"
@@ -1388,6 +1393,111 @@ class Pc1Test(RunAllCase):
                     ok_lines("schema", "register", "decisions")
                     + "FAIL claims.input: ExceptionGroup: g (1 sub-exception)\n" + ok_lines("cites"), 1,
                     ["schema", "register", "decisions", "cites"])
+
+
+class LiveProgramTest(RunAllCase):  # Task P2.3: RA1-RA4, RA9, RA11 (the live program is a branch <p>/integration holding streams.yml)
+    NAME = "20261101-x"
+
+    def live(self, root):
+        git(root, "checkout", "-q", "-b", self.NAME + "/integration")
+        write_record(root, ".strict-delivery/state/programs/%s/streams.yml" % self.NAME, {"schema": "streams/1"})
+        commit_all(root, "program")
+        git(root, "checkout", "-q", "main")
+
+    def test_live_program_gates_literal(self):  # RA4
+        self.assertEqual(run_all.LIVE_PROGRAM_GATES, ("streams",))
+        self.assertIs(type(run_all.LIVE_PROGRAM_GATES), tuple)
+
+    def test_streams_not_run_without_program(self):  # RA1
+        for profile in ("light", "standard", "strict"):
+            self.all_pass()
+            self.fake("streams", self.recorder("streams"))
+            self.seen.clear()
+            run_all.check(["--root", self.fixture(profile)])
+            self.assertNotIn("streams", self.called())
+
+    def test_streams_runs_when_program_live_on_light(self):  # RA2, RA3, RA9, RA11
+        for profile in ("light", "standard", "strict"):
+            self.all_pass()
+            self.fake("streams", self.recorder("streams"))
+            self.seen.clear()
+            root = self.fixture(profile)
+            self.live(root)
+            res = run_all.check(["--root", root])
+            self.assertEqual(self.called()[-1], "streams")
+            self.assertEqual(self.called().count("streams"), 1)
+            self.assertEqual(self.args_of()["streams"], ["--root=" + root])
+            self.assertEqual([l.id for l in res.lines][-2:], ["streams.ok", "run_all.version"])
+
+    def test_streams_runs_on_program_branch_without_integration(self):  # RA5
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        git(root, "checkout", "-q", "-b", self.NAME + "/a/main")
+        run_all.check(["--root", root])
+        self.assertIn("streams", self.called())
+
+    def test_live_check_failure_is_a_line_and_profile_gates_run(self):  # RA7, D-Q22 (b)
+        self.all_pass()
+        root = self.fixture("light")
+        with mock.patch.object(run_all.programs, "live_programs", side_effect=GateError("boom")):
+            res = run_all.check(["--root", root])
+        self.assertEqual([(l.status, l.id) for l in res.lines if l.id.startswith("run_all.streams")],
+                         [("FAIL", "run_all.streams")])
+        self.assertEqual(self.called(), ["schema", "register", "decisions"])
+        self.assertEqual([l.id for l in res.lines if l.id.startswith("streams")], [])     # mutant #89: a failed check is not live
+
+    def test_streams_runs_on_a_malformed_program_branch(self):  # RA5 sibling, mutant #87: a bad shape counts as a program branch
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        git(root, "checkout", "-q", "-b", self.NAME + "/foo")
+        run_all.check(["--root", root])
+        self.assertIn("streams", self.called())
+
+    def test_detached_head_with_live_program_is_red(self):  # RA6 (D-Q22 (a)): streams is appended and answers streams.input
+        self.all_pass()
+        root = self.fixture("light")
+        self.live(root)
+        git(root, "checkout", "-q", "--detach")
+        res = run_all.check(["--root", root])
+        self.assertIn(("FAIL", "streams.input"), [(l.status, l.id) for l in res.lines])
+        self.assertIn("HEAD is detached; pass --branch NAME", [l.reason for l in res.lines if l.id == "streams.input"])
+
+    def test_base_is_not_passed_to_streams(self):  # RA8 (D-Q6 (a))
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        self.live(root)
+        run_all.check(["--root", root, "--base", "main"])
+        self.assertEqual(self.args_of()["streams"], ["--root=" + root])
+
+    def test_streams_module_missing_is_a_line(self):  # RA10
+        self.all_pass()
+        root = self.fixture("light")
+        self.live(root)
+        with mock.patch.dict(gates_main.GATES, {"streams": "gates.gate_streams_absent"}):
+            res = run_all.check(["--root", root])
+        self.assertIn(("FAIL", "run_all.missing.streams", "gates/gate_streams_absent.py missing"),
+                      [(l.status, l.id, l.reason) for l in res.lines])
+
+    def test_live_check_is_one_ref_listing_with_many_branches(self):  # RA13
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        self.live(root)
+        subprocess.run(["git", "-C", root, "update-ref", "--stdin"], check=True,
+                       input="".join("create refs/heads/b%d HEAD\n" % i for i in range(500)).encode())
+        calls = []
+        real = subprocess.run
+
+        def spy(argv, *a, **kw):
+            calls.append(list(argv))
+            return real(argv, *a, **kw)
+        with mock.patch.object(run_all.gitinfo.subprocess, "run", spy):
+            run_all.check(["--root", root])
+        self.assertEqual(len([c for c in calls if "for-each-ref" in c]), 1)
+        self.assertIn("streams", self.called())
 
 
 if __name__ == "__main__":

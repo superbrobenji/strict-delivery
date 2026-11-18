@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-ix24
+status: open
+source: "P2.1 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/P2.1-review-1.md R1-2"
+severity: MEDIUM
+class: "unusable breakdown: a breakdown/1 row without the edges key is read as no edges instead of ValueError (gates/lib/programs.py:939, :1107), so a residual to.<id> request that the edge would refuse passes (D-B11 (a))"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 0d12bf3e3ef40e4b4657bac12e548d51358003a2
+    by: stream-a11
+review_round: 1
+caused_by_change: true
+dimension: D-B11 unusable breakdown row

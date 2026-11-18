@@ -1,0 +1,65 @@
+kind: request
+version: 1
+format: yaml
+files:
+  - dir: programs
+    glob: "*/requests/*.yml"
+fields:
+  schema:
+    type: str
+  id:
+    type: id
+    id_kind: request
+  from_stream:
+    type: str
+  to_stream:
+    type: str
+  files:
+    type: list
+    min: 1
+    items:
+      type: str
+  interface:
+    type: cite
+  need:
+    type: str
+  status:
+    type: enum
+    values:
+      - open
+      - accepted
+      - done
+      - disputed
+      - withdrawn
+  raised_at:
+    type: map
+    fields:
+      sha:
+        type: sha
+      by:
+        type: str
+  resolution:
+    type: map
+    required_when:
+      - status:
+          - done
+    absent_when:
+      - status:
+          - open
+          - accepted
+          - disputed
+          - withdrawn
+    fields:
+      commits:
+        type: list
+        min: 1
+        items:
+          type: sha
+      at:
+        type: sha
+      by:
+        type: str
+  decision:
+    type: id
+    id_kind: decision
+    required: false

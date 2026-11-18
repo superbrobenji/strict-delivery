@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-tcxf
+status: open
+source: "P2.3 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/P2.3-review-1.md R1-2"
+severity: LOW
+class: "untested branch: a group branch of a stacked stream (gate_streams.owned_lines kind in (stream, group) stacked range base and merged-parent exemption); mutant narrowing to (stream,) survives"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 32e77ec0784a4da5a8f885e3655b2d86620edff9
+    by: stream-a13
+review_round: 1
+caused_by_change: true
+dimension: "Base / stacked: group branch of a stacked stream"
