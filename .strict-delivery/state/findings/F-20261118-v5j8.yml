@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-v5j8
+status: open
+source: "P2.2 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/P2.2-review-1.md R1-3"
+severity: LOW
+class: hostile git config fixture (color.ui=always, core.abbrev=7) not applied to request set --commit, sync-log and merged, row PG14
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: ee5414df74addec8e9c0681737e8f69d8441d27e
+    by: stream-a13
+review_round: 1
+caused_by_change: true
+dimension: PG14 hostile git config per subcommand
