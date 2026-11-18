@@ -7,13 +7,17 @@ module imports no Unicode database module and calls no ``str`` case method, so a
 answers Q-X35 (a), Q-FT-1 (a); decisions D-B6, D-B12). Text is compared by character class written out here
 (``[0-9A-Za-z]``), never by ``isalnum`` or ``\\w``. Known limit: a code point that Unicode 13.0.0 does not assign is
 compared as itself."""
+import dataclasses
 import datetime
+import os
 import posixpath
 import re
+import stat
 from typing import Optional
 
-from gates.lib import checkpoints, config, ids, migrations, schema, store
+from gates.lib import checkpoints, config, gitinfo, ids, merge, migrations, schema, store, yamlsub
 from gates.lib.fold_table import CCC, COMPOSE, DECOMP, FOLD
+from gates.lib.result import GateError
 
 PROGRAM_START = "program-start"
 PROGRAM_CLOSE = "program-close"
@@ -242,17 +246,17 @@ def event_problem(event: object, stream_ids: object) -> str:
     if type(stream_ids) not in (set, frozenset, dict) or any(type(x) is not str for x in stream_ids):
         raise ValueError("stream_ids: must be a set, frozenset or dict of strings")
     if type(event) is not str:
-        return "event is not a str (%s)" % type(event).__name__
+        return "not a str: %s" % type(event).__name__
     if event in (PROGRAM_START, PROGRAM_CLOSE):
         return ""
     if not event.startswith("merged:"):
-        return "'%s' is not an event" % event
+        return "not an event: '%s'" % event
     rest = event[7:]
     s, slash, b = rest.partition("/")
     if s not in stream_ids:
-        return "'%s' is not an event (unknown stream '%s')" % (event, s)
+        return "unknown stream %s: '%s'" % (s, event)
     if slash and (b == "" or any(c not in _ALNUM for c in b)):
-        return "'%s': sub-block id must be [0-9A-Za-z]+" % event
+        return "sub-block id must be [0-9A-Za-z]+: '%s'" % event
     return ""
 
 
@@ -698,24 +702,17 @@ def _ownership_errors(row: dict, cfg: dict, held: Optional[frozenset], known: se
 def worktrees_dir(root: str, row: dict) -> str:
     """The absolute directory ``worktrees`` names, resolved against the main worktree (never against ``root``).
     Needs git 2.31 (``--path-format=absolute``, in ``gitinfo.main_worktree``)."""
-    from gates.lib.result import GateError
     if type(row) is not dict:
         raise GateError("worktrees_dir: the streams row must be a mapping")
     w = row.get("worktrees")
     why = _worktrees_problem(w) if type(w) is str else "worktrees: must be a string"
     if why:
         raise GateError(why)
-    main = _main_worktree(root)
+    main = gitinfo.main_worktree(root)
     out = posixpath.normpath(posixpath.join(main, w))
     if out == main or out.startswith(main.rstrip("/") + "/") or main.startswith(out.rstrip("/") + "/"):
         raise GateError("worktrees: '%s' resolves inside or above the main worktree %s" % (w, main))
     return out
-
-
-def _main_worktree(root: str) -> str:
-    """The one seam to git: ``gitinfo.main_worktree`` (delivery (i)); tests replace this name."""
-    from gates.lib import gitinfo
-    return gitinfo.main_worktree(root)
 
 
 # ---------------------------------------------------------------- status page
@@ -1090,14 +1087,43 @@ def _period_of(stream: dict) -> tuple:
     return (PROGRAM_START, PROGRAM_CLOSE)
 
 
+def _need_breakdown(bd: object) -> None:
+    """``ValueError`` naming the first field of a ``breakdown/1`` row that ``agreement_errors`` cannot read."""
+    if type(bd) is not dict:
+        raise ValueError("breakdown: must be a mapping")
+    if type(bd.get("streams")) is not list:
+        raise ValueError("breakdown.streams: must be a list")
+    for i, s in enumerate(bd["streams"]):
+        if type(s) is not dict:
+            raise ValueError("breakdown.streams.%d: must be a mapping" % i)
+        if type(s.get("id")) is not str:
+            raise ValueError("breakdown.streams.%d.id: must be a string" % i)
+        if type(s.get("tasks")) is not list or any(type(t) is not str for t in s["tasks"]):
+            raise ValueError("breakdown.streams.%d.tasks: must be a list of strings" % i)
+        if "paths" in s and type(s["paths"]) is not list:
+            raise ValueError("breakdown.streams.%d.paths: must be a list" % i)
+        if "period" in s and type(s["period"]) is not dict:
+            raise ValueError("breakdown.streams.%d.period: must be a mapping" % i)
+    edges = bd.get("edges", [])
+    if type(edges) is not list or any(type(e) is not dict or type(e.get("from")) is not str
+                                      or type(e.get("to")) is not str for e in edges):
+        raise ValueError("breakdown.edges: must be a list of from/to maps")
+    if "plan" in bd and type(bd["plan"]) is not str:
+        raise ValueError("breakdown.plan: must be a string")
+
+
 def agreement_errors(streams_row: dict, breakdown_row: dict, plan_slug: str) -> list:
     """``create``'s agreement of ``streams.yml`` with the program plan's ``breakdown.yml`` and the stacked-order
     check (plan Task P2.2, owner answers Q-F80W-9 (a), Q-F80a-1 (a), Q-RD8-1 (a)): same stream ids, each stream's
     ``paths`` equal to its ``owns`` as (path, window) sets, ``residual`` and ``period`` equal (absent is
     ``program-start`` to ``program-close``), the breakdown's ``plan`` and the streams file's ``plan`` slug equal to
     ``plan_slug``, and for ``stacked_on`` streams every ``merged:<s>/<b>`` ordered after ``merged:<t>`` by
-    ``comes_before``. ``done`` is not compared. Each reason names ``streams`` (or ``stacked_on``)."""
+    ``comes_before``. ``done`` is not compared. Each reason names ``streams`` (or ``stacked_on``). A row that is
+    not usable (decision D-B11 (a)) is a ``ValueError`` naming the field."""
     _need_str(plan_slug, "plan_slug")
+    if type(streams_row) is not dict or type(streams_row.get("streams")) is not list:
+        raise ValueError("streams: the streams.yml row must be a mapping with a streams list")
+    _need_breakdown(breakdown_row)
     errs = []
     sts = {s["id"]: s for s in _stream_list(streams_row)}
     bds = {s["id"]: s for s in _stream_list(breakdown_row)}
@@ -1138,3 +1164,418 @@ def agreement_errors(streams_row: dict, breakdown_row: dict, plan_slug: str) -> 
         except ValueError as e:
             errs.append("stacked_on: stream %s: %s" % (sid, e))
     return errs
+
+
+# ---------------------------------------------------------------- loading a program (decisions D-A9, D-A23)
+
+_BOM = chr(0xFEFF)  # a byte order mark is refused in every program file
+
+
+@dataclasses.dataclass(frozen=True)
+class Program:
+    name: str
+    streams: dict
+    status_text: str
+    requests: list
+    sync_log: str
+    merged_log: str
+    ref: Optional[str]
+
+
+def _programs_dir(cfg: object) -> str:
+    try:
+        d = cfg["paths"]["programs"]  # type: ignore[index]
+    except (KeyError, TypeError):
+        d = None
+    if type(d) is not str or d == "":
+        raise GateError("cfg: paths.programs must be a non-empty string")
+    return d
+
+
+def _fs_text(root: str, rel: str) -> Optional[str]:
+    """The text of the regular file ``rel`` of the working tree, ``None`` when absent."""
+    path = os.path.join(root, *rel.split("/"))
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise GateError("%s: cannot read (%s)" % (rel, e.strerror or type(e).__name__)) from None
+    if not stat.S_ISREG(mode):
+        raise GateError("%s: not a regular file" % rel)  # a symlink, directory, FIFO or device is refused unopened
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as e:
+        raise GateError("%s: cannot read (%s)" % (rel, e.strerror or type(e).__name__)) from None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise GateError("%s: not valid UTF-8" % rel) from None
+
+
+def _file_text(root: str, rel: str, ref: Optional[str]) -> str:
+    """The text of one program file from the working tree (``ref`` ``None``) or from ``ref``; a missing file, a
+    non-regular file at the ref, a byte order mark or a CR is a GateError naming it."""
+    text = _fs_text(root, rel) if ref is None else gitinfo.show(root, ref, rel)
+    if text is None:
+        raise GateError("%s: missing" % rel)
+    if text.startswith(_BOM):
+        raise GateError("%s: starts with a byte order mark" % rel)
+    if "\r" in text:
+        raise GateError("%s: has a carriage return (CRLF line ends are refused)" % rel)
+    return text
+
+
+def _mapping(text: str, rel: str) -> dict:
+    try:
+        data = yamlsub.parse(text)  # a numeral past the int conversion limit is a YamlError too
+    except yamlsub.YamlError as e:
+        raise GateError("%s: %s%s" % (rel, e.reason, " (line %d)" % e.line if e.line else "")) from None
+    if type(data) is not dict:
+        raise GateError("%s: the top level must be a mapping" % rel)
+    return data
+
+
+def _request_files(root: str, rel_dir: str, ref: Optional[str]) -> list:
+    """The repo-relative paths of the request files, sorted. At a ref only the regular files directly in the
+    folder are listed (a subfolder or a symlink is not seen there: ``gitinfo.ls_tree`` lists regular files)."""
+    if ref is not None:
+        names = sorted(gitinfo.ls_tree(root, ref, rel_dir))
+    else:
+        d = os.path.join(root, *rel_dir.split("/"))
+        try:
+            mode = os.lstat(d).st_mode
+        except FileNotFoundError:
+            return []
+        except OSError as e:
+            raise GateError("%s: cannot read (%s)" % (rel_dir, e.strerror or type(e).__name__)) from None
+        if not stat.S_ISDIR(mode):
+            raise GateError("%s: not a directory" % rel_dir)
+        try:
+            names = ["%s/%s" % (rel_dir, n) for n in sorted(os.listdir(d))]
+        except OSError as e:
+            raise GateError("%s: cannot read (%s)" % (rel_dir, e.strerror or type(e).__name__)) from None
+    out = []
+    for rel in names:
+        base = posixpath.basename(rel)
+        if not base.endswith(".yml") or base.startswith(".") or base in store._GENERATED:
+            raise GateError("%s: not a regular file named <id>.yml" % rel)
+        if ref is None:
+            try:
+                mode = os.lstat(os.path.join(root, *rel.split("/"))).st_mode
+            except OSError as e:
+                raise GateError("%s: cannot read (%s)" % (rel, e.strerror or type(e).__name__)) from None
+            if not stat.S_ISREG(mode):
+                raise GateError("%s: not a regular file named <id>.yml" % rel)
+        out.append(rel)
+    return out
+
+
+def load_program(root: str, cfg: dict, name: str, ref: Optional[str]) -> Program:
+    """``<paths.programs>/<name>/`` read from the working tree (``ref`` ``None``) or from ``ref`` (decisions D-A9,
+    D-A23). A name failing ``program_problem``, a missing or unreadable ``streams.yml``, ``status.md``,
+    ``sync-log.md`` or ``merged.md``, a stray entry in ``requests/`` (a name that is not ``<id>.yml``, a
+    subfolder, a symlink; at a ref only regular files are listed), a file with a byte order mark, a CR or bytes that
+    are not UTF-8, and a file that does not parse or whose top level is not a mapping are each a ``GateError``
+    naming the file. Rows pass through ``migrations.migrate``. ``ref`` is a revision as ``gitinfo.show`` takes it:
+    a bare name that is both a tag and a branch is git's tag; pass ``refs/heads/<b>`` for the branch."""
+    gitinfo._need_root(root)
+    why = program_problem(name)
+    if why:
+        raise GateError("program name: %s" % why)
+    base = "%s/%s" % (_programs_dir(cfg), name)
+    gitinfo._require_toplevel(root)
+    if ref is not None and type(ref) is not str:
+        raise GateError("ref must be a string or None")   # gitinfo.show refuses a lead of - or ^ and 41+ hex
+    srel = base + "/streams.yml"
+    streams = _migrated("streams", _mapping(_file_text(root, srel, ref), srel))
+    texts = [_file_text(root, "%s/%s" % (base, n), ref) for n in ("status.md", "sync-log.md", "merged.md")]
+    requests = []
+    for rel in _request_files(root, base + "/requests", ref):
+        row = _migrated("request", _mapping(_file_text(root, rel, ref), rel))
+        requests.append(store.Record(row.get("id") if type(row) is dict else None, row, rel))
+    return Program(name, streams, texts[0], requests, texts[1], texts[2], ref)
+
+
+def live_programs(root: str, cfg: dict) -> list:
+    """Every program name ``p`` with a local branch ``<p>/integration`` whose tip holds
+    ``<paths.programs>/<p>/streams.yml`` as a regular file, sorted; the tip is read through ``refs/heads/<b>`` (D-A23)
+    and a stray branch name that ``parse_branch`` refuses is skipped (D-A24). The current branch is never read."""
+    directory = _programs_dir(cfg)   # gitinfo.local_branches refuses a root that is not a string
+    out = set()
+    for b in gitinfo.local_branches(root):
+        try:
+            parsed = parse_branch(b)
+        except ValueError:
+            continue
+        if parsed is None or parsed[0] != "integration":
+            continue
+        if gitinfo.show(root, "refs/heads/" + b, "%s/%s/streams.yml" % (directory, parsed[1])) is not None:
+            out.add(parsed[1])
+    return sorted(out)
+
+
+# ---------------------------------------------------------------- counted merges (decision D-A26 (1))
+
+def _need_program(program: object, who: str) -> None:
+    if type(program) is not Program:
+        raise ValueError("%s: program must be a Program" % who)
+
+
+def _stream_row(streams: object, sid: str) -> Optional[dict]:
+    for st in _stream_list(streams):
+        if st["id"] == sid:
+            return st
+    return None
+
+
+def _counted(program: Program, root: str, cfg: dict) -> tuple:
+    """``(lines, reasons)``: the ``MERGED`` lines of ``program.merged_log`` that count, in file order, and one
+    reason per line that does not. A line counts when its stream is a stream of ``streams.yml`` with a plan
+    ``<paths.plans>/<slug>.md`` and it passes ``merge.merged_errors`` for that slug."""
+    plans = _paths(cfg)["plans"]
+    counted, reasons = [], []
+    for ln in checkpoints.merged_lines(program.merged_log):
+        who = "merged.md pr %d" % ln["pr"]
+        st = _stream_row(program.streams, ln["stream"]) if ln["stream"] is not None else None
+        if st is None:
+            reasons.append("%s: stream %s is not a stream of streams.yml; the line does not count" % (who, ln["stream"]))
+            continue
+        slug = _slug_of(st.get("plan"), plans)
+        if slug is None:
+            reasons.append("%s: the plan of stream %s is not <paths.plans>/<name>.md; the line does not count"
+                           % (who, ln["stream"]))
+            continue
+        try:
+            bad = merge.merged_errors(root, cfg, slug, ln)
+        except ValueError as e:
+            reasons.append("%s: %s; the line does not count" % (who, e))
+            continue
+        if bad:
+            reasons.append("%s: the line does not count: %s" % (who, "; ".join("%s: %s" % (s, r) for s, r in bad)))
+            continue
+        counted.append(ln)
+    return counted, reasons
+
+
+def counted_lines(program: Program, root: str, cfg: dict, breakdown: dict) -> tuple:
+    """``(counted, merged, errors)`` (decision D-A26 (1); plan Task P2.3, P:2834 and P:2837).
+
+    ``counted``: the ``MERGED`` lines (``checkpoints.merged_lines`` dicts) of ``program.merged_log`` that pass
+    ``merge.merged_errors`` for their stream's plan slug, in file order. ``merged``: each stream with a counted line
+    to the set of sub-blocks its counted lines carry: a line carries its ``block`` and every sub-block of the
+    stream's ``tasks`` in ``breakdown`` each of whose tasks has a ``CHECKPOINT`` line, in the stream's ledger at the
+    line's ``head``, whose head is the line's head or an ancestor of it (owner answer Q-F80W-2). ``errors``: one
+    string per line that does not count and one per ``block`` rule a counted line breaks: ``block`` is no sub-block of
+    its stream's tasks (Q-F80W-10), it newly carries none, or it is not the last in the order of the stream's
+    ``tasks`` of those it newly carries (Q-F80W-8, Q-F80RR3-2); a ledger that cannot be read at the head is an error
+    and carries only the line's own block. An unusable ``breakdown`` is a ``ValueError`` naming the field."""
+    _need_program(program, "counted_lines")
+    gitinfo._need_root(root)
+    tasks = {s["id"]: s["tasks"] for s in _breakdown_streams(breakdown)}
+    counted, errors = _counted(program, root, cfg)
+    p = _paths(cfg)
+    merged: dict = {}
+    anc: dict = {}
+
+    def ancestor(a: str, b: str) -> bool:
+        if a == b:
+            return True
+        if (a, b) not in anc:
+            try:
+                anc[(a, b)] = gitinfo.is_ancestor(root, a, b)
+            except GateError:
+                anc[(a, b)] = False
+        return anc[(a, b)]
+
+    for ln in counted:
+        sid, block, head = ln["stream"], ln["block"], ln["head"]
+        who = "merged.md pr %d" % ln["pr"]
+        mine = tasks.get(sid, [])
+        order: list = []
+        for t in mine:
+            b = sub_block(t)
+            if b is not None and b not in order:
+                order.append(b)
+        slug = _slug_of(_stream_row(program.streams, sid).get("plan"), p["plans"])
+        rel = "%s/%s/ledger.md" % (p["plan_state"], slug)
+        points: list = []
+        try:
+            text = gitinfo.show(root, head, rel)
+            why = "does not exist at %s" % head
+        except GateError as e:
+            text, why = None, str(e)
+        if text is None:
+            errors.append("%s: the ledger %s cannot be read: %s" % (who, rel, why))
+        else:
+            points = checkpoints.checkpoint_lines(text)
+        carried = set()
+        for b in order:
+            if all(any(c["task"] == t and ancestor(c["head"], head) for c in points)
+                   for t in mine if sub_block(t) == b):
+                carried.add(b)
+        if block in order:
+            carried.add(block)         # the line's own block is carried whatever the ledger holds
+        have = merged.setdefault(sid, set())
+        new = [b for b in order if b in carried and b not in have]
+        if block not in order:
+            errors.append("%s: block %s is no sub-block of the tasks of stream %s in the breakdown" % (who, block, sid))
+        elif not new:
+            errors.append("%s: block %s newly carries no sub-block of stream %s" % (who, block, sid))
+        elif new[-1] != block:
+            errors.append("%s: block %s is not the last sub-block it newly carries (%s)" % (who, block, ", ".join(new)))
+        have |= carried
+    return counted, merged, errors
+
+
+# ---------------------------------------------------------------- request rules that read git (D-A22, D-B3, D-B5)
+
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _commit_paths(root: str, sha: str) -> list:
+    """The paths a commit changes against its first parent (a root commit against the empty tree)."""
+    ps = gitinfo.parents(root, sha)
+    return gitinfo.changed_paths(root, ps[0] if ps else _EMPTY_TREE, sha)
+
+
+def _done_problem(root: str, sha: str, to: str, files: list, branch: Optional[str], heads: list) -> str:
+    """Why ``sha`` does not close a request for ``files`` of stream ``to``; ``""`` when it does."""
+    try:
+        if not gitinfo.commit_exists(root, sha):
+            return "commit %s does not exist in this repository" % sha
+        reach = branch is not None and gitinfo.is_ancestor(root, sha, "refs/heads/" + branch)
+        reach = reach or any(gitinfo.is_ancestor(root, sha, h) for h in heads)
+        if not reach:
+            return ("commit %s is reachable from neither the branch of stream %s nor the head of a counted MERGED line "
+                    "of it" % (sha, to))
+        keys = [_ends(f) for f in files]
+        if not any(_covers(k, _ends(c)) for c in _commit_paths(root, sha) for k in keys):
+            return "commit %s touches none of the listed files" % sha
+    except GateError as e:
+        return "commit %s: git cannot judge it: %s" % (sha, e)
+    return ""
+
+
+def _valid_paths(files: object) -> list:
+    out = []
+    for f in files if type(files) is list else []:
+        if type(f) is str:
+            try:
+                _check_path(f)
+            except ValueError:
+                continue
+            out.append(f)
+    return out
+
+
+def request_errors(program: Program, root: str, cfg: dict, breakdown: dict) -> list:
+    """``(suffix, reason)`` for the requests of ``program`` (plan Task P2.1; decisions D-A22, D-B3, D-B5, D-B11):
+    ``store.store_errors`` first, then for each request in file order, in this order, ``to.<id>`` (``to_stream`` has
+    an entry covering each file, judged without event state, or is the residual stream and
+    ``residual_reachable`` holds; one tuple per request, ``to_stream <s> does not own <f1>, <f2>``; a file that is
+    not a normalised repository path is refused there too; a ``breakdown`` that ``residual_reachable`` cannot read
+    refuses a residual request), ``files.<id>`` (a file listed twice, by ``path_key``), ``from.<id>``
+    (``from_stream`` is a stream and differs from ``to_stream``), ``done.<id>`` (each ``resolution.commits`` sha is a
+    commit reachable from ``refs/heads/<p>/<to_stream>/main`` or from the head of a counted ``MERGED`` line of
+    ``to_stream`` (``counted_lines``), never from ``<p>/integration``, that touches a listed file: the diff against
+    its first parent, a root commit against the empty tree, the listed path or ``x/`` directory compared by
+    ``path_key``) and ``decision.<id>`` (a present ``decision`` names an answered decision of class
+    ``request-dispute``, read from the working tree or from ``program.ref``). A field of the wrong type is the
+    schema's to name and is skipped. ``program`` must be a ``Program``; ``breakdown`` is read only for a residual
+    ``to_stream`` and for the counted lines of a ``done`` request."""
+    _need_program(program, "request_errors")
+    gitinfo._need_root(root)
+    try:
+        prefix = cfg["ids"]["request"]
+        p = _paths(cfg)
+        plan_state = p["plan_state"]
+    except (KeyError, TypeError):
+        raise GateError("cfg: ids.request is missing") from None
+    out = list(store.store_errors(program.requests, prefix))
+    stream_ids = {s["id"] for s in _stream_list(program.streams)}
+    residual_ids = {s["id"] for s in _stream_list(program.streams) if _is_residual(s)}
+    keys: dict = {}
+    for sid, _, key, _, _ in _all_entries(program.streams, p) if type(program.streams) is dict else []:
+        keys.setdefault(sid, []).append(key)
+    lazy: dict = {}
+
+    def heads_of(to: str) -> list:
+        if "counted" not in lazy:
+            try:
+                lazy["counted"] = counted_lines(program, root, cfg, breakdown)[0]
+            except ValueError:  # the counting needs no breakdown: only the carried sets do
+                lazy["counted"] = _counted(program, root, cfg)[0]
+        return [ln["head"] for ln in lazy["counted"] if ln["stream"] == to]
+
+    def decisions() -> dict:
+        if "decisions" not in lazy:
+            if program.ref is None:
+                recs = store.Store(root, "decision", cfg).load()
+            else:
+                recs = [store.Record(row.get("id"), row, f) for f, row in
+                        store._records_at(root, program.ref, p["decisions"], program.ref, "")]
+            lazy["decisions"] = {r.id: r.row for r in recs if type(r.id) is str}
+        return lazy["decisions"]
+
+    for r in program.requests:
+        rid, row = r.id, r.row
+        if type(rid) is not str or type(row) is not dict:
+            continue
+        to, frm, files = row.get("to_stream"), row.get("from_stream"), row.get("files")
+        if type(to) is str and type(files) is list:
+            bad, problem = [], ""
+            for f in (f for f in files if type(f) is str):
+                try:
+                    _check_path(f)
+                except ValueError:
+                    bad.append("%s (not a normalised repository path)" % f)
+                    continue
+                kp = _ends(f)
+                if any(_covers(k, kp) for k in keys.get(to, [])):
+                    continue
+                if to in residual_ids:
+                    try:
+                        if residual_reachable(program.streams, breakdown, plan_state, f, cfg=cfg):
+                            continue
+                    except ValueError as e:
+                        problem = "; the breakdown cannot decide it: %s" % e
+                bad.append(f)
+            if bad:
+                out.append(("to." + rid, "to_stream %s does not own %s%s" % (to, ", ".join(bad), problem)))
+        if type(files) is list:
+            seen, dup = {}, []
+            for f in _valid_paths(files):
+                k = path_key(f)
+                if k in seen:
+                    dup.append(f)
+                seen[k] = f
+            if dup:
+                out.append(("files." + rid, "files lists %s more than once" % ", ".join(dup)))
+        if type(frm) is str:
+            if frm not in stream_ids:
+                out.append(("from." + rid, "from_stream %s is not a stream of this program" % frm))
+            elif frm == to:
+                out.append(("from." + rid, "from_stream %s is the same as to_stream" % frm))
+        res = row.get("resolution")
+        commits = res.get("commits") if type(res) is dict else None
+        if row.get("status") == "done" and type(to) is str and type(commits) is list:
+            if "branches" not in lazy:
+                lazy["branches"] = set(gitinfo.local_branches(root))
+            try:
+                branch = branch_of(program.name, to)
+            except ValueError:
+                branch = None
+            branch = branch if branch in lazy["branches"] else None
+            heads = heads_of(to)
+            why = [w for w in (_done_problem(root, c, to, _valid_paths(files), branch, heads)
+                               for c in commits if type(c) is str) if w]
+            if why:
+                out.append(("done." + rid, "; ".join(why)))
+        dec = row.get("decision")
+        if type(dec) is str and dec != "":
+            d = decisions().get(dec)
+            if d is None or d.get("status") != "answered" or d.get("class") != "request-dispute":
+                out.append(("decision." + rid, "decision %s is not an answered decision of class request-dispute" % dec))
+    return out

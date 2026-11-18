@@ -2,21 +2,25 @@
 Expected values are written by hand from the plan and the input-domain tables (task-P2.1-domain.md part A,
 task-P2.1-ownership-domain.md part B); the ``unicodedata`` oracle below is the independent check of ``path_key``."""
 import ast
+import dataclasses
 import itertools
+import os
 import pathlib
 import random
 import unicodedata
 import unittest
 from unittest import mock
 
-from gates.lib import programs, store
-from gates.lib.programs import (NAME_RE, REQUEST_TRANSITIONS, agreement_errors, branch_of, breakdown_sub_blocks,
-                                comes_before, event_problem, fold, group_problem, held_events, nfc, nfd, owner_of,
-                                parse_branch, path_key, program_problem, request_base_errors, residual_reachable,
+from gates.lib import config, gitinfo, migrations, programs, store, yamlsub
+from gates.lib.programs import (NAME_RE, REQUEST_TRANSITIONS, Program, agreement_errors, branch_of, breakdown_sub_blocks,
+                                comes_before, counted_lines, event_problem, fold, group_problem, held_events,
+                                live_programs, load_program, nfc, nfd, owner_of, parse_branch, path_key,
+                                program_problem, request_base_errors, request_errors, residual_reachable,
                                 shared_rule, status_errors, status_fact_errors, status_rows, stream_problem,
                                 streams_errors, sub_block, window_of, worktree_of, worktrees_dir)
 from gates.lib.result import GateError
-from tests.helpers import minimal_config
+from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, check_root_forms, commit_all, git, int_limit, make_repo,
+                           minimal_config, root_forms, write_record)
 
 CFG = minimal_config()
 NAME = "20261101-x"
@@ -308,6 +312,17 @@ class Events(unittest.TestCase):
                    "merged:a/b\n", "merged:a/b\r", "merged:a/b\x00", "merged:a/\ufeffb", None, 5, True, b"x", ["x"]):
             self.assertNotEqual(event_problem(ev, {"a"}), "", repr(ev))
 
+    def test_event_problem_reasons_keep_the_d_b5_phrase(self):
+        # D-B5: the recommended phrases of Q5 are the prefix of the reason; a ": <value>" suffix is allowed.
+        ids_ = {"a"}
+        self.assertTrue(event_problem(5, ids_).startswith("not a str"))
+        self.assertTrue(event_problem(None, ids_).startswith("not a str"))
+        self.assertTrue(event_problem("later", ids_).startswith("not an event"))
+        self.assertTrue(event_problem("merged", ids_).startswith("not an event"))
+        self.assertTrue(event_problem("merged:z", ids_).startswith("unknown stream z"))
+        self.assertTrue(event_problem("merged:a/b-c", ids_).startswith("sub-block id must be [0-9A-Za-z]+"))
+        self.assertTrue(event_problem("merged:a/", ids_).startswith("sub-block id must be [0-9A-Za-z]+"))
+
     def test_event_problem_stream_ids_shapes(self):
         self.assertEqual(event_problem("merged:a", frozenset({"a"})), "")
         self.assertEqual(event_problem("merged:a", {"a": 1}), "")
@@ -496,7 +511,7 @@ class Streams(unittest.TestCase):
             self.assertTrue(any(e.startswith("owns: x.py (stream a): ") for e in streams_errors(two([w], ["y.py"]), NAME, CFG)), w)
         self.assertEqual(streams_errors(two([W("x.py", PS_, "merged:a")], ["y.py"]), NAME, CFG), [])
         errs = streams_errors(row(stream("a", ["x.py"], ("later", PC)), stream("b", merge_order=2)), NAME, CFG)
-        self.assertEqual([e for e in errs if e.startswith("period:")], ["period: a: 'later' is not an event"])
+        self.assertEqual([e for e in errs if e.startswith("period:")], ["period: a: not an event: 'later'"])
         self.assertFalse(any(e.startswith("owns:") for e in errs))
         errs = streams_errors(row(stream("a", ["x.py"], ("later", "also")), stream("b", merge_order=2)), NAME, CFG)
         self.assertEqual(len([e for e in errs if e.startswith("period:")]), 2)
@@ -594,21 +609,22 @@ class Worktrees(unittest.TestCase):
         self.assertEqual(self.errs(5), [])
 
     def test_worktrees_dir_resolves_against_main_worktree(self):
-        with mock.patch.object(programs, "_main_worktree", return_value="/home/x/repo") as m:
+        with mock.patch.object(gitinfo, "main_worktree", return_value="/home/x/repo") as m:
             self.assertEqual(worktrees_dir("/home/x/wt/%s/integration" % NAME, S()), "/home/x/w")
             m.assert_called_once_with("/home/x/wt/%s/integration" % NAME)
             self.assertEqual(worktrees_dir("/r", {**S(), "worktrees": "../../w"}), "/home/w")
-        with mock.patch.object(programs, "_main_worktree", return_value="/home/x/repo"):
+        with mock.patch.object(gitinfo, "main_worktree", return_value="/home/x/repo"):
             for w in ("../repo/x", "..", "/w", "w", 5):
                 with self.assertRaises(GateError, msg=repr(w)):
                     worktrees_dir("/r", {**S(), "worktrees": w})
             with self.assertRaises(GateError):
                 worktrees_dir("/r", None)
 
-    def test_main_worktree_seam_calls_gitinfo(self):
-        from gates.lib import gitinfo
-        with mock.patch.object(gitinfo, "main_worktree", create=True, return_value="/m") as m:
-            self.assertEqual(programs._main_worktree("/r"), "/m")
+    def test_worktrees_dir_calls_gitinfo_main_worktree_at_call_time(self):
+        # the seam is gone: worktrees_dir reads the name `gitinfo.main_worktree` when it runs
+        self.assertFalse(hasattr(programs, "_main_worktree"))
+        with mock.patch.object(gitinfo, "main_worktree", return_value="/m/repo") as m:
+            self.assertEqual(worktrees_dir("/r", S()), "/m/w")
             m.assert_called_once_with("/r")
 
 
@@ -1023,13 +1039,6 @@ class StatusPage(unittest.TestCase):
 
 
 class Requests(unittest.TestCase):
-    def setUp(self):
-        # gates/schemas/request.yml is delivery (i)'s file; until it lands `migrate("request", ...)` has no schema
-        # to read, so phase 1 runs the rules through an identity migration (the registry has no request step).
-        p = mock.patch.object(programs, "_migrated", lambda kind, row: row)
-        p.start()
-        self.addCleanup(p.stop)
-
     def prog(self, *rows, name=NAME):
         reqs = [store.Record(r.get("id"), r, "programs/%s/requests/%s.yml" % (name, r.get("id"))) for r in rows]
         return mock.Mock(requests=reqs, spec=["requests", "name"], **{"name": name}) if False else _P(name, reqs)
@@ -1130,6 +1139,42 @@ class Agreement(unittest.TestCase):
         with self.assertRaises(ValueError):
             agreement_errors(st, b, None)
 
+    def test_agreement_unusable_breakdown_raises_naming_the_field(self):
+        # D-B11 (a): an unusable row is a ValueError naming the field, never a pass and never a traceback.
+        def bad(mut, field):
+            st, b = self.pair()
+            mut(b)
+            with self.assertRaises(ValueError, msg=field) as cm:
+                agreement_errors(st, b, "program-plan")
+            self.assertIn(field, str(cm.exception))
+        bad(lambda b: b.pop("streams"), "breakdown.streams")
+        bad(lambda b: b.update(streams={"a": 1}), "breakdown.streams")
+        bad(lambda b: b["streams"].append(5), "breakdown.streams.2")
+        bad(lambda b: b["streams"][0].pop("id"), "breakdown.streams.0.id")
+        bad(lambda b: b["streams"][0].update(id=5), "breakdown.streams.0.id")
+        bad(lambda b: b["streams"][0].pop("tasks"), "breakdown.streams.0.tasks")
+        bad(lambda b: b["streams"][0].update(tasks=["a1.1", 3]), "breakdown.streams.0.tasks")
+        bad(lambda b: b["streams"][1].update(paths="x"), "breakdown.streams.1.paths")
+        bad(lambda b: b["streams"][0].update(period=[1]), "breakdown.streams.0.period")
+        bad(lambda b: b.update(edges={"from": "a"}), "breakdown.edges")
+        bad(lambda b: b.update(edges=[5]), "breakdown.edges")
+        bad(lambda b: b.update(edges=[{"from": "a1.1"}]), "breakdown.edges")
+        bad(lambda b: b.update(plan=5), "breakdown.plan")
+        st, _ = self.pair()
+        for notmap in (None, [], "x", 5):
+            with self.assertRaises(ValueError) as cm:
+                agreement_errors(st, notmap, "program-plan")
+            self.assertIn("breakdown", str(cm.exception))
+        _, b = self.pair()
+        for notmap in (None, [], "x"):
+            with self.assertRaises(ValueError) as cm:
+                agreement_errors(notmap, b, "program-plan")
+            self.assertIn("streams", str(cm.exception))
+        # absent edges are an empty list (as comes_before reads them)
+        st, b = self.pair()
+        del b["edges"]
+        self.assertEqual(agreement_errors(st, b, "program-plan"), [])
+
     def test_stacked_order(self):
         def mk(edges, t_tasks=("t1.1",)):
             st = row(stream("s", ["s/"], merge_order=1, stacked_on="t"), stream("t", ["t/"], merge_order=2), plan=PROGRAM_PLAN)
@@ -1146,6 +1191,1127 @@ class Agreement(unittest.TestCase):
         self.assertTrue(any("stacked_on" in e for e in agreement_errors(st, b, "program-plan")))
         st, b = mk([("t1.1", "s1.1"), ("t2.1", "s1.1"), ("t1.1", "s2.1"), ("t2.1", "s2.1")], t_tasks=("t1.1", "t2.1"))
         self.assertEqual(agreement_errors(st, b, "program-plan"), [])
+
+
+# ---------------------------------------------------------------- delivery (ii) phase 2: git-backed rows
+
+RID = "R-20261105-bn3p"
+RID2 = "R-20261105-cn3p"
+DID = "DEC-20261105-bn3p"
+PROGDIR = ".strict-delivery/state/programs/" + NAME
+STATUS_TEXT = "<!-- schema: status/1 -->\n\nthe status page\n"
+SYNC_TEXT = "<!-- schema: sync-log/1 -->\n"
+MERGED_HEAD = "<!-- schema: merged-log/1 -->\n"
+LEDGER_HEAD = "<!-- schema: ledger/1 -->\n"
+
+
+def prog_streams():
+    return row(stream("a", ["a-owned.py", "tests/test_a.py"], merge_order=1), stream("b", ["b-owned.py"], merge_order=2),
+               stream("residual", residual=True, merge_order=3))
+
+
+def req_row(rid=RID, to="b", files=("b-owned.py",), status="open", frm="a", **kw):
+    r = {"schema": "request/1", "id": rid, "from_stream": frm, "to_stream": to, "files": list(files),
+         "interface": "docs/x.md#y", "need": "n", "status": status, "raised_at": {"sha": "a" * 7, "by": "a"}}
+    r.update(kw)
+    return r
+
+
+def done_row(commits, rid=RID, to="b", files=("b-owned.py",), **kw):
+    return req_row(rid, to, files, "done", resolution={"commits": list(commits), "at": "b" * 7, "by": "b"}, **kw)
+
+
+def rec(r):
+    return store.Record(r.get("id"), r, "%s/requests/%s.yml" % (PROGDIR, r.get("id")))
+
+
+def make_program(requests=(), streams=None, merged=MERGED_HEAD, ref=None, name=NAME):
+    return Program(name, streams if streams is not None else prog_streams(), STATUS_TEXT,
+                   [rec(r) for r in requests], SYNC_TEXT, merged, ref)
+
+
+def mline(pr, head, merge, stream_id, block, final="no", **kw):
+    f = {"pr": str(pr), "head": head, "merge": merge, "merged_by": "owner", "at": "2026-11-18T10:00:00Z",
+         "final": final, "stream": stream_id, "block": block}
+    f.update(kw)
+    return ("MERGED pr=%(pr)s head=%(head)s merge=%(merge)s merged_by=%(merged_by)s at=%(at)s final=%(final)s "
+            "stream=%(stream)s block=%(block)s approval=host" % f)
+
+
+def ledger(*lines):
+    return LEDGER_HEAD + "".join(l + "\n" for l in lines)
+
+
+def ckpt(block, task, head):
+    return "CHECKPOINT %s %s head=%s tests=1/1 gates=PASS next=n" % (block, task, head)
+
+
+BDX = {"plan": "program-plan", "streams": [
+    {"id": "a", "tasks": ["a1.1"], "paths": ["a-owned.py", "tests/test_a.py"]},
+    {"id": "b", "tasks": ["1a.1", "1b.1"], "paths": ["b-owned.py"]},
+    {"id": "residual", "tasks": ["R1.1", "R2.1"], "residual": True}], "edges": []}
+
+
+class GitProgram(GitIsolatedTestCase):
+    """A ``make_repo`` fixture whose git config sets ``color.ui=always``, ``color.diff=always``, ``core.abbrev=7``."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = make_repo(self.work, minimal_config())
+        for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.root, "config", k, v)
+        self.cfg = config.load(self.root)
+        self.A = git(self.root, "rev-parse", "HEAD")
+
+    def put(self, rel, text, root=None):
+        path = os.path.join(root or self.root, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(text if type(text) is bytes else text.encode("utf-8"))
+        return path
+
+    def folder(self, requests=(), streams=None, root=None, name=NAME, base=None):
+        base = base or ".strict-delivery/state/programs"
+        d = "%s/%s" % (base, name)
+        self.put(d + "/streams.yml", yamlsub.emit(streams if streams is not None else prog_streams()), root)
+        self.put(d + "/status.md", STATUS_TEXT, root)
+        self.put(d + "/sync-log.md", SYNC_TEXT, root)
+        self.put(d + "/merged.md", MERGED_HEAD, root)
+        for r in requests:
+            self.put("%s/requests/%s.yml" % (d, r["id"]), yamlsub.emit(r), root)
+
+    def sha(self, rev="HEAD", root=None):
+        return git(root or self.root, "rev-parse", rev)
+
+
+class ProgramDataclass(unittest.TestCase):
+    def test_program_dataclass_frozen(self):  # PR1
+        p = make_program()
+        self.assertEqual([f.name for f in dataclasses.fields(Program)],
+                         ["name", "streams", "status_text", "requests", "sync_log", "merged_log", "ref"])
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            p.name = "x"
+        self.assertIsNone(p.ref)
+
+
+class LoadProgram(GitProgram):
+    def setUp(self):
+        super().setUp()
+        self.req = req_row()
+        self.folder([self.req])
+        commit_all(self.root, "program")
+        self.expect = Program(NAME, prog_streams(), STATUS_TEXT, [rec(self.req)], SYNC_TEXT, MERGED_HEAD, None)
+
+    def streams_path(self):
+        return os.path.join(self.root, *(PROGDIR + "/streams.yml").split("/"))
+
+    def refuses(self, fragment, ref=None, **kw):
+        with self.assertRaises(GateError) as cm:
+            load_program(self.root, kw.get("cfg", self.cfg), kw.get("name", NAME), ref)
+        self.assertIn(fragment, str(cm.exception))
+
+    def test_load_program_working_tree(self):  # PR2
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None), self.expect)
+        p = load_program(self.root, self.cfg, NAME, None)
+        self.assertEqual(p.requests[0].file, PROGDIR + "/requests/" + RID + ".yml")
+        # sorted file order
+        self.put(PROGDIR + "/requests/" + RID2 + ".yml", yamlsub.emit(req_row(RID2)))
+        self.put(PROGDIR + "/requests/R-20261105-an3p.yml", yamlsub.emit(req_row("R-20261105-an3p")))
+        got = [r.id for r in load_program(self.root, self.cfg, NAME, None).requests]
+        self.assertEqual(got, ["R-20261105-an3p", RID, RID2])
+
+    def test_load_program_from_ref(self):  # PR3
+        git(self.root, "tag", "tg")
+        git(self.root, "branch", "br")
+        full = self.sha()
+        for ref in ("br", full, "HEAD", "tg", "main"):
+            p = load_program(self.root, self.cfg, NAME, ref)
+            self.assertEqual(p, dataclasses.replace(self.expect, ref=ref), ref)
+        # the working tree is not read when a ref is given
+        self.put(PROGDIR + "/status.md", "changed\n")
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").status_text, STATUS_TEXT)
+
+    def test_load_program_missing_folder(self):  # PR4
+        git(self.root, "checkout", "-q", "-b", "empty", self.A)
+        for ref in (None, "empty"):
+            self.refuses(PROGDIR + "/streams.yml", ref)
+        self.refuses("streams.yml", None, name="20261102-y")
+
+    def test_load_program_missing_streams(self):  # PR5
+        os.remove(self.streams_path())
+        self.refuses(PROGDIR + "/streams.yml")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "no streams")
+        self.refuses(PROGDIR + "/streams.yml", "HEAD")
+
+    def test_load_program_unparseable_streams(self):  # PR6
+        good = yamlsub.emit(prog_streams())
+        bad = {"tab indent": "a:\n\tb: 1\n", "duplicate key": "a: 1\na: 2\n", "anchor": "a: &x 1\nb: *x\n",
+               "flow beyond the subset": "a: {b: [1, {c: 2}]}\n", "top-level list": "- a\n- b\n", "empty": "",
+               "invalid utf-8": b"a: \xff\n", "BOM": b"\xef\xbb\xbf" + good.encode(), "CRLF": good.replace("\n", "\r\n"),
+               "scalar": "just text\n"}
+        for what, text in bad.items():
+            with self.subTest(what):
+                self.put(PROGDIR + "/streams.yml", text)
+                self.refuses("streams.yml")
+        p = self.streams_path()
+        os.remove(p)
+        os.mkdir(p)
+        self.refuses("streams.yml")
+        os.rmdir(p)
+        os.symlink(os.path.join(self.root, PROGDIR, "status.md"), p)
+        self.refuses("streams.yml")
+        os.remove(p)
+        os.mkfifo(p)
+        self.refuses("streams.yml")
+        os.remove(p)
+        self.put(PROGDIR + "/streams.yml", good)
+        if os.geteuid() != 0:
+            os.chmod(p, 0)
+            self.refuses("streams.yml")
+            os.chmod(p, 0o644)
+        self.put(PROGDIR + "/streams.yml", "# " + "x" * 98 + "\n" + "# " + "x" * 98 + "\n" * 1)
+        with open(p, "a") as fh:
+            fh.write(("# " + "x" * 98 + "\n") * 50000)   # about 5 MB of comments: still a mapping-less file
+        self.refuses("streams.yml")
+
+    def test_load_program_missing_texts(self):  # PR7, D-A9 (b)
+        for name in ("status.md", "sync-log.md", "merged.md"):
+            path = os.path.join(self.root, *(PROGDIR + "/" + name).split("/"))
+            with open(path, "rb") as fh:
+                saved = fh.read()
+            os.remove(path)
+            self.refuses(name)
+            self.put(PROGDIR + "/" + name, saved)
+
+    def test_load_program_text_kinds(self):  # PR8
+        for name in ("status.md", "sync-log.md", "merged.md"):
+            rel = PROGDIR + "/" + name
+            path = os.path.join(self.root, *rel.split("/"))
+            for what, data in (("invalid utf-8", b"<!-- x -->\n\xff\n"), ("BOM", b"\xef\xbb\xbf<!-- x -->\n"),
+                               ("CRLF", b"<!-- x -->\r\n")):
+                with self.subTest(name=name, what=what):
+                    self.put(rel, data)
+                    self.refuses(name)
+            os.remove(path)
+            os.mkdir(path)
+            self.refuses(name)
+            os.rmdir(path)
+            os.symlink(os.path.join(self.root, PROGDIR, "streams.yml"), path)
+            self.refuses(name)
+            os.remove(path)
+            self.put(rel, "ok\n")
+
+    def test_load_program_requests_folder(self):  # PR9
+        d = os.path.join(self.root, *(PROGDIR + "/requests").split("/"))
+        os.remove(os.path.join(d, RID + ".yml"))
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None).requests, [])     # empty
+        os.rmdir(d)
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None).requests, [])     # absent
+        os.mkdir(d)
+        stray = "not a regular file named <id>.yml"
+        for name, data in (("index.yml", "a: 1\n"), (".gitkeep", ""), ("README.md", "x\n"), ("notes.txt", "x\n"),
+                           (".hidden.yml", "a: 1\n"), ("in-force.md", "x\n")):
+            with self.subTest(name):
+                self.put(PROGDIR + "/requests/" + name, data)
+                self.refuses("requests/%s: %s" % (name, stray))
+                os.remove(os.path.join(d, name))
+        os.mkdir(os.path.join(d, "sub.yml"))
+        self.refuses("requests/sub.yml: " + stray)
+        os.rmdir(os.path.join(d, "sub.yml"))
+        os.symlink(self.streams_path(), os.path.join(d, "l.yml"))
+        self.refuses("requests/l.yml: " + stray)
+        os.remove(os.path.join(d, "l.yml"))
+        self.put(PROGDIR + "/requests/top.yml", "- a\n- b\n")
+        self.refuses("requests/top.yml")
+        os.remove(os.path.join(d, "top.yml"))
+        self.put(PROGDIR + "/requests/bad.yml", "a:\n\tb: 1\n")
+        self.refuses("requests/bad.yml")
+        os.remove(os.path.join(d, "bad.yml"))
+        # a file whose name or id is wrong is store_errors' to name, not load_program's
+        self.put(PROGDIR + "/requests/x.yml", yamlsub.emit(req_row("R-20261105-zz3p")))
+        self.assertEqual([r.id for r in load_program(self.root, self.cfg, NAME, None).requests], ["R-20261105-zz3p"])
+
+    def test_load_program_requests_folder_not_a_directory(self):  # PR9: the folder is a file or a symlink to a directory
+        d = os.path.join(self.root, *(PROGDIR + "/requests").split("/"))
+        os.remove(os.path.join(d, RID + ".yml"))
+        os.rmdir(d)
+        self.put(PROGDIR + "/requests", "x\n")
+        self.refuses(PROGDIR + "/requests: not a directory")
+        os.remove(d)
+        os.makedirs(os.path.join(self.root, "elsewhere"))
+        os.symlink(os.path.join(self.root, "elsewhere"), d)
+        self.refuses(PROGDIR + "/requests: not a directory")
+
+    def test_load_program_requests_listed_at_the_ref_not_the_working_tree(self):  # PR3, PR16
+        os.remove(os.path.join(self.root, *(PROGDIR + "/requests/" + RID + ".yml").split("/")))
+        self.put(PROGDIR + "/requests/README.md", "untracked stray\n")
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").requests, self.expect.requests)
+        self.refuses("requests/README.md", None)
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").requests[0].id, RID)
+
+    def test_load_program_ref_requests_folder(self):  # PR9 at a ref: a stray regular file is refused too
+        self.put(PROGDIR + "/requests/README.md", "x\n")
+        commit_all(self.root, "stray")
+        self.refuses("requests/README.md: not a regular file named <id>.yml", "HEAD")
+        git(self.root, "checkout", "-q", "-b", "none", self.A)
+        self.folder()
+        commit_all(self.root, "no requests")
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").requests, [])
+
+    def test_load_program_migrates_rows(self):  # PR10
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None).streams, prog_streams())   # current version: unchanged
+        # no registered step: the rows are as read. With a (test-only) version 2 and a step 1 -> 2 both rows move.
+        steps = {("streams", 1): lambda r: {**r, "schema": "streams/2"}, ("request", 1): lambda r: {**r, "schema": "request/2"}}
+        with mock.patch.dict(migrations.MIGRATIONS, steps), mock.patch.object(migrations, "current_version", return_value=2):
+            got = load_program(self.root, self.cfg, NAME, None)
+            self.assertEqual(got.streams, {**prog_streams(), "schema": "streams/2"})
+            self.assertEqual(got.requests[0].row, {**self.req, "schema": "request/2"})
+            self.assertEqual(got.requests[0].id, RID)
+            self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").streams["schema"], "streams/2")
+
+    def test_load_program_name(self):  # PR11
+        for bad in ("x", "../a", "a/b", "", None, 5, b"20261101-x", "20261301-x", NAME + "/", "./" + NAME):
+            with self.subTest(bad=bad):
+                with self.assertRaises(GateError) as cm:
+                    load_program(self.root, self.cfg, bad, None)
+                self.assertIn("program name", str(cm.exception))
+
+        class Sub(str):
+            pass
+        with self.assertRaises(GateError):
+            load_program(self.root, self.cfg, Sub(NAME), None)
+        with mock.patch.object(gitinfo, "show") as m:       # refused before any file is read
+            with self.assertRaises(GateError):
+                load_program(self.root, self.cfg, "../a", "HEAD")
+            m.assert_not_called()
+
+    def test_load_program_ref_forms(self):  # PR12, D-A23
+        for bad in ("-x", "^x", "a" * 41, "", 5, b"HEAD", "no-such-ref", "HEAD:x"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(GateError):
+                    load_program(self.root, self.cfg, NAME, bad)
+        # a tag and a branch of one name: the bare name is git's tag; refs/heads/<b> is the branch
+        git(self.root, "checkout", "-q", "-b", "tagged", self.A)
+        git(self.root, "tag", "t-folder")
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "tag", "dup", self.A)
+        git(self.root, "branch", "dup", "main")
+        self.assertRaises(GateError, load_program, self.root, self.cfg, NAME, "dup")      # the tag is the empty root commit
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "refs/heads/dup").status_text, STATUS_TEXT)
+
+    def test_load_program_root_forms(self):  # PR13
+        forms = root_forms(self.tmp, self.root)
+        check_root_forms(self, forms, {"at a ref": lambda p: load_program(p, self.cfg, NAME, "main"),
+                                       "working tree": lambda p: load_program(p, self.cfg, NAME, None)})
+        for bad in (None, 5, "", b"x", [self.root]):
+            with self.assertRaises(GateError):
+                load_program(bad, self.cfg, NAME, None)
+
+    def test_load_program_custom_paths(self):  # PR14
+        cfg2 = {**self.cfg, "paths": {**self.cfg["paths"], "programs": "p2"}}
+        self.folder([self.req], base="p2")
+        self.put("p2/%s/status.md" % NAME, "custom\n")
+        self.assertEqual(load_program(self.root, cfg2, NAME, None).status_text, "custom\n")
+        commit_all(self.root, "p2")
+        self.assertEqual(load_program(self.root, cfg2, NAME, "HEAD").status_text, "custom\n")
+        for bad in ({k: v for k, v in self.cfg.items() if k != "paths"}, {**self.cfg, "paths": {**self.cfg["paths"], "programs": 5}},
+                    {**self.cfg, "paths": {}}, {**self.cfg, "paths": None}, {}, None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(GateError) as cm:
+                    load_program(self.root, bad, NAME, None)
+                self.assertIn("paths.programs", str(cm.exception))
+
+    def test_load_program_ref_non_regular(self):  # PR15
+        for name in ("status.md", "streams.yml"):
+            git(self.root, "checkout", "-q", "-b", "sym-" + name[:3], "main")
+            rel = PROGDIR + "/" + name
+            os.remove(os.path.join(self.root, *rel.split("/")))
+            os.symlink("sync-log.md", os.path.join(self.root, *rel.split("/")))
+            commit_all(self.root, "symlink " + name)
+            self.refuses(name, "HEAD")
+            git(self.root, "checkout", "-q", "main")
+
+    def test_load_program_sources_independent(self):  # PR16
+        self.put(PROGDIR + "/status.md", "edited\n")
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None).status_text, "edited\n")
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").status_text, STATUS_TEXT)
+
+    def test_load_program_ref_invalid_utf8(self):  # PR17
+        self.put(PROGDIR + "/status.md", b"<!-- x -->\n\xff\n")
+        commit_all(self.root, "bad bytes")
+        self.refuses("not valid UTF-8", "HEAD")
+
+    def test_load_program_integration_worktree_root(self):  # PR18
+        wt = os.path.join(self.tmp, "wt")
+        git(self.root, "worktree", "add", "-q", "-b", NAME + "/integration", wt, "main")
+        self.put(PROGDIR + "/status.md", "worktree text\n", wt)
+        self.put(PROGDIR + "/status.md", "main text\n")
+        self.assertEqual(load_program(wt, self.cfg, NAME, None).status_text, "worktree text\n")
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None).status_text, "main text\n")
+
+    def test_load_program_digit_limits_same_on_both(self):  # PR19
+        def with_estimate(n):
+            r = prog_streams()
+            text = yamlsub.emit(r).replace("estimate: 5", "estimate: 1" + "0" * (n - 1), 1)
+            self.put(PROGDIR + "/streams.yml", text)
+        # yamlsub refuses a numeral of more than 1000 characters on every interpreter ("integer too large"); under the
+        # 3.11+ int-conversion limit of 640 even 1000 digits fail, and that too is the same GateError, never a traceback.
+        limited = lambda lim: lim == 640
+        for digits in (1000, 1001, 4300, 4301):
+            with_estimate(digits)
+            for lim in INT_LIMITS:
+                with self.subTest(digits=digits, limit=lim), int_limit(lim):
+                    if digits > 1000 or limited(lim):
+                        with self.assertRaises(GateError) as cm:
+                            load_program(self.root, self.cfg, NAME, None)
+                        self.assertIn("streams.yml: integer too large", str(cm.exception))
+                    else:
+                        got = load_program(self.root, self.cfg, NAME, None)
+                        self.assertEqual(got.streams["streams"][0]["estimate"], 10 ** 999)
+
+
+class WorktreesGit(GitProgram):
+    def test_worktrees_dir_real_main_worktree(self):  # WT7-WT9: the real gitinfo.main_worktree through worktrees_dir
+        r = {**S(), "worktrees": "../wt-out"}
+        want = os.path.join(os.path.dirname(self.root), "wt-out")
+        self.assertEqual(worktrees_dir(self.root, r), want)
+        linked = os.path.join(self.tmp, "linked")
+        git(self.root, "worktree", "add", "-q", "--detach", linked)
+        self.assertEqual(worktrees_dir(linked, r), want)      # resolved against the main worktree, never against root
+        self.assertEqual(worktrees_dir(self.root, r), gitinfo.main_worktree(self.root) and want)
+        with self.assertRaises(GateError):
+            worktrees_dir(os.path.join(self.root, "nope"), r)
+
+
+class LivePrograms(GitProgram):
+    def integration(self, name=NAME, with_folder=True, base="main", branch=None):
+        git(self.root, "checkout", "-q", "-b", branch or name + "/integration", base)
+        if with_folder:
+            self.folder(name=name)
+        commit_all(self.root, "int " + name)
+        git(self.root, "checkout", "-q", "main")
+
+    def test_live_programs_none(self):  # LV1
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+
+    def test_live_programs_from_integration_branches(self):  # LV2, plan :2701
+        self.integration()
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+
+    def test_live_programs_integration_without_folder(self):  # LV3
+        self.integration(with_folder=False)
+        self.folder()
+        commit_all(self.root, "folder on main only")
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+
+    def test_live_programs_two(self):  # LV4
+        self.integration("20261102-y")
+        self.integration()
+        self.integration("20261101-a")
+        self.assertEqual(live_programs(self.root, self.cfg), ["20261101-a", NAME, "20261102-y"])
+
+    def test_live_programs_stream_branch_only(self):  # LV5
+        self.integration(branch=NAME + "/a/main")
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+
+    def test_live_programs_ignores_current_tree(self):  # LV6
+        self.folder()
+        commit_all(self.root, "folder on main")
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+        git(self.root, "checkout", "-q", "-b", NAME + "/a/main")
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+        self.put(PROGDIR + "/x.txt", "x")           # an uncommitted tree changes nothing
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+
+    def test_live_programs_branch_name_forms(self):  # LV7, D-A24
+        for branch in ("x/integration", "20261105-z/integration/y", "20261101-x/records", "foo", "20261301-x/integration",
+                       "20261101-x/a/integration"):
+            git(self.root, "checkout", "-q", "-b", branch, "main")
+            for prog in ("x", "20261105-z", "20261101-x", "20261301-x"):
+                self.folder(name=prog)
+            commit_all(self.root, "forms " + branch)
+            git(self.root, "checkout", "-q", "main")
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+        self.integration("20261103-ok")
+        self.assertEqual(live_programs(self.root, self.cfg), ["20261103-ok"])
+
+    def test_live_programs_tip_file_kinds(self):  # LV8
+        for label, name in (("symlink", "20261101-a"), ("directory", "20261101-b"), ("empty", "20261101-c"),
+                            ("unparseable", "20261101-d")):
+            git(self.root, "checkout", "-q", "-b", name + "/integration", "main")
+            d = PROGDIR.replace(NAME, name)
+            self.put(d + "/status.md", "s\n")
+            target = os.path.join(self.root, *(d + "/streams.yml").split("/"))
+            if label == "symlink":
+                os.symlink("status.md", target)
+            elif label == "directory":
+                self.put(d + "/streams.yml/inner", "x")
+            else:
+                self.put(d + "/streams.yml", "" if label == "empty" else "a:\n\tb\n")
+            commit_all(self.root, label)
+            git(self.root, "checkout", "-q", "main")
+        self.assertEqual(live_programs(self.root, self.cfg), ["20261101-c", "20261101-d"])
+
+    def test_live_programs_ignores_program_field(self):  # LV9
+        self.folder(streams={**prog_streams(), "program": "20261102-other"})
+        git(self.root, "checkout", "-q", "-b", NAME + "/integration")
+        commit_all(self.root, "other program field")
+        git(self.root, "checkout", "-q", "main")
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+
+    def test_live_programs_tag_same_name(self):  # LV10, D-A23
+        self.integration()
+        git(self.root, "tag", NAME + "/integration", self.A)          # the tag has no folder
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])   # read from refs/heads/, not the tag git prefers
+        git(self.root, "tag", "-d", NAME + "/integration")
+        self.integration("20261102-y", with_folder=False)
+        git(self.root, "checkout", "-q", "-b", "with-folder", "main")
+        self.folder(name="20261102-y")
+        commit_all(self.root, "folder")
+        git(self.root, "tag", "20261102-y/integration")
+        git(self.root, "checkout", "-q", "main")
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])   # the tag holds a folder; the branch does not
+
+    def test_live_programs_head_states(self):  # LV11
+        self.integration()
+        git(self.root, "checkout", "-q", "--detach")
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+        git(self.root, "checkout", "-q", "--orphan", "unborn")
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+        git(self.root, "checkout", "-q", "-f", "main")
+        self.put("c.txt", "one\n")
+        commit_all(self.root, "one")
+        git(self.root, "checkout", "-q", "-b", "other", self.A)
+        self.put("c.txt", "two\n")
+        commit_all(self.root, "two")
+        git(self.root, "merge", "main", check=False)
+        self.assertTrue(os.path.exists(os.path.join(self.root, ".git", "MERGE_HEAD")))
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+
+    def test_live_programs_custom_path(self):  # LV12
+        cfg2 = {**self.cfg, "paths": {**self.cfg["paths"], "programs": "p2"}}
+        git(self.root, "checkout", "-q", "-b", NAME + "/integration", "main")
+        self.folder(base="p2")
+        commit_all(self.root, "p2")
+        git(self.root, "checkout", "-q", "main")
+        self.assertEqual(live_programs(self.root, cfg2), [NAME])
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+
+    def test_live_programs_remote_only_not_live(self):  # LV13
+        self.integration()
+        git(self.root, "update-ref", "refs/remotes/origin/20261102-y/integration", self.sha(NAME + "/integration"))
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+        git(self.root, "branch", "-D", NAME + "/integration")
+        self.assertEqual(live_programs(self.root, self.cfg), [])
+
+    def test_live_programs_many(self):  # LV14 (100 programs; one listing, one tip read each)
+        names = ["202611%02d-p%d" % (1 + i % 28, i) for i in range(100)]
+        git(self.root, "checkout", "-q", "-b", "store", "main")
+        for n in names:
+            self.put("%s/%s/streams.yml" % (".strict-delivery/state/programs", n), "a: 1\n")
+        sha = commit_all(self.root, "many")
+        git(self.root, "checkout", "-q", "main")
+        with open(os.path.join(self.root, ".git", "packed-refs"), "w") as fh:
+            fh.write("# pack-refs with: peeled fully-peeled sorted\n")
+            for n in sorted(names):
+                fh.write("%s refs/heads/%s/integration\n" % (sha, n))
+        self.assertEqual(len(gitinfo.local_branches(self.root)), 102)       # main, store and the 100 integration branches
+        with mock.patch.object(gitinfo, "local_branches", wraps=gitinfo.local_branches) as lb, \
+                mock.patch.object(gitinfo, "show", wraps=gitinfo.show) as sh:
+            got = live_programs(self.root, self.cfg)
+        self.assertEqual(got, sorted(names))
+        self.assertEqual(lb.call_count, 1)
+        self.assertEqual(sh.call_count, 100)
+
+    def test_live_programs_types(self):  # LV15
+        for bad in (None, 5, "", b"x"):
+            with self.assertRaises(GateError):
+                live_programs(bad, self.cfg)
+        for bad in ({}, None, {"paths": {}}, {"paths": {"programs": 5}}):
+            with self.assertRaises(GateError):
+                live_programs(self.root, bad)
+
+    def test_live_programs_returns_list(self):  # LV16
+        self.integration()
+        a = live_programs(self.root, self.cfg)
+        self.assertIs(type(a), list)
+        self.assertTrue(all(type(x) is str for x in a))
+        a.append("x")
+        self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+
+
+class Counted(GitProgram):
+    """``counted_lines`` (decision D-A26 (1)) on real merge commits."""
+
+    def setUp(self):
+        super().setUp()
+        self.a7 = self.A[:7]
+
+    def pr(self, branch, sid, ledger_lines=(), files=None, ledger_name="ledger.md"):
+        """A branch off main holding the stream's ledger (and ``files``), merged into main with ``--no-ff``;
+        returns ``(head, merge)``."""
+        git(self.root, "checkout", "-q", "-b", branch, "main")
+        self.put("%s/%s-plan/%s" % (PS, sid, ledger_name), ledger(*ledger_lines))
+        for rel, text in (files or {}).items():
+            self.put(rel, text)
+        head = commit_all(self.root, "work " + branch)
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "Merge " + branch, branch)
+        return head, self.sha("main")
+
+    def program(self, *lines, streams=None):
+        return make_program(streams=streams, merged=MERGED_HEAD + "".join(l + "\n" for l in lines))
+
+    def run_counted(self, prog, bd=None):
+        return counted_lines(prog, self.root, self.cfg, bd if bd is not None else BDX)
+
+    def test_counted_none(self):
+        self.assertEqual(self.run_counted(self.program()), ([], {}, []))
+
+    def test_counted_one_line(self):  # ME2
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1a")))
+        self.assertEqual([(c["pr"], c["head"], c["merge"], c["stream"], c["block"]) for c in counted],
+                         [(1, head, m, "b", "1a")])
+        self.assertEqual((merged, errors), ({"b": {"1a"}}, []))
+
+    def test_one_pr_carries_several_sub_blocks(self):  # ME5, Q-F80W-2: init4's pull request carries 4c, 4d, 4e
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7), ckpt("1b", "1b.1", head7(self, "main"))])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1b")))
+        self.assertEqual((merged, errors), ({"b": {"1a", "1b"}}, []))
+
+    def test_block_must_be_the_last_newly_carried(self):  # MP6, Q-F80W-8 (a)
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7), ckpt("1b", "1b.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1a")))
+        self.assertEqual(len(counted), 1)                       # the line counts and carries
+        self.assertEqual(merged, {"b": {"1a", "1b"}})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("pr 1", errors[0])
+        self.assertIn("not the last sub-block it newly carries (1a, 1b)", errors[0])
+
+    def test_last_is_by_the_order_of_the_tasks(self):  # MP12
+        bd = {**BDX, "streams": [BDX["streams"][0], {"id": "b", "tasks": ["1b.1", "1a.1"]}, BDX["streams"][2]]}
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7), ckpt("1b", "1b.1", self.a7)])
+        self.assertEqual(self.run_counted(self.program(mline(1, head, m, "b", "1a")), bd)[2], [])
+        self.assertEqual(len(self.run_counted(self.program(mline(1, head, m, "b", "1b")), bd)[2]), 1)
+
+    def test_a_sub_block_is_listed_once(self):  # two tasks of one sub-block name it once in the reason
+        bd = {**BDX, "streams": [BDX["streams"][0], {"id": "b", "tasks": ["1a.1", "1a.2", "1b.1"]}, BDX["streams"][2]]}
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7), ckpt("1a", "1a.2", self.a7), ckpt("1b", "1b.1", self.a7)])
+        errors = self.run_counted(self.program(mline(1, head, m, "b", "1a")), bd)[2]
+        self.assertEqual(len(errors), 1)
+        self.assertIn("not the last sub-block it newly carries (1a, 1b)", errors[0])
+
+    def test_checkpoint_head_not_ancestor_not_carried(self):  # ME6
+        git(self.root, "checkout", "-q", "-b", "side", "main")
+        self.put("side.txt", "x")
+        side = commit_all(self.root, "side")
+        git(self.root, "checkout", "-q", "main")
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", side[:7]), ckpt("1b", "1b.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1b")))
+        self.assertEqual((merged, errors), ({"b": {"1b"}}, []))
+
+    def test_checkpoint_head_unknown_is_not_carried_and_never_raises(self):  # ME6 (a head git cannot resolve)
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", "89abcde"), ckpt("1b", "1b.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1b")))
+        self.assertEqual((merged, errors), ({"b": {"1b"}}, []))
+
+    def test_one_task_without_checkpoint_not_carried(self):  # ME7
+        bd = {**BDX, "streams": [BDX["streams"][0], {"id": "b", "tasks": ["1a.1", "1a.2", "1b.1"]}, BDX["streams"][2]]}
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7), ckpt("1b", "1b.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1b")), bd)
+        self.assertEqual((merged, errors), ({"b": {"1b"}}, []))
+
+    def test_block_named_is_carried_without_a_checkpoint(self):  # ME8
+        head, m = self.pr("p1", "b", [])
+        self.assertEqual(self.run_counted(self.program(mline(1, head, m, "b", "1a")))[1:], ({"b": {"1a"}}, []))
+
+    def test_block_that_is_no_sub_block_of_the_stream(self):  # MP11, Q-F80W-10 (a)
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "R2")))
+        self.assertEqual(len(counted), 1)
+        self.assertEqual(merged, {"b": {"1a"}})                 # R2 is not added; 1a is carried by its checkpoint
+        self.assertEqual(len(errors), 1)
+        self.assertIn("block R2 is no sub-block of the tasks of stream b", errors[0])
+
+    def test_a_line_that_newly_carries_nothing(self):  # MP9, Q-F80RR3-2 (a)
+        h1, m1 = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7)])
+        h2, m2 = self.pr("p2", "b", [ckpt("1a", "1a.1", self.a7), ckpt("2x", "2x.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, h1, m1, "b", "1a"), mline(2, h2, m2, "b", "1a")))
+        self.assertEqual(len(counted), 2)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("pr 2", errors[0])
+        self.assertIn("newly carries no sub-block", errors[0])
+
+    def test_a_pull_request_names_a_block_already_counted(self):  # MP8, Q-F80RR3-2 (a): R3's line with block=R5
+        bd = {**BDX, "streams": [BDX["streams"][0], BDX["streams"][1],
+                                 {"id": "residual", "tasks": ["R1.1", "R3.1", "R5.1"], "residual": True}]}
+        h1, m1 = self.pr("p1", "residual", [ckpt("R1", "R1.1", self.a7), ckpt("R5", "R5.1", self.a7)])
+        h2, m2 = self.pr("p2", "residual", [ckpt("R1", "R1.1", self.a7), ckpt("R3", "R3.1", self.a7), ckpt("R5", "R5.1", self.a7)])
+        counted, merged, errors = self.run_counted(
+            self.program(mline(1, h1, m1, "residual", "R5"), mline(2, h2, m2, "residual", "R5")), bd)
+        self.assertEqual(merged, {"residual": {"R1", "R3", "R5"}})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("pr 2", errors[0])
+        self.assertIn("block R5 is not the last sub-block it newly carries (R3)", errors[0])
+
+    def test_uncounted_lines_have_reasons(self):  # ME3, P2.3 D-Q15
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7)])
+        counted, merged, errors = self.run_counted(self.program(mline(1, self.A, m, "b", "1a")))
+        self.assertEqual((counted, merged), ([], {}))
+        self.assertEqual(len(errors), 1)
+        for frag in ("pr 1", "does not count", "head.1"):
+            self.assertIn(frag, errors[0])
+        # a line of a stream the program does not have; a line with no stream; a plan that is not the stream's
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "zz", "1a")))
+        self.assertEqual((counted, merged), ([], {}))
+        self.assertIn("stream zz is not a stream of streams.yml", errors[0])
+        nostream = ("MERGED pr=3 head=%s merge=%s merged_by=o at=2026-11-18T10:00:00Z final=no approval=host" % (head, m))
+        self.assertIn("stream None", self.run_counted(self.program(nostream))[2][0])
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "residual", "R1")))
+        self.assertEqual(counted, [])
+        self.assertIn("plan.1", errors[0])
+
+    def test_stream_plan_forms(self):
+        head, m = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7)])
+        for plan, frag in (("elsewhere/b-plan.md", "is not <paths.plans>/<name>.md"), (PG + "/B_plan.md", "plan must be a plan slug")):
+            st = prog_streams()
+            st["streams"][1]["plan"] = plan
+            counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1a"), streams=st))
+            self.assertEqual(counted, [], plan)
+            self.assertIn(frag, errors[0])
+
+    def test_ledger_unreadable_at_the_head(self):  # ME12, Q16 (a)
+        head, m = self.pr("p1", "b", [], ledger_name="notes.md")
+        counted, merged, errors = self.run_counted(self.program(mline(1, head, m, "b", "1b")))
+        self.assertEqual(merged, {"b": {"1b"}})
+        self.assertEqual(len(errors), 1)
+        self.assertIn(PS + "/b-plan/ledger.md cannot be read", errors[0])
+        git(self.root, "checkout", "-q", "-b", "bad", "main")
+        self.put("%s/b-plan/ledger.md" % PS, b"\xff\n")
+        bad = commit_all(self.root, "bad ledger")
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "m", "bad")
+        counted, merged, errors = self.run_counted(self.program(mline(2, bad, self.sha("main"), "b", "1b")))
+        self.assertIn("not valid UTF-8", errors[0])
+
+    def test_unusable_breakdown_and_arguments(self):
+        head, m = self.pr("p1", "b", [])
+        prog = self.program(mline(1, head, m, "b", "1a"))
+        for bad in ({}, {"streams": 5}, {"streams": [{"id": "b"}]}, []):
+            with self.assertRaises(ValueError):
+                self.run_counted(prog, bad)
+        with self.assertRaises(ValueError):
+            counted_lines({"merged_log": ""}, self.root, self.cfg, BDX)
+        with self.assertRaises(GateError):
+            counted_lines(prog, 5, self.cfg, BDX)
+        with self.assertRaises(GateError):
+            counted_lines(self.program(), 5, self.cfg, BDX)       # with no line to judge, the root is still checked
+
+    def test_counted_lines_deterministic_and_file_order(self):  # ME16
+        h1, m1 = self.pr("p1", "b", [ckpt("1a", "1a.1", self.a7)])
+        h2, m2 = self.pr("p2", "b", [ckpt("1a", "1a.1", self.a7), ckpt("1b", "1b.1", self.a7)])
+        prog = self.program(mline(2, h2, m2, "b", "1b"), mline(1, h1, m1, "b", "1a"))
+        counted, merged, errors = self.run_counted(prog)
+        self.assertEqual([c["pr"] for c in counted], [2, 1])          # file order, not pr order
+        self.assertEqual(merged, {"b": {"1a", "1b"}})
+        self.assertEqual(self.run_counted(prog), (counted, merged, errors))
+        self.assertEqual(len(errors), 1)                               # the second line (pr 1, in file order) carries nothing new
+
+
+def head7(case, rev):
+    return case.sha(rev)[:7]
+
+
+class RequestsGit(GitProgram):
+    """``request_errors`` rules ``from.``, ``done.``, ``decision.`` and the store rules, on real history."""
+
+    def setUp(self):
+        super().setUp()
+        r = self.root
+        git(r, "checkout", "-q", "-b", NAME + "/a/main", "main")
+        self.put("a-owned.py", "a\n")
+        self.Ca = commit_all(r, "Ca")
+        git(r, "checkout", "-q", "-b", NAME + "/b/main", "main")
+        self.put("b-owned.py", "b\n")
+        self.put("%s/b-plan/ledger.md" % PS, ledger(ckpt("1a", "1a.1", self.A[:7])))
+        self.Cb = commit_all(r, "Cb")
+        self.put("src/x.py", "x\n")
+        self.Cd = commit_all(r, "Cd")
+        self.put("notes.txt", "n\n")
+        self.Cn = commit_all(r, "Cn")
+        git(r, "checkout", "-q", "-b", NAME + "/residual/main", "main")
+        self.put("res.txt", "r\n")
+        self.put("%s/residual-plan/ledger.md" % PS, ledger())
+        self.Cr = commit_all(r, "Cr")
+        git(r, "checkout", "-q", "-b", NAME + "/integration", "main")
+        self.put("ci.txt", "i\n")
+        self.Ci = commit_all(r, "Ci")
+        git(r, "checkout", "-q", "main")
+        git(r, "merge", "-q", "--no-ff", "-m", "Cm", NAME + "/b/main")
+        self.Cm = self.sha()
+        git(r, "merge", "-q", "--no-ff", "-m", "Mr", NAME + "/residual/main")
+        self.Mr = self.sha()
+        git(r, "branch", "-D", NAME + "/residual/main")
+        self.put("res.txt", "base\n")
+        self.Cbase = commit_all(r, "Cbase")
+        self.merged = MERGED_HEAD + mline(1, self.Cn, self.Cm, "b", "1a") + "\n" + mline(2, self.Cr, self.Mr, "residual", "R1") + "\n"
+
+    def errs(self, *rows, merged=None, ref=None, bd=None, streams=None, cfg=None):
+        prog = make_program(rows, streams, merged if merged is not None else self.merged, ref)
+        return request_errors(prog, self.root, cfg or self.cfg, BDX if bd is None else bd)
+
+    def kinds(self, *rows, **kw):
+        return [s for s, _ in self.errs(*rows, **kw)]
+
+    def test_request_store_errors(self):  # RQ1
+        good = req_row()
+        wrong_name = store.Record("R-20261105-bn3p", req_row(), PROGDIR + "/requests/x.yml")
+        prog = Program(NAME, prog_streams(), "", [store.Record(RID, good, PROGDIR + "/requests/R-20261105-cn3p.yml"), wrong_name,
+                                                  store.Record(5, req_row(rid=5), PROGDIR + "/requests/five.yml")],
+                       "", MERGED_HEAD, None)
+        got = request_errors(prog, self.root, self.cfg, BDX)
+        want = store.store_errors(prog.requests, "R")
+        self.assertEqual([e for e in got if e[0].split(".")[0] in ("id", "name", "duplicate")], want)
+        self.assertEqual(got[:len(want)], want)                      # first, verbatim
+        self.assertTrue(any(s.startswith("duplicate.") for s, _ in want))
+        self.assertTrue(any(s.startswith("name.") for s, _ in want) and any(s.startswith("id.") for s, _ in want))
+        decision_id = req_row(rid=DID)                                # a decision id in the requests folder
+        self.assertTrue(any(s.startswith("id.") for s in self.kinds(decision_id)))
+
+    def test_request_from_stream(self):  # RQ2
+        self.assertEqual(self.kinds(req_row(frm="a")), [])
+        self.assertEqual(self.errs(req_row(frm="z"))[0][0], "from." + RID)
+        self.assertIn("from_stream z is not a stream", self.errs(req_row(frm="z"))[0][1])
+        self.assertEqual(self.errs(req_row(frm="b", to="b"))[0], ("from." + RID, "from_stream b is the same as to_stream"))
+        self.assertEqual(self.errs(req_row(frm=NAME))[0][0], "from." + RID)           # the program is not a stream
+        self.assertEqual(self.errs(req_row(frm=""))[0][0], "from." + RID)
+        for bad in (5, None, ["a"]):
+            self.assertEqual(self.kinds(req_row(frm=bad)), [], bad)                   # the schema names a wrong type
+
+    def test_request_to_unknown_does_not_raise(self):  # RQ3
+        self.assertEqual(self.kinds(req_row(to="z")), ["to." + RID])
+
+    def test_request_done_without_resolution(self):  # RQ4
+        r = req_row(status="done")
+        self.assertEqual(self.kinds(r), [])
+        r["resolution"] = {"at": "b" * 7, "by": "b"}
+        self.assertEqual(self.kinds(r), [])
+        r["resolution"] = "x"
+        self.assertEqual(self.kinds(r), [])
+
+    def test_request_done_commit_must_exist(self):  # RQ5
+        self.assertEqual(self.kinds(done_row([self.Cb])), [])
+        self.assertEqual(self.kinds(done_row([self.Cb[:7]])), [])
+        absent = "89abcdef0123456789abcdef0123456789abcdef"
+        for what, sha in (("absent", absent), ("tree", git(self.root, "rev-parse", self.Cb + "^{tree}")),
+                          ("blob", git(self.root, "rev-parse", self.Cb + ":b-owned.py")), ("41 hex", self.Cb + "a"),
+                          ("annotated tag peels", None)):
+            if sha is None:
+                git(self.root, "tag", "-a", "-m", "t", "annot", self.Cb)
+                sha = git(self.root, "rev-parse", "annot")
+                self.assertEqual(self.kinds(done_row([sha])), [], what)      # an annotated tag peels to its commit
+                continue
+            got = self.errs(done_row([sha]))
+            self.assertEqual([s for s, _ in got], ["done." + RID], what)
+            self.assertEqual(got[0][1], "commit %s does not exist in this repository" % sha, what)
+
+    def test_done_needs_commit_on_owner_branch(self):  # RQ6, RQ7, RQ8; plan :2698
+        self.assertEqual(self.kinds(done_row([self.Cb])), [])
+        got = self.errs(done_row([self.Ca]))                    # another stream's branch only
+        self.assertEqual([s for s, _ in got], ["done." + RID])
+        self.assertIn("reachable from neither", got[0][1])
+        self.assertEqual(self.kinds(done_row([self.Ci])), ["done." + RID])      # only on <p>/integration
+
+    def test_done_counted_merged_head_accepted(self):  # RQ9, RQ10
+        r = done_row([self.Cr], to="residual", files=["res.txt"])
+        self.assertEqual(self.kinds(r), [])
+        r = done_row([self.Cbase], to="residual", files=["res.txt"])      # base_branch alone is no owner
+        self.assertEqual(self.kinds(r), ["done." + RID])
+
+    def test_done_uncounted_line_not_counted(self):  # RQ11, Q-A22 (i)
+        r = done_row([self.Cr], to="residual", files=["res.txt"])
+        wrong_head = MERGED_HEAD + mline(2, self.Cn, self.Mr, "residual", "R1") + "\n"
+        self.assertEqual(self.kinds(r, merged=wrong_head), ["done." + RID])
+        other = MERGED_HEAD + mline(1, self.Cn, self.Cm, "b", "1a") + "\n"            # another stream's line
+        self.assertEqual(self.kinds(r, merged=other), ["done." + RID])
+        wrong_plan = MERGED_HEAD + mline(3, self.Cn, self.Cm, "residual", "R1") + "\n"   # Cm touched b's plan, not residual's
+        r2 = done_row([self.Cn], to="residual", files=["notes.txt"])
+        self.assertEqual(self.kinds(r2, merged=wrong_plan), ["done." + RID])
+        self.assertEqual(self.kinds(r2, merged=MERGED_HEAD + mline(3, self.Cn, self.Cm, "b", "1a") + "\n"), ["done." + RID])
+        self.assertEqual(self.kinds(r), [])
+
+    def test_done_counted_heads_come_from_counted_lines(self):
+        # the same commit set that counted_lines returns decides `done` (one definition)
+        prog = make_program([], None, self.merged)
+        heads = [(c["stream"], c["head"]) for c in counted_lines(prog, self.root, self.cfg, BDX)[0]]
+        self.assertEqual(heads, [("b", self.Cn), ("residual", self.Cr)])
+        r = done_row([self.Cr], to="residual", files=["res.txt"])
+        self.assertEqual([s for s in self.kinds(r, bd={}) if s.startswith("done.")], [])   # an unusable breakdown still counts the lines
+
+    def test_done_branch_deleted(self):  # RQ12
+        git(self.root, "branch", "-D", NAME + "/b/main")
+        self.assertEqual(self.kinds(done_row([self.Cb])), [])                        # the counted head Cn holds Cb
+        self.assertEqual(self.kinds(done_row([self.Cb]), merged=MERGED_HEAD), ["done." + RID])
+
+    def test_done_commit_must_touch_listed_file(self):  # RQ13
+        got = self.errs(done_row([self.Cn]))
+        self.assertEqual([s for s, _ in got], ["done." + RID])
+        self.assertIn("touches none of the listed files", got[0][1])
+        only_done = lambda row_: [s for s in self.kinds(row_) if s.startswith("done.")]
+        self.assertEqual(only_done(done_row([self.Cd], files=["src/"])), [])        # a directory prefix
+        self.assertEqual(only_done(done_row([self.Cd], files=["src"])), ["done." + RID])
+        self.assertEqual(self.kinds(done_row([self.Cb], files=["B-OWNED.PY"])), [])  # compared by path_key
+        # a root commit against the empty tree
+        root_files = [".strict-delivery/config.yml"]
+        self.assertEqual(self.kinds(done_row([self.A], files=root_files)), ["to." + RID])   # b owns no config file
+        self.assertEqual([s for s in self.kinds(done_row([self.A], files=root_files)) if s.startswith("done.")], [])
+        self.assertEqual([s for s in self.kinds(done_row([self.A])) if s.startswith("done.")], ["done." + RID])
+
+    def test_done_merge_commit_is_judged_by_its_first_parent_diff(self):  # Q-A22 (iii)
+        r = self.root
+        git(r, "checkout", "-q", "-b", "side", NAME + "/b/main")
+        self.put("side.py", "s\n")
+        commit_all(r, "side work")
+        git(r, "checkout", "-q", NAME + "/b/main")
+        self.put("y.py", "y\n")
+        commit_all(r, "Cy")
+        git(r, "merge", "-q", "--no-ff", "-m", "Mx", "side")
+        Mx = self.sha()
+        git(r, "checkout", "-q", "main")
+        self.assertEqual([s for s in self.kinds(done_row([Mx], files=["side.py"])) if s.startswith("done.")], [])
+        self.assertEqual([s for s in self.kinds(done_row([Mx], files=["y.py"])) if s.startswith("done.")], ["done." + RID])
+
+    def test_done_git_failure_is_a_reason_not_a_crash(self):  # RQ16 (shallow or incomplete history)
+        with mock.patch.object(programs, "_commit_paths", side_effect=GateError("boom")):
+            got = self.errs(done_row([self.Cb]))
+        self.assertEqual(got, [("done." + RID, "commit %s: git cannot judge it: boom" % self.Cb)])
+
+    def test_done_each_commit_checked(self):  # RQ14
+        self.assertEqual(self.kinds(done_row([self.Cb, self.Cn])), ["done." + RID])
+        self.assertEqual(self.kinds(done_row([self.Cb], files=["b-owned.py", "other.py"])), ["to." + RID])
+        got = self.errs(done_row([self.Cb, self.Cn]))
+        self.assertIn(self.Cn, got[0][1])
+        self.assertNotIn(self.Cb, got[0][1])
+
+    def test_done_only_for_done_requests(self):  # RQ15
+        r = req_row(status="open")
+        r["resolution"] = {"commits": [self.Ca], "at": "b" * 7, "by": "b"}
+        self.assertEqual(self.kinds(r), [])
+
+    def test_request_errors_git_states(self):  # RQ16
+        git(self.root, "checkout", "-q", "--detach", "main")
+        self.assertEqual(self.kinds(done_row([self.Cb])), [])
+        git(self.root, "checkout", "-q", "--orphan", "unborn")
+        self.assertEqual(self.kinds(done_row([self.Cb])), [])
+        self.assertEqual(self.kinds(done_row([self.Ca])), ["done." + RID])
+        git(self.root, "checkout", "-q", "-f", "main")
+        # a tag of the branch's name: the branch is read through refs/heads/ (D-A23)
+        git(self.root, "checkout", "-q", "-b", "zside", "main")
+        self.put("b-owned.py", "z\n")
+        Cz = commit_all(self.root, "Cz touches a listed file, on no stream branch")
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "tag", NAME + "/b/main", Cz)
+        self.assertEqual(self.kinds(done_row([self.Cb])), [])
+        self.assertEqual(self.kinds(done_row([Cz])), ["done." + RID])      # the tag is no owner branch (refs/heads/ is read)
+        self.assertEqual(self.kinds(done_row([self.Ca])), ["done." + RID])
+        # an unknown to_stream names no branch
+        self.assertEqual(self.kinds(done_row([self.Cb], to="zz")), ["to." + RID, "done." + RID])
+
+    def decision_files(self, status="answered", cls="request-dispute", did=DID):
+        write_dec = {"schema": "decision/1", "id": did, "status": status, "class": cls}
+        write_record(self.root, ".strict-delivery/state/decisions/%s.yml" % did, write_dec)
+
+    def test_request_decision_must_be_answered_dispute(self):  # RQ17
+        r = req_row(decision=DID)
+        got = self.errs(r)
+        self.assertEqual(got, [("decision." + RID, "decision %s is not an answered decision of class request-dispute" % DID)])
+        self.assertEqual(self.kinds(req_row()), [])                                    # absent: not judged
+        self.decision_files()
+        self.assertEqual(self.kinds(r), [])
+        for status, cls in (("open", "request-dispute"), ("withdrawn", "request-dispute"), ("answered", "scope")):
+            self.decision_files(status, cls)
+            self.assertEqual(self.kinds(r), ["decision." + RID], (status, cls))
+        self.decision_files()
+        self.assertEqual(self.kinds(req_row(decision="DEC-20261105-zzzz")), ["decision." + RID])   # unknown id
+        self.assertEqual(self.kinds(req_row(decision=RID)), ["decision." + RID])                   # a request id
+
+    def test_request_decision_read_at_the_programs_ref(self):  # D-A22 (iv)
+        self.decision_files()
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "decision")
+        r = req_row(decision=DID)
+        self.assertEqual(self.kinds(r, ref="HEAD"), [])
+        git(self.root, "checkout", "-q", "-b", "nodec", self.A)
+        self.assertEqual(self.kinds(r, ref="main"), [])                 # the working tree is not read
+        self.assertEqual(self.kinds(r, ref=None), ["decision." + RID])  # branch nodec holds no decision
+
+    def test_request_decision_types(self):  # RQ18
+        for bad in (5, "", None, ["x"]):
+            self.assertEqual(self.kinds(req_row(decision=bad)), [], bad)
+
+    def test_request_errors_arguments(self):  # RQ19
+        prog = make_program([req_row()])
+        for bad in (None, {"requests": []}, [prog]):
+            with self.assertRaises(ValueError):
+                request_errors(bad, self.root, self.cfg, BDX)
+        for bad in (None, 5, "", b"x"):
+            with self.assertRaises(GateError):
+                request_errors(prog, bad, self.cfg, BDX)
+        for bad in ({}, {"ids": {}}, None, {"ids": None}):
+            with self.assertRaises(GateError):
+                request_errors(prog, self.root, bad, BDX)
+        sub = os.path.join(self.root, "sub")
+        os.makedirs(sub)
+        with self.assertRaises(GateError):
+            request_errors(make_program([done_row([self.Cb])]), sub, self.cfg, BDX)
+        for bd in (None, {}, BDX):
+            self.assertEqual(request_errors(prog, self.root, self.cfg, bd), [])        # a non-residual request: not read
+
+    def test_request_errors_order(self):  # RQ20
+        r1 = req_row(RID, frm="z", to="z", files=["q.py"])
+        r2 = done_row([self.Ca], rid=RID2, to="b", files=["b-owned.py", "b-owned.py"], decision=DID)
+        got = self.kinds(r1, r2)
+        self.assertEqual(got, ["to." + RID, "from." + RID, "files." + RID2, "done." + RID2, "decision." + RID2])
+        self.assertEqual(self.kinds(r1, r2), got)                       # deterministic
+        self.assertEqual(self.kinds(r2, r1), ["files." + RID2, "done." + RID2, "decision." + RID2, "to." + RID, "from." + RID])
+
+    def test_request_errors_same_on_both(self):  # RQ21: no case folding of ids, no int(), 41 hex refused
+        ids_ = ["R-20261105-ࡰn3p", "r-20261105-bn3p"]
+        for i in ids_:
+            self.assertTrue(any(s.startswith("id.") for s in self.kinds(req_row(rid=i))), i)
+        self.assertEqual(self.kinds(done_row(["a" * 41])), ["done." + RID])
+
+    def test_request_duplicate_files(self):  # D-A22 (v): a file listed twice is refused
+        self.assertEqual(self.errs(req_row(files=["b-owned.py", "B-OWNED.PY"]))[0][0], "files." + RID)
+        self.assertEqual(self.kinds(req_row(files=["b-owned.py", "b-owned.py"])), ["files." + RID])
+        self.assertEqual(self.kinds(req_row(files=["b-owned.py"])), [])
+
+
+def rdf(entries, period=(PS_, PC), edges=(), subs=None, extra=()):
+    streams = row(stream("a", entries.get("a", ["zz-a.py"])), stream("b", entries.get("b", ["zz-b.py"]), merge_order=2),
+                  stream("y", ["zz-y.py"], merge_order=3), stream("residual", residual=True, period=period, merge_order=4), *extra)
+    return streams, bd(subs or {"a": ["a1.1"], "b": ["b1.1"], "y": ["y1.1"], "residual": ["r1.1"]}, edges)
+
+
+class RequestsTo(GitProgram):
+    """The ``to.<id>`` rule (part B, Producer 10), on hand-built streams rows."""
+
+    def to(self, to, files, streams=None, breakdown=None, status="open", cfg=None, **kw):
+        prog = make_program([req_row(to=to, files=files, status=status, **kw)], streams if streams is not None else AB())
+        return [e for e in request_errors(prog, self.root, cfg or self.cfg, BDX if breakdown is None else breakdown)
+                if e[0] == "to." + RID]
+
+    def has(self, *a, **kw):
+        return len(self.to(*a, **kw)) == 1
+
+    def test_request_to_stream_must_own_files(self):  # RQ1, RQ2, RQ25; plan :2696
+        self.assertEqual(self.to("a", ["b-owned.py", "a-owned.py"]), [("to." + RID, "to_stream a does not own b-owned.py")])
+        self.assertEqual(self.to("a", ["a-owned.py"]), [])
+        prog = make_program([req_row(RID, to="a", frm="b", files=["b-owned.py"]), req_row(RID2, to="b", files=["a-owned.py"])], AB())
+        self.assertEqual(request_errors(prog, self.root, self.cfg, BDX),
+                         [("to." + RID, "to_stream a does not own b-owned.py"), ("to." + RID2, "to_stream b does not own a-owned.py")])
+
+    def test_request_to_by_key(self):  # RQ3
+        st = two(["src/", "café/", "Doc.md"], ["b-owned.py"])
+        for f in ("src/x/y.py", "SRC/x.py", "src/", "café/x", "CAFÉ/y", "doc.MD"):
+            self.assertFalse(self.has("a", [f], st), f)
+        for f in ("srcx/y.py", "doc.md/x", "x/src/y"):
+            self.assertTrue(self.has("a", [f], st), f)
+
+    def test_request_to_window_not_yet_open_passes(self):  # RQ4, RQ5
+        st = two([W("w.py", "merged:b", PC), W("dead.py", PC, PC)], ["b-owned.py"])
+        self.assertFalse(self.has("a", ["w.py"], st))            # judged without event state
+        self.assertFalse(self.has("a", ["dead.py"], st))         # a window that can never open still is an entry
+
+    def test_request_to_workspaces(self):  # RQ6
+        self.assertFalse(self.has("a", [PS + "/a-plan/n.md"]))
+        self.assertTrue(self.has("a", [PS + "/b-plan/n.md"]))
+
+    def test_request_to_unknown_stream(self):  # RQ7
+        self.assertEqual(self.to("zz", ["a-owned.py"]), [("to." + RID, "to_stream zz does not own a-owned.py")])
+
+    def residual_rows(self):
+        a, ps, pc = "merged:a", PS_, PC
+        return [("unowned.py", {}, (ps, pc), (), False), ("w.py", {"a": [W("w.py", ps, a)]}, (ps, pc), (), False),
+                ("f.py", {"a": ["f.py"]}, (ps, pc), (), True), (PROGRAM_PLAN, {}, (ps, pc), (), True),
+                (PS + "/program-plan/ledger.md", {}, (ps, pc), (), True), (PROGDIR + "/streams.yml", {}, (ps, pc), (), True),
+                (".strict-delivery/state/decisions/x.yml", {}, (ps, pc), (), True),
+                (PS + "/a-plan/n.md", {}, (ps, pc), (), True), (PS + "/residual-plan/n.md", {}, (ps, pc), (), False),
+                ("chained.md", {"a": [W("chained.md", ps, a)], "b": [W("chained.md", a, pc)]}, (ps, pc), (), True),
+                ("twostep.py", {"a": [W("twostep.py", ps, a)], "b": [W("twostep.py", a, "merged:b")]}, (ps, pc), (), False),
+                ("late.md", {"a": [W("late.md", ps, a)]}, (ps, "merged:y"), [("a1.1", "y1.1")], False),
+                ("late.md", {"a": [W("late.md", ps, a)]}, (ps, "merged:y"), [("y1.1", "a1.1")], True),
+                ("f.py", {"a": [W("f.py", ps, pc)]}, (ps, pc), (), True)]
+
+    def test_request_to_residual_rows(self):  # RQ8-RQ17
+        for path, entries, period, edges, refused in self.residual_rows():
+            streams, b = rdf(entries, period, edges)
+            self.assertEqual(self.has("residual", [path], streams, b), refused, (path, entries, period, edges))
+        # the rows RQ14 and RQ16 with the plan's helper (comes_before) agree
+        streams, b = rdf({"a": [W("late.md", PS_, "merged:a")]}, (PS_, "merged:y"), [("y1.1", "a1.1")])
+        self.assertTrue(comes_before(b, "merged:y", "merged:a"))
+
+    def test_request_to_residual_missing(self):  # RQ18
+        self.assertTrue(self.has("residual", ["unowned.py"], AB()))
+
+    def test_request_to_residual_by_flag(self):  # RQ19, D-B13
+        flagged = row(stream("a"), stream("rest", residual=True, merge_order=2))
+        self.assertFalse(self.has("rest", ["unowned.py"], flagged, bd({"a": ["a1.1"], "rest": ["r1.1"]})))
+        unflagged = row(stream("a"), stream("residual", ["res.py"], merge_order=2))
+        self.assertTrue(self.has("residual", ["unowned.py"], unflagged, bd({"a": ["a1.1"], "residual": ["r1.1"]})))
+
+    def test_request_to_several_files(self):  # RQ20
+        self.assertEqual(self.to("a", ["a-owned.py", "x1.py", "x2.py"]), [("to." + RID, "to_stream a does not own x1.py, x2.py")])
+
+    def test_request_to_file_forms(self):  # RQ21
+        for f in ("", "/x", "a//b", "./a", "../a", "a/../b", "x\x00y"):
+            got = self.to("a", [f])
+            self.assertEqual(got, [("to." + RID, "to_stream a does not own %s (not a normalised repository path)" % f)], repr(f))
+        got = self.to("a", ["x" * 4301])
+        self.assertEqual(got, [("to." + RID, "to_stream a does not own %s" % ("x" * 4301))])
+        st = two(["a/"], ["b-owned.py"])             # a directory entry covers these spellings by key; their shape refuses them
+        for f in ("a/../b", "a//b", "a/./b"):
+            self.assertEqual(self.to("a", [f], st), [("to." + RID, "to_stream a does not own %s (not a normalised repository path)" % f)])
+        st = two(["dir/", "a-owned.py"], ["b-owned.py"])
+        self.assertFalse(self.has("a", ["dir/"], st))
+        self.assertFalse(self.has("a", ["dir/x/y"], st))
+
+    def test_request_to_breakdown_unusable(self):  # RQ22, D-B11
+        streams = rdf({})[0]
+        for badbd in ({}, {"edges": []}, {"streams": [], "edges": 5}, {"streams": [{"id": "residual"}]}):
+            got = self.to("residual", ["unowned.py"], streams, badbd)
+            self.assertEqual(len(got), 1, badbd)
+            self.assertIn("the breakdown cannot decide it", got[0][1])
+        self.assertFalse(self.has("a", ["zz-a.py"], streams, {}))     # a non-residual to_stream never reads it
+        prog = make_program([req_row(to="residual", files=["unowned.py"])], streams)
+        self.assertEqual(request_errors(prog, self.root, self.cfg, None)[0][0], "to." + RID)
+
+    def test_request_to_all_statuses(self):  # RQ23
+        for st in ("open", "accepted", "done", "disputed", "withdrawn"):
+            self.assertTrue(self.has("a", ["b-owned.py"], status=st), st)
+            self.assertFalse(self.has("a", ["a-owned.py"], status=st), st)
+
+    def test_record_request_to(self):  # RQ24: the plan's record
+        rs, rb = record_streams(), RECORD_BD
+        for to, f, refused in (("residual", "gates/__main__.py", False), ("residual", "CLAUDE.md", False),
+                               ("residual", ".claude-plugin/plugin.json", False), ("init4", "gates/__main__.py", False),
+                               ("release", "gates/__main__.py", True), ("package", "CLAUDE.md", True),
+                               ("residual", PS + "/package-plan/x.md", True)):
+            self.assertEqual(self.has(to, [f], rs, rb), refused, (to, f))
+
+    def test_request_to_passes_the_real_cfg(self):  # D-B2: a caller that forgot cfg would use the defaults
+        cfg2 = {**self.cfg, "paths": {**self.cfg["paths"], "plan_state": "state/p", "programs": "p2"}}
+        st, b = rdf({})
+        self.assertTrue(self.has("residual", ["state/p/a-plan/n.md"], st, b, cfg=cfg2))
+        self.assertFalse(self.has("residual", ["state/p/a-plan/n.md"], st, b))
+        self.assertTrue(self.has("residual", ["p2/%s/streams.yml" % NAME], st, b, cfg=cfg2))
+        self.assertFalse(self.has("residual", ["p2/%s/streams.yml" % NAME], st, b))
+
+
+def AB():
+    return row(stream("a", ["a-owned.py"], merge_order=1), stream("b", ["b-owned.py"], merge_order=2))
 
 
 if __name__ == "__main__":
