@@ -1156,14 +1156,14 @@ class LinesLoad(Dirs):
 
     def test_pattern_variable_count_cap(self):  # F-20261118-ff4c: at most 24 variable quantifiers and alternations
         many = "more than 24 quantifiers and alternations"
-        ok = ("a?" * 24, "a?|" * 12, "(?:a|a)" * 24, "a{2,3}" * 24, "a{2,}" * 24, "a{,3}" * 24, "a*?" * 24, "a??" * 24,
-              "a{2}" * 100, "a{2}?" * 100, "[?][*][+][|]" * 100, "\\?\\*\\+\\|" * 100, "(?:a)" * 100, "(?=a)" * 100,
-              "(?!a)" * 100, "{x" * 100, "{}" * 100, "a" * 5000, "a+" * 12 + "b*" * 12, "a*?" * 12 + "a|" * 12)
+        ok = ("a?" * 24, "a?|" * 12, "(?:a|a)" * 24, "a{2,3}" * 24, "a{2,}" * 24, "a{,3}" * 24, "a*?" * 12, "a??" * 12,
+              "a{2}" * 100, "a{2}?" * 24, "a{2,3}?" * 12, "[?][*][+][|]" * 100, "\\?\\*\\+\\|" * 100, "(?:a)" * 100, "(?=a)" * 100,
+              "(?!a)" * 100, "{x" * 100, "{}" * 100, "a" * 5000, "a+" * 12 + "b*" * 12, "a*?" * 6 + "a|" * 12)  # a lazy ? counts: "a*?" is 2
         for pat in ok:
             with self.subTest(loads=pat[:30], n=len(pat)):
                 self.assertEqual(self.ln([{"word": "X", "pattern": pat}]).lines[0]["pattern"], pat)
         for pat in ("a?" * 25, "a?" * 25 + "a" * 25, "a?|" * 12 + "a?", "(?:a|a)" * 25, "a{2,3}" * 25, "a{2,}" * 25,
-                    "a{,3}" * 25, "a*" * 25, "a+" * 25, "a|" * 25, "a*?" * 25, "a??" * 25, "(?:a|b)?" * 13,
+                    "a{,3}" * 25, "a*" * 25, "a+" * 25, "a|" * 25, "a*?" * 13, "a??" * 13, "a{2}?" * 25, "a{2,3}?" * 13, "a*?" * 12 + "b|", "(?:a|b)?" * 13,
                     "a?" * 24 + "b|c"):
             with self.subTest(refused=pat[:30], n=len(pat)):
                 self.refused([{"word": "X", "pattern": pat}], "lines.0.pattern", many)

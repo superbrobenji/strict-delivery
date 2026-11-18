@@ -216,18 +216,18 @@ def _pattern_problem(pattern: str) -> str:
     only as ``(?:``, ``(?=`` or ``(?!``; no possessive quantifier; no quantified group (no nested quantifier); none
     of the escapes ``\\w \\W \\d \\D \\s \\S \\b \\B``; groups nested at most ``_MAX_GROUP_DEPTH`` deep (a deeper nest
     raises RecursionError at a depth that depends on the interpreter); at most ``_MAX_VARIABLE`` variable
-    quantifiers (``?`` ``*`` ``+``, ``{m,n}``, ``{m,}``, not a fixed ``{n}`` and not the lazy ``?`` after a
-    quantifier) and alternations ``|`` together. The dialect does NOT rule out slow matching: that count only bounds
-    it (repeated ``a?`` or ``(?:a|a)`` still backtrack exponentially in the count; measured, 24 ``a?`` then 24 ``a``
-    against a failing line takes about 0.5 s on 3.9 and 0.25 s on 3.13), it does not remove it."""
+    quantifiers (every ``?`` ``*`` ``+``, the lazy marker ``?`` after a quantifier included, ``{m,n}``, ``{m,}``,
+    not a fixed ``{n}``) and alternations ``|`` together. Neither the dialect nor that count bounds matching cost:
+    ``a*`` repeated then ``b`` is polynomial, ``a?`` repeated then ``a`` repeated is exponential, and either can make a
+    failing line slow. ``lines`` patterns are repository-controlled schema files; a cost bound is a separate proposed
+    task."""
     if not all(" " <= c <= "~" for c in pattern):
         return "must be printable ASCII (U+0020-U+007E)"
     if any(p in pattern for p in _POSSESSIVE):
         return "possessive quantifiers are not supported"
-    i, n, depth, in_class, variable, prev_q = 0, len(pattern), 0, False, 0, False
+    i, n, depth, in_class, variable = 0, len(pattern), 0, False, 0
     while i < n:
         c = pattern[i]
-        lazy, prev_q = prev_q, False  # lazy: the previous token was a quantifier, so a '?' now marks it lazy
         if c == "\\":
             nxt = pattern[i + 1:i + 2]
             if nxt != "" and nxt in "wWdDsSbB":
@@ -259,15 +259,12 @@ def _pattern_problem(pattern: str) -> str:
         elif c == "|":
             variable += 1
         elif c in "*+?":
-            if not (c == "?" and lazy):  # else: the lazy marker of the quantifier before it, not counted
-                variable += 1
-                prev_q = True
+            variable += 1  # every '?' counts, the lazy marker too
         elif c == "{":
             m = _BRACE.match(pattern, i - 1)
             if m is not None and (m.group(1) or m.group(2) or m.group(3)):
                 if m.group(2):
                     variable += 1  # {m,n} or {m,}: a variable count; a fixed {n} is not counted
-                prev_q = True
                 i = m.end()
     if variable > _MAX_VARIABLE:
         return "more than %d quantifiers and alternations" % _MAX_VARIABLE
