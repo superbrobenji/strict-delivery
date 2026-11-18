@@ -1,14 +1,20 @@
 """Task P2.2 part d: the rows of task-P2.2-domain.md that parts a-c left without a test (row ids in the comments): RT6,
 RN7, RN14, RN18, CR22, SL9, PG6 (every subcommand), ST11 (a 4 MB page) and PE20 (a 20 MB text). Expected values are
 written by hand; every git fixture is a ``make_repo`` repository or a clone of one."""
+import builtins
+import errno
 import os
+import stat
+import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
 
-from gates.lib import breakdown
-from tests.helpers import git
-from tests.test_program_cli import NAME, PG, Fx, load_yaml, run
+from gates.lib import breakdown, ids
+from gates.tools import program_cli
+from tests.helpers import git, write_record
+from tests.test_program_cli import DEC, NAME, PG, Fx, load_yaml, run
 from tests.test_program_merged import PLAN_REC, RecFx
 from tests.test_program_rows_c import tree
 from tests.test_program_rows_c2 import REQ, AfterC
@@ -140,6 +146,154 @@ class NameForms(AfterC):
             code, out, err = run("program", *sub.split(" "), "20261102-y", *argv, "--root", self.iw)
             self.assertEqual((code, out), (1, ""), err)
             self.assertIn("program runs only on", err)
+
+
+def only_in(fn_name, real, fake):
+    """A stand-in for ``real`` that acts as ``fake`` when the caller is the function ``fn_name`` of program_cli and as
+    ``real`` for every other caller (so the rest of the run is the production path)."""
+    def wrapper(*a, **k):
+        f = sys._getframe(1)
+        if f.f_code.co_name == fn_name and f.f_globals.get("__name__") == program_cli.__name__:
+            return fake(*a, **k)
+        return real(*a, **k)
+    return wrapper
+
+
+def raising(exc):
+    def fake(*a, **k):
+        raise exc
+    return fake
+
+
+class WriteBranches(AfterC):
+    """The OSError branches of ``program_cli._replace`` (status, sync-log, request set) and ``_new_file`` (request
+    new, create): each is a named refusal, exit 1, and leaves no temporary or partial file (PG12)."""
+
+    def leftovers(self):
+        return sorted(f for d, _, fs in os.walk(self.folder()) for f in fs if f.startswith(".program."))
+
+    def status(self):
+        return self.cli("status", "a", "--used", "1")
+
+    def refused_with(self, patches, needle):
+        with open(self.page(), "rb") as fh:
+            before = fh.read()
+        with patches:
+            code, out, err = self.status()
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn(needle, err)
+        self.assertEqual(self.leftovers(), [])
+        with open(self.page(), "rb") as fh:
+            self.assertEqual(fh.read(), before)
+
+    def test_replace_lstat_fails(self):  # PG12: the file vanishes or cannot be read between the load and the rewrite
+        eacces = PermissionError(errno.EACCES, "Permission denied")
+        self.refused_with(mock.patch.object(os, "lstat", only_in("_replace", os.lstat, raising(eacces))),
+                          "status.md: cannot read (Permission denied)")
+
+    def test_replace_refuses_a_non_regular_file(self):  # PG12
+        as_dir = lambda p: os.lstat(os.path.dirname(p))
+        self.refused_with(mock.patch.object(os, "lstat", only_in("_replace", os.lstat, as_dir)),
+                          "status.md: not a regular file")
+
+    def test_replace_mkstemp_fails(self):  # PG12
+        eacces = PermissionError(errno.EACCES, "Permission denied")
+        self.refused_with(mock.patch.object(tempfile, "mkstemp", only_in("_replace", tempfile.mkstemp, raising(eacces))),
+                          "status.md: cannot write (Permission denied)")
+
+    def test_replace_fails_after_the_temp_file_exists(self):  # PG12: the temp file is removed on every failure path
+        eacces = PermissionError(errno.EACCES, "Permission denied")
+        self.refused_with(mock.patch.object(os, "replace", only_in("_replace", os.replace, raising(eacces))),
+                          "status.md: cannot write (Permission denied)")
+        nospace = OSError(errno.ENOSPC, "No space left on device")
+        self.refused_with(mock.patch.object(os, "fsync", only_in("_replace", os.fsync, raising(nospace))),
+                          "status.md: cannot write (No space left on device)")
+
+    def test_replace_keeps_the_mode_and_syncs(self):  # PG12
+        os.chmod(self.page(), 0o640)
+        calls = []
+        real = os.fsync
+        with mock.patch.object(os, "fsync", only_in("_replace", real, lambda fd: calls.append(fd) or real(fd))):
+            self.assertEqual(self.status()[0], 0)
+        self.assertEqual(stat.S_IMODE(os.stat(self.page()).st_mode), 0o640)
+        self.assertEqual(len(calls), 1)
+
+    def test_new_file_exists(self):  # PG12: a file that appeared after the mint is never overwritten
+        real = ids.mint
+        made = []
+
+        def mint(*a, **k):
+            rid = real(*a, **k)
+            path = os.path.join(self.folder(), "requests", rid + ".yml")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("other\n")
+            made.append(path)
+            return rid
+
+        with mock.patch.object(ids, "mint", mint):
+            code, out, err = self.cli("request new", *REQ)
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn(".yml: already exists", err)
+        with open(made[0], encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "other\n")
+
+    def test_new_file_create_and_write_fail(self):  # PG12
+        eacces = PermissionError(errno.EACCES, "Permission denied")
+        with mock.patch.object(builtins, "open", only_in("_new_file", builtins.open, raising(eacces))):
+            code, out, err = self.cli("request new", *REQ)
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn(".yml: cannot create (Permission denied)", err)
+        nospace = OSError(errno.ENOSPC, "No space left on device")
+        with mock.patch.object(os, "fsync", only_in("_new_file", os.fsync, raising(nospace))):
+            code, out, err = self.cli("request new", *REQ)
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn(".yml: cannot write (No space left on device)", err)
+        reqs = os.path.join(self.folder(), "requests")
+        self.assertEqual(os.listdir(reqs) if os.path.isdir(reqs) else [], [])      # no partial file
+        calls = []
+        real = os.fsync
+        with mock.patch.object(os, "fsync", only_in("_new_file", real, lambda fd: calls.append(fd) or real(fd))):
+            self.assertEqual(self.cli("request new", *REQ)[0], 0)
+        self.assertEqual(len(calls), 1)
+
+    def test_request_new_by_stream_ids_that_are_not_text(self):  # RN9: a stream id that is not a str is no stream
+        path = os.path.join(self.folder(), "streams.yml")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(text.count("- id: b\n"), 1, text)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text.replace("- id: b\n", "- id: [b]\n"))
+        code, out, err = self.cli("request new", *REQ[:2], "--to", "a", *REQ[4:])
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(code, 1, err)
+
+
+class IdRegisters(AfterC):
+    def spy_seen(self):
+        seen = []
+        real = program_cli.ids.mint
+
+        def spy(fmt, existing, today, rng):
+            seen.append(set(existing))
+            return real(fmt, existing, today, rng)
+
+        with mock.patch.object(program_cli.ids, "mint", spy):
+            self.new_request()
+        return seen[0]
+
+    def test_request_ids_include_findings_and_claims(self):  # RN11: every register's ids are given to the mint
+        write_record(self.iw, ".strict-delivery/state/findings/F-20261118-aaaa.yml",
+                     {"schema": "finding/1", "id": "F-20261118-aaaa"})
+        write_record(self.iw, ".strict-delivery/state/claims/c.yml",
+                     {"schema": "claims/1", "claims": [{"id": "CLAIM-1"}, {"id": ["not", "text"]}, {"id": 7}]})
+        seen = self.spy_seen()
+        self.assertLessEqual({DEC, "F-20261118-aaaa", "CLAIM-1"}, seen)
+
+    def test_request_ids_skip_ids_that_are_not_text(self):  # RN11: a register entry whose id is no str is skipped
+        write_record(self.iw, ".strict-delivery/state/findings/F-20261118-bbbb.yml",
+                     {"schema": "finding/1", "id": ["not", "text"]})
+        self.assertIn(DEC, self.spy_seen())
 
 
 class RequestChecksBeforeIo(AfterC):
