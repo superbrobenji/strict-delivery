@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-uy7g
+status: open
+source: "PR-P2 final review: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/final-review-P2.md F-5"
+severity: LOW
+class: "residual_reachable input order: no test has windows that chain against the file order of streams, so a one-pass loop mutant (programs.py:1045-1054) survives (P:2638 (6), P:2658)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c76520077fa4bb9833572b065d2f63e97dc1ee06
+    by: stream-a13
+review_round: 3
+caused_by_change: true
+dimension: residual_reachable fixpoint
