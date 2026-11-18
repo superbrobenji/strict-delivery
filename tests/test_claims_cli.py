@@ -26,6 +26,7 @@ from tests.helpers import E128, TOP, GitIsolatedTestCase, commit_all, git, make_
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLAIMS = ".strict-delivery/state/claims"
 DEC = ".strict-delivery/state/decisions"
+FIN = ".strict-delivery/state/findings"
 DOC = "docs/a.md"
 HAS_EG = hasattr(builtins, "BaseExceptionGroup")
 DAY = "20261231"
@@ -329,8 +330,8 @@ class AddFlagTests(Base):
         os.mkfifo(os.path.join(self.root, "src", "pipe"))
         for cite, needle in (("../x", "normalised"), ("/abs", "normalised"), ("a/./b", "normalised"),
                              ("a//b", "normalised"), ("x/", "normalised"), ("src/x.py#L1", "normalised"),
-                             ("src", "is not tracked"), ("src/missing.py", "is not tracked"),
-                             ("src/link.py", "is not tracked"), ("src/pipe", "is not tracked"),
+                             ("src", "is not a regular file"), ("src/missing.py", "is not tracked"),
+                             ("src/link.py", "is not a regular file"), ("src/pipe", "is not a regular file"),
                              ("src/café.py", "U+00E9 is not allowed")):
             with self.subTest(cite=cite):
                 self.refused(self.argv(cites=(cite,)), needle)
@@ -589,6 +590,24 @@ class AddEffectTests(Base):
             fh.write("key: [\n")
         self.refused(self.argv(), "")
 
+    def test_add_unloadable_finding_register_refuses(self):  # W8, D-Q16: the finding register is a mint input
+        # an `F-` id can never collide with a `C-` id (distinct prefixes), so the input is pinned through its load
+        # error: a finding file that does not parse refuses the add and nothing is written
+        os.makedirs(os.path.join(self.root, FIN))
+        with open(os.path.join(self.root, FIN, "F-%s-cccc.yml" % DAY), "w") as fh:
+            fh.write("key: [\n")
+        self.refused(self.argv(), "")
+        self.assertFalse(os.path.exists(os.path.join(self.root, CLAIMS)))
+
+    def test_add_tracked_symlink_cite_named(self):  # F8 (fix round 1): a tracked symlink is not "untracked"
+        os.symlink("x.py", os.path.join(self.root, "src", "lnk.py"))
+        commit_all(self.root, "symlink")
+        self.assertEqual(git(self.root, "ls-files", "-s", "--", "src/lnk.py").split()[0], "120000")
+        err = self.refused(self.argv(cites=("src/lnk.py",)), "src/lnk.py: is not a regular file")
+        self.assertNotIn("not tracked", err)
+        self.refused(self.argv(cites=("src/x.py", "src/lnk.py", "src/nope.py")),
+                     "src/lnk.py: is not a regular file; src/nope.py: is not tracked")
+
     def test_add_mint_exhausted(self):  # W9
         import datetime
         day = datetime.date(2026, 12, 31)
@@ -770,6 +789,15 @@ class VerifyTests(Base):
                 git(self.root, "update-index", flag, "src/y.py")
                 self.refused(["verify", self.cid, "--by", "me"], "src/y.py: is flagged assume-unchanged")
                 git(self.root, "update-index", "--no-" + flag[2:], "src/y.py")
+
+    def test_verify_tracked_symlink_cite_named(self):  # V-7 (fix round 1): y.py becomes a tracked symlink
+        os.unlink(os.path.join(self.root, "src", "y.py"))
+        os.symlink("x.py", os.path.join(self.root, "src", "y.py"))
+        commit_all(self.root, "y is a symlink now")
+        before = self.file_bytes()
+        err = self.refused(["verify", self.cid, "--by", "me"], "src/y.py: is not a regular file")
+        self.assertNotIn("not tracked", err)
+        self.assertEqual(self.file_bytes(), before)
 
     def test_verify_cited_path_states(self):  # V-7 (D-Q8)
         git(self.root, "rm", "-q", "--cached", "src/y.py")

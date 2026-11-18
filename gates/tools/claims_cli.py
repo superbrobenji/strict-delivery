@@ -106,12 +106,27 @@ def _load_all(root: str, cfg: dict) -> list:
     return files
 
 
+def _not_regular(root: str, rel: str) -> bool:
+    """True when ``rel`` exists in the work tree (``lstat``, no link followed) and is not a regular file."""
+    try:
+        return not stat.S_ISREG(os.lstat(os.path.join(root, *rel.split("/"))).st_mode)
+    except OSError:
+        return False
+
+
 def _check_cited(root: str, paths: list, tracked: frozenset) -> None:
     """Every cited path is tracked, not flagged and has no unstaged change (D-Q8, D-Q17, D-Q23); each refusal names
     every offending path."""
     bad = [p for p in paths if p not in tracked]
     if bad:
-        raise GateError("%s: is not tracked" % ", ".join(bad))
+        # ``tracked_files`` lists regular files only, so a tracked symlink is "not tracked" to it; a path that is
+        # present but is no regular file is named as such (the ``gitinfo.blob_id`` wording), never as untracked
+        odd = [p for p in bad if _not_regular(root, p)]
+        reasons = ["%s: is not a regular file" % ", ".join(odd)] if odd else []
+        rest = [p for p in bad if p not in odd]
+        if rest:
+            reasons.append("%s: is not tracked" % ", ".join(rest))
+        raise GateError("; ".join(reasons))
     flagged = set(gitinfo.flagged_paths(root))
     bad = [p for p in paths if p in flagged]
     if bad:
