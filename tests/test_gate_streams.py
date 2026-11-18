@@ -962,5 +962,165 @@ class Rows(Fx):
         self.assertEqual(len(seen & {"streams.input", "streams.none", "streams.branch"}), 3)
 
 
+class Survivors(Fx):
+    """Tests that kill the mutants #16-#81 of the part-b run that survived (Task P2.3 part c)."""
+
+    def stream(self, files, name=SA):
+        self.branch(name)
+        return self.commit(files)
+
+    def test_plan_edit_without_breakdown_names_it(self):  # PF-row / mutant #16: breakdown.yml unreadable
+        self.program(bd=None)
+        self.stream({PG + "/a-plan.md": PLAN_A.replace("body one", "body one edited")})
+        self.assertIn("breakdown.yml cannot be read, so the task sections of stream a are unknown", self.run_gate()[0])
+
+    def test_record_path_owned_by_a_stream_is_still_a_record(self):  # OW7 / IG / mutants #20, #32
+        sync = ".strict-delivery/state/findings/x.yml"            # a global record
+        self.program(streams=row(stream("a", ["a-owned.py", "tests/test_a.py", sync], merge_order=1),
+                                 stream("b", ["b-owned.py", "tests/test_b.py"], merge_order=2)))
+        self.stream({sync: "x\n"})
+        self.assertIn("FAIL streams.owned.%s: a program record" % sync, self.run_gate()[0])      # mutant #20
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "combined", SA)
+        self.assertIn("FAIL streams.owned.%s: a merge of stream a may change only paths it owns" % sync, self.run_gate()[0])
+
+    def test_octopus_merge_into_stream_branch_is_judged(self):  # mutant #22: every second parent must be on the base tip
+        self.program()
+        self.branch(SA)
+        git(self.root, "branch", "feat", SA)
+        git(self.root, "checkout", "-q", "main")
+        self.commit({"m.txt": "m\n"})
+        git(self.root, "checkout", "-q", "feat")
+        self.commit({"a-owned.py": "f\n"})
+        git(self.root, "checkout", "-q", SA)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "oct", "main", "feat")
+        out = self.run_gate()[0]
+        self.assertIn("FAIL streams.owned.m.txt:", out)
+
+    def test_stream_merge_of_plain_branch_is_judged_by_paths(self):  # mutant #60: only integration merges are combined
+        self.program()
+        self.branch(SA)
+        git(self.root, "checkout", "-q", "-b", "feat", "main")
+        self.commit({"tests/test_b.py": "t\n"})                       # another stream's test file: allowed on a stream branch
+        git(self.root, "checkout", "-q", SA)
+        self.commit({"a-owned.py": "x\n"})
+        git(self.root, "merge", "-q", "--no-ff", "-m", "m", "feat")
+        self.assertIn("PASS streams.owned\n", self.run_gate()[0])
+
+    def test_octopus_merge_on_integration_refused(self):  # mutant #30
+        self.program()
+        self.branch(SA)
+        self.commit({"a-owned.py": "x\n"})
+        self.branch(SB, "main")
+        self.commit({"b-owned.py": "x\n"})
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "oct", SA, SB)
+        out = self.run_gate()[0]
+        self.assertIn("an octopus merge on %s is refused" % INT, out)
+
+    def test_combined_merge_reached_by_two_streams_fails(self):  # mutant #31
+        self.program()
+        self.branch(SA)
+        self.commit({"a-owned.py": "x\n"})
+        git(self.root, "branch", SB, SA)
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "m", SA)
+        self.assertIn("streams a and b both reach the second parent", self.run_gate()[0])
+
+    def test_combined_merge_of_a_group_branch(self):  # mutant #33: a group branch counts as the stream's
+        self.program()
+        self.branch(NAME + "/a/g1")
+        self.commit({"a-owned.py": "x\n"})
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "m", NAME + "/a/g1")
+        self.assertIn("PASS streams.owned\n", self.run_gate()[0])
+
+    def test_malformed_program_branch_name_fails_closed_on_a_combined_merge(self):  # mutant #34 probe: pins the present behaviour
+        self.program()
+        self.branch(NAME + "/foo", "main")
+        self.commit({"a-owned.py": "x\n"})
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "m", NAME + "/foo")
+        out, code = self.run_gate()
+        self.assertTrue(out.startswith("FAIL streams.input: ValueError: branch '%s/foo'" % NAME), out)
+        self.assertEqual(code, 1)
+
+    def shared_fx(self, text):
+        self.commit({"reg.md": text})
+        self.program(streams=streams_row(shared=[{"path": "reg.md", "rule": "append-rows"}]))
+        self.branch(SA)
+
+    def test_shared_append_to_base_without_end(self):  # mutant #36
+        self.shared_fx("| h |\n| r1 |")
+        self.commit({"reg.md": "| h |\n| r1 |\n| r2 |\n"})
+        self.assertIn("PASS streams.shared", self.run_gate()[0])
+        self.commit({"reg.md": "| h |\n| r1 |\n| r2 |\n| r3 |"})
+        self.assertIn("PASS streams.shared", self.run_gate()[0])
+
+    def test_shared_appended_line_must_be_a_row(self):  # mutant #37
+        self.shared_fx("| h |\n| r1 |\n")
+        self.commit({"reg.md": "| h |\n| r1 |\nnote\n"})
+        self.assertIn("FAIL streams.shared.reg.md: append-rows: 'note' is not a table row", self.run_gate()[0])
+
+    def test_detached_and_shallow_messages(self):  # mutants #41, #42
+        git(self.root, "checkout", "-q", "--detach")
+        self.assertIn("HEAD is detached; pass --branch NAME", self.run_gate()[0])
+        self.program()
+        clone = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", "--depth", "1", "file://" + self.root, clone)
+        git(clone, "checkout", "-q", "-b", INT, "origin/main")
+        self.assertIn("shallow clone; fetch the full history", self.run_gate("--branch", SA, root=clone)[0])
+
+    def test_staged_path_restored_in_work_tree_is_judged(self):  # mutant #45
+        self.program()
+        self.branch(SA)
+        self.put("b-owned.py", "z\n")
+        git(self.root, "add", "b-owned.py")
+        self.put("b-owned.py", "b\n")                                   # the work tree equals HEAD; only the index differs
+        out = self.run_gate()[0]
+        self.assertIn("FAIL streams.owned.b-owned.py: owned by stream b (the tree being committed)", out)
+
+    def test_no_shared_line_on_integration_or_records(self):  # mutant #57
+        self.program()
+        git(self.root, "checkout", "-q", INT)
+        self.assertNotIn("streams.shared", self.run_gate()[0])
+        self.branch(REC, "main")
+        self.assertNotIn("streams.shared", self.run_gate()[0])
+
+    def test_uncommitted_own_plan_edit_on_stream_branch_passes(self):  # mutant #61: the tree is diffed against HEAD
+        self.program()
+        self.branch(SA)
+        self.put(PG + "/a-plan.md", PLAN_A.replace("body one", "body one edited"))
+        self.assertIn("PASS streams.owned\n", self.run_gate()[0])
+
+    def test_merged_record_first_line_and_finals_per_stream(self):  # mutants #50, #51
+        head1, m1 = self.pr("p1", "a")
+        head2, m2 = self.pr("p2", "b")
+        l1 = mline(1, head1, m1, "a", "a2", final="yes")
+        l2 = mline(2, head2, m2, "b", "1b", final="yes")
+        self.program(merged=MERGED_HEAD + l1 + "\n" + l2 + "\n")
+        out = self.run_gate()[0]
+        self.assertNotIn("final=yes after a final line", out)         # a final line per stream (mutant #51: one in all)
+        git(self.root, "branch", "-D", INT)
+        self.program(merged="<!-- schema: merged-log/2 -->\n" + l1 + "\n")
+        self.assertIn("merged.md: first line must be", self.run_gate()[0])    # mutant #50
+
+    def test_one_final_line_per_stream_still_refused(self):  # sibling of #51
+        head1, m1 = self.pr("p1", "a")
+        head2, m2 = self.pr("p2", "a")
+        self.program(merged=MERGED_HEAD + mline(1, head1, m1, "a", "a1", final="yes") + "\n"
+                     + mline(2, head2, m2, "a", "a2", final="yes") + "\n")
+        self.assertIn("final=yes after a final line of stream a", self.run_gate()[0])
+
+    def test_base_ledger_records_a_pr_twice(self):  # mutant #54
+        a7 = git(self.root, "rev-parse", "--short=7", "HEAD")
+        head, m = self.pr("p1", "a", [ckpt("a1", "a1.1", a7)])
+        line = mline(1, head, m, "a", "a1")
+        self.program(merged=MERGED_HEAD + line + "\n")
+        git(self.root, "checkout", "-q", "main")
+        self.commit({"%s/a-plan/ledger.md" % PS: ledger(ckpt("a1", "a1.1", a7), line, line)})
+        self.assertIn("pr 1: recorded twice in %s/a-plan/ledger.md at main" % PS, self.run_gate()[0])
+
+
 if __name__ == "__main__":
     unittest.main()

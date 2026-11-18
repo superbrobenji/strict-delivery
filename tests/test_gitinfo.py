@@ -2384,6 +2384,51 @@ class P23GitinfoTest(GitIsolatedTestCase):
         self.put("u.txt", "u\n")
         self.assertEqual(gitinfo.staged_paths(self.root), ["s.txt"])
 
+    def test_staged_rename_lists_both_sides(self):  # D-Q13, mutant #72: --no-renames
+        self.put("r.txt", "line one\nline two\nline three\n")
+        commit_all(self.root, "r")
+        git(self.root, "mv", "r.txt", "r2.txt")
+        self.assertEqual(sorted(gitinfo.staged_paths(self.root)), ["r.txt", "r2.txt"])
+
+    def test_merge_head_octopus_message(self):  # MH7, mutant #65: two lines are an octopus, not merely a malformed file
+        head = git(self.root, "rev-parse", "HEAD")
+        with open(os.path.join(self.root, ".git", "MERGE_HEAD"), "w") as fh:
+            fh.write(head + "\n" + head + "\n")
+        with self.assertRaisesRegex(GateError, "octopus merge is in progress"):
+            gitinfo.merge_head(self.root)
+
+    def test_commit_paths_non_string_message(self):  # CP12, mutant #64 (equivalent: parents() refuses with the same text)
+        for bad in (None, 5, b"abc"):
+            with self.assertRaisesRegex(GateError, "sha must be a string"):
+                gitinfo.commit_paths(self.root, bad)
+
+    def test_file_hunks_ref_against_ref_not_work_tree(self):  # mutant #77
+        self.put("h.txt", "a\nb\nc\n")
+        c1 = commit_all(self.root, "h1")
+        self.put("h.txt", "a\nB\nc\n")
+        c2 = commit_all(self.root, "h2")
+        self.put("h.txt", "a\nB\nC\n")
+        self.assertEqual(gitinfo.file_hunks(self.root, c1, c2, "h.txt"), [(2, 1, 2, 1)])
+        self.assertEqual(gitinfo.file_hunks(self.root, c1, None, "h.txt"), [(2, 2, 2, 2)])
+
+    def test_file_hunks_header_that_cannot_be_read(self):  # mutants #79, #80, #81
+        def hunks(text):
+            with mock.patch.object(gitinfo, "_require_toplevel"), mock.patch.object(gitinfo, "_run", return_value=mock.Mock(stdout=text.encode())):
+                return gitinfo.file_hunks(self.root, "HEAD", None, "h.txt")
+        self.assertEqual(hunks("@@ -3 +4,0 @@ x\n"), [(3, 1, 4, 0)])
+        for bad in ("@@ -1,2 @@\n", "@@ -1 +1 +2 @@\n", "@@ -a +1 @@\n", "@@ -1 +1,x @@\n", "@@ -1234567890 +1 @@\n",
+                    "@@ -1,1234567890 +1 @@\n", "@@ -1,2 +, @@\n"):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(GateError, "hunk header that cannot be read"):
+                    hunks(bad)
+        self.assertEqual(hunks("@@ -123456789 +1 @@\n"), [(123456789, 1, 1, 1)])
+
+    def test_is_shallow_odd_output_refused(self):  # mutant #74
+        with mock.patch.object(gitinfo, "_require_toplevel"), mock.patch.object(gitinfo, "_run", return_value=mock.Mock(stdout=b"maybe\n")):
+            with self.assertRaisesRegex(GateError, "is-shallow-repository gave"):
+                gitinfo.is_shallow(self.root)
+        self.assertFalse(gitinfo.is_shallow(self.root))
+
 
 if __name__ == "__main__":
     unittest.main()

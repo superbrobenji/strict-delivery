@@ -1440,6 +1440,15 @@ class LiveProgramTest(RunAllCase):  # Task P2.3: RA1-RA4, RA9, RA11 (the live pr
         self.assertEqual([(l.status, l.id) for l in res.lines if l.id.startswith("run_all.streams")],
                          [("FAIL", "run_all.streams")])
         self.assertEqual(self.called(), ["schema", "register", "decisions"])
+        self.assertEqual([l.id for l in res.lines if l.id.startswith("streams")], [])     # mutant #89: a failed check is not live
+
+    def test_streams_runs_on_a_malformed_program_branch(self):  # RA5 sibling, mutant #87: a bad shape counts as a program branch
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        git(root, "checkout", "-q", "-b", self.NAME + "/foo")
+        run_all.check(["--root", root])
+        self.assertIn("streams", self.called())
 
 
 if __name__ == "__main__":
