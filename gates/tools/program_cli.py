@@ -617,8 +617,8 @@ def main(argv: Optional[list] = None) -> int:
     try:
         return _RUN[sub](ns)
     except GateError as e:
-        for part in safe_text(e).split("\n"):
-            sys.stderr.write("program %s: %s\n" % (sub, part))
+        for part in str(e).split("\n"):                 # one line per reason, each escaped on its own (PG11)
+            sys.stderr.write("program %s: %s\n" % (sub, safe_text(part)))
         return 1
 
 
