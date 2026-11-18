@@ -1536,6 +1536,54 @@ class LoadProgram(GitProgram):
                 self.refuses(msg, None)
                 self.refuses(msg, self.sha())
 
+    def test_load_program_requests_not_a_folder_same_at_a_ref_and_in_the_working_tree(self):
+        # F-20261118-bc74 (D-A9 class, controller ruling): `requests` itself a file, a symlink or a gitlink is
+        # refused at a ref with the working tree's message. A gitlink has no working-tree twin (an empty folder
+        # there is a folder), so it is checked at the refs only. An absent `requests` stays [].
+        base = self.sha()
+        rq = PROGDIR + "/requests"
+        d = os.path.join(self.root, *rq.split("/"))
+        msg = rq + ": not a directory"
+
+        def clear():
+            for n in os.listdir(d):
+                os.remove(os.path.join(d, n))
+            os.rmdir(d)
+
+        def as_file():
+            clear()
+            self.put(rq, "x\n")
+
+        def as_symlink():
+            clear()
+            os.makedirs(os.path.join(self.root, "elsewhere"))
+            self.put("elsewhere/a.yml", yamlsub.emit(req_row("R-20261105-zz3p")))
+            os.symlink(os.path.join(self.root, "elsewhere"), d)
+
+        def as_gitlink():
+            clear()
+            git(self.root, "add", "-A")      # the index drops the folder's entries before the gitlink takes the name
+            git(self.root, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % ("1" * 40, rq))
+            os.mkdir(d)                      # an uninitialised submodule is an empty folder; `add -A` keeps the gitlink
+
+        for i, (what, make, wt) in enumerate([("file", as_file, True), ("symlink", as_symlink, True),
+                                              ("gitlink", as_gitlink, False)]):
+            with self.subTest(what):
+                git(self.root, "checkout", "-q", "-f", "-b", "nf%d" % i, base)
+                make()
+                git(self.root, "add", "-A")
+                git(self.root, "commit", "-q", "-m", what)
+                self.refuses(msg, "HEAD")
+                self.refuses(msg, self.sha())
+                if wt:
+                    self.refuses(msg, None)
+        git(self.root, "checkout", "-q", "-f", "-b", "nf-absent", base)
+        clear()
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "no requests")
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").requests, [])
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None).requests, [])
+
     def test_load_program_ref_accepts_an_executable_request_file(self):  # PR9: mode 100755 is a regular file at a ref
         os.chmod(os.path.join(self.root, *(PROGDIR + "/requests/" + RID + ".yml").split("/")), 0o755)
         commit_all(self.root, "exec")

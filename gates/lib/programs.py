@@ -1248,6 +1248,10 @@ def _request_files(root: str, rel_dir: str, ref: Optional[str]) -> list:
     included, where ``gitinfo.ls_tree`` hides all but the regular files)."""
     not_regular = set()
     if ref is not None:
+        parent, _, _ = rel_dir.rpartition("/")   # git lists nothing under a `requests` that is no folder: ask its parent
+        for mode, _, name in gitinfo.ls_tree_entries(root, ref, parent):
+            if name == rel_dir and mode != "040000":
+                raise GateError("%s: not a directory" % rel_dir)
         listed = sorted((name, mode) for mode, _, name in gitinfo.ls_tree_entries(root, ref, rel_dir))
         names = [name for name, _ in listed]
         # the mode decides: 100644 and 100755 are regular files; 120000 a symlink, 040000 a tree, 160000 a gitlink
