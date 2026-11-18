@@ -51,12 +51,15 @@ def _argv(root: str, args: List[str], literal: bool, opts: Optional[List[str]]) 
 
 def _run(root: str, name: str, args: List[str], ok: Optional[tuple] = (0,),
          literal: bool = False, opts: Optional[List[str]] = None,
-         index: Optional[str] = None) -> "subprocess.CompletedProcess":
+         index: Optional[str] = None, extra_env: Optional[dict] = None) -> "subprocess.CompletedProcess":
     """Run ``git [opts] -C root <args>``; with ``ok`` a tuple, any other exit status is a GateError naming
-    ``name``. ``index`` sets ``GIT_INDEX_FILE`` for this call only (``blob_ids``'s temporary copy)."""
+    ``name``. ``index`` sets ``GIT_INDEX_FILE`` for this call only (``blob_ids``'s temporary copy);
+    ``extra_env`` adds names to this call's environment only (``dirty_paths``: ``GIT_OPTIONAL_LOCKS``)."""
     env = _env()
     if index is not None:
         env["GIT_INDEX_FILE"] = index
+    if extra_env:
+        env.update(extra_env)
     argv = _argv(root, args, literal, opts)
     try:
         p = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, check=False,
@@ -410,3 +413,73 @@ def hooks_dir(root: str) -> str:
     if path.endswith("\n"):
         path = path[:-1]  # git's one line terminator; every other byte (spaces, more newlines) is the path's own
     return os.path.abspath(os.path.join(root, path))
+
+
+def _need_root(root: object) -> None:
+    """Decision D-Q14 (Task P1.3): the functions of this task take a ``str`` root, never ``""``, ``bytes`` or a subclass."""
+    if type(root) is not str or root == "":
+        raise GateError("root must be a string")
+
+
+_HEADS = "refs/heads/"
+
+
+def current_branch(root: str) -> Optional[str]:
+    """The branch HEAD is on, or ``None`` when HEAD is detached (Task P1.3, decision D-Q6): ``git symbolic-ref --quiet
+    HEAD`` with ``refs/heads/`` stripped, not the ``--short`` form, which prints ``heads/<b>`` when a tag ``<b>``
+    exists. An unborn branch gives its name. A target outside ``refs/heads/`` is a GateError (fail closed)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "symbolic-ref", ["symbolic-ref", "--quiet", "HEAD"], ok=(0, 1))
+    if p.returncode == 1:
+        return None
+    ref = _text(p.stdout, "symbolic-ref")
+    if ref.endswith("\n"):
+        ref = ref[:-1]  # git's one line terminator
+    if not ref.startswith(_HEADS) or len(ref) == len(_HEADS):
+        raise GateError("git symbolic-ref: HEAD does not name a branch under refs/heads/")
+    return ref[len(_HEADS):]
+
+
+def dirty_paths(root: str) -> list:
+    """The paths of the work tree at ``root`` that ``git status`` reports (staged, unstaged, untracked, unmerged, a
+    changed submodule), in git's order, each once (Task P1.3; decisions D-Q7, D-Q8). ``--porcelain=v1 -z`` quotes
+    nothing; ``--no-renames`` makes every entry one path (the text after the three bytes ``XY ``; minimum git 2.18);
+    ``--ignore-submodules=none`` as ``unstaged_paths``; ``--untracked-files=all`` and ``--ignored=no`` override the
+    user's ``status.showUntrackedFiles``; ``GIT_OPTIONAL_LOCKS=0`` keeps this call from rewriting ``.git/index``;
+    ``core.fsmonitor`` is off as in the hooks' calls. ``GIT_INDEX_FILE`` is inherited. A linked worktree's paths are
+    never listed: git answers for the work tree of ``root``."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "status --porcelain", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=no",
+                                          "--no-renames", "--ignore-submodules=none"],
+             opts=FSMONITOR_OFF, extra_env={"GIT_OPTIONAL_LOCKS": "0"})
+    out = []
+    for raw in p.stdout.split(b"\0"):
+        if not raw:
+            continue
+        if len(raw) < 4 or raw[2:3] != b" ":
+            raise GateError("git status --porcelain: unexpected entry %r" % raw)
+        out.append(_text(raw[3:], "status --porcelain"))
+    return out
+
+
+def upstream_sha(root: str) -> Optional[str]:
+    """The commit ``@{upstream}`` names, ``None`` when the branch has none (never configured, the remote branch gone,
+    a detached HEAD, measured with git 2.50.1): ``git rev-parse --verify --quiet`` exits 1 then (Task P1.3). Read from local
+    refs only."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "rev-parse @{upstream}", ["rev-parse", "--verify", "--quiet", "--end-of-options", "@{upstream}"],
+             ok=(0, 1))
+    if p.returncode == 1:
+        return None
+    return _text(p.stdout, "rev-parse").strip()
+
+
+def remotes(root: str) -> list:
+    """The names ``git remote`` lists, in git's order; any listed name counts (Task P1.3, decision D-Q12)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "remote", ["remote"])
+    return [n for n in _text(p.stdout, "remote").split("\n") if n]
