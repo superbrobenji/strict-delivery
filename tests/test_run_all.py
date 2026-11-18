@@ -1390,5 +1390,57 @@ class Pc1Test(RunAllCase):
                     ["schema", "register", "decisions", "cites"])
 
 
+class LiveProgramTest(RunAllCase):  # Task P2.3: RA1-RA4, RA9, RA11 (the live program is a branch <p>/integration holding streams.yml)
+    NAME = "20261101-x"
+
+    def live(self, root):
+        git(root, "checkout", "-q", "-b", self.NAME + "/integration")
+        write_record(root, ".strict-delivery/state/programs/%s/streams.yml" % self.NAME, {"schema": "streams/1"})
+        commit_all(root, "program")
+        git(root, "checkout", "-q", "main")
+
+    def test_live_program_gates_literal(self):  # RA4
+        self.assertEqual(run_all.LIVE_PROGRAM_GATES, ("streams",))
+        self.assertIs(type(run_all.LIVE_PROGRAM_GATES), tuple)
+
+    def test_streams_not_run_without_program(self):  # RA1
+        for profile in ("light", "standard", "strict"):
+            self.all_pass()
+            self.fake("streams", self.recorder("streams"))
+            self.seen.clear()
+            run_all.check(["--root", self.fixture(profile)])
+            self.assertNotIn("streams", self.called())
+
+    def test_streams_runs_when_program_live_on_light(self):  # RA2, RA3, RA9, RA11
+        for profile in ("light", "standard", "strict"):
+            self.all_pass()
+            self.fake("streams", self.recorder("streams"))
+            self.seen.clear()
+            root = self.fixture(profile)
+            self.live(root)
+            res = run_all.check(["--root", root])
+            self.assertEqual(self.called()[-1], "streams")
+            self.assertEqual(self.called().count("streams"), 1)
+            self.assertEqual(self.args_of()["streams"], ["--root=" + root])
+            self.assertEqual([l.id for l in res.lines][-2:], ["streams.ok", "run_all.version"])
+
+    def test_streams_runs_on_program_branch_without_integration(self):  # RA5
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        git(root, "checkout", "-q", "-b", self.NAME + "/a/main")
+        run_all.check(["--root", root])
+        self.assertIn("streams", self.called())
+
+    def test_live_check_failure_is_a_line_and_profile_gates_run(self):  # RA7, D-Q22 (b)
+        self.all_pass()
+        root = self.fixture("light")
+        with mock.patch.object(run_all.programs, "live_programs", side_effect=GateError("boom")):
+            res = run_all.check(["--root", root])
+        self.assertEqual([(l.status, l.id) for l in res.lines if l.id.startswith("run_all.streams")],
+                         [("FAIL", "run_all.streams")])
+        self.assertEqual(self.called(), ["schema", "register", "decisions"])
+
+
 if __name__ == "__main__":
     unittest.main()

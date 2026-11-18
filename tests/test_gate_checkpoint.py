@@ -309,7 +309,7 @@ class Arguments(Fx):
         out = io.StringIO()
         with contextlib.redirect_stderr(out):
             self.assertEqual(gates_main.main(["check"]), 2)
-        self.assertIn("gates: checkpoint, cites, claims, decisions, dispatch, register, schema\n", out.getvalue())
+        self.assertIn("gates: checkpoint, cites, claims, decisions, dispatch, register, schema, streams\n", out.getvalue())
 
     def test_main_exit_codes(self):  # AV12
         self.build()

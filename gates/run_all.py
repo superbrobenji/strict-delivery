@@ -6,7 +6,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 
-from gates.lib import config, plugin, result
+from gates.lib import config, gitinfo, plugin, programs, result
 
 PROFILE_GATES: dict = {
     "light": ("schema", "register", "decisions"),
@@ -14,6 +14,9 @@ PROFILE_GATES: dict = {
     "strict": ("schema", "register", "decisions", "claims", "cites"),
 }
 BASE_GATES: tuple = ("decisions", "register", "claims")
+# Task P2.3 (controller ruling, plan P:2843): appended to the profile's list while a program is live or the current branch
+# is a program branch, whatever the profile; ``streams`` is not in ``BASE_GATES`` (decision D-Q6 (a)).
+LIVE_PROGRAM_GATES: tuple = ("streams",)
 
 
 def _args(args: list):
@@ -83,20 +86,48 @@ def _version_line(cfg: dict) -> result.Line:
     return res.lines[0]
 
 
+def _run_gates(gates: tuple, root: str, base) -> list:
+    out: list = []
+    for gate in gates:
+        fn, lines = _load(gate)
+        if fn is not None:
+            # one token per option: a value starting with "-" is then never read as an option (F-FV-1)
+            gate_args = ["--root=" + root]
+            if gate in BASE_GATES and base is not None:
+                gate_args.append("--base=" + base)
+            lines = result.run_check(gate, fn, gate_args).lines
+        out.extend(lines)
+    return out
+
+
+def _program_live(root: str) -> bool:
+    """True when a program is live (``programs.live_programs``) or the current branch is a program branch, a bad shape
+    included (``streams`` then reports it)."""
+    cfg = config.load(root)
+    if programs.live_programs(root, cfg):
+        return True
+    branch = gitinfo.current_branch(root)
+    if branch is None:
+        return False
+    try:
+        return programs.parse_branch(branch) is not None
+    except ValueError:
+        return True
+
+
 def check(args: list) -> result.Result:
     ns = _args(args)
     root = ns.root if ns.root is not None else result.repo_root()
     cfg = config.load(root)
     res = result.Result("run_all")
-    for gate in PROFILE_GATES[cfg["profile"]]:
-        fn, lines = _load(gate)
-        if fn is not None:
-            # one token per option: a value starting with "-" is then never read as an option (F-FV-1)
-            gate_args = ["--root=" + root]
-            if gate in BASE_GATES and ns.base is not None:
-                gate_args.append("--base=" + ns.base)
-            lines = result.run_check(gate, fn, gate_args).lines
-        res.lines.extend(lines)
+    res.lines.extend(_run_gates(PROFILE_GATES[cfg["profile"]], root, ns.base))
+    try:
+        live = _program_live(root)
+    except (result.GateError, ValueError) as e:   # decision D-Q22 (b): the profile gates still ran
+        res.fail("run_all.streams", "the live-program check failed: %s" % e)
+        live = False
+    if live:
+        res.lines.extend(_run_gates(LIVE_PROGRAM_GATES, root, ns.base))
     res.lines.append(_version_line(cfg))
     return res
 

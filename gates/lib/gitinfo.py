@@ -614,3 +614,101 @@ def main_worktree(root: str) -> str:
         raise GateError("git rev-parse --git-common-dir: no main worktree (the common git directory is not a "
                         "directory named .git)")
     return posixpath.dirname(common)
+
+
+# Task P2.3 (decisions D-Q1, D-Q2, D-Q5, D-Q13; plan P:2827-2828). Every call is ``-C root``, ``GIT_INDEX_FILE`` inherited.
+_EMPTY = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: a root commit is diffed against it
+
+
+def commit_paths(root: str, sha: str) -> list:
+    """The paths commit ``sha`` changes against its first parent, both sides of a rename (``changed_paths``' flags: ``git
+    diff --no-color --name-only -z --no-renames --no-ext-diff --no-textconv``); a root commit lists every path (it is
+    diffed against the empty tree; ``git diff <sha>^`` exits 128 for it). A merge lists its first-parent diff. ``sha`` is
+    a ``str`` that is a commit (a tree or blob id, an unknown id, ``""`` and a lead of ``-`` or ``^`` are a GateError)."""
+    _need_root(root)
+    if type(sha) is not str:
+        raise GateError("sha must be a string")
+    ps = parents(root, sha)
+    return changed_paths(root, ps[0] if ps else _EMPTY, sha)
+
+
+def merge_head(root: str) -> Optional[str]:
+    """The 40-hex commit of the merge in progress, or ``None`` (decision D-Q2 (a)): the file ``git rev-parse --path-format=
+    absolute --git-path MERGE_HEAD`` names (per worktree), not ``rev-parse MERGE_HEAD``, which also answers for a branch or
+    tag called ``MERGE_HEAD``. An octopus (two or more lines), an empty file, anything but one line of 40 lowercase hex
+    digits, and an id that is no commit are a GateError (a merge cannot be told away by corrupting its marker)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "rev-parse --git-path", ["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"])
+    path = _text(p.stdout, "rev-parse --git-path").rstrip("\n")
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise GateError("MERGE_HEAD: cannot read (%s)" % (e.strerror or type(e).__name__)) from None
+    text = _text(data, "MERGE_HEAD")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if len(lines) > 1:
+        raise GateError("MERGE_HEAD: an octopus merge is in progress (%d heads); merge one stream at a time" % len(lines))
+    if len(lines) != 1 or len(lines[0]) != 40 or any(c not in "0123456789abcdef" for c in lines[0]):
+        raise GateError("MERGE_HEAD: not one 40-digit lowercase hex id")
+    if not commit_exists(root, lines[0]):
+        raise GateError("MERGE_HEAD: %s is no commit" % lines[0])
+    return lines[0]
+
+
+def staged_paths(root: str) -> list:
+    """The paths the index differs from HEAD in (what a commit would take; decision D-Q13 (c)), both sides of a rename:
+    ``git diff --cached --no-color --name-only -z --no-renames --no-ext-diff --no-textconv --``. An unborn HEAD lists the
+    whole index. ``GIT_OPTIONAL_LOCKS=0`` and ``core.fsmonitor`` off as in ``changed_paths``."""
+    _need_root(root)
+    _require_toplevel(root)
+    args = ["diff", "--cached", "--no-color", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--"]
+    p = _run(root, "diff --cached", args, opts=_NO_REPLACE + FSMONITOR_OFF, extra_env={"GIT_OPTIONAL_LOCKS": "0"})
+    return [_text(raw, "diff --cached") for raw in p.stdout.split(b"\0") if raw]
+
+
+def is_shallow(root: str) -> bool:
+    """True in a shallow clone (``git rev-parse --is-shallow-repository``; decision D-Q5)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "rev-parse --is-shallow-repository", ["rev-parse", "--is-shallow-repository"])
+    out = _text(p.stdout, "rev-parse --is-shallow-repository").strip()
+    if out not in ("true", "false"):
+        raise GateError("git rev-parse --is-shallow-repository gave %r" % out[:20])
+    return out == "true"
+
+
+def file_hunks(root: str, a: str, b: Optional[str], path: str) -> list:
+    """The hunks of ``path`` between ``a`` and ``b`` (``None``: the work tree) as ``(old_start, old_count, new_start,
+    new_count)``: ``git diff --no-color --no-ext-diff --no-textconv --no-renames -U0 a [b] -- path`` (plan P:2837 (ii)).
+    A count that is absent in the ``@@`` header is 1; ``-U0`` and ``--no-ext-diff --no-textconv`` give the same hunks
+    whatever the repository's diff configuration says."""
+    _need_root(root)
+    _need_revision(a, "a")
+    if b is not None:
+        _need_revision(b, "b")
+    _check_norm(path, "diff: path")
+    _require_toplevel(root)
+    args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U0", a] + ([b] if b else []) + ["--", path]
+    p = _run(root, "diff -U0", args, opts=_NO_REPLACE + FSMONITOR_OFF, literal=True, extra_env={"GIT_OPTIONAL_LOCKS": "0"})
+    out = []
+    for line in _text(p.stdout, "diff -U0").split("\n"):
+        if not line.startswith("@@ -"):
+            continue
+        head = line[4:].split(" @@")[0].split(" +")
+        if len(head) != 2:
+            raise GateError("git diff gave a hunk header that cannot be read")
+        nums = []
+        for part in head:
+            s, _, c = part.partition(",")
+            c = c if c != "" else "1"
+            if not s or not c or any(ch not in "0123456789" for ch in s + c) or len(s) > 9 or len(c) > 9:
+                raise GateError("git diff gave a hunk header that cannot be read")
+            nums += [int(s), int(c)]
+        out.append(tuple(nums))
+    return out

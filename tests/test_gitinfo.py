@@ -2299,5 +2299,91 @@ class MainWorktree(P21Case):
             self.assertEqual(str(cm.exception), "root must be a string")
 
 
+from tests.helpers import minimal_config  # noqa: E402 (Task P2.3 rows)
+
+# ---- Task P2.3: commit_paths (CP1-CP7, CP10, CP11, CP16), merge_head (MH1-MH10), staged_paths (D-Q13) ----------------------
+class P23GitinfoTest(GitIsolatedTestCase):
+    def setUp(self):
+        super().setUp()
+        self.root = make_repo(self.work, minimal_config())
+        for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.root, "config", k, v)
+
+    def put(self, rel, text):
+        path = os.path.join(self.root, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def test_commit_paths_plain_rename_root_merge_empty(self):  # CP1-CP7, CP16
+        first = git(self.root, "rev-list", "--max-parents=0", "HEAD")
+        self.assertEqual(gitinfo.commit_paths(self.root, first), [".strict-delivery/config.yml"])      # CP3: a root commit
+        self.put("a.txt", "a\n")
+        self.put("dir/b c.txt", "b\n")
+        c1 = commit_all(self.root, "c1")
+        self.assertEqual(gitinfo.commit_paths(self.root, c1), ["a.txt", "dir/b c.txt"])               # CP1
+        git(self.root, "mv", "dir/b c.txt", "dir/moved.txt")
+        os.remove(os.path.join(self.root, "a.txt"))
+        c2 = commit_all(self.root, "c2")
+        self.assertEqual(gitinfo.commit_paths(self.root, c2), ["a.txt", "dir/b c.txt", "dir/moved.txt"])   # CP2: both sides
+        self.assertEqual(gitinfo.commit_paths(self.root, commit_all(self.root, "empty")), [])           # CP7
+        git(self.root, "checkout", "-q", "-b", "side", c1)
+        self.put("side.txt", "s\n")
+        commit_all(self.root, "side")
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "merge", "side")
+        self.assertEqual(gitinfo.commit_paths(self.root, "HEAD"), ["side.txt"])                       # CP4: the first-parent diff
+
+    def test_commit_paths_refusals(self):  # CP10, CP11, CP12
+        for bad in ("-x", "--output=f", "^x", "a" * 41, "", "f" * 40):
+            with self.subTest(bad=bad):
+                with self.assertRaises(GateError):
+                    gitinfo.commit_paths(self.root, bad)
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        with self.assertRaises(GateError):
+            gitinfo.commit_paths(self.root, tree)
+        for bad in (None, 5, b"abc"):
+            with self.assertRaises(GateError):
+                gitinfo.commit_paths(self.root, bad)
+        with self.assertRaises(GateError):
+            gitinfo.commit_paths(b".", "HEAD")
+
+    def test_merge_head_states(self):  # MH1, MH2, MH4, MH6, MH7, MH9, MH10
+        self.assertIsNone(gitinfo.merge_head(self.root))
+        git(self.root, "branch", "MERGE_HEAD")                                                         # MH6: a branch of that name
+        self.assertIsNone(gitinfo.merge_head(self.root))
+        git(self.root, "checkout", "-q", "-b", "other")
+        self.put("f.txt", "o\n")
+        other = commit_all(self.root, "o")
+        git(self.root, "checkout", "-q", "main")
+        self.put("f.txt", "m\n")
+        commit_all(self.root, "m")
+        git(self.root, "merge", "-q", "other", check=False)
+        self.assertEqual(gitinfo.merge_head(self.root), other)                                         # MH2
+        self.assertEqual(len(gitinfo.merge_head(self.root)), 40)
+        path = os.path.join(self.root, ".git", "MERGE_HEAD")
+        for text in ("", "zz\n", other + "\n" + other + "\n", "f" * 40 + "\n", other.upper() + "\n"):  # MH10, MH7
+            with open(path, "w") as fh:
+                fh.write(text)
+            with self.subTest(text=text):
+                with self.assertRaises(GateError):
+                    gitinfo.merge_head(self.root)
+        git(self.root, "merge", "--abort", check=False)
+        self.assertIsNone(gitinfo.merge_head(self.root))                                               # MH4
+
+    def test_merge_head_unborn(self):  # MH9
+        d = os.path.join(self.tmp, "unborn")
+        os.mkdir(d)
+        git(d, "init", "-q", "-b", "main")
+        self.assertIsNone(gitinfo.merge_head(d))
+
+    def test_staged_paths(self):  # D-Q13
+        self.assertEqual(gitinfo.staged_paths(self.root), [])
+        self.put("s.txt", "s\n")
+        git(self.root, "add", "s.txt")
+        self.put("u.txt", "u\n")
+        self.assertEqual(gitinfo.staged_paths(self.root), ["s.txt"])
+
+
 if __name__ == "__main__":
     unittest.main()

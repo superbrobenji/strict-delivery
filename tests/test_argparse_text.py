@@ -905,6 +905,7 @@ class TestParserSites(unittest.TestCase):
             ("gates/gate_dispatch.py", "gate_args"),  # Task 2c.3 (after F1): `--root`, `--prompts`, `--input`
             ("gates/gate_register.py", "gate_args"),
             ("gates/gate_schema.py", "gate_args"),
+            ("gates/gate_streams.py", "gate_args"),
             # inside _GateParser itself (E10): the registry snapshot of a plain parser that never parses (its action
             # names are the base the allowlist compares with), and the two super() calls of the build hooks
             ("gates/lib/result.py", "ArgumentParser"), ("gates/lib/result.py", "_GateParser"),
