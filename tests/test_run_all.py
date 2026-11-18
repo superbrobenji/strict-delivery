@@ -1450,6 +1450,50 @@ class LiveProgramTest(RunAllCase):  # Task P2.3: RA1-RA4, RA9, RA11 (the live pr
         run_all.check(["--root", root])
         self.assertIn("streams", self.called())
 
+    def test_detached_head_with_live_program_is_red(self):  # RA6 (D-Q22 (a)): streams is appended and answers streams.input
+        self.all_pass()
+        root = self.fixture("light")
+        self.live(root)
+        git(root, "checkout", "-q", "--detach")
+        res = run_all.check(["--root", root])
+        self.assertIn(("FAIL", "streams.input"), [(l.status, l.id) for l in res.lines])
+        self.assertIn("HEAD is detached; pass --branch NAME", [l.reason for l in res.lines if l.id == "streams.input"])
+
+    def test_base_is_not_passed_to_streams(self):  # RA8 (D-Q6 (a))
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        self.live(root)
+        run_all.check(["--root", root, "--base", "main"])
+        self.assertEqual(self.args_of()["streams"], ["--root=" + root])
+
+    def test_streams_module_missing_is_a_line(self):  # RA10
+        self.all_pass()
+        root = self.fixture("light")
+        self.live(root)
+        with mock.patch.dict(gates_main.GATES, {"streams": "gates.gate_streams_absent"}):
+            res = run_all.check(["--root", root])
+        self.assertIn(("FAIL", "run_all.missing.streams", "gates/gate_streams_absent.py missing"),
+                      [(l.status, l.id, l.reason) for l in res.lines])
+
+    def test_live_check_is_one_ref_listing_with_many_branches(self):  # RA13
+        self.all_pass()
+        self.fake("streams", self.recorder("streams"))
+        root = self.fixture("light")
+        self.live(root)
+        subprocess.run(["git", "-C", root, "update-ref", "--stdin"], check=True,
+                       input="".join("create refs/heads/b%d HEAD\n" % i for i in range(500)).encode())
+        calls = []
+        real = subprocess.run
+
+        def spy(argv, *a, **kw):
+            calls.append(list(argv))
+            return real(argv, *a, **kw)
+        with mock.patch.object(run_all.gitinfo.subprocess, "run", spy):
+            run_all.check(["--root", root])
+        self.assertEqual(len([c for c in calls if "for-each-ref" in c]), 1)
+        self.assertIn("streams", self.called())
+
 
 if __name__ == "__main__":
     unittest.main()
