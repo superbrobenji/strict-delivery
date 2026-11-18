@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-n8fn
+status: open
+source: "P1.2 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g5/P1.2-review-1.md F4"
+severity: LOW
+class: "argument-type rules untested: non-str ledger beside a valid plan; _check_args ValueError texts; gates/lib/checkpoints.py:220, :445, :448"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P1.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: ee5d508b079d88671f1379b6a6a294b3580fb225
+    by: stream-a9
+review_round: 1
+caused_by_change: true
+dimension: argument types of handoff_errors and ledger_errors
