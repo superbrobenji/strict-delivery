@@ -151,7 +151,7 @@ def rt(d):
 class KnownKinds(unittest.TestCase):
     def test_K1_known_kinds_match_appendix(self):
         self.assertEqual(KNOWN_KINDS, ("config", "decision", "finding", "claim", "request", "streams", "context",
-                                       "handoff", "ledger", "status", "sync-log", "merged-log", "overview", "in-force",
+                                       "handoff", "ledger", "status", "sync-log", "merged-log", "breakdown", "overview", "in-force",
                                        "decision-index", "finding-index", "mutation-transcript", "review-report",
                                        "receipt", "claude-block", "gitignore-block"))
 
@@ -162,7 +162,7 @@ class KnownKinds(unittest.TestCase):
 class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
-        self.assertEqual(sorted(got), ["claim", "config", "decision", "decision-index", "finding", "finding-index",
+        self.assertEqual(sorted(got), ["breakdown", "claim", "config", "decision", "decision-index", "finding", "finding-index",
                                        "handoff", "in-force", "ledger", "merged-log", "overview", "request", "status",
                                        "streams", "sync-log"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
@@ -781,7 +781,8 @@ class Producers(unittest.TestCase):
             return produced_kinds()
 
     def test_P1_union(self):
-        self.assertEqual(produced_kinds(), {"claim", "decision", "decision-index", "finding", "finding-index", "in-force", "overview"})  # Tasks 1c.3, 1d.1, 1d.2, 2c.1
+        self.assertEqual(produced_kinds(), {"breakdown", "claim", "decision", "decision-index", "finding", "finding-index", "in-force", "merged-log",
+                                           "overview", "request", "status", "streams", "sync-log"})  # Tasks 1c.3, 1d.1, 1d.2, 2c.1; P2.2: the program tool's six
         self.assertEqual(self.kinds([]), set())
         self.assertEqual(self.kinds(["prod_claim"]), {"claim"})
         self.assertEqual(self.kinds(["prod_claim_decision", "prod_decision", "prod_empty"]), {"claim", "decision"})
@@ -1049,7 +1050,7 @@ class FrontMatterSchema(Dirs):
 
     def test_old_schemas_unchanged(self):  # FS7
         listed = sorted(os.listdir(schema.SCHEMAS_DIR))
-        later = ["handoff.yml", "ledger.yml", "merged-log.yml", "request.yml", "status.yml", "streams.yml",
+        later = ["breakdown.yml", "handoff.yml", "ledger.yml", "merged-log.yml", "request.yml", "status.yml", "streams.yml",
                  "sync-log.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas
         self.assertEqual(listed, sorted([k + ".yml" for k, _ in EXPECTED_FILES] + later))
         got = [name for name in listed if name not in later]  # the old vocabulary's files only

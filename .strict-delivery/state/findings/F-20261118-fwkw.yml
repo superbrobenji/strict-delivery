@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-fwkw
+status: open
+source: "P2.2 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/P2.2-review-1.md R1-2"
+severity: LOW
+class: "untested refusal: every program subcommand run on a program folder with no streams.yml (request new, request set, status, sync-log, merged), row RN13"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: ee5414df74addec8e9c0681737e8f69d8441d27e
+    by: stream-a13
+review_round: 1
+caused_by_change: true
+dimension: RN13 request new before create

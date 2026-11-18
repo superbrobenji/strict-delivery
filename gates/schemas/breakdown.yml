@@ -1,0 +1,92 @@
+kind: breakdown
+version: 1
+format: yaml
+files:
+  - dir: plan_state
+    glob: "*/breakdown.yml"
+fields:
+  schema:
+    type: str
+  plan:
+    type: str
+  max_concurrent:
+    type: int
+    min: 1
+  max_depth:
+    type: int
+    min: 1
+  done:
+    type: list
+    items:
+      type: str
+  streams:
+    type: list
+    min: 1
+    items:
+      type: map
+      fields:
+        id:
+          type: str
+        residual:
+          type: bool
+          required: false
+        paths:
+          type: list
+          min: 1
+          required_when:
+            - residual:
+                - false
+          absent_when:
+            - residual:
+                - true
+          items:
+            type: one_of
+            of:
+              - type: str
+              - type: map
+                fields:
+                  path:
+                    type: str
+                  from:
+                    type: str
+                    required: false
+                  until:
+                    type: str
+                    required: false
+        period:
+          type: map
+          required: false
+          fields:
+            from:
+              type: str
+            until:
+              type: str
+        tasks:
+          type: list
+          min: 1
+          items:
+            type: str
+        unblock:
+          type: str
+  edges:
+    type: list
+    items:
+      type: map
+      fields:
+        from:
+          type: str
+        to:
+          type: str
+  groups:
+    type: list
+    min: 1
+    items:
+      type: map
+      fields:
+        id:
+          type: str
+        tasks:
+          type: list
+          min: 1
+          items:
+            type: str

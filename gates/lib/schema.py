@@ -16,8 +16,8 @@ from gates.lib import config, gitinfo, ids, print_table, yamlsub
 from gates.lib.result import GateError, _raw
 
 KNOWN_KINDS = ("config", "decision", "finding", "claim", "request", "streams", "context", "handoff", "ledger",
-               "status", "sync-log", "merged-log", "overview", "in-force", "decision-index", "finding-index",
-               "mutation-transcript", "review-report", "receipt", "claude-block", "gitignore-block")
+               "status", "sync-log", "merged-log", "breakdown", "overview", "in-force", "decision-index",
+               "finding-index", "mutation-transcript", "review-report", "receipt", "claude-block", "gitignore-block")
 GENERATED_KINDS = ("decision-index", "finding-index", "in-force", "overview")  # OQ-17: skipped when absent
 # ``one_of`` (Task P2.1 part i, decision D-A1): a union of alternatives with pairwise distinct base types.
 TYPES = ("str", "text", "int", "bool", "enum", "list", "map", "any-map", "id", "sha", "glob", "cite", "sha-path",

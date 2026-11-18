@@ -562,7 +562,7 @@ class HookCommandTest(HookCase):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual((p.returncode, p.stdout, p.stderr.decode()),
                          (2, b"", "usage: python3 -m gates <command> [args]\n"
-                                  "commands: check, claims, decisions, findings, githook, githooks, hook, index, loopstats, "
+                                  "commands: check, claims, decisions, findings, githook, githooks, hook, index, loopstats, program, "
                                   "run_all\n"))
 
     def test_s2_unicode_in_an_import_error_name_is_escaped_the_same_on_both(self):  # S2

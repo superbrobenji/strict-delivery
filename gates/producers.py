@@ -5,4 +5,4 @@ module's dotted name here.
 """
 
 PRODUCER_MODULES: tuple = ("gates.tools.index", "gates.tools.decisions_cli", "gates.tools.findings_cli",
-                           "gates.tools.claims_cli", "gates.gate_checkpoint")
+                           "gates.tools.claims_cli", "gates.gate_checkpoint", "gates.tools.program_cli")
