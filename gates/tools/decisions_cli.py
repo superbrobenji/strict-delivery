@@ -183,7 +183,29 @@ def _supersedes(decs: list, target: str) -> None:
                         % (target, ", ".join(live)))
 
 
+def _once(flag: str, values: Optional[list]) -> Optional[str]:
+    """The one value of ``--overrides``, ``--recommend`` or ``--source``: None when absent; given more than once (in
+    full, with ``=`` or abbreviated) is a refusal, exit 1 (plan P:1925; decision D-Q3)."""
+    if values is None:
+        return None
+    if len(values) > 1:
+        raise GateError("%s given more than once" % flag)
+    return values[0]
+
+
+def _source(flag: str, value: str) -> str:
+    """The family's path rule for a report path (decision D-Q28): ``_glob``'s, a normalised path with no ``#`` and no
+    glob character; existence is not checked."""
+    _glob(flag, value)
+    if "#" in value or any(c in value for c in "*?[]") or not schema._path_ok(value):
+        raise GateError("%s: must be a normalised repo-relative path with no '#' and no glob character" % flag)
+    return value
+
+
 def _ask(ns) -> int:
+    overrides = _once("--overrides", ns.overrides)
+    recommend = _once("--recommend", ns.recommend)
+    source = _once("--source", ns.source)
     question = _text("--question", ns.question, multiline=True)
     options = [_option(v) for v in ns.option]
     _unique("--option label", [o["label"] for o in options])
@@ -198,6 +220,17 @@ def _ask(ns) -> int:
     for flag, value in (("--program", ns.program), ("--stream", ns.stream)):
         if value is not None:
             _slug(flag, value, _TOPIC)  # the grant-field name rule of decisions.py (decision D-4)
+    if overrides is not None:
+        _text("--overrides", overrides)  # the class and rule checks are decisions.validate's, below
+    if recommend is None:
+        if cls != decisions.CLASS_MODEL:
+            raise GateError("--recommend LABEL is required: name the recommended option")
+    elif cls == decisions.CLASS_MODEL:
+        raise GateError("--recommend: class %s carries no recommended option" % decisions.CLASS_MODEL)
+    else:
+        _text("--recommend", recommend)
+    if source is not None:
+        _source("--source", source)
     root, cfg = _setup(ns.root)
     prefix = cfg["ids"]["decision"]
     if ns.supersedes is not None:
@@ -215,6 +248,9 @@ def _ask(ns) -> int:
     for key in ("supersedes", "plan", "program", "stream"):
         if getattr(ns, key) is not None:
             row[key] = getattr(ns, key)
+    for key, value in (("overrides", overrides), ("recommended", recommend), ("source", source)):
+        if value is not None:
+            row[key] = value
     _valid(row, cfg)
     Store(root, "decision", cfg).create(row)
     qs = {r.id: r.row.get("question") for r in decs}
@@ -382,6 +418,8 @@ def _parser(sub: str):
         p.add_argument("--plan", action=_Once)
         p.add_argument("--program", action=_Once)
         p.add_argument("--stream", action=_Once)
+        for flag in ("--overrides", "--recommend", "--source"):  # repeats are a refusal (exit 1), checked by _ask
+            p.add_argument(flag, action="append")
     elif sub == "decide":
         p.add_argument("id", metavar="ID")
         p.add_argument("--answer", required=True, action=_Once)

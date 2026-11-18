@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-b4dw
+status: open
+source: "PR-2c1 final review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g4/final-review-1.md FR-1"
+severity: LOW
+class: "refusal order of decisions ask against D-Q26: new --recommend/--overrides/--source checks run before the existing post-setup checks (--root, config load, --supersedes form); gates/tools/decisions_cli.py:223-234"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 311554fb63abe9be94ced284d1c1d1cb283d9f69
+    by: stream-a9
+review_round: 3
+caused_by_change: true
+dimension: check order

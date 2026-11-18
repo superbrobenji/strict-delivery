@@ -33,8 +33,8 @@ UNSET = object()
 HAS_EG = hasattr(builtins, "ExceptionGroup")
 PASS5 = "".join("PASS %s.ok\n" % g for g in FIVE)
 VERSION_PASS = "PASS run_all.version\n"   # Task 3d.1: the last line; config framework_version "0.0.0" = the plugin's
-# the 31 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
-REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\n"
+# the 32 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
+REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
              "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\n"
              "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
              "PASS register.evidence\nPASS register.epic\nPASS register.report\n"
@@ -962,7 +962,7 @@ class ArgvTest(RunAllCase):
                 self.assertEqual(got, want)
         out, code = self.sub(["--root", root, "--base", "HEAD"])
         self.assertEqual(code, 0)
-        self.assertEqual(len(out.splitlines()), 32)   # the 31 real-gate lines and the version line
+        self.assertEqual(len(out.splitlines()), 33)   # the 32 real-gate lines and the version line
 
 
 class ConfigTest(RunAllCase):
@@ -1025,7 +1025,7 @@ class OutputTest(RunAllCase):
     def test_real_gates_pass_on_fixture_repo(self):  # O4
         root = self.fixture()
         out, code = self.run_main(["--root", root, "--base", "HEAD"])
-        want = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\n"
+        want = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
                 "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
                 "PASS schema.finding-index\n"
                 "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
@@ -1264,7 +1264,7 @@ class Pc1Test(RunAllCase):
 
     def test_pc1_long_number_base(self):  # S1
         root = self.fixture()
-        schema_ok = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\n"
+        schema_ok = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
                      "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
                      "PASS schema.finding-index\n")
         cites_ok = "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n"

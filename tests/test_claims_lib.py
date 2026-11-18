@@ -261,7 +261,10 @@ class SchemaFileTests(GitIsolatedTestCase):
         self.assertEqual(s.fields, {"schema": {"type": "str"}, "document": {"type": "str"},
                                     "claims": {"type": "list", "min": 1, "items": item}})
 
-    def test_check_schema_does_not_check_claim_files(self):  # Y5
+    def test_check_schema_checks_claim_files_from_task_2c1(self):  # Y5 (replaced by Task 2c.1: P:1949 "PASS schema.claim")
+        # Before Task 2c.1 no module declared ``claim`` in PRODUCES, so ``check schema`` skipped claim files (the old
+        # Y5). claims_cli declares it now, so the gate checks them: the same gate on the same repository without the
+        # claim file is the oracle for every other line.
         root = make_repo(self.work)
         os.makedirs(os.path.join(root, CDIR))
         without = run_check("schema", gate_schema.check, ["--root", root]).render(False)
@@ -269,12 +272,14 @@ class SchemaFileTests(GitIsolatedTestCase):
             fh.write("schema: other/1\n")
         commit_all(root, "bad claim file")
         out = run_check("schema", gate_schema.check, ["--root", root]).render(False)
-        # U-1: the oracle is the same gate on the same repository without the claim file, so a schema line another
-        # task adds (PR-1c: overview, in-force, decision-index, finding-index) does not change the verdict.
-        self.assertEqual(out, without)
         self.assertTrue(out.startswith("PASS schema.kinds\nPASS schema.config\n"), out)
-        self.assertNotIn("FAIL", out)
-        self.assertNotIn("bad.yml", out)
+        self.assertIn("PASS schema.claim\n", without)
+        self.assertNotIn("FAIL", without)
+        self.assertEqual([x for x in out.splitlines() if "schema.claim" not in x],
+                         [x for x in without.splitlines() if "schema.claim" not in x])
+        bad = [x for x in out.splitlines() if x.startswith("FAIL schema.claim")]
+        self.assertEqual(len(bad), 1, out)
+        self.assertIn("bad.yml", bad[0])
         self.assertIn("claim", schema.schemas())
 
 
