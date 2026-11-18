@@ -285,3 +285,12 @@ class PlanErrorsC(unittest.TestCase):
             with self.subTest(hex(ord(ch))):
                 self.assertEqual(suff("## Block %s:\n### Task %s.1: x\n" % (ch, ch)), ["outline.structure"])
                 self.assertEqual(suff("## Block 2a: %s\n### Task 2a.1: %s\n" % (ch, ch)), [])
+
+
+class DuplicateHeadings(unittest.TestCase):
+    def test_duplicate_block_ids_and_texts(self):  # PE8, PE9: only later longer ids make an umbrella; a pointer needs every heading
+        self.assertEqual(suff("## Block 1x:\n\nprose\n\n## Block 1x:\n### Task 1x.1: y\n"), ["outline.block.1x"])
+        self.assertEqual(suff("## Block 1x:\n\n## Block 1x:\n\n"), ["outline.block.1x"])        # reported once
+        text = ('## Block 2: same\n### Task 2.1: x\n\n## Block 2: same\n\nprose\n\n## Later blocks\n\n'
+                '- **X.** Planned in full in section "Block 2: same" above.\n')
+        self.assertEqual(suff(text), ["outline.block.2", "outline.later.1"])

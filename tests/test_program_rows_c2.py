@@ -56,9 +56,10 @@ class StatusC(AfterC):
         self.unchanged(self.page(), *[("status", (s, "--used", "1")) for s in ("A", "a ", "a" * 4301, "ab", "")])
 
     def test_status_text_forms(self):  # ST6
-        bad = ("x|y", "x\\|y", "x\ny", "x\ry", "x\0y", "x\ty", " x", "x ", "", "café", "ࡰ")
+        bad = ("x|y", "x\\y", "x\\|y", "x\ny", "x\ry", "x\0y", "x\ty", " x", "x ", "", "café", "ࡰ")
         for flag in ("--block", "--next-task", "--delivers"):
             self.unchanged(self.page(), *[("status", ("a", flag, v)) for v in bad])
+        self.assertIn("must not hold '|'", self.cli("status", "a", "--block", "x|y")[2])         # the reason, not only the refusal
         code, out, err = self.cli("status", "a", "--block", "A1", "--next-task", "A1.1", "--delivers", "one: two #3")
         self.assertEqual(code, 0, err)
 
@@ -84,6 +85,19 @@ class StatusC(AfterC):
                 with open(self.page(), "w", encoding="utf-8") as fh:
                     fh.write(text)
                 self.unchanged(self.page(), ("status", ("a", "--used", "1")))
+
+    def test_status_does_not_repair_a_page(self):  # ST9: a page that fails before the change is refused, even when the
+        with open(self.page(), encoding="utf-8") as fh:        # change would repair the bad cell
+            text = fh.read()
+        with open(self.page(), "w", encoding="utf-8") as fh:
+            fh.write(text.replace("| 3 | 0 | ready |", "| 3 | zz | ready |", 1))
+        self.unchanged(self.page(), ("status", ("a", "--used", "1")))
+
+    def test_request_decision_only_when_leaving_disputed(self):  # RS6
+        rid = self.new_request()
+        code, out, err = self.cli("request set", rid, "--status", "accepted", "--by", "b", "--decision", DEC)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("--decision is allowed only when leaving disputed", err)
 
     def test_status_file_kinds(self):  # ST11
         with open(self.page(), "rb") as fh:
@@ -166,6 +180,49 @@ class RequestC(AfterC):
         with mock.patch.object(program_cli.ids, "mint", spy):
             self.new_request()
         self.assertLessEqual({DEC, rid}, seen[0])
+
+    def test_request_new_other_programs_ids(self):  # RN11: an id of another program's request is never minted
+        other = "20261102-y"
+        rid = self.new_request()
+        self.commit_iw()
+        iw2 = os.path.join(self.tmp, "w", other, "integration")
+        git(self.work, "worktree", "add", "-q", "-b", other + "/integration", iw2, NAME + "/integration")
+        src = self.folder()
+        dst = os.path.join(iw2, ".strict-delivery/state/programs", other)
+        os.rename(os.path.join(iw2, ".strict-delivery/state/programs", NAME), dst)
+        for name in ("streams.yml", "status.md"):
+            with open(os.path.join(dst, name), encoding="utf-8") as fh:
+                text = fh.read().replace(NAME, other)
+            with open(os.path.join(dst, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        os.rename(os.path.join(dst, "requests", rid + ".yml"), os.path.join(dst, "requests", "R-20261102-aaaa.yml"))
+        path = os.path.join(dst, "requests", "R-20261102-aaaa.yml")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read().replace(rid, "R-20261102-aaaa")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        commit_all(iw2, "other program")
+        self.assertTrue(os.path.isdir(src))
+
+        class Rng:
+            seq = list("aaaabbbb")
+
+            def choice(self, alphabet):
+                return self.seq.pop(0)
+
+        with mock.patch.object(program_cli, "_rng", Rng()), mock.patch.object(
+                program_cli.ids, "utc_today", return_value=datetime.date(2026, 11, 2)):
+            minted = self.new_request()
+        self.assertEqual(minted, "R-20261102-bbbb")
+
+    def test_request_new_file_forms(self):  # RN4
+        for f in ("b\\x.py", "b/", "/b/x", "./b/x.py", "b//x.py", "", "b/../x.py", "caf\u00e9"):
+            with self.subTest(f):
+                code, out, err = self.cli("request new", *REQ[:4], "--file", f, *REQ[6:])
+                self.assertEqual((code, out), (1, ""), err)
+                if f in ("b\\x.py", "b/", "/b/x", "./b/x.py", "b//x.py", "b/../x.py"):
+                    self.assertIn("is not a normalised repository path", err)   # the reason, not only the refusal
+        self.assertFalse(os.path.exists(os.path.join(self.folder(), "requests")))
 
     def test_request_new_twice_and_single_flags(self):  # RN16, RN17
         self.assertNotEqual(self.new_request(), self.new_request())
@@ -267,6 +324,8 @@ class SyncC(AfterC):
             fh.write("<!-- schema: sync-log/1 -->")                              # no final newline
         self.unchanged(self.log(), ("sync-log", ("--main", git(self.work, "rev-parse", "main"), "--merged-main", "no",
                                                  "--tests", "PASS")))
+        code, out, err = self.line()
+        self.assertIn("does not end with a newline", err)                          # the reason, not only the refusal
         with open(self.log(), "w", encoding="utf-8") as fh:
             fh.write("<!-- schema: sync-log/1 -->\nSYNC bogus\n")                # a malformed earlier line
         self.unchanged(self.log(), ("sync-log", ("--main", git(self.work, "rev-parse", "main"), "--merged-main", "no",
@@ -293,6 +352,19 @@ class MergedC(RecFx):
             fh.write(merged_line(90, "1" * 40, "2" * 40, "release", "6R") + "\n")      # unknown objects: fails merged_errors
         self.commit_iw()
         self.assertEqual(self.new(merged_line(91, head, m, "release", "6R")), (0, ""))
+
+    def test_merged_malformed_earlier_line_refuses_the_append(self):  # MG11, MG10: the file must validate, it is not repaired
+        head, m = self.pr("release", [("6R", "6R.1")])
+        path = os.path.join(self.folder(), "merged.md")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("MERGED pr=x\n")
+        with open(path, "rb") as fh:
+            before = fh.read()
+        code, err = self.new(merged_line(1, head, m, "release", "6R"))
+        self.assertEqual(code, 1)
+        self.assertIn("merged.md", err)
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
 
     def test_merged_at_forms(self):  # MG15
         head, m = self.pr("release", [("6R", "6R.1")])

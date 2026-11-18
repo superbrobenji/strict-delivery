@@ -76,10 +76,9 @@ class CreateRows(Fx):
         self.assertIn(base, err)
 
     def test_decision_forms(self):  # CR13
-        self.decision("DEC-20261105-op3n", "open")
-        self.decision("DEC-20261105-wd3n", "withdrawn")
-        self.decision("DEC-20261105-sc3p", "answered", "scope")
-        git(self.work, "add", "-A")
+        self.decision("DEC-20261105-op3n", "open", root=self.iw)          # read from --root (CR14), so each is judged
+        self.decision("DEC-20261105-wd3n", "withdrawn", root=self.iw)
+        self.decision("DEC-20261105-sc3p", "answered", "scope", root=self.iw)
         for did in ("DEC-20261105-op3n", "DEC-20261105-wd3n", "DEC-20261105-sc3p", "DEC-20261105-zzzz", "DEC-1", ""):
             with self.subTest(did):
                 code, out, err = self.create(decision=did)

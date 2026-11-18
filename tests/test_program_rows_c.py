@@ -5,6 +5,7 @@ import os
 from unittest import mock
 
 from gates.lib import programs
+from gates.tools import program_cli
 from tests.helpers import E128, TOP, commit_all, git, minimal_config, root_forms, write_record
 from tests.test_program_merged import merged_line
 from tests.test_program_cli import (DEC, NAME, PG, PLAN, PS, Fx, breakdown_row, load_yaml, run, stream, streams_row)
@@ -33,7 +34,7 @@ class CreateC(Fx):
         return err
 
     def test_status_cells_from_streams_file(self):  # CR5
-        for purpose in ("", "a|b", "a\nb", "café", "a\\b", " a", "a "):
+        for purpose in ("", "a|b", "a\nb", "café", "a\\b", " a", "a ", "a\x7fb", "a\x1fb"):
             with self.subTest(purpose):
                 self.set_streams(streams_row(stream("a", ["a/"], purpose=purpose), stream("b", ["b/"], merge_order=2)))
                 self.refused("purpose")
@@ -69,6 +70,13 @@ class CreateC(Fx):
         self.refused("program-create", decision=other)
         self.decision(other, root=self.iw)                        # in the integration worktree, untracked: read
         self.assertEqual(self.create(decision=other)[0], 0)
+
+    def test_create_refuses_superseded_decision(self):  # CR13 (Q13): an answered decision that another answered one supersedes
+        write_record(self.iw, ".strict-delivery/state/decisions/DEC-20261105-nw3p.yml",
+                     {"schema": "decision/1", "id": "DEC-20261105-nw3p", "status": "answered", "class": "program-create",
+                      "supersedes": DEC})
+        self.refused("program-create")
+        self.assertEqual(self.create(decision="DEC-20261105-nw3p")[0], 0)
 
     def test_create_streams_file_kinds(self):  # CR15
         sf = self.sf
@@ -271,3 +279,40 @@ class StackedC(Fx):
         self.assertFalse(os.path.exists(self.folder()))
         self.bd(("A1.1", "C1.1"), ("A2.1", "C1.1"))
         self.assertEqual(self.create()[0], 0)
+
+
+class SchemaFirst(Fx):
+    def test_empty_purpose_is_refused_by_the_schema_first(self):  # CR5: `_purpose_ok`'s empty-purpose branch is unreachable
+        from gates.lib import config, schema
+        row = streams_row(stream("a", ["a/"], purpose=""), stream("b", ["b/"], merge_order=2))
+        errs = schema.validate(schema.schemas()["streams"], row, config.load(self.work))
+        self.assertTrue(any("purpose" in e for e in errs), errs)
+
+
+class StagesC(Fx):
+    def refused(self, *needles):
+        code, out, err = self.create()
+        self.assertEqual((code, out), (1, ""), err)
+        for n in needles:
+            self.assertIn(n, err)
+        self.assertFalse(os.path.exists(self.folder()))
+        return err
+
+    def test_create_passes_plans_to_breakdown_errors_workspace(self):  # CR10, BE15: a stream's plan workspace is owned
+        ws = "%s/x-a/f.md" % PS                                   # stream a's plan is PG/x-a.md: its workspace is PS/x-a/
+        sts = [{"id": "a", "paths": ["a/"], "tasks": ["A1.1"], "unblock": "at program start"},
+               {"id": "b", "paths": [ws], "tasks": ["B1.1"], "unblock": "at program start"}]
+        write_record(self.iw, "%s/%s/breakdown.yml" % (PS, PLAN), breakdown_row(streams=sts))
+        err = self.refused("x-a")                                 # the streams file is fine: the breakdown's own overlap
+        self.assertIn("breakdown: ", err)
+        self.assertNotIn("disagree", err)
+
+    def test_create_refuses_breakdown_errors(self):  # CR9: the breakdown_errors stage prints its reasons
+        edges = [{"from": "A1.1", "to": "B1.1"}, {"from": "B1.1", "to": "A1.1"}]
+        write_record(self.iw, "%s/%s/breakdown.yml" % (PS, PLAN), breakdown_row(edges=edges))
+        self.refused("cycle")
+
+    def test_create_validates_the_status_page_it_writes(self):  # CR3: status_errors judges the page before the write
+        with mock.patch.object(program_cli, "_status_page", return_value=program_cli._status_page(
+                streams_row(), NAME).replace("| ready |", "| nonsense |")):
+            self.refused("status.md")
