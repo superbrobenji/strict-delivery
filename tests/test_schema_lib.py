@@ -151,7 +151,7 @@ def rt(d):
 class KnownKinds(unittest.TestCase):
     def test_K1_known_kinds_match_appendix(self):
         self.assertEqual(KNOWN_KINDS, ("config", "decision", "finding", "claim", "request", "streams", "context",
-                                       "handoff", "ledger", "status", "sync-log", "overview", "in-force",
+                                       "handoff", "ledger", "status", "sync-log", "merged-log", "overview", "in-force",
                                        "decision-index", "finding-index", "mutation-transcript", "review-report",
                                        "receipt", "claude-block", "gitignore-block"))
 
@@ -163,7 +163,8 @@ class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
         self.assertEqual(sorted(got), ["claim", "config", "decision", "decision-index", "finding", "finding-index",
-                                       "handoff", "in-force", "ledger", "overview"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger
+                                       "handoff", "in-force", "ledger", "merged-log", "overview", "request", "status",
+                                       "streams", "sync-log"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
 
     def test_K6_fixture_dir_and_bad_file_raises_naming_it(self):
@@ -321,9 +322,9 @@ class LoadSchema(Dirs):
     def test_L7_field_type(self):
         for t in schema.TYPES:
             extra = {"enum": {"values": ["a"]}, "list": {"items": {"type": "str"}}, "map": {"fields": {"x": {"type": "str"}}},
-                     "id": {"id_kind": "decision"}}.get(t, {})
+                     "id": {"id_kind": "decision"}, "one_of": {"of": [{"type": "str"}]}}.get(t, {})
             self.sch({"v": dict(type=t, **extra)})
-        self.assertEqual(len(schema.TYPES), 13)
+        self.assertEqual(len(schema.TYPES), 14)  # Task P2.1 part i adds one_of (D-A1)
         for t in ("string", "float", None, 5):
             p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {"type": t}}))
             self.assertTrue(m.startswith("%s: fields.v.type: must be one of str, text" % p), m)
@@ -1048,8 +1049,10 @@ class FrontMatterSchema(Dirs):
 
     def test_old_schemas_unchanged(self):  # FS7
         listed = sorted(os.listdir(schema.SCHEMAS_DIR))
-        self.assertEqual(listed, sorted([k + ".yml" for k, _ in EXPECTED_FILES] + ["handoff.yml", "ledger.yml"]))  # Task P1.2 adds two
-        got = [name for name in listed if name not in ("handoff.yml", "ledger.yml")]  # the old vocabulary's files only
+        later = ["handoff.yml", "ledger.yml", "merged-log.yml", "request.yml", "status.yml", "streams.yml",
+                 "sync-log.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas
+        self.assertEqual(listed, sorted([k + ".yml" for k, _ in EXPECTED_FILES] + later))
+        got = [name for name in listed if name not in later]  # the old vocabulary's files only
         loaded = [load_schema(os.path.join(schema.SCHEMAS_DIR, name)) for name in got]
         self.assertEqual({s.kind: s.files for s in loaded}, dict(EXPECTED_FILES))
         for s in loaded:
@@ -1771,6 +1774,132 @@ class LinesValidate(Dirs):
     def test_lines_keyword_reasons_are_plain_text(self):
         got = self.v("CHECKPOINT ࡰ")
         self.assertEqual(got, [self.err(2)])
+
+
+class OneOf(Dirs):
+    """Task P2.1 part i, decision D-A1: the ``one_of`` union spec (``of: [spec, ...]``, pairwise distinct base types,
+    the alternative picked by ``type(value)`` exactly, no trial and backtrack)."""
+
+    OWNS = {"type": "one_of", "of": [{"type": "str"},
+                                      {"type": "map", "fields": {"path": {"type": "str"},
+                                                                 "from": {"type": "str", "required": False}}}]}
+
+    def field(self, spec=None):
+        return self.sch({"v": dict(spec or self.OWNS, required=False)})
+
+    def check(self, s, value):
+        return validate(s, {"schema": THING, "v": value}, CFG)
+
+    def test_one_of_is_a_type(self):
+        self.assertIn("one_of", schema.TYPES)
+        self.assertEqual(len(schema.TYPES), 14)
+        self.assertEqual(self.field().fields["v"]["type"], "one_of")
+
+    def test_one_of_valid_alternatives(self):  # the owns item of streams.yml: a string or a window map
+        s = self.field()
+        for value in ("src/", {"path": "src/"}, {"path": "src/", "from": "merged:a"}):
+            with self.subTest(value=repr(value)):
+                self.assertEqual(self.check(s, value), [])
+
+    def test_one_of_checks_the_matching_alternative_only(self):
+        s = self.field()
+        self.assertEqual(self.check(s, ""), ["v: must be a non-empty string"])
+        self.assertEqual(self.check(s, {}), ["v.path: required key is missing"])
+        self.assertEqual(self.check(s, {"path": "p", "x": 1}), ["v.x: unknown key"])
+        self.assertEqual(self.check(s, {"path": 5}), ["v.path: must be a non-empty string"])
+
+    def test_one_of_no_matching_alternative_names_the_allowed_types(self):
+        s = self.field()
+        class S(str):
+            pass
+        for value in (5, True, 1.5, ["a"], S("a"), b"x", ()):
+            with self.subTest(value=repr(value)):
+                self.assertEqual(self.check(s, value), ["v: must be a string or a mapping"])
+
+    def test_one_of_base_types(self):
+        alts = [{"type": "int", "min": 1}, {"type": "bool"}, {"type": "list", "items": {"type": "str"}},
+                {"type": "enum", "values": ["a", "b"]}]
+        s = self.field({"type": "one_of", "of": alts})
+        self.assertEqual(self.check(s, 3), [])
+        self.assertEqual(self.check(s, 0), ["v: must be at least 1"])
+        self.assertEqual(self.check(s, True), [])  # a bool is the bool alternative, never the int one
+        self.assertEqual(self.check(s, ["x"]), [])
+        self.assertEqual(self.check(s, [5]), ["v.0: must be a non-empty string"])
+        self.assertEqual(self.check(s, "a"), [])
+        self.assertEqual(self.check(s, "c"), ["v: must be one of a, b"])
+        self.assertEqual(self.check(s, {"x": 1}), ["v: must be an integer or true or false or a list or a string"])
+        only_int = self.field({"type": "one_of", "of": [{"type": "int"}, {"type": "str"}]})
+        self.assertEqual(self.check(only_int, False), ["v: must be an integer or a string"])
+
+    def test_one_of_string_types_share_one_base_type(self):
+        for t in ("text", "id", "sha", "glob", "cite", "sha-path"):
+            extra = {"id": {"id_kind": "decision"}}.get(t, {})
+            with self.subTest(t=t):
+                p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {
+                    "type": "one_of", "of": [{"type": "str"}, dict(type=t, **extra)]}}))
+                self.assertIn("same base type", m)
+
+    def test_one_of_nullable_and_required_belong_to_the_union(self):
+        s = self.sch({"v": dict(self.OWNS, nullable=True)})
+        self.assertEqual(self.check(s, None), [])
+        self.assertEqual(validate(s, {"schema": THING}, CFG), ["v: required key is missing"])
+        s = self.field()
+        self.assertEqual(self.check(s, None), ["v: must not be null"])
+
+    def test_one_of_inside_a_list(self):  # streams.yml owns: list of (str or map)
+        s = self.sch({"v": {"type": "list", "min": 1, "items": self.OWNS}})
+        self.assertEqual(self.check(s, ["a/", {"path": "b/"}]), [])
+        self.assertEqual(self.check(s, ["a/", 5]), ["v.1: must be a string or a mapping"])
+
+    def test_one_of_load_refusals(self):
+        def spec(**kw):
+            return dict(BASE, fields={"schema": {"type": "str"}, "v": dict({"type": "one_of"}, **kw)})
+        p, m = self.bad(spec())
+        self.assertEqual(m, "%s: fields.v.of: required by type one_of" % p)
+        for of in ([], "x", {"a": 1}, None, 5):
+            with self.subTest(of=repr(of)):
+                p, m = self.bad(spec(of=of))
+                self.assertEqual(m, "%s: fields.v.of: must be a non-empty list of field specs" % p)
+        p, m = self.bad(spec(of=["str"]))
+        self.assertEqual(m, "%s: fields.v.of.0: a field spec must be a mapping" % p)
+        p, m = self.bad(spec(of=[{"type": "str"}, {"type": "str"}]))
+        self.assertEqual(m, "%s: fields.v.of.1: has the same base type (str) as alternative 0; the alternatives need "
+                         "distinct base types" % p)
+        p, m = self.bad(spec(of=[{"type": "map", "fields": {"a": {"type": "str"}}}, {"type": "any-map"}]))
+        self.assertIn("same base type (map)", m)
+        p, m = self.bad(spec(of=[{"type": "str"}, {"type": "enum", "values": ["a"]}]))
+        self.assertIn("same base type (str)", m)
+        p, m = self.bad(spec(of=[{"type": "int"}, {"type": "enum", "values": [1]}]))
+        self.assertIn("same base type (int)", m)
+        p, m = self.bad(spec(of=[{"type": "one_of", "of": [{"type": "str"}]}]))
+        self.assertEqual(m, "%s: fields.v.of.0.type: a one_of alternative cannot itself be one_of" % p)
+        p, m = self.bad(spec(of=[{"type": "str"}, {"type": "one_of", "of": [{"type": "int"}]}]))
+        self.assertEqual(m, "%s: fields.v.of.1.type: a one_of alternative cannot itself be one_of" % p)
+        p, m = self.bad(spec(of=[{"type": "nope"}]))
+        self.assertIn("fields.v.of.0.type: must be one of", m)
+        p, m = self.bad(spec(of=[{"type": "map"}]))
+        self.assertEqual(m, "%s: fields.v.of.0.fields: required by type map" % p)
+        for key, val in (("required", False), ("nullable", True), ("required_when", [{"schema": ["x"]}]),
+                         ("absent_when", [{"schema": ["x"]}])):
+            with self.subTest(key=key):
+                p, m = self.bad(spec(of=[{"type": "str", key: val}]))
+                self.assertEqual(m, "%s: fields.v.of.0.%s: not used inside one_of" % (p, key))
+
+    def test_of_is_used_by_one_of_only(self):
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {"type": "str", "of": [{"type": "str"}]}}))
+        self.assertEqual(m, "%s: fields.v.of: not used by type str" % p)
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {"type": "one_of", "of": [{"type": "str"}],
+                                                                              "min": 1}}))
+        self.assertEqual(m, "%s: fields.v.min: not used by type one_of" % p)
+
+    def test_one_of_alternative_with_its_own_items_and_fields_is_checked(self):
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {
+            "type": "one_of", "of": [{"type": "list", "items": {"type": "str"}}, {"type": "str", "min": 1}]}}))
+        self.assertEqual(m, "%s: fields.v.of.1.min: not used by type str" % p)
+
+    def test_one_of_schema_field_cannot_be_the_tag(self):  # a yaml schema declares schema as a required str
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "one_of", "of": [{"type": "str"}]}}))
+        self.assertEqual(m, "%s: fields.schema: must be declared as a required, non-nullable str" % p)
 
 
 class VersionRows(Dirs):

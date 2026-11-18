@@ -1583,6 +1583,12 @@ class LocalBranches(P21Case):
         git(self.root, "branch", HEX40)
         self.assertEqual(gitinfo.local_branches(self.root), [HEX40, "main"])
 
+    def test_local_branches_unexpected_ref(self):  # a ref outside refs/heads/ is a GateError, never a name
+        with stub_run("for-each-ref", b"refs/heads/ok\nrefs/tags/t\n"):
+            with self.assertRaises(GateError) as cm:
+                gitinfo.local_branches(self.root)
+        self.assertIn("unexpected ref", str(cm.exception))
+
     def test_local_branches_non_utf8(self):  # LB8 (the name cannot be created on APFS: stubbed output)
         with stub_run("for-each-ref", b"refs/heads/bad\xff\n"):
             with self.assertRaises(GateError) as cm:
@@ -1846,6 +1852,12 @@ class RevList(P21Case):
         tip = git(self.root, "rev-parse", "orphan")
         first = git(self.root, "rev-parse", "orphan~1")
         self.assertEqual(gitinfo.rev_list(self.root, self.M, "orphan"), [first, tip])
+
+    def test_rev_list_revision_named_like_a_file(self):  # RL16: a range names no path, so git exits 0 even without --
+        self.put("main", b"f\n")
+        tip = commit_all(self.root, "file named main")
+        self.assertEqual(plain_git(self.root, "rev-list", "%s..main" % self.M, check=False).returncode, 0)
+        self.assertEqual(gitinfo.rev_list(self.root, self.M, "main"), [tip])
 
     def test_rev_list_unknown_revision(self):  # RL6
         for a, b in ((self.A, "nosuch"), (ABSENT40, self.M)):
