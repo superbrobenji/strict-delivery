@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-qmmm
+status: open
+source: "P1.1 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g5/P1.1-review-1.md F2"
+severity: LOW
+class: "match semantics of lines patterns: case of ASCII letters; compile flags other than re.ASCII (IGNORECASE mutant survives); gates/lib/schema.py:268"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P1.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7a03cfdc6417d82a73ae68c7e403edc3ed8fbc06
+    by: stream-a9
+review_round: 1
+caused_by_change: true
+dimension: pattern flags and case

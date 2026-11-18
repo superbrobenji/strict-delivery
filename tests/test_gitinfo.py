@@ -1032,5 +1032,434 @@ class RootGuardTest(Fixture):
                 self.assertEqual(str(e.exception), "ref must not start with '-'")
 
 
+# ======================================================================== Task P1.3: current_branch, dirty_paths,
+# upstream_sha, remotes (table rows CB1-CB9, DP1-DP16, UP1-UP8, RM1-RM6; decisions D-Q6, D-Q7, D-Q8, D-Q12, D-Q14)
+
+def plain_git(root, *args, check=True):
+    """The plain git command line, bytes out (the independent oracle of the tests below)."""
+    p = subprocess.run(["git", "-C", root] + list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if check and p.returncode != 0:
+        raise AssertionError(p.stderr)
+    return p
+
+
+def porcelain_oracle(root):
+    """Three lines written in the test: ``git status --porcelain=v1 -z`` entries, one path each (no renames)."""
+    out = plain_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=no", "--no-renames").stdout
+    return [e[3:].decode("utf-8") for e in out.split(b"\0") if e]
+
+
+class P13Case(GitIsolatedTestCase):
+    """A ``make_repo`` fixture whose config pins the Global Constraints :33 settings (colour always, abbrev 7)."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = make_repo(self.work)
+        git(self.root, "config", "color.ui", "always")
+        git(self.root, "config", "color.diff", "always")
+        git(self.root, "config", "color.status", "always")
+        git(self.root, "config", "core.abbrev", "7")
+
+    def put(self, rel, data=b"x\n", root=None):
+        path = os.path.join(root or self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+
+    def bare_remote(self, name="origin"):
+        bare = os.path.join(self.tmp, name + ".git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", bare)
+        git(self.root, "remote", "add", name, bare)
+        return bare
+
+    def linked(self, name="w", branch=None):
+        path = os.path.join(self.tmp, name)
+        if branch:
+            git(self.root, "worktree", "add", "-q", "-b", branch, path)
+        else:
+            git(self.root, "worktree", "add", "-q", "--detach", path)
+        return path
+
+
+class CurrentBranch(P13Case):
+    def test_current_branch_names(self):  # CB1
+        for name in ("block/p1.3", "feat-x", "b" * 200, "café", "7up", "main"):
+            with self.subTest(name=name[:20]):
+                git(self.root, "checkout", "-q", "-B", name)
+                self.assertEqual(gitinfo.current_branch(self.root), name)
+                self.assertEqual(plain_git(self.root, "symbolic-ref", "--short", "HEAD").stdout.decode().strip(), name)
+
+    def test_current_branch_detached_is_none(self):  # CB2
+        git(self.root, "checkout", "-q", "--detach")
+        self.assertIsNone(gitinfo.current_branch(self.root))
+
+    def test_current_branch_unborn(self):  # CB3
+        fresh = os.path.join(self.tmp, "fresh")
+        os.mkdir(fresh)
+        git(fresh, "init", "-q", "-b", "trunk")
+        self.assertEqual(gitinfo.current_branch(fresh), "trunk")
+        with self.assertRaises(GateError):
+            gitinfo.head_sha(fresh)
+
+    def test_current_branch_tag_of_same_name(self):  # CB4, D-Q6
+        git(self.root, "checkout", "-q", "-b", "feat")
+        git(self.root, "tag", "feat")
+        self.assertEqual(plain_git(self.root, "symbolic-ref", "--short", "HEAD").stdout.decode().strip(), "heads/feat")
+        self.assertEqual(gitinfo.current_branch(self.root), "feat")
+
+    def test_current_branch_linked_worktree(self):  # CB5
+        w = self.linked("sib", "sibbr")
+        self.assertEqual(gitinfo.current_branch(w), "sibbr")
+        self.assertEqual(gitinfo.current_branch(self.root), "main")
+
+    def test_current_branch_root_forms(self):  # CB6
+        check_root_forms(self, root_forms(self.tmp, self.root), {"current_branch": gitinfo.current_branch})
+
+    def test_current_branch_ignores_user_config(self):  # CB7
+        git(self.root, "config", "init.defaultBranch", "other")
+        with mock.patch.dict(os.environ, {"GIT_DIR": os.path.join(self.tmp, "nowhere"), "GIT_INDEX_FILE": "idx"}):
+            self.assertEqual(gitinfo.current_branch(self.root), "main")
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.current_branch(self.root)
+        sym = [a for a, _ in calls if "symbolic-ref" in a]
+        self.assertEqual(len(sym), 1)
+        self.assertEqual(sym[0][-3:], ["symbolic-ref", "--quiet", "HEAD"])
+        self.assertEqual(sym[0][:3], ["git", "-C", self.root])
+
+    def test_current_branch_root_types(self):  # CB8, D-Q14
+        class S(str):
+            pass
+        for bad in (None, b".", 5, S(self.root), ""):
+            with self.subTest(bad=repr(bad)):
+                with self.assertRaises(GateError) as e:
+                    gitinfo.current_branch(bad)
+                self.assertEqual(str(e.exception), "root must be a string")
+
+    def test_current_branch_unicode_same_on_both(self):  # CB9
+        for name in ("uࡰx", "e\U0001fae8"):
+            git(self.root, "checkout", "-q", "-B", name)
+            self.assertEqual(gitinfo.current_branch(self.root), name)
+
+    def test_current_branch_target_outside_heads_is_refused(self):  # D-Q6 fail closed
+        real = gitinfo._run
+
+        def fake(root, name, args, **kw):
+            p = real(root, name, args, **kw)
+            if name == "symbolic-ref":
+                p.stdout = b"refs/remotes/origin/main\n"
+            return p
+        with mock.patch.object(gitinfo, "_run", fake):
+            with self.assertRaises(GateError) as e:
+                gitinfo.current_branch(self.root)
+        self.assertEqual(str(e.exception), "git symbolic-ref: HEAD does not name a branch under refs/heads/")
+
+
+class DirtyPaths(P13Case):
+    def test_dirty_paths_clean(self):  # DP1
+        self.assertEqual(gitinfo.dirty_paths(self.root), [])
+
+    def test_dirty_paths_each_kind(self):  # DP2
+        self.put("a.txt")
+        self.put("b.txt")
+        self.put("c.txt")
+        self.put("d.txt")
+        commit_all(self.root, "base")
+        self.put("a.txt", b"changed\n")
+        git(self.root, "add", "a.txt")  # staged modify
+        self.put("b.txt", b"changed\n")  # unstaged modify
+        os.remove(os.path.join(self.root, "c.txt"))  # deleted, unstaged
+        git(self.root, "rm", "-q", "d.txt")  # staged delete
+        self.put("u.txt")
+        git(self.root, "add", "u.txt")  # staged add
+        self.put("n/x y.txt")  # untracked, in a new directory
+        got = gitinfo.dirty_paths(self.root)
+        self.assertEqual(got, ["a.txt", "b.txt", "c.txt", "d.txt", "u.txt", "n/x y.txt"])  # tracked entries, then untracked
+        self.assertEqual(got, porcelain_oracle(self.root))
+
+    def test_dirty_paths_mm_listed_once(self):  # DP3
+        self.put("a.txt")
+        commit_all(self.root, "base")
+        self.put("a.txt", b"one\n")
+        git(self.root, "add", "a.txt")
+        self.put("a.txt", b"two\n")
+        self.assertEqual(gitinfo.dirty_paths(self.root), ["a.txt"])
+
+    def test_dirty_paths_rename_entries(self):  # DP4, Q7 (a), V4
+        self.put("a.txt", b"some longer content so the rename is detected\n" * 3)
+        commit_all(self.root, "base")
+        git(self.root, "mv", "a.txt", "a2.txt")
+        want = ["a.txt", "a2.txt"]
+        self.assertEqual(sorted(gitinfo.dirty_paths(self.root)), want)
+        for value in ("false", "true"):
+            git(self.root, "config", "status.renames", value)
+            self.assertEqual(sorted(gitinfo.dirty_paths(self.root)), want, value)
+        git(self.root, "config", "status.renames", "copies")
+        self.assertEqual(sorted(gitinfo.dirty_paths(self.root)), want)
+        self.assertEqual(len(gitinfo.dirty_paths(self.root)), 2)
+
+    def test_dirty_paths_ignored_passes(self):  # DP5
+        self.put(".gitignore", b"*.log\n")
+        commit_all(self.root, "ignore")
+        self.put("x.log")
+        self.assertEqual(gitinfo.dirty_paths(self.root), [])
+        self.put(".git/info/exclude", b"*.tmp\n")
+        self.put("y.tmp")
+        self.assertEqual(gitinfo.dirty_paths(self.root), [])
+
+    def test_dirty_paths_odd_names(self):  # DP6
+        names = ["sp ace.txt", "nl\nname.txt", "café.txt", 'q"uote.txt', "-lead.txt", "t\tab.txt", "back\\slash.txt"]
+        for n in names:
+            self.put(n)
+        self.assertEqual(sorted(gitinfo.dirty_paths(self.root)), sorted(names))
+        self.assertEqual(gitinfo.dirty_paths(self.root), porcelain_oracle(self.root))
+
+    def test_dirty_paths_invalid_utf8_name_is_a_gate_error(self):  # DP6
+        try:
+            with open(os.path.join(os.fsencode(self.root), b"bad\xff.txt"), "wb") as fh:
+                fh.write(b"x")
+        except OSError:
+            self.skipTest("this file system refuses a byte name that is not UTF-8")
+        with self.assertRaises(GateError) as e:
+            gitinfo.dirty_paths(self.root)
+        self.assertEqual(str(e.exception), "git status --porcelain gave output that is not valid UTF-8")
+
+    def test_dirty_paths_untracked_kinds(self):  # DP7
+        os.mkdir(os.path.join(self.root, "emptydir"))
+        os.symlink("a.txt", os.path.join(self.root, "lnk"))
+        inner = os.path.join(self.root, "inner")
+        os.mkdir(inner)
+        git(inner, "init", "-q", "-b", "main")
+        self.put("inner/f.txt")
+        os.mkfifo(os.path.join(self.root, "fifo"))
+        got = gitinfo.dirty_paths(self.root)
+        self.assertNotIn("emptydir", got)
+        self.assertEqual(got, porcelain_oracle(self.root))
+        self.assertIn("lnk", got)
+        self.assertIn("inner/", got)
+
+    def test_dirty_paths_unmerged(self):  # DP8
+        self.put("f.txt", b"base\n")
+        commit_all(self.root, "base")
+        git(self.root, "checkout", "-q", "-b", "side")
+        self.put("f.txt", b"side\n")
+        commit_all(self.root, "side")
+        git(self.root, "checkout", "-q", "main")
+        self.put("f.txt", b"main\n")
+        commit_all(self.root, "main")
+        git(self.root, "merge", "side", check=False)
+        self.assertEqual(gitinfo.dirty_paths(self.root), ["f.txt"])
+
+    def test_dirty_paths_ignores_other_worktrees(self):  # DP9, plan :2593
+        w = self.linked("other", "ob")
+        self.put("x", root=w)
+        self.assertEqual(gitinfo.dirty_paths(self.root), [])
+        self.assertEqual(gitinfo.dirty_paths(w), ["x"])
+        self.put("m", root=self.root)
+        self.assertEqual(gitinfo.dirty_paths(self.root), ["m"])
+        self.assertEqual(gitinfo.dirty_paths(w), ["x"])
+
+    def test_dirty_paths_inherits_git_index_file(self):  # DP10
+        self.put("a.txt", b"one\n")
+        commit_all(self.root, "base")
+        alt = os.path.join(self.tmp, "alt-index")
+        shutil.copy(os.path.join(self.root, ".git", "index"), alt)
+        self.put("scratch", b"different\n")
+        h = plain_git(self.root, "hash-object", "-w", "scratch").stdout.decode().strip()
+        os.remove(os.path.join(self.root, "scratch"))
+        env = dict(os.environ, GIT_INDEX_FILE=alt)
+        subprocess.run(["git", "-C", self.root, "update-index", "--cacheinfo", "100644,%s,a.txt" % h], env=env, check=True)
+        self.assertEqual(gitinfo.dirty_paths(self.root), [])
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": alt}):
+            self.assertEqual(gitinfo.dirty_paths(self.root), ["a.txt"])
+
+    def test_dirty_paths_ignores_user_config(self):  # DP11, Global Constraints :33
+        self.put("u.txt")
+        for key, value in (("status.showUntrackedFiles", "no"), ("status.short", "true"), ("status.branch", "true"),
+                           ("core.quotePath", "true"), ("color.status", "always"), ("core.abbrev", "7")):
+            git(self.root, "config", key, value)
+        self.assertEqual(gitinfo.dirty_paths(self.root), ["u.txt"])
+
+    def test_dirty_paths_call_form(self):  # Global Constraints :33
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.dirty_paths(self.root)
+        st = [(a, e) for a, e in calls if "status" in a]
+        self.assertEqual(len(st), 1)
+        argv, env = st[0]
+        self.assertEqual(argv, ["git", "-c", "core.fsmonitor=false", "-C", self.root, "status", "--porcelain=v1", "-z",
+                                "--untracked-files=all", "--ignored=no", "--no-renames", "--ignore-submodules=none"])
+        self.assertEqual(env["LC_ALL"], "C")
+        self.assertEqual(env["GIT_OPTIONAL_LOCKS"], "0")
+
+    def test_dirty_paths_does_not_write_the_index(self):  # DP12, D-Q8
+        self.put("a.txt")
+        commit_all(self.root, "base")
+        os.utime(os.path.join(self.root, "a.txt"), (1, 1))  # stat-dirty, content equal
+        idx = os.path.join(self.root, ".git", "index")
+        with open(idx, "rb") as fh:
+            before = fh.read()
+        self.assertEqual(gitinfo.dirty_paths(self.root), [])
+        with open(idx, "rb") as fh:
+            self.assertEqual(fh.read(), before)
+        plain_git(self.root, "status", "--porcelain=v1")  # the plain call does rewrite it (why the variable is set)
+        with open(idx, "rb") as fh:
+            self.assertNotEqual(fh.read(), before)
+
+    def test_dirty_paths_root_forms(self):  # DP13
+        check_root_forms(self, root_forms(self.tmp, self.root), {"dirty_paths": gitinfo.dirty_paths})
+
+    def test_dirty_paths_root_types(self):  # D-Q14
+        for bad in (None, b".", 5, ""):
+            with self.assertRaises(GateError) as e:
+                gitinfo.dirty_paths(bad)
+            self.assertEqual(str(e.exception), "root must be a string")
+
+    def test_dirty_paths_submodule(self):  # DP14, Q7b
+        sub = os.path.join(self.tmp, "subsrc")
+        os.mkdir(sub)
+        git(sub, "init", "-q", "-b", "main")
+        git(sub, "config", "user.email", "f@example.invalid")
+        git(sub, "config", "user.name", "F")
+        self.put("s.txt", root=sub)
+        commit_all(sub, "s")
+        git(self.root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "mod")
+        commit_all(self.root, "add submodule")
+        self.assertEqual(gitinfo.dirty_paths(self.root), [])
+        self.put("mod/untracked.txt")
+        git(self.root, "config", "diff.ignoreSubmodules", "all")
+        git(self.root, "config", "submodule.mod.ignore", "all")
+        self.assertEqual(gitinfo.dirty_paths(self.root), ["mod"])
+
+    def test_dirty_paths_same_on_both(self):  # DP15, V1, V2
+        names = ["uࡰ.txt", "e\U0001fae8.txt"]
+        for n in names:
+            self.put(n)
+        digits = "9" * 255  # the longest name; a 4301-digit path exceeds PATH_MAX (1024) on macOS, so none is built
+        self.put(digits)
+        got = gitinfo.dirty_paths(self.root)
+        self.assertEqual(sorted(got), sorted(names + [digits]))
+
+    def test_dirty_paths_many_paths(self):  # DP16 (3000 files; the call count is what the row pins)
+        for i in range(3000):
+            self.put("many/f%04d" % i, b"")
+        calls, patch = spy_runs()
+        with patch:
+            got = gitinfo.dirty_paths(self.root)
+        self.assertEqual(len(got), 3000)
+        self.assertEqual(len([a for a, _ in calls if "status" in a]), 1)
+
+
+class UpstreamAndRemotes(P13Case):
+    def setUp(self):
+        super().setUp()
+        self.bare = self.bare_remote()
+
+    def push(self):
+        git(self.root, "push", "-q", "-u", "origin", "main")
+
+    def test_upstream_sha_none(self):  # UP1
+        self.assertIsNone(gitinfo.upstream_sha(self.root))
+
+    def test_upstream_sha_values(self):  # UP2
+        self.push()
+        pushed = git(self.root, "rev-parse", "HEAD")
+        self.assertEqual(gitinfo.upstream_sha(self.root), pushed)
+        self.assertEqual(len(gitinfo.upstream_sha(self.root)), 40)
+        self.put("a.txt")
+        local = commit_all(self.root, "local")
+        self.assertEqual(gitinfo.upstream_sha(self.root), pushed)  # behind
+        git(self.root, "reset", "-q", "--hard", pushed)
+        other = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", self.bare, other)
+        git(other, "config", "user.email", "f@example.invalid")
+        git(other, "config", "user.name", "F")
+        self.put("from-clone", root=other)
+        remote_new = commit_all(other, "clone")
+        git(other, "push", "-q", "origin", "HEAD:main")
+        git(self.root, "fetch", "-q")
+        self.assertEqual(gitinfo.upstream_sha(self.root), remote_new)  # ahead
+        self.put("b.txt")
+        commit_all(self.root, "diverge")
+        self.assertEqual(gitinfo.upstream_sha(self.root), remote_new)  # diverged
+        self.assertNotEqual(local, remote_new)
+
+    def test_upstream_sha_gone(self):  # UP3
+        git(self.root, "checkout", "-q", "-b", "b")
+        git(self.root, "push", "-q", "-u", "origin", "b")
+        self.assertIsNotNone(gitinfo.upstream_sha(self.root))
+        git(self.root, "push", "-q", "origin", ":b")  # git drops the local tracking ref with it
+        git(self.root, "fetch", "-q", "--prune")
+        self.assertIsNone(gitinfo.upstream_sha(self.root))
+
+    def test_upstream_sha_local_upstream(self):  # UP4
+        git(self.root, "checkout", "-q", "-b", "loc")
+        git(self.root, "branch", "--set-upstream-to=main")
+        self.assertEqual(gitinfo.upstream_sha(self.root), git(self.root, "rev-parse", "main"))
+
+    def test_upstream_sha_follows_configuration_not_name(self):  # UP5
+        self.push()
+        git(self.root, "checkout", "-q", "-b", "newfeat", "origin/main")
+        self.put("n.txt")
+        commit_all(self.root, "n")
+        git(self.root, "push", "-q", "origin", "newfeat:newfeat")
+        self.assertEqual(gitinfo.upstream_sha(self.root), git(self.root, "rev-parse", "origin/main"))
+        self.assertNotEqual(gitinfo.upstream_sha(self.root), git(self.root, "rev-parse", "HEAD"))
+        git(self.root, "branch", "--set-upstream-to=origin/newfeat")
+        self.assertEqual(gitinfo.upstream_sha(self.root), git(self.root, "rev-parse", "HEAD"))
+
+    def test_upstream_sha_detached(self):  # UP6
+        self.push()
+        git(self.root, "checkout", "-q", "--detach")
+        self.assertIsNone(gitinfo.upstream_sha(self.root))
+
+    def test_upstream_sha_odd_names(self):  # UP7
+        git(self.root, "checkout", "-q", "-b", "a/b/c")
+        git(self.root, "remote", "add", "weird/name", self.bare)
+        git(self.root, "push", "-q", "-u", "weird/name", "a/b/c")
+        self.assertEqual(gitinfo.upstream_sha(self.root), git(self.root, "rev-parse", "HEAD"))
+
+    def test_upstream_sha_ignores_abbrev_and_color(self):  # UP8
+        self.push()
+        self.assertRegex(gitinfo.upstream_sha(self.root), r"\A[0-9a-f]{40}\Z")
+
+    def test_upstream_sha_root_forms_and_types(self):
+        check_root_forms(self, root_forms(self.tmp, self.root), {"upstream_sha": gitinfo.upstream_sha})
+        for bad in (None, 5, b".", ""):
+            with self.assertRaises(GateError):
+                gitinfo.upstream_sha(bad)
+
+    def test_remotes_none(self):  # RM1
+        fresh = os.path.join(self.tmp, "norem")
+        os.mkdir(fresh)
+        make_repo(fresh)
+        self.assertEqual(gitinfo.remotes(fresh), [])
+
+    def test_remotes_names(self):  # RM2
+        git(self.root, "remote", "add", "fork", self.bare)
+        self.assertEqual(gitinfo.remotes(self.root), ["fork", "origin"])
+        self.assertEqual(gitinfo.remotes(self.root), plain_git(self.root, "remote").stdout.decode().split())
+
+    def test_remotes_without_url(self):  # RM3, D-Q12
+        git(self.root, "config", "remote.noloc.fetch", "+refs/heads/*:refs/remotes/noloc/*")
+        self.assertEqual(gitinfo.remotes(self.root), ["noloc", "origin"])
+
+    def test_remotes_odd_names(self):  # RM4
+        git(self.root, "remote", "add", "weird/name", self.bare)
+        git(self.root, "remote", "add", "café", self.bare)
+        self.assertEqual(sorted(gitinfo.remotes(self.root)), sorted(["origin", "weird/name", "café"]))
+
+    def test_remotes_root_forms(self):  # RM5
+        check_root_forms(self, root_forms(self.tmp, self.root), {"remotes": gitinfo.remotes})
+        with self.assertRaises(GateError):
+            gitinfo.remotes(None)
+
+    def test_remotes_returns_list(self):  # RM6
+        got = gitinfo.remotes(self.root)
+        self.assertIs(type(got), list)
+        self.assertTrue(all(type(x) is str for x in got))
+
+
 if __name__ == "__main__":
     unittest.main()

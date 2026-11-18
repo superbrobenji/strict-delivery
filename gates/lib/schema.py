@@ -9,6 +9,7 @@ import importlib
 import os
 import re
 import stat
+import warnings
 from typing import List, Optional
 
 from gates.lib import config, gitinfo, ids, print_table, yamlsub
@@ -20,7 +21,7 @@ KNOWN_KINDS = ("config", "decision", "finding", "claim", "request", "streams", "
 GENERATED_KINDS = ("decision-index", "finding-index", "in-force", "overview")  # OQ-17: skipped when absent
 TYPES = ("str", "text", "int", "bool", "enum", "list", "map", "any-map", "id", "sha", "glob", "cite", "sha-path")
 ID_KINDS = ("decision", "finding", "claim", "request")
-FORMATS = ("yaml", "markdown")
+FORMATS = ("yaml", "markdown", "front-matter")
 SCHEMAS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schemas")
 
 _SPEC_KEYS = ("type", "required", "nullable", "values", "items", "fields", "id_kind", "min", "required_when",
@@ -54,6 +55,8 @@ class Schema:
         self.first_line = data.get("first_line")
         self.table = data.get("table")
         self.headings = data.get("headings")
+        self.lines = data.get("lines")
+        self.rules: dict = {}  # word -> (pattern text, compiled pattern); built by load_schema from ``lines``
 
 
 # ---------------------------------------------------------------- schema files
@@ -124,6 +127,42 @@ def _check_fields(path: str, where: str, fields: object) -> None:
         _check_spec(path, "%s.%s" % (where, name), spec, set(fields))
 
 
+def _bracket_bodies(glob: str) -> list:
+    """The text between ``[`` and ``]`` of every bracket expression, found exactly as ``bracket_problem`` finds them."""
+    out: list = []
+    i, n = 0, len(glob)
+    while i < n:
+        i += 1
+        if glob[i - 1] != "[":
+            continue
+        j = i
+        if j < n and glob[j] == "!":
+            j += 1
+        if j < n and glob[j] == "]":
+            j += 1
+        while j < n and glob[j] != "]":
+            j += 1
+        if j < n:
+            out.append(glob[i:j])
+    return out
+
+
+def _glob_problem(glob: str) -> str:
+    """'' when ``glob`` is a supported file glob (P1.1, decisions D-Q1, D-Q2), else the problem: ``/``-separated
+    segments, none empty, ``.`` or ``..``; no ``**``; no bracket expression holding ``/``; every bracket expression in
+    the ``bracket_problem`` grammar."""
+    segments = glob.split("/")
+    if "" in segments:
+        return "must not have an empty segment (no leading, trailing or doubled '/')"
+    if "." in segments or ".." in segments:
+        return "'.' and '..' segments are not allowed"
+    if "**" in glob:
+        return "'**' is not supported"
+    if any("/" in body for body in _bracket_bodies(glob)):
+        return "a [...] class may not hold '/'"
+    return bracket_problem(glob)
+
+
 def _check_files(path: str, files: object) -> None:
     if type(files) is not list or not files:
         raise _err(path, "files", "must be a non-empty list")
@@ -141,8 +180,9 @@ def _check_files(path: str, files: object) -> None:
             for k in ("dir", "glob"):
                 if type(item.get(k)) is not str or item[k] == "":
                     raise _err(path, "%s.%s" % (where, k), "a dir item needs a non-empty string dir and glob")
-            if bracket_problem(item["glob"]):
-                raise _err(path, where + ".glob", bracket_problem(item["glob"]))
+            glob_problem = _glob_problem(item["glob"])
+            if glob_problem:
+                raise _err(path, where + ".glob", glob_problem)
             ex = item.get("exclude", [])
             if type(ex) is not list or not all(type(x) is str for x in ex):
                 raise _err(path, where + ".exclude", "must be a list of strings")
@@ -164,6 +204,120 @@ def _check_markdown(path: str, data: dict) -> None:
             raise _err(path, "headings", "each heading is a full line starting '## '")
 
 
+_POSSESSIVE = ("*+", "++", "?+", "}+")
+_MAX_GROUP_DEPTH = 20
+_MAX_VARIABLE = 24
+_BRACE = re.compile(r"\{(\d*)(,?)(\d*)\}")
+
+
+def _pattern_problem(pattern: str) -> str:
+    """'' when ``pattern`` is in the restricted regular-expression dialect of a ``lines`` item (decision D-Q11),
+    else the problem. The dialect is chosen so that ``re`` reads it the same on 3.9 and 3.13: printable ASCII; ``(?``
+    only as ``(?:``, ``(?=`` or ``(?!``; no possessive quantifier; no quantified group (no nested quantifier); none
+    of the escapes ``\\w \\W \\d \\D \\s \\S \\b \\B``; groups nested at most ``_MAX_GROUP_DEPTH`` deep (a deeper nest
+    raises RecursionError at a depth that depends on the interpreter); at most ``_MAX_VARIABLE`` variable
+    quantifiers (every ``?`` ``*`` ``+``, the lazy marker ``?`` after a quantifier included, ``{m,n}``, ``{m,}``,
+    not a fixed ``{n}``) and alternations ``|`` together. Neither the dialect nor that count bounds matching cost:
+    ``a*`` repeated then ``b`` is polynomial, ``a?`` repeated then ``a`` repeated is exponential, and either can make a
+    failing line slow. ``lines`` patterns are repository-controlled schema files; a cost bound is a separate proposed
+    task."""
+    if not all(" " <= c <= "~" for c in pattern):
+        return "must be printable ASCII (U+0020-U+007E)"
+    if any(p in pattern for p in _POSSESSIVE):
+        return "possessive quantifiers are not supported"
+    i, n, depth, in_class, variable = 0, len(pattern), 0, False, 0
+    while i < n:
+        c = pattern[i]
+        if c == "\\":
+            nxt = pattern[i + 1:i + 2]
+            if nxt != "" and nxt in "wWdDsSbB":
+                return "the escapes \\w \\W \\d \\D \\s \\S \\b \\B are not supported"
+            i += 2
+            continue
+        i += 1
+        if in_class:
+            in_class = c != "]"
+            continue
+        if c == "[":
+            in_class = True
+            if pattern[i:i + 1] == "^":
+                i += 1
+            if pattern[i:i + 1] == "]":
+                i += 1
+        elif c == "(":
+            depth += 1
+            if depth > _MAX_GROUP_DEPTH:
+                return "groups nested more than %d deep are not supported" % _MAX_GROUP_DEPTH
+            if pattern[i:i + 1] == "?" and pattern[i + 1:i + 2] not in (":", "=", "!"):  # "" (the end) is not in it
+                return "'(?' is only supported as (?: (?= or (?!"
+            if pattern[i:i + 1] == "?":
+                i += 2  # the '?' and the kind character of (?: (?= (?! are not quantifiers
+        elif c == ")":
+            depth -= 1
+            if pattern[i:i + 1] in ("*", "+", "{"):  # "" (the end) is not in the tuple
+                return "a quantified group is not supported (a ')' followed by '*', '+' or '{')"
+        elif c == "|":
+            variable += 1
+        elif c in "*+?":
+            variable += 1  # every '?' counts, the lazy marker too
+        elif c == "{":
+            m = _BRACE.match(pattern, i - 1)
+            if m is not None and (m.group(1) or m.group(2) or m.group(3)):
+                if m.group(2):
+                    variable += 1  # {m,n} or {m,}: a variable count; a fixed {n} is not counted
+                i = m.end()
+    if variable > _MAX_VARIABLE:
+        return "more than %d quantifiers and alternations" % _MAX_VARIABLE
+    return ""
+
+
+def _compile_pattern(pattern: str) -> tuple:
+    """``(compiled, problem)``: the pattern compiled with ``re.ASCII`` under the ``error`` warning filter (a pattern
+    that warns is refused on every interpreter), or the reason; every ``Exception`` of ``re.compile`` is a reason."""
+    problem = _pattern_problem(pattern)
+    if problem:
+        return None, problem
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            return re.compile(pattern, re.ASCII), ""
+    except Exception as e:
+        detail = "re.error: %s" % e.msg if type(e) is re.error else type(e).__name__
+        return None, "not a valid regular expression (%s)" % detail
+
+
+def _check_lines(path: str, lines: object) -> dict:
+    if type(lines) is not list or not lines:
+        raise _err(path, "lines", "must be a non-empty list")
+    rules: dict = {}
+    for i, item in enumerate(lines):
+        where = "lines.%d" % i
+        if type(item) is not dict:
+            raise _err(path, where, "must be a mapping")
+        for k in item:
+            if k not in ("word", "pattern"):
+                raise _err(path, "%s.%s" % (where, k), "unknown key")
+        for k in ("word", "pattern"):
+            if k not in item:
+                raise _err(path, "%s.%s" % (where, k), "required key is missing")
+            if type(item[k]) is not str:
+                raise _err(path, "%s.%s" % (where, k), "must be a string")
+        word, pattern = item["word"], item["pattern"]
+        if word == "" or not all("!" <= c <= "~" for c in word):
+            raise _err(path, where + ".word", "must be printable ASCII with no whitespace")
+        if word.endswith(":"):
+            raise _err(path, where + ".word", "must not end with ':'")
+        if word in rules:
+            raise _err(path, where + ".word", "repeats the word of an earlier item")
+        if pattern == "":
+            raise _err(path, where + ".pattern", "must not be empty")
+        compiled, problem = _compile_pattern(pattern)
+        if problem:
+            raise _err(path, where + ".pattern", problem)
+        rules[word] = (pattern, compiled)
+    return rules
+
+
 def load_schema(path: str) -> Schema:
     try:
         data = yamlsub.load(path, path)
@@ -180,8 +334,8 @@ def load_schema(path: str) -> Schema:
         raise _err(path, "version", "must be a positive integer")
     fmt = data.get("format")
     if type(fmt) is not str or fmt not in FORMATS:
-        raise _err(path, "format", "must be yaml or markdown")
-    body = ("fields",) if fmt == "yaml" else ("first_line", "table", "headings")
+        raise _err(path, "format", "must be yaml, markdown or front-matter")
+    body = ("first_line", "table", "headings", "lines") if fmt == "markdown" else ("fields",)
     for k in data:
         if k not in ("kind", "version", "format", "files") + body:
             raise _err(path, str(k), "unknown key for a %s schema" % fmt)
@@ -189,15 +343,18 @@ def load_schema(path: str) -> Schema:
         if k not in data:
             raise _err(path, k, "required key is missing")
     _check_files(path, data["files"])
-    if fmt == "yaml":
+    if fmt != "markdown":
         _check_fields(path, "fields", data["fields"])
         s = data["fields"].get("schema")
         if s is None or s["type"] != "str" or s.get("required", True) is not True or s.get("nullable", False) \
                 or "required_when" in s or "absent_when" in s:
             raise _err(path, "fields.schema", "must be declared as a required, non-nullable str")
-    else:
-        _check_markdown(path, data)
-    return Schema(path, data)
+        return Schema(path, data)
+    _check_markdown(path, data)
+    sch = Schema(path, data)
+    if "lines" in data:
+        sch.rules = _check_lines(path, data["lines"])
+    return sch
 
 
 def scan_dir(dirpath: Optional[str] = None) -> tuple:
@@ -425,7 +582,37 @@ def validate_markdown(schema: Schema, text: str) -> list:
         got = [ln for ln in lines if ln.startswith("## ")]
         if got != schema.headings:
             errs.append("headings: expected [%s], got [%s]" % (", ".join(schema.headings), ", ".join(got)))
+    if schema.rules:
+        for n, line in enumerate(lines[1:], 2):
+            token = line.split(" ", 1)[0]  # a line that starts with a space has the token "": never keyword-led
+            if token.endswith(":"):
+                token = token[:-1]
+            rule = schema.rules.get(token)
+            if rule is not None and not rule[1].fullmatch(line):
+                errs.append("line %d: '%s' line does not match %s" % (n, token, rule[0]))
     return errs
+
+
+def validate_front_matter(schema: Schema, text: object, cfg: dict) -> list:
+    """Errors of the YAML front matter of ``text`` against the front-matter ``schema``: line 1 is exactly ``---``, the
+    front matter runs to the next line that is exactly ``---``, the body after it is free text. A structural problem
+    is the only error returned (decision D-Q7); a YAML error names the file's line (the YAML line plus 1)."""
+    if type(text) is not str:
+        return ["front matter: text must be a string"]
+    lines = text.split("\n")
+    if lines[0] != "---":
+        return ["front matter: first line must be '---'"]
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return ["front matter: no closing '---' line"]
+    try:
+        value = yamlsub.parse("\n".join(lines[1:end]))
+    except yamlsub.YamlError as e:
+        return ["front matter: line %d: %s" % (e.line + 1, e.reason)]
+    if type(value) is not dict:
+        return ["front matter: must be a mapping"]
+    return validate(schema, value, cfg)
 
 
 # ---------------------------------------------------------------- producers and files
@@ -461,8 +648,10 @@ def expected_paths(schema: Schema, cfg: dict) -> list:
 
 
 def entries_of(schema: Schema, root: str, cfg: dict) -> list:
-    """``(repo-relative path, from_glob)`` for every existing file the schema names, sorted per item. A glob match
-    is any entry of the directory with a matching name, whatever its type: the caller refuses non-regular ones."""
+    """``(repo-relative path, from_glob)`` for every existing file the schema names, a glob item's matches sorted by
+    full repo-relative path. A glob is ``/``-separated segments: each but the last matches real directories (a
+    symlink raises LayoutError, any other non-directory is skipped); the last matches entries of any type, whatever
+    its type: the caller refuses non-regular ones."""
     gitinfo._require_toplevel(root)
     out: list = []
     for item in schema.files:
@@ -489,14 +678,38 @@ def entries_of(schema: Schema, root: str, cfg: dict) -> list:
                 raise LayoutError(rel, "is not a directory")
         if missing:
             continue
-        try:
-            names = sorted(os.listdir(os.path.join(root, *parts)))
-        except OSError as e:
-            raise LayoutError(directory, "cannot read the directory (%s)" % (e.strerror or type(e).__name__)) from None
+        segments = item["glob"].split("/")
+        level = [directory]
+        for segment in segments[:-1]:  # each segment but the last matches real directories only
+            level = [d + "/" + name for d in level for name in _names(root, d) if fnmatch.fnmatchcase(name, segment)]
+            level = _real_directories(root, level)
         exclude = item.get("exclude", [])
-        for name in names:
-            if fnmatch.fnmatchcase(name, item["glob"]) and name not in exclude:
-                out.append((directory + "/" + name, True))
+        found = [d + "/" + name for d in level for name in _names(root, d)
+                 if fnmatch.fnmatchcase(name, segments[-1]) and name not in exclude]
+        out.extend((rel, True) for rel in sorted(found))
+    return out
+
+
+def _names(root: str, directory: str) -> list:
+    try:
+        return os.listdir(os.path.join(root, *directory.split("/")))
+    except OSError as e:
+        raise LayoutError(directory, "cannot read the directory (%s)" % (e.strerror or type(e).__name__)) from None
+
+
+def _real_directories(root: str, rels: list) -> list:
+    """The entries of ``rels`` that are directories; a symlink raises LayoutError, any other non-directory is skipped
+    (decision D-Q4: an entry that cannot be inspected raises LayoutError too)."""
+    out: list = []
+    for rel in rels:
+        try:
+            mode = os.lstat(os.path.join(root, *rel.split("/"))).st_mode
+        except OSError as e:
+            raise LayoutError(rel, "cannot read (%s)" % (e.strerror or type(e).__name__)) from None
+        if stat.S_ISLNK(mode):
+            raise LayoutError(rel, "is a symlink; directories must be real directories")
+        if stat.S_ISDIR(mode):
+            out.append(rel)
     return out
 
 
