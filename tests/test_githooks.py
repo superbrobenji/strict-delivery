@@ -521,6 +521,39 @@ class PreCommitTest(HookCase):
         self.assertLess(out.index("PASS schema.config"), out.index("PASS githook.test"))
         self.assertNotEqual(self.head(d), before)
 
+    def test_githook_runs_streams_when_live(self):  # RA12: a live program on `light`; `streams` runs inside run_all, its lines pass through
+        d = self.repo(profile="light")
+        git(d, "checkout", "-q", "-b", "20261101-x/integration")
+        write_file(d, ".strict-delivery/state/programs/20261101-x/streams.yml", "schema: streams/1\n")
+        commit_all(d, "program")
+        git(d, "checkout", "-q", "main")
+        called = self.fake_gates()
+        for label, line, want_rc in (("pass", ("PASS", "streams.ok", ""), 0),
+                                     ("fail", ("FAIL", "streams.owned.x.py", "owned by stream a"), 1)):
+            mod = types.ModuleType("tests_fake_githook_streams_" + label)
+            mod.check = lambda args, line=line: self.streams_result(called, line)
+            for patcher in (mock.patch.dict(gates_main.GATES, {"streams": mod.__name__}), mock.patch.dict(sys.modules, {mod.__name__: mod})):
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            del called[:]
+            rc, out, err = self.hook(["pre-commit", "--root", d])
+            self.assertEqual((rc, err), (want_rc, ""), label)
+            self.assertEqual(called.count("streams"), 1, label)
+            want = "PASS streams.ok\n" if label == "pass" else "FAIL streams.owned.x.py: owned by stream a\n"
+            self.assertIn(want, out, label)                                   # the line passes through, unchanged
+            self.assertTrue(out.endswith(want + "PASS run_all.version\n"), label)   # after the profile's gates, before run_all.version
+        d2 = self.repo(profile="light")                                       # no live program: streams does not run
+        del called[:]
+        self.assertEqual(self.hook(["pre-commit", "--root", d2])[0], 0)
+        self.assertNotIn("streams", called)
+
+    def streams_result(self, called, line):
+        called.append("streams")
+        res = Result("streams")
+        status, ident, reason = line
+        (res.passed(ident) if status == "PASS" else res.fail(ident, reason))
+        return res
+
     def test_failing_gate_refuses_commit(self):  # C13 (a gate FAIL), T8
         marker = "marker.txt"
         d = self.repo(profile="strict", commands={"test": "echo ran > %s" % marker}, install=True)

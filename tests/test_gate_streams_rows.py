@@ -2,6 +2,7 @@
 Same fixtures as tests/test_gate_streams.py (a hand-written program on ``<program>/integration``, ``helpers.make_repo``
 repositories whose git config sets colour and a short abbreviation); expected values are written from the table."""
 import os
+import re
 import subprocess
 import unittest
 
@@ -9,7 +10,7 @@ from gates.lib import gitinfo, yamlsub
 from tests import test_gate_streams as base
 from tests.helpers import commit_all, git
 from tests.test_gate_streams import (BD, INT, NAME, PG, PLAN_A, PROGDIR, PROGRAM_PLAN, REC, SA, SB, W, bd_of, status_page, streams_row)
-from tests.test_programs_lib import MERGED_HEAD, PS, ckpt, ledger, mline, row, stream
+from tests.test_programs_lib import MERGED_HEAD, PS, RID, ckpt, done_row, ledger, mline, row, stream
 
 
 class RowsE(base.Fx):
@@ -350,6 +351,151 @@ class RowsF(base.Fx):
         b = stream("b", ["b-owned.py", "tests/test_b.py"], merge_order=2)
         self.program(streams=row(a, b, shared=[{"path": "docs/reg.md", "rule": "append-rows"}]), bd=bd_of(a, b))
         self.assertIn("FAIL streams.map.%s: " % NAME, self.run_gate()[0])
+
+
+RPLAN = PROGRAM_PLAN + "".join("\n## Block R%d: x\n" % n for n in range(1, 6))
+
+
+class RowsG(base.Fx):
+    """The residual stream's events (ME10, ME11): stream ``r`` is residual; a owns three paths until ``merged:r/R1``,
+    ``merged:r/R2`` and ``merged:r``, b from there; the branch of b changes all three and the failing paths are read."""
+    layout = base.Windows.layout
+
+    def setUp(self):
+        super().setUp()
+        self.commit({PG + "/program-plan.md": RPLAN}, "plan with the R blocks")
+
+    def probe(self, merged_blocks):
+        """One pull request per block of ``merged_blocks`` (in that order), each checkpointing its own task; the failing paths."""
+        layout = {"a_owns": [W("w1.py", None, "merged:r/R1"), W("w2.py", None, "merged:r/R2"), W("wall.py", None, "merged:r")],
+                  "b_owns": [W("w1.py", "merged:r/R1"), W("w2.py", "merged:r/R2"), W("wall.py", "merged:r")]}
+        streams, bd, names = self.layout(residual=True, **layout)
+        bd["streams"][2]["tasks"] = ["R%d.1" % n for n in range(1, 6)]
+        lines = []
+        for n, b in enumerate(merged_blocks, 1):
+            h7 = git(self.root, "rev-parse", "--short=7", "HEAD")
+            head, m = self.pr("pr%d" % n, "r", [ckpt(b, b + ".1", h7)])
+            lines.append(mline(n, head, m, "r", b))
+        self.program(merged=MERGED_HEAD + "".join(l + "\n" for l in lines), streams=streams, bd=bd, status=status_page(names))
+        self.branch(SB)
+        self.commit({"w1.py": "x\n", "w2.py": "x\n", "wall.py": "x\n"})
+        out = self.run_gate()[0]
+        self.assertIn("PASS streams.map", out)
+        return sorted(l.split(":")[0][len("FAIL streams.owned."):] for l in out.splitlines() if l.startswith("FAIL streams.owned."))
+
+    def test_residual_r1_merged_r2_open(self):  # ME10: R1's PR only; R2 is checkpointed on a later head the PR does not hold
+        self.assertEqual(self.probe(["R1"]), ["w2.py", "wall.py"])       # merged:r/R1 holds; merged:r/R2 and merged:r do not
+
+    def test_residual_after_all_prs(self):  # ME11: five lines R1, R5, R3, R2, R4: merged:r holds
+        self.assertEqual(self.probe(["R1", "R5", "R3", "R2", "R4"]), [])
+
+    def test_residual_with_one_pr_missing(self):  # ME11 (contradiction): R4 never merged, merged:r does not hold
+        self.assertEqual(self.probe(["R1", "R5", "R3", "R2"]), ["wall.py"])
+
+
+class RowsH(base.Fx):
+    layout = base.Windows.layout
+
+    def test_request_done_uses_counted_lines(self):  # RQ4 (Q-F80W-17 (a)): a `done` request's commit is reachable from a counted MERGED head of the receiver
+        streams, bd, names = self.layout()
+        h7 = git(self.root, "rev-parse", "--short=7", "HEAD")
+        head, merge = self.pr("pr1", "b", [ckpt("1a", "1a.1", h7)], files={"b-owned.py": "changed\n"})
+        for label, line, ok in (("counted line", mline(1, head, merge, "b", "1a"), True),
+                                ("head is not the merge's second parent: not counted", mline(1, head, head, "b", "1a"), False)):
+            self.program(merged=MERGED_HEAD + line + "\n", streams=streams, bd=bd, status=status_page(names),
+                         requests={RID: done_row([head], to="b", files=["b-owned.py"])})
+            out = self.run_gate()[0]
+            if ok:
+                self.assertIn("PASS streams.request\n", out, label)                       # the branch of b does not exist: the counted head carries it
+                self.assertNotIn("streams.request.done", out, label)
+            else:
+                self.assertIn("FAIL streams.request.done.%s: commit %s is reachable from neither the branch of stream b nor the "
+                              "head of a counted MERGED line of it" % (RID, head), out, label)
+            git(self.root, "branch", "-D", INT)
+
+
+class RowsI(base.Fx):
+    layout, merge_line = base.Windows.layout, base.Windows.merge_line
+
+    def scene(self):
+        """a owns ``w1.py`` from ``merged:b/1a``; b's PR is merged into main AFTER ``<p>/integration`` is cut; a's branch changes w1.py."""
+        streams, bd, names = self.layout(a_owns=[W("w1.py", "merged:b/1a")], b_owns=[])
+        cut = git(self.root, "rev-parse", "HEAD")
+        self.branch(SA)
+        self.commit({"w1.py": "x\n"})
+        git(self.root, "checkout", "-q", "main")
+        _, merge, line = self.merge_line(1, "1a", sid="b")
+        self.program(merged=MERGED_HEAD + line + "\n", streams=streams, bd=bd, status=status_page(names), base=cut)
+        git(self.root, "checkout", "-q", INT)
+        return merge
+
+    def test_integration_events_need_main_merged(self):  # IN16 (Q-F80W-12 (a)): the event of b's merge holds only for commits that have it in their history
+        merge = self.scene()
+        git(self.root, "merge", "-q", "--no-ff", "-m", "combined a", SA)
+        out, code = self.run_gate()
+        self.assertIn("FAIL streams.owned.w1.py: a merge of stream a may change only paths it owns", out)   # merged:b/1a does not hold there: nobody owns w1.py
+        self.assertEqual(code, 1)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync main", "main")                               # main merged past it afterwards: the earlier merge is still judged without it
+        self.assertTrue(gitinfo.is_ancestor(self.root, merge, "HEAD"))
+        self.assertIn("FAIL streams.owned.w1.py: a merge of stream a may change only paths it owns", self.run_gate()[0])
+
+    def test_integration_events_after_main_merged_pass(self):  # IN16 (contradiction): main merged first, then a's merge: the window is open
+        merge = self.scene()
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync main", "main")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "combined a", SA)
+        self.assertTrue(gitinfo.is_ancestor(self.root, merge, "HEAD^1"))
+        out, code = self.run_gate()
+        self.assertIn("PASS streams.owned\n", out)
+        self.assertEqual(code, 0)
+
+
+class RowsJ(base.Fx):
+    def test_map_oracle_equal(self):  # MP23: 30 streams, 200 lines; pull request n belongs to stream (n-1) % 30 + 1, block j = (n-1) // 30 + 1
+        # streams 1-20 get 7 lines, streams 21-30 get 6: 6 * 30 + 20 = 200. Written out by hand, not read from the gate.
+        want_lines = {k: [n for n in range(1, 201) if (n - 1) % 30 + 1 == k] for k in range(1, 31)}
+        self.assertEqual([len(want_lines[k]) for k in (1, 20, 21, 30)], [7, 7, 6, 6])
+        self.assertEqual(sum(len(v) for v in want_lines.values()), 200)
+        self.assertEqual(want_lines[2], [2, 32, 62, 92, 122, 152, 182])
+        self.commit({PG + "/program-plan.md": PROGRAM_PLAN + "".join("\n## Block s%db%d: x\n" % (k, j)
+                                                                      for k in range(1, 31) for j in range(1, len(want_lines[k]) + 1))})
+        ss, tasks = [], {}
+        for k in range(1, 31):
+            owns = ["s%d-owned.py" % k]
+            if k == 1:
+                owns.append(W("w.py", None, "merged:s2"))
+            if k == 30:
+                owns.append(W("w.py", "merged:s2"))
+            ss.append(stream("s%d" % k, owns, merge_order=k))
+            tasks[k] = ["s%db%d.1" % (k, j) for j in range(1, len(want_lines[k]) + 1)]
+        bd = {"plan": "program-plan", "edges": [], "streams": [{"id": "s%d" % k, "tasks": tasks[k], "paths": list(ss[k - 1]["owns"])}
+                                                               for k in range(1, 31)]}
+        good = {}
+        for n in range(1, 201):
+            k, j = (n - 1) % 30 + 1, (n - 1) // 30 + 1
+            h7 = git(self.root, "rev-parse", "--short=7", "HEAD")
+            block = "s%db%d" % (k, j)
+            head, merge = self.pr("pr%d" % n, "s%d" % k, [ckpt(block, block + ".1", h7)])
+            good[n] = (head, merge, "s%d" % k, block)
+        names = ["s%d" % k for k in range(1, 31)]
+        for bad in ((17, 92, 200), ()):
+            lines = "".join((mline(n, h, h, s, b) if n in bad else mline(n, h, m, s, b)) + "\n" for n, (h, m, s, b) in good.items())
+            self.program(merged=MERGED_HEAD + lines, streams=row(*ss), bd=bd, status=status_page(names))
+            self.branch(NAME + "/s30/main")
+            self.commit({"w.py": "x\n"})
+            out = self.run_gate()[0]                        # one run per scenario: the map line and the ownership of w.py
+            map_line = [l for l in out.splitlines() if l.startswith(("FAIL streams.map", "PASS streams.map"))]
+            self.assertEqual(len(map_line), 1, out)
+            if bad:                                         # exactly the three lines whose merge is not their merge are named
+                self.assertTrue(map_line[0].startswith("FAIL streams.map.%s: " % NAME), map_line[0])
+                self.assertEqual(sorted(int(x) for x in re.findall(r"merged\.md pr (\d+): the line does not count", map_line[0])), list(bad))
+            else:
+                self.assertEqual(map_line[0], "PASS streams.map.%s" % NAME)
+            if bad:                                       # pr 92 is stream s2's 4th line: merged:s2 does not hold, s1 still owns w.py
+                self.assertIn("FAIL streams.owned.w.py: owned by stream s1", out)
+            else:                                           # all 7 lines of s2 count: merged:s2 holds, s30 owns w.py
+                self.assertIn("PASS streams.owned\n", out)
+            git(self.root, "checkout", "-q", "main")
+            git(self.root, "branch", "-D", INT, NAME + "/s30/main")
 
 
 PROGRAM_PLAN_EDIT = PROGRAM_PLAN.replace("## Block a1: x", "## Block a1: y")
