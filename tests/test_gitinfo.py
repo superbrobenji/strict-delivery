@@ -2055,6 +2055,46 @@ class Parents(P21Case):
         self.assertEqual(gitinfo.parents(self.root, self.M), [self.B, self.C])
 
 
+class PlanFixture(P21Case):
+    """The fixture of the plan's test :2715-2716, written out with its own expected values: A the root commit, then B
+    renaming x to y and deleting z, then M merging B and C; once in a plain repository and once in one whose config sets
+    ``color.ui=always``, ``color.diff=always`` and ``core.abbrev=7``."""
+
+    def history(self, name, colour):
+        root = os.path.join(self.tmp, name)
+        os.mkdir(root)
+        git(root, "init", "-q", "-b", "main")
+        git(root, "config", "user.email", "fixture@example.invalid")
+        git(root, "config", "user.name", "Fixture")
+        git(root, "config", "commit.gpgsign", "false")
+        if colour:
+            for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+                git(root, "config", k, v)
+        self.put("x", root=root)
+        self.put("z", root=root)
+        a = commit_all(root, "A")
+        git(root, "checkout", "-q", "-b", "side")
+        self.put("c.txt", root=root)
+        c = commit_all(root, "C")
+        git(root, "checkout", "-q", "main")
+        git(root, "mv", "x", "y")
+        git(root, "rm", "-q", "z")
+        b = commit_all(root, "B")
+        git(root, "merge", "-q", "--no-ff", "-m", "M", "side")
+        return root, a, b, c, git(root, "rev-parse", "HEAD")
+
+    def test_changed_paths_rev_list_parents(self):  # plan :2715-2716, owner answer Q-F80W-21 (a)
+        for name, colour in (("plain", False), ("colour", True)):
+            with self.subTest(repository=name):
+                root, a, b, c, m = self.history(name, colour)
+                self.assertEqual(gitinfo.changed_paths(root, a, b), ["x", "y", "z"])
+                self.assertEqual(gitinfo.rev_list(root, a, m), [b, c, m])
+                self.assertEqual(gitinfo.rev_list(root, a, m, first_parent=True), [b, m])
+                self.assertEqual(gitinfo.rev_list(root, m, m), [])
+                self.assertEqual(gitinfo.parents(root, a), [])
+                self.assertEqual(gitinfo.parents(root, m), [b, c])
+
+
 class MainWorktree(P21Case):
     def test_main_worktree_of_the_main_checkout(self):  # WT7 (main), D-A25
         self.assertEqual(os.path.realpath(gitinfo.main_worktree(self.root)), os.path.realpath(self.root))
