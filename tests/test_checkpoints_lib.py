@@ -1535,5 +1535,63 @@ class Repository(unittest.TestCase):
                 self.assertIs(cm.exception, exc)
 
 
+
+class FixRound1(unittest.TestCase):
+    """Fix round 1 of Task P1.2 (findings F-20261118-rkcp, -s325, -n8fn, -2tif)."""
+
+    def test_empty_nested_strings_refused(self):  # F-20261118-rkcp: every nested str field refuses ""
+        sub = lambda **kw: R(live_subagents=[{**SUB, **kw}])
+        job = lambda **kw: R(live_subagents=[{**SUB, "jobs": [{"id": "j", "state": "running", **kw}]}])
+        qq = lambda **kw: R(questions=[{**Q1, **kw}])
+        opt = lambda **kw: R(questions=[{**Q1, "options": [{**OPTS[0], **kw}, OPTS[1]]}])
+        cases = [
+            ("live_subagents.0.agent", sub(agent="")), ("live_subagents.0.task", sub(task="")),
+            ("live_subagents.0.worktree", sub(worktree="")), ("live_subagents.0.transcript", sub(transcript="")),
+            ("live_subagents.0.last_record", sub(last_record="")), ("live_subagents.0.jobs.0.id", job(id="")),
+            ("questions.0.qid", qq(qid="")), ("questions.0.class", qq(**{"class": ""})),
+            ("questions.0.question", qq(question="")), ("questions.0.recommended", qq(recommended="")),
+            ("questions.0.source", qq(source="")), ("questions.0.options.0.label", opt(label="")),
+            ("questions.0.options.0.cost", opt(cost="")),
+        ]
+        for path, row in cases:
+            with self.subTest(path=path):
+                self.assertIn("%s: must be a non-empty string" % path, vf(row))
+        # D-Q8 (controller, review F3): an empty recommended gets the schema error and the label error
+        self.assertEqual(vf(qq(recommended="")), ["questions.0.recommended: must be a non-empty string"])
+        self.assertEqual([e for e in he(questions=[{**Q1, "recommended": ""}], resume=resume(["q1"]))],
+                         ["questions.q1.recommended:  is not the label of exactly one option"])
+
+    def test_recommended_with_three_options(self):  # F-20261118-s325
+        three = [{"label": "a", "cost": "x"}, {"label": "b", "cost": "y"}, {"label": "c", "cost": "z"}]
+        e = lambda rec: he(questions=[{**Q1, "options": three, "recommended": rec}], resume=resume(["q1"]))
+        for rec in ("a", "b", "c"):
+            self.assertEqual(e(rec), [], rec)
+        self.assertEqual(e("d"), ["questions.q1.recommended: d is not the label of exactly one option"])
+        twin = [{"label": "a", "cost": "x"}, {"label": "b", "cost": "y"}, {"label": "b", "cost": "z"}]
+        self.assertEqual(he(questions=[{**Q1, "options": twin, "recommended": "b"}], resume=resume(["q1"])),
+                         ["questions.q1.recommended: b is not the label of exactly one option"])
+        self.assertEqual(he(questions=[{**Q1, "options": twin, "recommended": "a"}], resume=resume(["q1"])), [])
+
+    def test_ledger_argument_texts_and_wrong_typed_ledger(self):  # F-20261118-n8fn
+        self.assertEqual(he(ledger=5), [])  # a non-str ledger is the schema's error, no 'expected' error beside it
+        self.assertEqual(he(ledger=None), [])
+        t = LH + C0 + "\n"
+        for kw, msg in (({"plan_text": 5}, "ledger_errors: plan_text must be None or a string"),
+                        ({"stream_ids": ["a"]}, "ledger_errors: stream_ids must be None or a set of strings"),
+                        ({"stream_ids": {1}}, "ledger_errors: stream_ids must be None or a set of strings"),
+                        ({"per_stream": 1}, "ledger_errors: per_stream must be a bool")):
+            with self.subTest(kw=kw):
+                with self.assertRaises(ValueError) as cm:
+                    ledger_errors(t, cfg(), **kw)
+                self.assertEqual(str(cm.exception), msg)
+
+    def test_required_read_path_refuses_backslash(self):  # F-20261118-2tif (D-Q11, as worktrees.<i>.path)
+        bad = "required_reads.0.path: must be a normalised repo-relative path (no leading '/', no '..' segment, not '.')"
+        for p in ("a\\b", "a\\", "\\a", "dir/a\\b.md"):
+            with self.subTest(path=p):
+                self.assertEqual(he(required_reads=[{"path": p, "why": "w"}]), [bad])
+        self.assertEqual(he(required_reads=[{"path": "dir/a.md", "why": "w"}]), [])
+
+
 if __name__ == "__main__":
     unittest.main()

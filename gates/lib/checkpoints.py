@@ -327,7 +327,7 @@ def _read_errors(errs: list, reads: object) -> None:
             continue
         where = "required_reads.%d" % i
         p = r.get("path")
-        if _line_check(errs, where + ".path", p) and not schema._path_ok(p):  # _path_ok refuses '.', '..', '/x', '//'
+        if _line_check(errs, where + ".path", p) and (not schema._path_ok(p) or "\\" in p):  # _path_ok refuses '.', '..', '/x'; a backslash too (D-Q11)
             errs.append("%s.path: must be a normalised repo-relative path (no leading '/', no '..' segment, not '.')"
                         % where)
         lines = r.get("lines")
