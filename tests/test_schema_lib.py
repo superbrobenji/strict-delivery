@@ -163,7 +163,7 @@ class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
         self.assertEqual(sorted(got), ["claim", "config", "decision", "decision-index", "finding", "finding-index",
-                                       "in-force", "overview"])  # Task 1c.3 adds the four generated kinds
+                                       "handoff", "in-force", "ledger", "overview"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
 
     def test_K6_fixture_dir_and_bad_file_raises_naming_it(self):
@@ -1047,8 +1047,9 @@ class FrontMatterSchema(Dirs):
         self.assertEqual(schema.FORMATS, ("yaml", "markdown", "front-matter"))
 
     def test_old_schemas_unchanged(self):  # FS7
-        got = sorted(os.listdir(schema.SCHEMAS_DIR))
-        self.assertEqual(got, sorted(k + ".yml" for k, _ in EXPECTED_FILES))
+        listed = sorted(os.listdir(schema.SCHEMAS_DIR))
+        self.assertEqual(listed, sorted([k + ".yml" for k, _ in EXPECTED_FILES] + ["handoff.yml", "ledger.yml"]))  # Task P1.2 adds two
+        got = [name for name in listed if name not in ("handoff.yml", "ledger.yml")]  # the old vocabulary's files only
         loaded = [load_schema(os.path.join(schema.SCHEMAS_DIR, name)) for name in got]
         self.assertEqual({s.kind: s.files for s in loaded}, dict(EXPECTED_FILES))
         for s in loaded:
