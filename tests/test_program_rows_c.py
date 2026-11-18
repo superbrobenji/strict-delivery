@@ -5,7 +5,7 @@ import os
 from unittest import mock
 
 from gates.lib import programs
-from tests.helpers import E128, TOP, git, minimal_config, root_forms, write_record
+from tests.helpers import E128, TOP, commit_all, git, minimal_config, root_forms, write_record
 from tests.test_program_merged import merged_line
 from tests.test_program_cli import (DEC, NAME, PG, PLAN, PS, Fx, breakdown_row, load_yaml, run, stream, streams_row)
 
@@ -236,3 +236,38 @@ class CreateC(Fx):
         self.assertEqual((code, out, err), (0, "push %s/integration\n" % NAME, ""))
         self.assertEqual(self.read("sync-log.md"), "<!-- schema: sync-log/1 -->\n")
         self.assertEqual(load_yaml(os.path.join(self.folder(), "streams.yml")), streams_row())
+
+
+class StackedC(Fx):
+    """Three streams, ``c`` stacked on ``a``; ``a`` has the sub-blocks A1 and A2 (CA18, CA19)."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_main(PG + "/%s.md" % PLAN, "".join("## Block %s: x\n\n### Task %s.1: x\n\n" % (b, b)
+                                                      for b in ("A1", "A2", "B1", "C1")))
+        commit_all(self.work, "plan 4")
+        git(self.iw, "merge", "-q", "main")
+        self.set_streams(streams_row(stream("a", ["a/"]), stream("b", ["b/"], merge_order=2),
+                                     stream("c", ["c/"], merge_order=3, stacked_on="a")))
+
+    def bd(self, *edges):
+        sts = [{"id": "a", "paths": ["a/"], "tasks": ["A1.1", "A2.1"], "unblock": "at program start"},
+               {"id": "b", "paths": ["b/"], "tasks": ["B1.1"], "unblock": "at program start"},
+               {"id": "c", "paths": ["c/"], "tasks": ["C1.1"], "unblock": "at program start"}]
+        write_record(self.iw, "%s/%s/breakdown.yml" % (PS, PLAN), breakdown_row(
+            max_concurrent=3, streams=sts, edges=[{"from": f, "to": t} for f, t in edges],
+            groups=[{"id": "g1", "tasks": ["A1.1", "A2.1"]}, {"id": "g2", "tasks": ["B1.1"]}, {"id": "g3", "tasks": ["C1.1"]}]))
+
+    def test_create_stacked_order_transitive(self):  # CA18: a -> b -> c orders merged:c/C1 after merged:a
+        self.bd(("A1.1", "B1.1"), ("A2.1", "B1.1"), ("B1.1", "C1.1"))
+        code, out, err = self.create()
+        self.assertEqual((code, err), (0, ""))
+
+    def test_create_stacked_needs_all_parent_subblocks(self):  # CA19: one sub-block of a is not merged:a
+        self.bd(("A1.1", "C1.1"))
+        code, out, err = self.create()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("stacked_on", err)
+        self.assertFalse(os.path.exists(self.folder()))
+        self.bd(("A1.1", "C1.1"), ("A2.1", "C1.1"))
+        self.assertEqual(self.create()[0], 0)
