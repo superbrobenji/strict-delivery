@@ -206,22 +206,28 @@ def _check_markdown(path: str, data: dict) -> None:
 
 _POSSESSIVE = ("*+", "++", "?+", "}+")
 _MAX_GROUP_DEPTH = 20
+_MAX_VARIABLE = 24
+_BRACE = re.compile(r"\{(\d*)(,?)(\d*)\}")
 
 
 def _pattern_problem(pattern: str) -> str:
     """'' when ``pattern`` is in the restricted regular-expression dialect of a ``lines`` item (decision D-Q11),
     else the problem. The dialect is chosen so that ``re`` reads it the same on 3.9 and 3.13: printable ASCII; ``(?``
-    only as ``(?:``, ``(?=`` or ``(?!``; no possessive quantifier; no quantified group (no nested unbounded
-    quantifier, so no catastrophic backtracking); none of the escapes ``\\w \\W \\d \\D \\s \\S \\b \\B``;
-    groups nested at most ``_MAX_GROUP_DEPTH`` deep (a deeper nest raises RecursionError at a depth that depends on the
-    interpreter)."""
+    only as ``(?:``, ``(?=`` or ``(?!``; no possessive quantifier; no quantified group (no nested quantifier); none
+    of the escapes ``\\w \\W \\d \\D \\s \\S \\b \\B``; groups nested at most ``_MAX_GROUP_DEPTH`` deep (a deeper nest
+    raises RecursionError at a depth that depends on the interpreter); at most ``_MAX_VARIABLE`` variable
+    quantifiers (``?`` ``*`` ``+``, ``{m,n}``, ``{m,}``, not a fixed ``{n}`` and not the lazy ``?`` after a
+    quantifier) and alternations ``|`` together. The dialect does NOT rule out slow matching: that count only bounds
+    it (repeated ``a?`` or ``(?:a|a)`` still backtrack exponentially in the count; measured, 24 ``a?`` then 24 ``a``
+    against a failing line takes about 0.5 s on 3.9 and 0.25 s on 3.13), it does not remove it."""
     if not all(" " <= c <= "~" for c in pattern):
         return "must be printable ASCII (U+0020-U+007E)"
     if any(p in pattern for p in _POSSESSIVE):
         return "possessive quantifiers are not supported"
-    i, n, depth, in_class = 0, len(pattern), 0, False
+    i, n, depth, in_class, variable, prev_q = 0, len(pattern), 0, False, 0, False
     while i < n:
         c = pattern[i]
+        lazy, prev_q = prev_q, False  # lazy: the previous token was a quantifier, so a '?' now marks it lazy
         if c == "\\":
             nxt = pattern[i + 1:i + 2]
             if nxt != "" and nxt in "wWdDsSbB":
@@ -244,10 +250,27 @@ def _pattern_problem(pattern: str) -> str:
                 return "groups nested more than %d deep are not supported" % _MAX_GROUP_DEPTH
             if pattern[i:i + 1] == "?" and pattern[i + 1:i + 2] not in (":", "=", "!"):  # "" (the end) is not in it
                 return "'(?' is only supported as (?: (?= or (?!"
+            if pattern[i:i + 1] == "?":
+                i += 2  # the '?' and the kind character of (?: (?= (?! are not quantifiers
         elif c == ")":
             depth -= 1
             if pattern[i:i + 1] in ("*", "+", "{"):  # "" (the end) is not in the tuple
                 return "a quantified group is not supported (a ')' followed by '*', '+' or '{')"
+        elif c == "|":
+            variable += 1
+        elif c in "*+?":
+            if not (c == "?" and lazy):  # else: the lazy marker of the quantifier before it, not counted
+                variable += 1
+                prev_q = True
+        elif c == "{":
+            m = _BRACE.match(pattern, i - 1)
+            if m is not None and (m.group(1) or m.group(2) or m.group(3)):
+                if m.group(2):
+                    variable += 1  # {m,n} or {m,}: a variable count; a fixed {n} is not counted
+                prev_q = True
+                i = m.end()
+    if variable > _MAX_VARIABLE:
+        return "more than %d quantifiers and alternations" % _MAX_VARIABLE
     return ""
 
 
