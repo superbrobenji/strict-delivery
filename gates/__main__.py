@@ -7,7 +7,8 @@ GATES: Dict[str, str] = {"checkpoint": "gates.gate_checkpoint", "cites": "gates.
                          "decisions": "gates.gate_decisions",
                          "dispatch": "gates.gate_dispatch",
                          "register": "gates.gate_register",
-                         "schema": "gates.gate_schema"}  # gate name -> module defining check(args)
+                         "schema": "gates.gate_schema",
+                         "streams": "gates.gate_streams"}  # gate name -> module defining check(args)
 _OWNER: Dict[str, str] = {"cites": " (stream C, Task C2.2)"}  # who delivers a gate module that may be absent
 
 
