@@ -381,6 +381,33 @@ class Owned(Fx):
             git(self.root, "merge", "-q", "--no-ff", "-m", "bad", INT)
             self.assertIn("FAIL streams.integration.", self.run_gate()[0], kind)
 
+    def test_stream_may_not_edit_request(self):  # plan Step 1 name (OW9)
+        self.stream({PROGDIR + "/requests/R-1.yml": "q\n"})
+        out = self.run_gate()[0]
+        self.assertIn("FAIL streams.owned.", out)
+        self.assertIn("requests/", out)
+        self.assertIn("a program record (program folder", out)          # a record of the program, not an unowned path
+
+    def test_integration_merged_into_stream_fails(self):  # plan Step 1 name, Q-M4 (a) (IG1)
+        self.stream({"a-owned.py": "x\n"})
+        git(self.root, "checkout", "-q", INT)
+        self.commit({PROGDIR + "/sync-log.md": "<!-- schema: sync-log/1 -->\nx\n"})
+        git(self.root, "checkout", "-q", SA)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "bad", INT)
+        self.assertIn("FAIL streams.integration.", self.run_gate()[0])
+
+    def test_append_rows_rule(self):  # plan Step 1 name (SH1-SH3)
+        sh = [{"path": "reg.md", "rule": "append-rows"}]
+        git(self.root, "branch", "-D", INT)
+        git(self.root, "checkout", "-q", "main")
+        self.commit({"reg.md": "| h |\n| r1 |\n"})
+        self.program(streams=streams_row(shared=sh))
+        self.branch(SA)
+        self.commit({"reg.md": "| h |\n| r1 |\n| r2 |\n"})
+        self.assertIn("PASS streams.shared", self.run_gate()[0])
+        self.commit({"reg.md": "| h |\n| r1x |\n| r2 |\n"})
+        self.assertIn("FAIL streams.shared.reg.md:", self.run_gate()[0])
+
     def test_shared_rules(self):  # SH1-SH8
         sh = [{"path": "reg.md", "rule": "append-rows"}, {"path": "own.md", "rule": "own-row"}]
         git(self.root, "branch", "-D", INT)
@@ -449,6 +476,26 @@ class Integration(Fx):
         git(self.root, "checkout", "-q", INT)
         git(self.root, "merge", "-q", "--no-ff", "-m", "sync", "main")
         self.assertIn("FAIL streams.owned.tests/test_a.py:", self.run_gate()[0])      # the earlier merge is still judged
+
+    def test_integration_merge_of_main_exempt(self):  # plan Step 1 name (IN5, RC9, D-Q26)
+        git(self.root, "checkout", "-q", "main")
+        self.commit({"src/main_moved.py": "main\n"})
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync", "main")
+        out, code = self.run_gate()
+        self.assertIn("PASS streams.owned", out)
+        self.assertEqual(code, 0)
+        git(self.root, "checkout", "-q", "-b", REC, "main")
+        self.commit({PG + "/program-plan.md": "p2\n"})
+        git(self.root, "checkout", "-q", "main")
+        self.commit({"src/main_moved2.py": "main\n"})
+        git(self.root, "checkout", "-q", REC)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync", "main")
+        self.assertIn("PASS streams.owned\n", self.run_gate()[0])        # the merge of main on <p>/records is exempt too
+
+    def test_integration_non_merge_outside_folder_fails(self):  # plan Step 1 name (IN2)
+        self.commit({"src/x.py": "x\n"})
+        self.assertIn("FAIL streams.owned.src/x.py", self.run_gate()[0])
 
     def test_unknown_merge_fails(self):  # IN7
         self.branch("other/x", "main")
@@ -650,6 +697,37 @@ class Stacked(Fx):
         out, code = self.run_gate()                                  # BS5: merged:b holds, base is main, b's commits are judged
         self.assertIn("FAIL streams.owned.b-owned.py: owned by stream b", out)
         self.assertEqual(code, 1)
+
+    def test_stream_judged_against_main(self):  # plan Step 1 name: own change passes, the parent's commits are not judged before merged:b, are after; the program plan fails
+        self.parent_and_child()
+        _, m, line = self.b_merged_line()
+        self.stacked_program([line])
+        git(self.root, "checkout", "-q", SA)
+        out, code = self.run_gate()
+        self.assertIn("PASS streams.owned", out)
+        self.assertEqual(code, 0, out)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync", m)
+        self.assertIn("FAIL streams.owned.b-owned.py: owned by stream b", self.run_gate()[0])
+        self.commit({PG + "/program-plan.md": "changed\n"})
+        self.assertIn("FAIL streams.owned.%s/program-plan.md" % PG, self.run_gate()[0])
+
+    def test_stacked_group_branch(self):  # F-20261118-tcxf: a group branch of a stacked stream: range base is the parent's branch, the parent merge is exempt
+        self.parent_and_child()
+        _, m, line = self.b_merged_line()
+        self.stacked_program([line])
+        git(self.root, "checkout", "-q", "-b", NAME + "/a/g1", SA)
+        self.commit({"a-owned.py": "g1\n"})
+        out, code = self.run_gate()
+        self.assertIn("PASS streams.owned\n", out)                  # base SB: b's two commits in the parent are not judged
+        self.assertEqual(code, 0, out)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync", m)   # merged:b holds, base is main: b's commits are judged
+        self.assertIn("FAIL streams.owned.b-owned.py: owned by stream b", self.run_gate()[0])
+        git(self.root, "checkout", "-q", "-B", NAME + "/a/g1", SA)
+        git(self.root, "checkout", "-q", SB)
+        self.commit({"b-owned.py": "b3\n"})
+        git(self.root, "checkout", "-q", NAME + "/a/g1")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "take parent", SB)      # a merge of the stacked parent is exempt
+        self.assertIn("PASS streams.owned\n", self.run_gate()[0])
 
     def test_stacked_parent_branch_missing(self):  # BS6
         self.parent_and_child()
