@@ -124,6 +124,14 @@ class BreakdownErrors(unittest.TestCase):
             with self.subTest(name):
                 self.assertNotEqual(breakdown_errors(r), [])
 
+    def test_task_and_sub_block_reasons_are_exact(self):  # BE5, BE6, Q-F80W-11 (a): each reason is the one named
+        got = breakdown_errors(row(st("a", ["A1.1"]), st("b", ["A1.1"])))
+        self.assertEqual([m for s, m in got if s == "tasks"], ["task A1.1 is in streams a and b", "sub-block A1 has tasks in streams a and b"])
+        got = breakdown_errors(row(st("a", ["4c.1"]), st("b", ["4c.2"])))
+        self.assertEqual([m for s, m in got if s == "tasks"], ["sub-block 4c has tasks in streams a and b"])
+        ok = breakdown_errors(row(st("a", ["4c.1", "4c.2"]), st("b", ["B1.1"])))
+        self.assertEqual([m for s, m in ok if s == "tasks"], [])
+
     def test_overlapping_paths(self):  # BE12, BE13, plan test :2788
         self.assertNotEqual(breakdown_errors(paths_row("a/", "a/b.py")), [])
         self.assertNotEqual(breakdown_errors(paths_row("a/", "a/")), [])
