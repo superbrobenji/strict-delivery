@@ -860,11 +860,15 @@ def _ref_update(line):
             and _tests(p[4]) and p[5] in ("gates=PASS", "gates=n/a"))
 
 
+def _ruling_printable(s):  # printable ASCII and exactly U+00A7 (decision D-Q24), nothing else
+    return all(" " <= c <= "~" or c == "\u00a7" for c in s)
+
+
 def _ref_ruling(line):
     if not line.startswith("Ruling: "):
         return False
     parts = line[8:].split(" -- ")
-    return len(parts) == 4 and all(x != "" and _printable(x) and x[0] != " " and x[-1] != " " for x in parts)
+    return len(parts) == 4 and all(x != "" and _ruling_printable(x) and x[0] != " " and x[-1] != " " for x in parts)
 
 
 def _stream(s):
@@ -1203,7 +1207,7 @@ class LedgerPatterns(unittest.TestCase):
     def test_ledger_yml_patterns_load_verbatim(self):  # LP18
         want = [
             ("CHECKPOINT", "CHECKPOINT [!-~]+ [!-~]+ head=[0-9a-f]{7,40} tests=(?:0|[1-9][0-9]{0,599})/(?:0|[1-9][0-9]{0,599}) gates=(?:PASS|n/a) next=[!-~]+"),
-            ("Ruling", "Ruling: (?![ -~]* -- [ -~]* -- [ -~]* -- [ -~]* -- )[!-~](?:[ -~]*[!-~])? -- [!-~](?:[ -~]*[!-~])? -- [!-~](?:[ -~]*[!-~])? -- [!-~](?:[ -~]*[!-~])?"),
+            ("Ruling", "Ruling: (?![ -~\\xa7]* -- [ -~\\xa7]* -- [ -~\\xa7]* -- [ -~\\xa7]* -- )[!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])? -- [!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])? -- [!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])? -- [!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])?"),  # D-Q24: U+00A7 as \\xa7
             ("Request", "Request: [A-Za-z0-9]+-[0-9]{8}-[A-Za-z0-9]{4} from=[a-z0-9][a-z0-9-]* to=[a-z0-9][a-z0-9-]* files=[!-~]+ need=[ -~]+ status=(?:open|done|disputed)(?: sha=[0-9a-f]{7,40})?"),
             ("UPDATE", "UPDATE [!-~]+ from=[!-~]+@[0-9a-f]{7,40} head=[0-9a-f]{7,40} tests=(?:0|[1-9][0-9]{0,599})/(?:0|[1-9][0-9]{0,599}) gates=(?:PASS|n/a)"),
             ("MERGED", "MERGED pr=[1-9][0-9]{0,599} head=[0-9a-f]{40} merge=[0-9a-f]{40} merged_by=[!-~]+ at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z final=(?:yes|no)(?: stream=[a-z0-9][a-z0-9-]* block=[0-9A-Za-z]+)? approval=(?:host|chat pr=[1-9][0-9]{0,599} head=[0-9a-f]{40} words= *[!-~][ -~]*)"),
@@ -1468,6 +1472,106 @@ class LedgerErrors(unittest.TestCase):
         for n, line in enumerate(lines, 1):  # every line the oracle calls bad is flagged
             if n > 1 and not ref_ok(line):
                 self.assertIn(n, flagged, line[:80])
+
+
+# ======================================================================== the section sign in a Ruling (F-20261118-ikag)
+
+RULING_BEFORE = ("Ruling: (?![ -~]* -- [ -~]* -- [ -~]* -- [ -~]* -- )[!-~](?:[ -~]*[!-~])? -- [!-~](?:[ -~]*[!-~])? -- "
+                 "[!-~](?:[ -~]*[!-~])? -- [!-~](?:[ -~]*[!-~])?")
+# the six real Ruling lines of origin/main's ledger.md (lines 19, 24, 25, 102, 103, 107) and the seventh (line 20)
+REAL_RULINGS = {
+    19: "Ruling: .gitignore (`.superpowers/`, `__pycache__/`, `.strict-delivery/receipts/`) is created in Task 1a.1 -- the clean-tree rule needs it and no task owns it -- cost if wrong: one extra file in 1a.1's diff -- spec §5 (receipts git-ignored), §16",
+    24: 'Ruling: unstated grammar rules 1,2,5,6,7 (extra plain-start refusals `, ] } ? -`, trailing-comma refusal, control-char/surrogate refusal, top-level scalar accepted, quoted \'<<\' is a plain key) stand -- each refuses an input outside the accepted grammar (fail closed) or accepts a node the grammar already lists -- cost if wrong: a hand-written file using these needs quoting -- plan Global Constraints "every other YAML feature is refused with a line number", spec §6',
+    25: 'Ruling: unstated rule 8 (load() on missing/unreadable file raises OSError) is a defect, fixed in round 1 as YamlError naming `shown` -- brief: "Every YamlError from it carries shown"; gates fail closed on missing input as <gate>.input -- cost if wrong: none -- spec §13',
+    102: 'Ruling: R-rev3-1 finding owner keys declared in finding.yml via required_when/absent_when on kind (nested map) -- spec §7.2 "never from hand-coded field lists" settles it -- cost if wrong: schema-language nesting rework in 1b.1 -- spec §7.2.',
+    103: 'Ruling: R-rev3-2 decisions ask candidates = union of per-topic, per-applies_to-glob (equal or fnmatch either way) and per-question-word (>=4 chars) find hits -- spec §7.4 "runs find on the new question\'s topics, paths and keywords" needs OR to find related records -- cost if wrong: noisier or thinner candidate lists -- spec §7.4.',
+    107: 'Ruling: R-rev5-1 config.load refuses two ids kinds sharing a prefix -- spec §7.2 cross-register uniqueness through the prefix check presumes distinct prefixes -- cost if wrong: a project cannot alias prefixes -- spec §7.2. Rulings this block: 3 of 5.',
+}
+REAL_RULING_20 = ("Ruling: strict prompt blocks are dispatched verbatim; their lap-timer commit-gate paths (tools/gates/run_all.py, "
+                  "tools/.venv) do not exist here, so each ## Task states this repo's bootstrap commit gate -- cost if wrong: a "
+                  "child follows the wrong gate text -- spec §16 bootstrap")
+SS = "§"
+
+
+def _ruling_with(i, part):
+    ps = ["a", "b", "c", "d"]
+    ps[i] = part
+    return "Ruling: " + " -- ".join(ps)
+
+
+class RulingSectionSign(unittest.TestCase):
+    def test_pattern_text_only_gained_the_escape(self):  # the dialect, and nothing else changed
+        pat = LS.rules["Ruling"][0]
+        self.assertEqual(schema._pattern_problem(pat), "")
+        self.assertTrue(all(" " <= c <= "~" for c in pat))
+        self.assertEqual(pat.replace("\\xa7", ""), RULING_BEFORE)
+        self.assertEqual(pat.count("\\xa7"), 16)
+        self.assertEqual(sum(pat.count(c) for c in "*+?|"), 17)  # the quantifier count is unchanged
+        self.assertEqual(sum(pat.count(c) for c in "{}"), 0)
+
+    def test_other_patterns_do_not_mention_the_escape(self):
+        for word in ("CHECKPOINT", "Request", "UPDATE", "MERGED"):
+            self.assertNotIn("xa7", LS.rules[word][0], word)
+
+    def test_section_sign_in_each_part_position(self):
+        for i in range(4):
+            for name, part in (("alone", SS), ("first", SS + "x"), ("last", "x" + SS), ("both ends", SS + "x" + SS),
+                               ("inside", "x" + SS + "y"), ("with spaces", "x " + SS + " y")):
+                with self.subTest(part=i, name=name):
+                    self.assertEqual(lerr(_ruling_with(i, part)), [])
+
+    def test_section_sign_in_all_four_parts(self):
+        self.assertEqual(lerr("Ruling: " + " -- ".join([SS] * 4)), [])
+
+    def test_section_sign_does_not_open_a_fifth_part_or_a_space_edge(self):
+        pat = LS.rules["Ruling"][0]
+        err = ["line 2: 'Ruling' line does not match " + pat]
+        for line in ("Ruling: a -- b -- c -- d -- " + SS, "Ruling: " + " -- ".join([SS] * 5), "Ruling: a -- b -- c --  " + SS,
+                     "Ruling: " + SS + " -- b -- c", "Ruling: a -- b -- c -- " + SS + " "):
+            with self.subTest(line=line):
+                self.assertEqual(lerr(line), err)
+
+    def test_neighbours_and_other_non_ascii_stay_refused_in_every_part(self):
+        pat = LS.rules["Ruling"][0]
+        err = ["line 2: 'Ruling' line does not match " + pat]
+        for cp in (0xa0, 0xa6, 0xa8, 0xe9, 0x2014, 0x870, 0x1fae8, 0x80, 0xff, 0x7f, 0x09, 0xa7 + 0x100):
+            c = chr(cp)
+            for i in range(4):
+                for name, part in (("alone", c), ("first", c + "x"), ("last", "x" + c), ("inside", "x" + c + "y")):
+                    with self.subTest(cp="U+%04X" % cp, part=i, name=name):
+                        self.assertEqual(lerr(_ruling_with(i, part)), err)
+
+    def test_real_ruling_lines_of_origin_main_match(self):
+        for n, line in REAL_RULINGS.items():
+            with self.subTest(line=n):
+                self.assertTrue(line.startswith("Ruling: ") and SS in line)
+                self.assertEqual(lerr(line), [])
+                self.assertTrue(pattern_ok(line))
+
+    def test_real_ruling_line_20_still_fails_with_two_separators(self):
+        pat = LS.rules["Ruling"][0]
+        self.assertEqual(REAL_RULING_20.count(" -- "), 2)
+        self.assertEqual(lerr(REAL_RULING_20), ["line 2: 'Ruling' line does not match " + pat])
+        self.assertEqual(lerr(REAL_RULING_20.replace(SS, "s")), ["line 2: 'Ruling' line does not match " + pat])
+
+    def test_other_four_line_kinds_refuse_the_section_sign(self):
+        for name, base, old in (("CHECKPOINT", C0, "1a.1"), ("CHECKPOINT next", C0, "1a.2"), ("Request files", Q0, "gates/__main__.py"),
+                                ("Request need", Q0, "register cites"), ("UPDATE", U0, "1b"), ("MERGED words", M0C, "approve PR 3"),
+                                ("MERGED by", M0H, "superbrobenji")):
+            for new in (SS, "x" + SS, SS + "x"):
+                line = base.replace(old, new, 1)
+                with self.subTest(kind=name, new=new):
+                    self.assertNotEqual(line, base)
+                    self.assertFalse(pattern_ok(line))
+                    self.assertEqual(len(lerr(line)), 1)
+                    self.assertFalse(ref_ok(line))
+        self.assertTrue(pattern_ok(C0) and pattern_ok(Q0) and pattern_ok(U0) and pattern_ok(M0H) and pattern_ok(M0C))
+
+    def test_reference_parser_agrees_on_every_ruling_variant(self):
+        extra = [_ruling_with(i, p) for i in range(4) for p in (SS, SS + "x", "x" + SS, " ", "¦", "¨", "é", "—", "ࡰ")]
+        for line in ruling_variants() + extra:
+            with self.subTest(line=line):
+                self.assertEqual(pattern_ok(line), ref_ok(line))
 
 
 # ======================================================================== the repository and the versions
