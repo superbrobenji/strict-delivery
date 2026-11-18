@@ -115,7 +115,7 @@ class RecFx(Fx):
 
 
 class Merged(RecFx):
-    def test_valid_line_appended(self):  # MG1, plan test :2807
+    def test_sync_line_and_merged_record_appended(self):  # MG1, plan test :2807
         head, m = self.pr("release", [("6R", "6R.1")])
         line = merged_line(1, head, m, "release", "6R")
         code, out, err = self.merged(line)

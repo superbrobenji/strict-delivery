@@ -13,9 +13,9 @@ from unittest import mock
 
 from gates.lib import breakdown, ids
 from gates.tools import program_cli
-from tests.helpers import git, write_record
+from tests.helpers import commit_all, git, write_record
 from tests.test_program_cli import DEC, NAME, PG, Fx, load_yaml, run
-from tests.test_program_merged import PLAN_REC, RecFx
+from tests.test_program_merged import PLAN_REC, RecFx, merged_line
 from tests.test_program_rows_c import tree
 from tests.test_program_rows_c2 import REQ, AfterC
 
@@ -294,6 +294,66 @@ class IdRegisters(AfterC):
         write_record(self.iw, ".strict-delivery/state/findings/F-20261118-bbbb.yml",
                      {"schema": "finding/1", "id": ["not", "text"]})
         self.assertIn(DEC, self.spy_seen())
+
+
+class NoProgramFolder(Fx):
+    """RN13 and its class: every subcommand but create on a program that was never created."""
+
+    def test_no_streams_file(self):  # RN13
+        rel = ".strict-delivery/state/programs/%s/streams.yml: missing" % NAME
+        sha = "a" * 40
+        line = ("MERGED pr=1 head=%s merge=%s merged_by=u at=2026-11-01T10:00:00Z final=no stream=a block=A1 approval=host"
+                % (sha, sha))
+        for sub, argv in (("status", ("a", "--used", "1")), ("request new", REQ),
+                          ("request set", ("R-20261101-aaaa", "--status", "accepted", "--by", "b")),
+                          ("sync-log", ("--main", sha, "--merged-main", "no", "--tests", "PASS")),
+                          ("merged", ("--line", line))):
+            with self.subTest(sub):
+                code, out, err = run("program", *sub.split(" "), NAME, *argv, "--root", self.iw)
+                self.assertEqual((code, out), (1, ""), err)
+                self.assertEqual(err, "program %s: %s\n" % (sub, rel))
+        self.assertFalse(os.path.exists(os.path.join(self.iw, ".strict-delivery/state/programs", NAME)))
+
+
+class ColourSet(AfterC):
+    """PG14 for request set --commit and sync-log: git colour and abbreviation settings change nothing."""
+
+    def setUp(self):
+        super().setUp()
+        for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.work, "config", k, v)
+
+    def test_request_set_commit_and_sync_log(self):  # PG14
+        rid = self.new_request()
+        self.assertEqual(self.cli("request set", rid, "--status", "accepted", "--by", "b")[0], 0)
+        git(self.work, "checkout", "-q", "-b", NAME + "/b/main", "main")
+        self.write_main("b/x.py", "x = 1\n")
+        sha = commit_all(self.work, "b work")
+        git(self.work, "checkout", "-q", "main")
+        code, out, err = self.cli("request set", rid, "--status", "done", "--by", "b", "--commit", sha)
+        self.assertEqual((code, out, err), (0, "push %s/integration\n" % NAME, ""))
+        self.assertEqual(len(sha), 40)
+        self.assertEqual(load_yaml(self.request_file(rid))["resolution"]["commits"], [sha])
+        self.assertEqual(load_yaml(self.request_file(rid))["resolution"]["at"], git(self.iw, "rev-parse", "HEAD"))
+        main = git(self.work, "rev-parse", "main")
+        code, out, err = self.cli("sync-log", "--main", main, "--merged-main", "no", "--tests", "PASS")
+        self.assertEqual((code, out, err), (0, "push %s/integration\n" % NAME, ""))
+        with open(os.path.join(self.folder(), "sync-log.md"), encoding="utf-8") as fh:
+            last = fh.read().splitlines()[-1]
+        self.assertEqual(last, "SYNC integration=%s main=%s merged-main=no updated=none combined=none tests=PASS questions=none"
+                         % (git(self.iw, "rev-parse", "HEAD"), main))
+        self.assertEqual(len(git(self.iw, "rev-parse", "HEAD")), 40)
+
+
+class ColourMerged(RecFx):
+    def test_merged_under_colour_config(self):  # PG14
+        for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.work, "config", k, v)
+        head, m = self.pr("release", [("6R", "6R.1")])
+        line = merged_line(1, head, m, "release", "6R")
+        code, out, err = self.merged(line)
+        self.assertEqual((code, out, err), (0, "push %s/integration\n" % NAME, ""))
+        self.assertEqual(self.log().splitlines(), ["<!-- schema: merged-log/1 -->", line])
 
 
 class RequestChecksBeforeIo(AfterC):

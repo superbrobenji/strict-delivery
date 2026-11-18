@@ -401,13 +401,15 @@ class After(Fx):
                         self.assertEqual(code, 1)
                         self.assertEqual(self.status_of(rid), cur)
 
-    def test_request_done_needs_commit_and_dispute_needs_decision(self):  # RS2, RS5, RS4, RS6
+    def test_request_done_needs_commit(self):  # RS2, RS5, RS4
         rid = self.new_request()
         self.assertEqual(self.cli("request set", rid, "--status", "accepted", "--by", "b")[0], 0)
         self.assertEqual(self.cli("request set", rid, "--status", "done", "--by", "b")[0], 1)
         self.assertEqual(self.status_of(rid), "accepted")
         self.assertEqual(self.cli("request set", rid, "--status", "withdrawn", "--commit", "a" * 40, "--by", "b")[0], 1)
         self.assertEqual(self.cli("request set", rid, "--status", "withdrawn", "--decision", DEC, "--by", "b")[0], 1)
+
+    def test_leaving_dispute_needs_decision(self):  # RS6
         d = self.new_request()
         self.assertEqual(self.cli("request set", d, "--status", "disputed", "--by", "b")[0], 0)
         self.assertEqual(self.cli("request set", d, "--status", "accepted", "--by", "b")[0], 1)
@@ -417,7 +419,7 @@ class After(Fx):
         self.assertEqual((code, self.status_of(d), err), (0, "accepted", ""))
         self.assertEqual(self.cli("request set", "R-20261105-zzzz", "--status", "accepted", "--by", "b")[0], 1)
 
-    def test_sync_line_appended(self):  # SL1-SL12
+    def test_sync_line_and_merged_record_appended(self):  # SL1-SL12
         head = git(self.iw, "rev-parse", "HEAD")
         main = git(self.work, "rev-parse", "main")
         code, out, err = self.cli("sync-log", "--main", main, "--merged-main", "yes", "--updated", "b", "--updated", "a",

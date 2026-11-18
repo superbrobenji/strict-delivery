@@ -80,7 +80,7 @@ class BreakdownErrors(unittest.TestCase):
         for e in ({"from": "A1.1", "to": "zz.1"}, {"from": "zz.1", "to": "A1.1"}, {"from": "A1.1", "to": "A1.1"}):
             self.assertIn("edges", suffixes(breakdown_errors(row(edges=[e]))))
 
-    def test_group_rules(self):  # BE21
+    def test_group_over_concurrency_or_with_dependent_tasks_fails(self):  # BE21
         a, b, c = "A1.1", "A1.2", "A1.3"
         base = [st("a", [a, b, c]), st("b", ["B1.1"])]
         for name, groups, edges, kw in (
@@ -132,7 +132,7 @@ class BreakdownErrors(unittest.TestCase):
         ok = breakdown_errors(row(st("a", ["4c.1", "4c.2"]), st("b", ["B1.1"])))
         self.assertEqual([m for s, m in ok if s == "tasks"], [])
 
-    def test_overlapping_paths(self):  # BE12, BE13, plan test :2788
+    def test_overlapping_paths_fail_and_prefix_without_slash_passes(self):  # BE12, BE13, plan test :2788
         self.assertNotEqual(breakdown_errors(paths_row("a/", "a/b.py")), [])
         self.assertNotEqual(breakdown_errors(paths_row("a/", "a/")), [])
         self.assertEqual(breakdown_errors(paths_row("a", "ab")), [])
@@ -165,6 +165,12 @@ class BreakdownErrors(unittest.TestCase):
                 self.assertNotEqual(breakdown_errors(r, plans=plans), [])
                 self.assertEqual(breakdown_errors(r), [])
         self.assertEqual(breakdown_errors(row(), plans=plans), [])
+        # plan :2802, F-80rr3-7: the residual stream's implicit workspace is included (F-20261118-uant)
+        rplans = dict(plans, residual="residual-plan")
+        p = PS + "/residual-plan/x.md"
+        r = row(st("a", ["A1.1"], paths=[p]), st("b", ["B1.1"]), st("residual", ["R1.1"], residual=True))
+        self.assertTrue(any(s == "paths" and "(stream residual)" in m for s, m in breakdown_errors(r, plans=rplans)))
+        self.assertEqual(breakdown_errors(r), [])
 
     def test_window_defaults(self):  # BE16, Q-F80r-1 (a)
         r = row(st("a", ["A1.1"], period={"from": "program-start", "until": "merged:b/B1"}, paths=["x/"]),
@@ -257,7 +263,7 @@ class PlanErrors(unittest.TestCase):
             with self.assertRaises(ValueError):
                 plan_errors(*args)
 
-    def test_this_repository_plan_passes_its_headings(self):  # PE1, plan test :2790-2791
+    def test_plan_errors_this_repository_plan_passes_its_headings(self):  # PE1, plan test :2790-2791
         with open(PLAN_FILE, encoding="utf-8") as fh:
             text = fh.read()
         heads = [l for l in text.split("\n") if breakdown._TASK_HEAD.match(l)]
