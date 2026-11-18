@@ -1151,8 +1151,23 @@ class LinesLoad(Dirs):
         self.assertEqual(sorted(s.rules), ["X", "Y"])
         for word, (pattern, compiled) in s.rules.items():
             self.assertTrue(compiled.flags & re.ASCII, word)
+            self.assertEqual(compiled.flags, re.compile("x", re.ASCII).flags, word)  # no IGNORECASE, DOTALL, MULTILINE
             self.assertEqual(compiled.pattern, pattern)
         self.assertEqual(s.rules["X"][0], "X [^ ]+")
+
+    def test_pattern_variable_count_cap(self):  # F-20261118-ff4c: at most 24 variable quantifiers and alternations
+        many = "more than 24 quantifiers and alternations"
+        ok = ("a?" * 24, "a?|" * 12, "(?:a|a)" * 24, "a{2,3}" * 24, "a{2,}" * 24, "a{,3}" * 24, "a*?" * 24, "a??" * 24,
+              "a{2}" * 100, "a{2}?" * 100, "[?][*][+][|]" * 100, "\\?\\*\\+\\|" * 100, "(?:a)" * 100, "(?=a)" * 100,
+              "(?!a)" * 100, "{x" * 100, "{}" * 100, "a" * 5000, "a+" * 12 + "b*" * 12, "a*?" * 12 + "a|" * 12)
+        for pat in ok:
+            with self.subTest(loads=pat[:30], n=len(pat)):
+                self.assertEqual(self.ln([{"word": "X", "pattern": pat}]).lines[0]["pattern"], pat)
+        for pat in ("a?" * 25, "a?" * 25 + "a" * 25, "a?|" * 12 + "a?", "(?:a|a)" * 25, "a{2,3}" * 25, "a{2,}" * 25,
+                    "a{,3}" * 25, "a*" * 25, "a+" * 25, "a|" * 25, "a*?" * 25, "a??" * 25, "(?:a|b)?" * 13,
+                    "a?" * 24 + "b|c"):
+            with self.subTest(refused=pat[:30], n=len(pat)):
+                self.refused([{"word": "X", "pattern": pat}], "lines.0.pattern", many)
 
     def test_pattern_group_nesting_cap(self):  # LW9: no RecursionError can differ between interpreters
         deep = "(?:" * 21 + "a" + ")" * 21
@@ -1666,6 +1681,16 @@ class LinesValidate(Dirs):
         self.assertEqual(validate_markdown(s, "CHECKPOINT ok\n"), [])
         self.assertEqual(validate_markdown(self.ls, "CHECKPOINT bad\nCHECKPOINT bad\n"),
                          ["first line: expected '%s'" % LTAG])
+
+    def test_lines_match_is_case_sensitive(self):  # F-20261118-qmmm: only re.ASCII, no IGNORECASE
+        upper = self.ln([{"word": "CHECKPOINT", "pattern": "CHECKPOINT X"}])
+        self.assertEqual(validate_markdown(upper, LTAG + "\nCHECKPOINT X\n"), [])
+        self.assertEqual(validate_markdown(upper, LTAG + "\nCHECKPOINT x\n"), [self.err(2, "CHECKPOINT X")])
+        lower = self.ln([{"word": "Ruling", "pattern": "Ruling: [a-z]+"}])
+        self.assertEqual(validate_markdown(lower, LTAG + "\nRuling: abc\n"), [])
+        self.assertEqual(validate_markdown(lower, LTAG + "\nRuling: ABC\nRuling: abC\n"),
+                         [self.err(2, "Ruling: [a-z]+", "Ruling"), self.err(3, "Ruling: [a-z]+", "Ruling")])
+        self.assertEqual(validate_markdown(lower, LTAG + "\nruling: abc\n"), [])  # the word is case sensitive too
 
     def test_lines_fullmatch_decides(self):  # LV7, LV8
         def s_(pat, word="CHECKPOINT"):
