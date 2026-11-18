@@ -1,0 +1,10 @@
+kind: sync-log
+version: 1
+format: markdown
+files:
+  - dir: programs
+    glob: "*/sync-log.md"
+first_line: "<!-- schema: sync-log/1 -->"
+lines:
+  - word: SYNC
+    pattern: "SYNC integration=[0-9a-f]{7,40} main=[0-9a-f]{7,40} merged-main=(?:yes|no) updated=(?:none|(?![a-z0-9,-]*,[,-])[a-z0-9](?:[a-z0-9,-]*[a-z0-9-])?) combined=(?:none|(?![a-z0-9,-]*,[,-])[a-z0-9](?:[a-z0-9,-]*[a-z0-9-])?) tests=(?:PASS|FAIL) questions=(?:none|(?![A-Za-z0-9,-]*,[,-])[A-Za-z0-9](?:[A-Za-z0-9,-]*[A-Za-z0-9])?)"

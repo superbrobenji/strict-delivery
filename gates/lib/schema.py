@@ -16,18 +16,23 @@ from gates.lib import config, gitinfo, ids, print_table, yamlsub
 from gates.lib.result import GateError, _raw
 
 KNOWN_KINDS = ("config", "decision", "finding", "claim", "request", "streams", "context", "handoff", "ledger",
-               "status", "sync-log", "overview", "in-force", "decision-index", "finding-index",
+               "status", "sync-log", "merged-log", "overview", "in-force", "decision-index", "finding-index",
                "mutation-transcript", "review-report", "receipt", "claude-block", "gitignore-block")
 GENERATED_KINDS = ("decision-index", "finding-index", "in-force", "overview")  # OQ-17: skipped when absent
-TYPES = ("str", "text", "int", "bool", "enum", "list", "map", "any-map", "id", "sha", "glob", "cite", "sha-path")
+# ``one_of`` (Task P2.1 part i, decision D-A1): a union of alternatives with pairwise distinct base types.
+TYPES = ("str", "text", "int", "bool", "enum", "list", "map", "any-map", "id", "sha", "glob", "cite", "sha-path",
+         "one_of")
 ID_KINDS = ("decision", "finding", "claim", "request")
 FORMATS = ("yaml", "markdown", "front-matter")
 SCHEMAS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schemas")
 
 _SPEC_KEYS = ("type", "required", "nullable", "values", "items", "fields", "id_kind", "min", "required_when",
-              "absent_when")
-_USES = {"enum": ("values",), "list": ("items", "min"), "int": ("min",), "map": ("fields",), "id": ("id_kind",)}
-_NEEDS = {"enum": "values", "list": "items", "map": "fields", "id": "id_kind"}
+              "absent_when", "of")
+_USES = {"enum": ("values",), "list": ("items", "min"), "int": ("min",), "map": ("fields",), "id": ("id_kind",),
+         "one_of": ("of",)}
+_NEEDS = {"enum": "values", "list": "items", "map": "fields", "id": "id_kind", "one_of": "of"}
+_BASE_NAMES = {"str": "a string", "int": "an integer", "bool": "true or false", "list": "a list", "map": "a mapping"}
+_PY_BASE = {str: "str", int: "int", bool: "bool", list: "list", dict: "map"}  # the exact type of a value -> base type
 _TAG = re.compile(r"([a-z][a-z-]*)/([1-9][0-9]*)")
 _SHA = re.compile(r"[0-9a-f]{7,40}")
 
@@ -69,6 +74,41 @@ def _scalar_list(v: object) -> bool:
     return type(v) is list and all(type(x) in (str, int, bool) for x in v)
 
 
+def _base_type(spec: dict) -> str:
+    """The base type of an alternative of a ``one_of``: the Python type of the values it accepts, named ``str``, ``int``,
+    ``bool``, ``list`` or ``map`` (an ``enum`` takes that of its values)."""
+    t = spec["type"]
+    if t in ("int", "bool", "list"):
+        return t
+    if t in ("map", "any-map"):
+        return "map"
+    if t == "enum":
+        return _PY_BASE[type(spec["values"][0])]
+    return "str"  # str, text, id, sha, glob, cite, sha-path
+
+
+def _check_of(path: str, where: str, alts: object) -> None:
+    """The ``of`` list of a ``one_of`` (D-A1): non-empty, no nested ``one_of``, no ``required``, ``nullable`` or
+    condition key on an alternative (they belong to the union), and pairwise distinct base types."""
+    if type(alts) is not list or not alts:
+        raise _err(path, where, "must be a non-empty list of field specs")
+    seen: dict = {}
+    for i, alt in enumerate(alts):
+        w = "%s.%d" % (where, i)
+        if type(alt) is dict and alt.get("type") == "one_of":
+            raise _err(path, w + ".type", "a one_of alternative cannot itself be one_of")
+        if type(alt) is dict:
+            for k in ("required", "nullable", "required_when", "absent_when"):
+                if k in alt:
+                    raise _err(path, "%s.%s" % (w, k), "not used inside one_of")
+        _check_spec(path, w, alt, set())
+        base = _base_type(alt)
+        if base in seen:
+            raise _err(path, w, "has the same base type (%s) as alternative %d; the alternatives need distinct base "
+                       "types" % (base, seen[base]))
+        seen[base] = i
+
+
 def _check_spec(path: str, where: str, spec: object, siblings: set) -> None:
     if type(spec) is not dict:
         raise _err(path, where, "a field spec must be a mapping")
@@ -81,7 +121,7 @@ def _check_spec(path: str, where: str, spec: object, siblings: set) -> None:
     for k in ("required", "nullable"):
         if k in spec and type(spec[k]) is not bool:
             raise _err(path, "%s.%s" % (where, k), "must be true or false")
-    for k in ("values", "items", "min", "fields", "id_kind"):
+    for k in ("values", "items", "min", "fields", "id_kind", "of"):
         if k in spec and k not in _USES.get(t, ()):
             raise _err(path, "%s.%s" % (where, k), "not used by type %s" % t)
     if t in _NEEDS and _NEEDS[t] not in spec:
@@ -99,6 +139,8 @@ def _check_spec(path: str, where: str, spec: object, siblings: set) -> None:
         _check_spec(path, where + ".items", spec["items"], set())
     if "fields" in spec:
         _check_fields(path, where + ".fields", spec["fields"])
+    if "of" in spec:
+        _check_of(path, where + ".of", spec["of"])
     for k in ("required_when", "absent_when"):
         if k not in spec:
             continue
@@ -498,6 +540,13 @@ def _check_value(spec: dict, v: object, path: str, cfg: dict, errs: list) -> Non
     elif t == "any-map":
         if type(v) is not dict:
             errs.append("%s: must be a mapping" % path)
+    elif t == "one_of":
+        base = _PY_BASE.get(type(v))  # the exact type: a subclass or a float matches no alternative
+        for alt in spec["of"]:
+            if _base_type(alt) == base:
+                _check_value(alt, v, path, cfg, errs)
+                return
+        errs.append("%s: must be %s" % (path, " or ".join(_BASE_NAMES[_base_type(a)] for a in spec["of"])))
     elif t == "id":
         problem = ids.id_problem(v, cfg["ids"][spec["id_kind"]])
         if problem:

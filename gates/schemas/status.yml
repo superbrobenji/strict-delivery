@@ -1,0 +1,26 @@
+kind: status
+version: 1
+format: markdown
+files:
+  - dir: programs
+    glob: "*/status.md"
+first_line: "<!-- schema: status/1 -->"
+table:
+  - stream
+  - block
+  - branch
+  - worktree
+  - next task
+  - estimate
+  - used
+  - status
+  - blockers
+  - pending decisions
+  - delivers
+lines:
+  - word: Batch-cut
+    pattern: "Batch-cut: (?:none|[0-9a-f]{7,40})"
+  - word: Agent
+    pattern: "Agent: [!-~]+ stream=[!-~]+ task=[!-~]+ transcript=[!-~]+ last=[!-~]+ jobs=(?:none|[A-Za-z0-9._-]+:(?:running|finished|stopped)(?:,[A-Za-z0-9._-]+:(?:running|finished|stopped))?(?:,[A-Za-z0-9._-]+:(?:running|finished|stopped))?(?:,[A-Za-z0-9._-]+:(?:running|finished|stopped))?)"
+  - word: Integration
+    pattern: "Integration: head=[0-9a-f]{7,40}"

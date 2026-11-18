@@ -1,0 +1,90 @@
+kind: streams
+version: 1
+format: yaml
+files:
+  - dir: programs
+    glob: "*/streams.yml"
+fields:
+  schema:
+    type: str
+  program:
+    type: str
+  plan:
+    type: str
+  specs:
+    type: list
+    items:
+      type: str
+  worktrees:
+    type: str
+  streams:
+    type: list
+    min: 1
+    items:
+      type: map
+      fields:
+        id:
+          type: str
+        purpose:
+          type: str
+        plan:
+          type: str
+        owns:
+          type: list
+          min: 1
+          required_when:
+            - residual:
+                - false
+          absent_when:
+            - residual:
+                - true
+          items:
+            type: one_of
+            of:
+              - type: str
+              - type: map
+                fields:
+                  path:
+                    type: str
+                  from:
+                    type: str
+                    required: false
+                  until:
+                    type: str
+                    required: false
+        residual:
+          type: bool
+          required: false
+        period:
+          type: map
+          required: false
+          fields:
+            from:
+              type: str
+            until:
+              type: str
+        estimate:
+          type: int
+          min: 0
+        depends_on:
+          type: list
+          items:
+            type: str
+        merge_order:
+          type: int
+          min: 1
+        stacked_on:
+          type: str
+          required: false
+  shared:
+    type: list
+    items:
+      type: map
+      fields:
+        path:
+          type: str
+        rule:
+          type: enum
+          values:
+            - append-rows
+            - own-row
