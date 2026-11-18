@@ -2648,6 +2648,14 @@ class P23dGitinfoTest(GitIsolatedTestCase):
         self.assertEqual(got, got.lower())
         self.assertNotIn("\x1b", got)                                                      # color.ui=always: no colour in the id
 
+    def test_git_option_support(self):  # V4 (Q1): the options the new functions rely on exist in the installed git
+        version = git(self.root, "--version").split()[2].split(".")
+        self.assertGreaterEqual((int(version[0]), int(version[1])), (2, 24))              # --end-of-options needs git 2.24
+        head = git(self.root, "rev-parse", "HEAD")
+        self.assertEqual(git(self.root, "rev-list", "-n", "1", "--end-of-options", "HEAD"), head)
+        git(self.root, "diff", "--no-renames", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "HEAD", "HEAD")
+        self.assertEqual(gitinfo.commit_paths(self.root, head), [".strict-delivery/config.yml"])
+
 
 if __name__ == "__main__":
     unittest.main()

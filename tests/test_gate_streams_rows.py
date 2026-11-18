@@ -156,7 +156,7 @@ SH = [{"path": "reg.md", "rule": "append-rows"}, {"path": "own.md", "rule": "own
 
 class RowsF(base.Fx):
     """Plan-file hunks (PF13-PF20), shared files (SH11-SH19, OW4, TF5, IN19), line ids (OU2), environment (EN6, EN7)."""
-    layout = base.Windows.layout
+    layout, merge_line = base.Windows.layout, base.Windows.merge_line
 
     def stream(self, files, name=SA):
         self.branch(name)
@@ -167,7 +167,7 @@ class RowsF(base.Fx):
         self.program(streams=streams_row(shared=SH + [{"path": "gates.py", "rule": "append-rows"}, {"path": "tests/test_x.py", "rule": "append-rows"}]), **kw)
 
     # ---- plan-file hunks
-    def test_plan_hunk_rows(self):  # PF13, PF14, PF15, PF16, PF17, PF18, PF20
+    def test_plan_hunk_rows(self):  # PF13, PF14, PF15, PF16, PF17, PF20, EN6
         own = PLAN_A.replace("body one", "body one edited")
         out_of_task = PLAN_A.replace("foreign body", "foreign edited")
         self.commit({PG + "/b-plan.md": "# b\n", ".gitattributes": "*.md diff=custom\n"})
@@ -316,6 +316,40 @@ class RowsF(base.Fx):
 
     def lines_of(self, out):
         return [l for l in out.splitlines() if l]
+
+    def test_merged_lines_in_any_order_and_stream_without_tasks(self):  # ME16, ME14
+        layout = {"a_owns": [W("w1.py", None, "merged:a/a1"), W("w2.py", None, "merged:a/a2")],
+                  "b_owns": [W("w1.py", "merged:a/a1"), W("w2.py", "merged:a/a2")]}
+        streams, bd, names = self.layout(**layout)
+        _, _, l1 = self.merge_line(1, "a1")
+        _, _, l2 = self.merge_line(2, "a2", branch="pr2")
+        for order in ((l1, l2), (l2, l1)):                                                   # the events are the same set
+            self.program(merged=MERGED_HEAD + "".join(l + "\n" for l in order), streams=streams, bd=bd, status=status_page(names))
+            self.branch(SB)
+            self.commit({"w1.py": "x\n", "w2.py": "x\n"})
+            out = self.run_gate()[0]
+            self.assertIn("PASS streams.owned\n", out)
+            self.assertNotIn("FAIL", out)
+            git(self.root, "checkout", "-q", "main")
+            git(self.root, "branch", "-D", SB, INT)
+        a_owns = [W("w1.py", None, "merged:b")]                                              # ME14: a stream with no tasks never has merged:b
+        b_owns = [W("w1.py", "merged:b")]
+        streams, bd, names = self.layout(a_owns=a_owns, b_owns=b_owns)
+        bd["streams"][1]["tasks"] = []
+        self.program(merged=MERGED_HEAD + l1.replace("stream=a block=a1", "stream=b block=1a") + "\n", streams=streams, bd=bd,
+                     status=status_page(names))
+        self.branch(SB)
+        self.commit({"w1.py": "x\n"})
+        out = self.run_gate()[0]
+        self.assertIn("FAIL streams.owned.w1.py:", out)                                      # the window never opens
+        self.assertIn("FAIL streams.map.%s: " % NAME, out)                                   # and the line itself is refused
+        self.assertEqual(self.run_gate("--branch", "other")[0].count("PASS streams.map"), 0)
+
+    def test_shared_path_inside_an_owned_directory_fails_map(self):  # SH17
+        a = stream("a", ["a-owned.py", "tests/test_a.py", "docs/"], merge_order=1)
+        b = stream("b", ["b-owned.py", "tests/test_b.py"], merge_order=2)
+        self.program(streams=row(a, b, shared=[{"path": "docs/reg.md", "rule": "append-rows"}]), bd=bd_of(a, b))
+        self.assertIn("FAIL streams.map.%s: " % NAME, self.run_gate()[0])
 
 
 PROGRAM_PLAN_EDIT = PROGRAM_PLAN.replace("## Block a1: x", "## Block a1: y")

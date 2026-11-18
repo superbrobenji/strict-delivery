@@ -362,7 +362,7 @@ class Owned(Fx):
         self.assertIn("FAIL streams.integration.", out)
         self.assertEqual(code, 1)
 
-    def test_group_merge_after_combined_testing_passes(self):  # IG4, owner answer Q-A11-1 (c)
+    def test_group_merge_after_combined_testing_passes(self):  # IG4, IG10 (operand order and the second filter: mutants #26-#29), owner answer Q-A11-1 (c)
         self.branch(NAME + "/a/g1")
         self.commit({"a-owned.py": "g\n"})
         git(self.root, "checkout", "-q", "-b", SA, "main")
@@ -431,7 +431,7 @@ class Integration(Fx):
         git(self.root, "add", "src/x.py")
         self.assertIn("FAIL streams.owned.src/x.py:", self.run_gate()[0])
 
-    def test_merge_of_main_exempt_combined_merge_owned_paths(self):  # IN5, IN6, IN7
+    def test_merge_of_main_exempt_combined_merge_owned_paths(self):  # IN5, IN6, IN7, IN14 (the base of the integration range is base_branch)
         self.branch(SA, "main")
         self.commit({"a-owned.py": "x\n"})
         git(self.root, "checkout", "-q", INT)
@@ -660,7 +660,7 @@ class Stacked(Fx):
         self.assertTrue(out.startswith("FAIL streams.input:"), out)
         self.assertEqual(code, 1)
 
-    def test_stacked_parent_merge_exempt(self):  # OW24
+    def test_stacked_parent_merge_exempt(self):  # OW24, IG6
         for stacked, want in ((True, "PASS streams.owned\n"), (False, "FAIL streams.owned.b-owned.py")):
             with self.subTest(stacked=stacked):
                 self.branch(SB)
@@ -812,7 +812,7 @@ class Rows(Fx):
         self.assertIn("FAIL streams.owned.b-owned.py: a merge of stream a may change only paths it owns", out)
         self.assertNotIn("only program records", out)
 
-    def test_records_rows(self):  # RC8, RC9, RC10
+    def test_records_rows(self):  # RC7 (the main merge, D-Q26), RC8, RC9, RC10
         self.program()
         self.branch(REC)
         self.commit({PG + "/program-plan.md": "p2\n"})
@@ -989,7 +989,7 @@ class Survivors(Fx):
         git(self.root, "merge", "-q", "--no-ff", "-m", "combined", SA)
         self.assertIn("FAIL streams.owned.%s: a merge of stream a may change only paths it owns" % sync, self.run_gate()[0])
 
-    def test_octopus_merge_into_stream_branch_is_judged(self):  # mutant #22: every second parent must be on the base tip
+    def test_octopus_merge_into_stream_branch_is_judged(self):  # IG11, mutant #22: every second parent must be on the base tip
         self.program()
         self.branch(SA)
         git(self.root, "branch", "feat", SA)
@@ -1012,7 +1012,7 @@ class Survivors(Fx):
         git(self.root, "merge", "-q", "--no-ff", "-m", "m", "feat")
         self.assertIn("PASS streams.owned\n", self.run_gate()[0])
 
-    def test_octopus_merge_on_integration_refused(self):  # mutant #30
+    def test_octopus_merge_on_integration_refused(self):  # IN12, mutant #30
         self.program()
         self.branch(SA)
         self.commit({"a-owned.py": "x\n"})
@@ -1023,7 +1023,7 @@ class Survivors(Fx):
         out = self.run_gate()[0]
         self.assertIn("an octopus merge on %s is refused" % INT, out)
 
-    def test_combined_merge_reached_by_two_streams_fails(self):  # mutant #31
+    def test_combined_merge_reached_by_two_streams_fails(self):  # IN8, mutant #31
         self.program()
         self.branch(SA)
         self.commit({"a-owned.py": "x\n"})
@@ -1032,7 +1032,7 @@ class Survivors(Fx):
         git(self.root, "merge", "-q", "--no-ff", "-m", "m", SA)
         self.assertIn("streams a and b both reach the second parent", self.run_gate()[0])
 
-    def test_combined_merge_of_a_group_branch(self):  # mutant #33: a group branch counts as the stream's
+    def test_combined_merge_of_a_group_branch(self):  # IN9, mutant #33: a group branch counts as the stream's
         self.program()
         self.branch(NAME + "/a/g1")
         self.commit({"a-owned.py": "x\n"})
@@ -1117,7 +1117,7 @@ class Survivors(Fx):
                      + mline(2, head2, m2, "a", "a2", final="yes") + "\n")
         self.assertIn("final=yes after a final line of stream a", self.run_gate()[0])
 
-    def test_base_ledger_records_a_pr_twice(self):  # mutant #54
+    def test_base_ledger_records_a_pr_twice(self):  # ME23, mutant #54
         a7 = git(self.root, "rev-parse", "--short=7", "HEAD")
         head, m = self.pr("p1", "a", [ckpt("a1", "a1.1", a7)])
         line = mline(1, head, m, "a", "a1")
@@ -1334,7 +1334,7 @@ class RowsD(Fx):
             self.assertEqual(fh.read(), real)                                              # no gate call wrote the real index
 
     # ---- the merged record and the ledgers (MP13-MP16, MP18-MP20, ME3, ME9, ME12, ME15, ME19, ME24)
-    def test_ledger_rows(self):  # MP13, MP14, MP15, MP16
+    def test_ledger_rows(self):  # MP13, MP14, MP15, MP16, MP22 (the ledger path is <plan_state>/<plan slug>/ledger.md)
         self.program()
         bad = ledger("Ruling nonsense")
         self.branch(SA)                                                                    # MP15: a stream with no ledger yet
