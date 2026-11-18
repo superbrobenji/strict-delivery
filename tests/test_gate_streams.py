@@ -900,6 +900,16 @@ class Rows(Fx):
         out = self.run_gate("--branch", INT)[0]
         self.assertIn("PASS streams.request\n", out)
 
+    def test_request_base_is_head_when_branch_given_differs(self):  # RQ3 / D-Q12 (mutant #11): `--branch` names the integration branch but HEAD is elsewhere
+        from tests.test_programs_lib import RID, req_row
+        self.program(requests={RID: req_row(status="withdrawn")})
+        git(self.root, "checkout", "-q", "-b", "work", INT)
+        self.commit({PROGDIR + "/requests/%s.yml" % RID: yamlsub.emit(req_row(status="withdrawn", need="changed"))})
+        # base HEAD (the work branch itself): the withdrawn request is unchanged against HEAD, so the request line passes;
+        # base the integration ref would read "a withdrawn request does not change" (immutable)
+        out = self.run_gate("--branch", INT)[0]
+        self.assertIn("PASS streams.request\n", out)
+
     def test_odd_paths_and_many_failures(self):  # OU4, OU9, OU1
         self.program()
         files = {"sp ace.txt": "x\n", "uniࡰ.txt": "x\n", "-dash.txt": "x\n", "q'uote.txt": "x\n"}
