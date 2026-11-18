@@ -554,6 +554,33 @@ def rev_list(root: str, a: str, b: str, first_parent: bool = False) -> list:
     return [x for x in _text(p.stdout, "rev-list").split("\n") if x]
 
 
+def ls_tree_entries(root: str, ref: str, directory: str) -> list:
+    """Every entry directly under ``directory`` at ``ref`` as ``(mode, type, path)`` (Task P2.1 review 1, finding
+    F-20261118-bc74, decision D-A9): ``git ls-tree -z --full-tree ref -- directory/``. ``mode`` is git's six digits
+    (``100644``, ``100755``, ``120000`` a symlink, ``160000`` a gitlink, ``040000`` a tree), ``type`` is ``blob``,
+    ``tree`` or ``commit``, ``path`` is repo-relative. ``ls_tree`` lists only the regular files and hides the
+    rest; this lists them all, so a caller can refuse a stray entry. A ``directory`` that is no folder at ``ref``
+    (missing, a file, a symlink) gives ``[]``; ``""`` is the repository root."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    if type(directory) is not str:
+        raise GateError("directory must be a string")
+    _require_toplevel(root)
+    _check_norm(directory, "ls-tree: directory", allow_empty=True)
+    args = ["ls-tree", "-z", "--full-tree", ref] + (["--", directory + "/"] if directory else [])
+    p = _run(root, "ls-tree", args, literal=True, opts=_NO_REPLACE)
+    out = []
+    for raw in p.stdout.split(b"\0"):
+        if not raw:
+            continue
+        head, _, path = raw.partition(b"\t")
+        fields = head.split(b" ")
+        if len(fields) != 3:
+            raise GateError("git ls-tree gave an entry that cannot be read")
+        out.append((fields[0].decode("ascii"), fields[1].decode("ascii"), _text(path, "ls-tree")))
+    return out
+
+
 def parents(root: str, sha: str) -> list:
     """The parents of commit ``sha``, first parent first, as full ids; ``[]`` for a root commit (Task P2.1; decisions
     D-A15, D-A16): ``git rev-list --parents -n 1 --end-of-options <sha>^{commit}``. The ``^{commit}`` peel makes a

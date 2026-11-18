@@ -1859,6 +1859,20 @@ class RevList(P21Case):
         self.assertEqual(plain_git(self.root, "rev-list", "%s..main" % self.M, check=False).returncode, 0)
         self.assertEqual(gitinfo.rev_list(self.root, self.M, "main"), [tip])
 
+    def test_rev_list_range_named_like_a_file(self):  # RL17, F-20261118-2j6r: plan :33 "`--` before paths"
+        git(self.root, "branch", "x", self.A)
+        git(self.root, "branch", "y", self.M)
+        self.put("x..y", b"f\n")
+        commit_all(self.root, "file named x..y")
+        bare = plain_git(self.root, "rev-list", "x..y", check=False)
+        self.assertEqual(bare.returncode, 128)  # without --, git refuses: both revision and filename
+        self.assertIn(b"ambiguous argument 'x..y'", bare.stderr)
+        plain = plain_git(self.root, "rev-list", "--topo-order", "--reverse", "x..y", "--")
+        want = [self.B, self.C, self.M]  # written here: the commits of M not in A, parents first
+        self.assertEqual(plain.stdout.decode().split(), want)
+        self.assertEqual(gitinfo.rev_list(self.root, "x", "y"), want)
+        self.assertEqual(gitinfo.rev_list(self.root, "x", "y", first_parent=True), [self.B, self.M])
+
     def test_rev_list_unknown_revision(self):  # RL6
         for a, b in ((self.A, "nosuch"), (ABSENT40, self.M)):
             with self.subTest(a=a[:6], b=b[:6]):
@@ -1955,6 +1969,140 @@ class RevList(P21Case):
         with self.assertRaises(GateError) as cm:
             gitinfo.rev_list(None, "HEAD", "HEAD")
         self.assertEqual(str(cm.exception), "root must be a string")
+
+
+class LsTreeEntries(P21Case):
+    """``ls_tree_entries`` (F-20261118-bc74, D-A9): every entry directly under a folder at a ref with its mode and
+    type, against the plain ``git ls-tree`` output. The folder ``requests`` holds a regular file, an executable, a
+    gitlink, a symlink and a subfolder; ``ls_tree`` (unchanged) lists only the two regular files."""
+
+    NAMES = ["a.yml", "e.yml", "g", "l.yml", "sub"]
+    WANT = [("100644", "blob", "requests/a.yml"), ("100755", "blob", "requests/e.yml"),
+            ("160000", "commit", "requests/g"), ("120000", "blob", "requests/l.yml"),
+            ("040000", "tree", "requests/sub")]
+
+    def setUp(self):
+        super().setUp()
+        r = self.root
+        self.put("requests/a.yml")
+        self.put("requests/e.yml")
+        os.chmod(os.path.join(r, "requests/e.yml"), 0o755)
+        os.symlink("a.yml", os.path.join(r, "requests", "l.yml"))
+        self.put("requests/sub/x.yml")
+        self.put("other/o.yml")
+        git(r, "add", "-A")
+        git(r, "update-index", "--add", "--cacheinfo", "160000,%s,requests/g" % ("1" * 40))
+        git(r, "commit", "-q", "-m", "requests")
+        self.head = git(r, "rev-parse", "HEAD")
+
+    def test_entries_modes_types_names(self):
+        got = gitinfo.ls_tree_entries(self.root, "HEAD", "requests")
+        self.assertEqual(got, self.WANT)
+        plain = plain_git(self.root, "ls-tree", "--full-tree", "HEAD", "--", "requests/").stdout.decode()
+        lines = [l.split(" ", 2)[:2] + [l.split("\t", 1)[1]] for l in plain.split("\n") if l]
+        self.assertEqual([tuple(x) for x in lines], self.WANT)   # the same three fields as the plain command
+
+    def test_entries_by_sha_and_branch(self):
+        for ref in (self.head, self.head[:7], "main", "refs/heads/main"):
+            with self.subTest(ref=ref):
+                self.assertEqual(gitinfo.ls_tree_entries(self.root, ref, "requests"), self.WANT)
+
+    def test_ls_tree_unchanged(self):
+        self.assertEqual(gitinfo.ls_tree(self.root, "HEAD", "requests"), ["requests/a.yml", "requests/e.yml"])
+
+    def test_entries_only_direct_children(self):
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "requests/sub"),
+                         [("100644", "blob", "requests/sub/x.yml")])
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "other"), [("100644", "blob", "other/o.yml")])
+
+    def test_entries_root_missing_and_non_folder(self):
+        top = gitinfo.ls_tree_entries(self.root, "HEAD", "")
+        names = plain_git(self.root, "ls-tree", "--name-only", "HEAD").stdout.decode().split("\n")
+        self.assertEqual([n for _, _, n in top], [n for n in names if n])
+        self.assertIn(("040000", "tree", "requests"), top)
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "nope"), [])
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "requests/a.yml"), [])   # a file is no folder
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "requests/l.yml"), [])   # nor is a symlink
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "req"), [])              # no prefix match
+
+    def test_entries_odd_names(self):
+        names = ["sp ace.yml", "nl\nname.yml", "tab\tname.yml", "é.yml", "-lead.yml", "gl*ob.yml"]
+        for n in names:
+            self.put("odd/" + n)
+        commit_all(self.root, "odd names")
+        got = gitinfo.ls_tree_entries(self.root, "HEAD", "odd")
+        self.assertEqual(sorted(got), sorted(("100644", "blob", "odd/" + n) for n in names))
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "odd/gl*"), [])    # a literal path, no glob
+        self.put("-dir/f.yml")
+        commit_all(self.root, "folder named like an option")
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "-dir"), [("100644", "blob", "-dir/f.yml")])
+
+    def test_entries_unreadable_output(self):
+        for bad in (b"garbage\0", b"100644 blob\tx\0", b"100644 blob abc def\tx\0"):
+            with self.subTest(bad=bad):
+                with stub_run("ls-tree", bad):
+                    with self.assertRaises(GateError) as cm:
+                        gitinfo.ls_tree_entries(self.root, "HEAD", "requests")
+                self.assertEqual(str(cm.exception), "git ls-tree gave an entry that cannot be read")
+        with stub_run("ls-tree", b"100644 blob abc\tbad\xff\0"):
+            with self.assertRaises(GateError) as cm:
+                gitinfo.ls_tree_entries(self.root, "HEAD", "requests")
+        self.assertIn("not valid UTF-8", str(cm.exception))
+
+    def test_entries_arguments(self):
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.ls_tree_entries(self.root, "HEAD", "requests")
+        argv = [a for a, _ in calls if "ls-tree" in a][0]
+        for want in ("--no-replace-objects", "--literal-pathspecs", "-z", "--full-tree", "--"):
+            self.assertIn(want, argv)
+        self.assertEqual(argv[-2:], ["--", "requests/"])
+        self.assertEqual(argv[argv.index("-C") + 1], self.root)
+
+    def test_entries_ignore_user_config_and_replace(self):
+        self.assertEqual(plain_git(self.root, "config", "color.ui").stdout.strip(), b"always")
+        self.assertEqual(plain_git(self.root, "config", "core.abbrev").stdout.strip(), b"7")
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "requests"), self.WANT)
+        # a replace ref for the tree of requests: git replace makes the real listing differ without the option
+        t_req = git(self.root, "rev-parse", "HEAD:requests")
+        t_other = git(self.root, "rev-parse", "HEAD:other")
+        git(self.root, "replace", t_req, t_other)
+        self.assertEqual(gitinfo.ls_tree_entries(self.root, "HEAD", "requests"), self.WANT)
+
+    def test_entries_refused(self):
+        for bad in ("-x", "^x", "a" * 41):
+            with self.subTest(ref=bad[:6]):
+                with self.assertRaises(GateError):
+                    gitinfo.ls_tree_entries(self.root, bad, "requests")
+        for bad in ("", b"x", 5, None, _Sub("HEAD")):
+            with self.subTest(ref=repr(bad)):
+                with self.assertRaises(GateError) as cm:
+                    gitinfo.ls_tree_entries(self.root, bad, "requests")
+                self.assertEqual(str(cm.exception), "ref must be a non-empty string")
+        for bad in (".", "./a", "a/.", "a//b", "requests/", "/requests", "..", "requests/../other"):
+            with self.subTest(directory=bad):
+                with self.assertRaises(GateError):
+                    gitinfo.ls_tree_entries(self.root, "HEAD", bad)
+        for bad in (None, 5, b"x", _Sub("requests")):
+            with self.subTest(directory=repr(bad)):
+                with self.assertRaises(GateError) as cm:
+                    gitinfo.ls_tree_entries(self.root, "HEAD", bad)
+                self.assertEqual(str(cm.exception), "directory must be a string")
+        with self.assertRaises(GateError):
+            gitinfo.ls_tree_entries(self.root, "nosuchref", "requests")
+        with self.assertRaises(GateError):
+            gitinfo.ls_tree_entries(self.root, ABSENT40, "requests")
+
+    def test_entries_root_forms(self):
+        check_root_forms(self, root_forms(self.tmp, self.root),
+                         {"ls_tree_entries": lambda p: gitinfo.ls_tree_entries(p, "HEAD", "requests")})
+        with self.assertRaises(GateError) as cm:
+            gitinfo.ls_tree_entries(None, "HEAD", "requests")
+        self.assertEqual(str(cm.exception), "root must be a string")
+        sub = os.path.join(self.root, "requests")
+        with self.assertRaises(GateError) as cm:
+            gitinfo.ls_tree_entries(sub, "HEAD", "requests")
+        self.assertIn("top level", str(cm.exception))
 
 
 class Parents(P21Case):

@@ -936,10 +936,12 @@ class _Order:
                 b = sub_block(t)
                 if b is not None:
                     self.task[t] = (s["id"], b)
-        edges = bd.get("edges", [])
+        if "edges" not in bd:      # D-B11 (a): a row with no `edges` is unusable, never "no edges"
+            raise ValueError("breakdown.edges: missing (a list of from/to maps, empty when there are none)")
+        edges = bd["edges"]
         if type(edges) is not list or any(type(e) is not dict or type(e.get("from")) is not str
                                           or type(e.get("to")) is not str for e in edges):
-            raise ValueError("breakdown: edges must be a list of from/to maps")
+            raise ValueError("breakdown.edges: must be a list of from/to maps")
         self.adj: dict = {}
         for e in edges:
             a, b = self.task.get(e["from"]), self.task.get(e["to"])
@@ -1104,7 +1106,9 @@ def _need_breakdown(bd: object) -> None:
             raise ValueError("breakdown.streams.%d.paths: must be a list" % i)
         if "period" in s and type(s["period"]) is not dict:
             raise ValueError("breakdown.streams.%d.period: must be a mapping" % i)
-    edges = bd.get("edges", [])
+    if "edges" not in bd:          # D-B11 (a): a row with no `edges` is unusable, never "no edges"
+        raise ValueError("breakdown.edges: missing (a list of from/to maps, empty when there are none)")
+    edges = bd["edges"]
     if type(edges) is not list or any(type(e) is not dict or type(e.get("from")) is not str
                                       or type(e.get("to")) is not str for e in edges):
         raise ValueError("breakdown.edges: must be a list of from/to maps")
@@ -1238,10 +1242,16 @@ def _mapping(text: str, rel: str) -> dict:
 
 
 def _request_files(root: str, rel_dir: str, ref: Optional[str]) -> list:
-    """The repo-relative paths of the request files, sorted. At a ref only the regular files directly in the
-    folder are listed (a subfolder or a symlink is not seen there: ``gitinfo.ls_tree`` lists regular files)."""
+    """The repo-relative paths of the request files, sorted. An entry that is not a regular file named ``<id>.yml``
+    (a subfolder, a symlink, a gitlink, any other name) is a ``GateError`` naming it, in the working tree and at a
+    ref alike (decision D-A9, row PR9; ``gitinfo.ls_tree_entries`` lists every entry at a ref, mode and type
+    included, where ``gitinfo.ls_tree`` hides all but the regular files)."""
+    not_regular = set()
     if ref is not None:
-        names = sorted(gitinfo.ls_tree(root, ref, rel_dir))
+        listed = sorted((name, mode) for mode, _, name in gitinfo.ls_tree_entries(root, ref, rel_dir))
+        names = [name for name, _ in listed]
+        # the mode decides: 100644 and 100755 are regular files; 120000 a symlink, 040000 a tree, 160000 a gitlink
+        not_regular = {name for name, mode in listed if mode not in gitinfo._REGULAR}
     else:
         d = os.path.join(root, *rel_dir.split("/"))
         try:
@@ -1259,7 +1269,7 @@ def _request_files(root: str, rel_dir: str, ref: Optional[str]) -> list:
     out = []
     for rel in names:
         base = posixpath.basename(rel)
-        if not base.endswith(".yml") or base.startswith(".") or base in store._GENERATED:
+        if not base.endswith(".yml") or base.startswith(".") or base in store._GENERATED or rel in not_regular:
             raise GateError("%s: not a regular file named <id>.yml" % rel)
         if ref is None:
             try:
@@ -1276,7 +1286,7 @@ def load_program(root: str, cfg: dict, name: str, ref: Optional[str]) -> Program
     """``<paths.programs>/<name>/`` read from the working tree (``ref`` ``None``) or from ``ref`` (decisions D-A9,
     D-A23). A name failing ``program_problem``, a missing or unreadable ``streams.yml``, ``status.md``,
     ``sync-log.md`` or ``merged.md``, a stray entry in ``requests/`` (a name that is not ``<id>.yml``, a
-    subfolder, a symlink; at a ref only regular files are listed), a file with a byte order mark, a CR or bytes that
+    subfolder, a symlink, a gitlink; the same at a ref as in the working tree), a file with a byte order mark, a CR or bytes that
     are not UTF-8, and a file that does not parse or whose top level is not a mapping are each a ``GateError``
     naming the file. Rows pass through ``migrations.migrate``. ``ref`` is a revision as ``gitinfo.show`` takes it:
     a bare name that is both a tag and a branch is git's tag; pass ``refs/heads/<b>`` for the branch."""

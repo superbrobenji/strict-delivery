@@ -453,6 +453,22 @@ class Streams(unittest.TestCase):
         self.assertEqual(streams_errors(with_owns(S_, {"a": [PS + "/a-plan/x.md"]}), NAME, CFG), [])
         self.assertEqual(streams_errors(with_owns(res, {"a": ["x.py"]}), NAME, CFG), [])
 
+    def test_streams_errors_deterministic(self):   # SE14: the same row twice, streams in another order
+        def ovl(p, s, q, t):
+            return "owns: %s (stream %s) overlaps %s (stream %s)" % (p, s, q, t)
+        sa, sb, sc = (stream(i, ["x.py"], merge_order=n) for n, i in enumerate("abc", 1))
+        first = row(sa, sb, sc)
+        self.assertEqual(streams_errors(first, NAME, CFG), streams_errors(first, NAME, CFG))   # the same row twice
+        self.assertEqual(streams_errors(first, NAME, CFG), [ovl("x.py", "a", "x.py", "b"), ovl("x.py", "a", "x.py", "c"),
+                                                            ovl("x.py", "b", "x.py", "c")])         # row order
+        other = row(sc, sa, sb)
+        self.assertEqual(streams_errors(other, NAME, CFG), [ovl("x.py", "c", "x.py", "a"), ovl("x.py", "c", "x.py", "b"),
+                                                            ovl("x.py", "a", "x.py", "b")])         # its row order
+        self.assertEqual(sorted(streams_errors(first, NAME, CFG)), sorted(
+            e.replace("(stream c) overlaps x.py (stream a)", "(stream a) overlaps x.py (stream c)")
+             .replace("(stream c) overlaps x.py (stream b)", "(stream b) overlaps x.py (stream c)")
+            for e in streams_errors(other, NAME, CFG)))     # the same set of reasons, up to the order within a pair
+
     def test_overlap_windows_without_held(self):
         ps, pc = PS_, PC
         cases = [([W("x.py", ps, "merged:a")], [W("x.py", "merged:a", pc)], False),      # chained
@@ -482,12 +498,30 @@ class Streams(unittest.TestCase):
         self.assertEqual(len(overlaps(streams_errors(two(["x.py"], ["x.py"]), NAME, CFG, S0))), 1)
 
     def test_overlap_keys_and_boundaries(self):
-        for a, b, want in [("src/", "SRC/x.py", True), ("caf\u00e9/", "cafe\u0301/x", True), ("cafe\u0301/", "caf\u00e9/x", True),
-                           ("\u1ea1\u0301/", "a\u0301\u0323/x", True), ("strasse/", "STRA\u00dfE/x", True), ("strasse/", "STRA\u1e9eE/x", True),
-                           ("a/", "ab/x", False), ("a/", "a/b.py", True), ("a/b", "a/bc", False), ("X/", "x/", True),
-                           ("\U00010570/", "\U00010597/x", False), ("a", "a/", True), ("a/", "a", True), ("a", "a/x", False)]:
+        for a, b, want in [("a/", "ab/x", False), ("a/", "a/b.py", True), ("a/b", "a/bc", False),
+                           ("a", "a/", True), ("a/", "a", True), ("a", "a/x", False)]:
             got = bool(overlaps(streams_errors(two([a], [b]), NAME, CFG)))
             self.assertEqual(got, want, (a, b))
+
+    def test_owned_overlap_case_folded_and_nfc(self):   # EN7, EN8 (plan :2673, Q-CAT-4, Q-X35 (a))
+        def ovl(p, s, q, t):    # the reason's text, as the record test above spells it
+            return "owns: %s (stream %s) overlaps %s (stream %s)" % (p, s, q, t)
+        # EN7: ASCII case
+        self.assertEqual(streams_errors(two(["src/"], ["SRC/x.py"]), NAME, CFG), [ovl("src/", "a", "SRC/x.py", "b")])
+        # EN8: NFC against NFD, both ways, and the two mark orders of a-dot-below-acute
+        self.assertEqual(streams_errors(two(["caf\u00e9/"], ["cafe\u0301/x"]), NAME, CFG),
+                         [ovl("caf\u00e9/", "a", "cafe\u0301/x", "b")])
+        self.assertEqual(streams_errors(two(["cafe\u0301/"], ["caf\u00e9/x"]), NAME, CFG),
+                         [ovl("cafe\u0301/", "a", "caf\u00e9/x", "b")])
+        self.assertEqual(streams_errors(two(["\u1ea1\u0301/"], ["a\u0301\u0323/x"]), NAME, CFG),
+                         [ovl("\u1ea1\u0301/", "a", "a\u0301\u0323/x", "b")])
+        # the moved rows of the old table: full case folding, and a character this Unicode table does not fold
+        for a, b, want in [("strasse/", "STRA\u00dfE/x", True), ("strasse/", "STRA\u1e9eE/x", True), ("X/", "x/", True),
+                           ("src/", "SRC/x.py", True), ("caf\u00e9/", "cafe\u0301/x", True),
+                           ("cafe\u0301/", "caf\u00e9/x", True), ("\u1ea1\u0301/", "a\u0301\u0323/x", True),
+                           ("\U00010570/", "\U00010597/x", False)]:
+            with self.subTest(a=a, b=b):
+                self.assertEqual(bool(overlaps(streams_errors(two([a], [b]), NAME, CFG))), want)
 
     def test_overlap_with_held(self):
         ps = PS_
@@ -812,8 +846,12 @@ class Order(unittest.TestCase):
                 cb([], bad, "merged:b/b1")
         self.assertFalse(comes_before(bd({"s": ["x"], "t": ["t1.1"]}), "merged:s", "merged:t/t1"))
         self.assertFalse(comes_before(bd({"s": ["x"], "t": ["t1.1"]}), "merged:t/t1", "merged:s"))
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             comes_before({"streams": [{"id": "a", "tasks": ["a1.1"]}], "edges": "x"}, PS_, PC)
+        self.assertIn("breakdown.edges", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:    # F-20261118-ix24, D-B11 (a): no `edges` key
+            comes_before({"streams": [{"id": "a", "tasks": ["a1.1"]}]}, PS_, PC)
+        self.assertIn("breakdown.edges", str(cm.exception))
 
     def test_comes_before_perf_and_digits(self):
         n = 400
@@ -965,12 +1003,16 @@ class StatusPage(unittest.TestCase):
         with self.assertRaises(ValueError):
             status_rows(None)
 
-    def test_status_errors_valid_and_rows(self):
+    def test_status_rows_one_per_stream(self):   # plan :2688: a page without stream b's row is "missing row"
         self.assertEqual(self.errs([self.rowtext("a"), self.rowtext("b")]), [])
         self.assertEqual(self.errs([self.rowtext("b"), self.rowtext("a")]), [])
         self.assertEqual(self.errs([self.rowtext("a")]), ["missing row for stream b"])
+        self.assertTrue(any("missing row" in e for e in status_errors(
+            status_rows(self.page([self.rowtext("a")])), S(), cfg={"ids": {"request": "R", "decision": "DEC"}}, request_ids=set())))
         self.assertTrue(any(e.startswith("extra row") for e in self.errs([self.rowtext("a"), self.rowtext("b"), self.rowtext("c")])))
         self.assertTrue(any("duplicate row" in e for e in self.errs([self.rowtext("a"), self.rowtext("a"), self.rowtext("b")])))
+
+    def test_status_errors_valid_and_rows(self):
         self.assertTrue(any("status row at line" in e for e in self.errs([self.rowtext("a"), self.rowtext("b"), "| a | b |"])))
         self.assertEqual(status_errors([], S(), cfg={"ids": {"request": "R", "decision": "DEC"}}, request_ids=set()), ["missing row for stream a", "missing row for stream b"])
         with self.assertRaises(TypeError):
@@ -1170,9 +1212,11 @@ class Agreement(unittest.TestCase):
             with self.assertRaises(ValueError) as cm:
                 agreement_errors(notmap, b, "program-plan")
             self.assertIn("streams", str(cm.exception))
-        # absent edges are an empty list (as comes_before reads them)
+        # F-20261118-ix24, D-B11 (a): streams usable, `edges` absent is an unusable row (it no longer reads as an
+        # empty list); an empty list stays valid (plan :2735: edges "may be empty")
+        bad(lambda b: b.pop("edges"), "breakdown.edges")
         st, b = self.pair()
-        del b["edges"]
+        self.assertEqual(b["edges"], [])
         self.assertEqual(agreement_errors(st, b, "program-plan"), [])
 
     def test_stacked_order(self):
@@ -1458,6 +1502,47 @@ class LoadProgram(GitProgram):
         self.folder()
         commit_all(self.root, "no requests")
         self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").requests, [])
+
+    def test_load_program_stray_entries_same_at_a_ref_and_in_the_working_tree(self):
+        # F-20261118-bc74, D-A9 (task-P2.1-domain.md:574): "a stray entry in requests/ (not <id>.yml, a subfolder, a
+        # symlink) ... each raise GateError naming it"; row PR9. One expected message for both readings.
+        base = self.sha()
+        rq = PROGDIR + "/requests/"
+
+        def symlink(n):
+            os.symlink(os.path.join(self.root, PROGDIR, "streams.yml"), os.path.join(self.root, *(rq + n).split("/")))
+
+        def subfolder(n):
+            self.put(rq + n + "/x.yml", yamlsub.emit(req_row("R-20261105-zz3p")))
+
+        def gitlink(n):          # an empty folder on disk (an uninitialised submodule) and a 160000 entry in the index
+            os.mkdir(os.path.join(self.root, *(rq + n).split("/")))
+            git(self.root, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % ("1" * 40, rq + n))
+
+        kinds = [("symlink named <id>.yml", "l.yml", symlink), ("symlink, other name", "l", symlink),
+                 ("subfolder named x.yml", "sub.yml", subfolder), ("subfolder, other name", "sub", subfolder),
+                 ("stray file", "README.md", lambda n: self.put(rq + n, "x\n")),
+                 ("hidden .yml", ".hidden.yml", lambda n: self.put(rq + n, "a: 1\n")),
+                 ("generated name", "in-force.md", lambda n: self.put(rq + n, "x\n")),
+                 ("gitlink named <id>.yml", "g.yml", gitlink)]      # last: git leaves its empty folder behind
+        for i, (what, name, make) in enumerate(kinds):
+            with self.subTest(what):
+                git(self.root, "checkout", "-q", "-f", "-b", "stray%d" % i, base)
+                make(name)
+                git(self.root, "add", "-A")
+                git(self.root, "commit", "-q", "-m", what)
+                msg = "%s%s: not a regular file named <id>.yml" % (rq, name)
+                self.refuses(msg, "HEAD")
+                self.refuses(msg, None)
+                self.refuses(msg, self.sha())
+
+    def test_load_program_ref_accepts_an_executable_request_file(self):  # PR9: mode 100755 is a regular file at a ref
+        os.chmod(os.path.join(self.root, *(PROGDIR + "/requests/" + RID + ".yml").split("/")), 0o755)
+        commit_all(self.root, "exec")
+        listing = git(self.root, "ls-tree", "HEAD", PROGDIR + "/requests/" + RID + ".yml")
+        self.assertEqual(listing.split()[:2], ["100755", "blob"])
+        self.assertEqual(load_program(self.root, self.cfg, NAME, "HEAD").requests, self.expect.requests)
+        self.assertEqual(load_program(self.root, self.cfg, NAME, None).requests, self.expect.requests)
 
     def test_load_program_migrates_rows(self):  # PR10
         self.assertEqual(load_program(self.root, self.cfg, NAME, None).streams, prog_streams())   # current version: unchanged
@@ -2280,7 +2365,10 @@ class RequestsTo(GitProgram):
 
     def test_request_to_breakdown_unusable(self):  # RQ22, D-B11
         streams = rdf({})[0]
-        for badbd in ({}, {"edges": []}, {"streams": [], "edges": 5}, {"streams": [{"id": "residual"}]}):
+        usable = {"streams": [{"id": "residual", "tasks": ["R1.1"], "residual": True}]}
+        self.assertEqual(self.to("residual", ["unowned.py"], streams, dict(usable, edges=[])), [])   # edges present, empty
+        for badbd in ({}, {"edges": []}, {"streams": [], "edges": 5}, {"streams": [{"id": "residual"}]},
+                      usable):                       # F-20261118-ix24: streams usable, `edges` absent
             got = self.to("residual", ["unowned.py"], streams, badbd)
             self.assertEqual(len(got), 1, badbd)
             self.assertIn("the breakdown cannot decide it", got[0][1])
