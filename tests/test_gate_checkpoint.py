@@ -35,6 +35,13 @@ EIGHT = ["handoff", "ledger", "agree", "head", "clean", "pushed", "reads", "work
 ALL = "".join("PASS checkpoint.%s\n" % i for i in EIGHT)
 
 
+def require_both_pys(tc):
+    """CI runs each interpreter in its own matrix cell, so a same-on-both test skips where one is absent."""
+    for py in PYS:
+        if not os.path.exists(py):
+            tc.skipTest("interpreter not present: " + py)
+
+
 def ids(out):
     return re.findall(r"^(?:PASS|FAIL) checkpoint\.([a-z]+)", out, re.M)
 
@@ -313,6 +320,7 @@ class Arguments(Fx):
                 self.assertEqual(gate_checkpoint.main(), 0)
 
     def test_gate_checkpoint_imports_same_on_both(self):  # AV13
+        require_both_pys(self)
         self.assertEqual(gate_checkpoint.PRODUCES, ())
         for py in PYS:
             p = subprocess.run([py, "-c", "import gates.gate_checkpoint as g; print(g.PRODUCES)"], cwd=REPO,
@@ -1282,6 +1290,7 @@ class Output(Fx):
         self.assertEqual(clean["reason"], "uncommitted paths: a\nb.txt")
 
     def test_output_escaping_same_on_both(self):  # OR7, V2
+        require_both_pys(self)
         self.build()
         for n in ("uࡰ.txt", "e\U0001fae8.txt", "n b.txt", "t .txt", "c\u0085.txt", "back\\slash.txt"):
             self.put(n)
@@ -1317,6 +1326,7 @@ class Output(Fx):
                 self.chk()
 
     def test_subprocess_run_same_on_both(self):  # OR11
+        require_both_pys(self)
         self.build()
         self.put("x.txt")
         outs = []
@@ -1358,7 +1368,7 @@ class Registration(unittest.TestCase):
         self.assertEqual(out.count("\n"), out.count("PASS schema"))
 
     def test_run_all_unaffected_when_undeclared(self):  # DC6
-        out, code = run_main(["run_all"])
+        out, code = run_main(["run_all", "--base", "HEAD"])
         self.assertEqual(code, 0, out)
         self.assertNotIn("checkpoint", out)
 
