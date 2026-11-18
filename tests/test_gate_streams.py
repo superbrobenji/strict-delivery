@@ -123,12 +123,14 @@ class Basics(Fx):
         self.assertEqual((len(out.splitlines()), code), (1, 1))
 
     def test_branch_value_forms(self):  # AV6 (D-Q4 (b)); AV7, AV8
-        for bad in ("", "a..b", "a b", "a~b", "a@{b", "a.lock", "a/", "/a", "x\ny"):
+        for bad in ("", "a..b", "a b", "a~b", "a@{b", "a.lock", "a/", "/a", "x\ny", "-x", "@", "a//b", "a.", "a/.b", "a/b.lock/c", "a\\b", "a:b", "a^b", "a?b", "a*b", "a[b", "a\x7fb", "x" * 256):
             with self.subTest(bad=bad):
                 out, code = self.run_gate("--branch", bad)
                 self.assertTrue(out.startswith("FAIL streams.input:"), out)
                 self.assertEqual(code, 1)
         self.assertEqual(self.run_gate("--branch=feature/x")[0], "PASS streams.none\n")
+        self.assertEqual(self.run_gate("--branch", "x" * 255)[0], "PASS streams.none\n")
+        self.assertEqual(self.run_gate("--branch", "a@b")[0], "PASS streams.none\n")
         self.assertEqual(self.run_gate("--base", "nosuch")[0], "PASS streams.none\n")   # ignored
         self.assertIn("more than once", self.run_gate("--branch", "a", "--branch", "b")[0])
 
@@ -471,6 +473,483 @@ class Records(Fx):
         out = self.run_gate()[0]
         for p in ("src/x.py", PROGDIR + "/status.md", PS + "/a-plan/x"):
             self.assertIn("FAIL streams.owned.%s:" % p, out)
+
+
+def W(path, a=None, b=None):
+    d = {"path": path}
+    if a:
+        d["from"] = a
+    if b:
+        d["until"] = b
+    return d
+
+
+def bd_of(*ss):
+    """The breakdown that agrees with the streams ``ss`` (same owns, tasks by stream id)."""
+    tasks = {"a": ["a1.1", "a2.1"], "b": ["1a.1", "1b.1"], "r": ["R1.1"]}
+    out = []
+    for s in ss:
+        e = {"id": s["id"], "tasks": tasks[s["id"]]}
+        if s.get("residual"):
+            e["residual"] = True
+        else:
+            e["paths"] = list(s["owns"])
+        out.append(e)
+    return {"plan": "program-plan", "streams": out, "edges": []}
+
+
+class Windows(Fx):
+    """Window rows: a owns ``w.py`` until ``merged:a/a1``, b owns it from ``merged:a/a1`` (chained)."""
+
+    def layout(self, a_owns=None, b_owns=None, residual=False, **akw):
+        a = stream("a", ["a-owned.py", "tests/test_a.py"] + (a_owns if a_owns is not None else [W("w1.py", None, "merged:a/a1")]),
+                   merge_order=1, **akw)
+        b = stream("b", ["b-owned.py", "tests/test_b.py"] + (b_owns if b_owns is not None else [W("w1.py", "merged:a/a1")]),
+                   merge_order=2)
+        ss = [a, b]
+        if residual:
+            ss.append(stream("r", residual=True, period=("program-start", "program-close"), merge_order=3))
+        return row(*ss), bd_of(*ss), ("a", "b", "r") if residual else ("a", "b")
+
+    def merge_line(self, n, block, sid="a", ckpts=None, branch=None, h7=None):
+        """A pull request on main carrying ``block`` of stream ``sid``; returns ``(head, merge, line)``."""
+        h7 = h7 or git(self.root, "rev-parse", "--short=7", "HEAD")
+        tid = {"a1": "a1.1", "a2": "a2.1", "1a": "1a.1", "1b": "1b.1", "R1": "R1.1"}
+        lines = [ckpt(b, tid[b], h7) for b in (ckpts or [block])]
+        head, m = self.pr(branch or "pr%d" % n, sid, lines)
+        return head, m, mline(n, head, m, sid, block)
+
+    def prog(self, lines, residual=False, **kw):
+        streams, bd, names = self.layout(residual=residual, **kw)
+        self.program(merged=MERGED_HEAD + "".join(l + "\n" for l in lines), streams=streams, bd=bd, status=status_page(names))
+
+    def test_two_open_windows_fail_naming_both(self):  # MP4, OW15
+        streams, bd, names = self.layout(a_owns=[W("w1.py", None, "merged:a/a2")], b_owns=[W("w1.py", "merged:a/a1")])
+        _, _, line = self.merge_line(1, "a1")
+        self.program(merged=MERGED_HEAD + line + "\n", streams=streams, bd=bd, status=status_page(names))
+        self.branch(SA)
+        self.commit({"w1.py": "x\n"})
+        out, code = self.run_gate()
+        self.assertIn("FAIL streams.map.%s: " % NAME, out)
+        self.assertIn("owns: w1.py (stream a) overlaps w1.py (stream b)", out)
+        self.assertIn("FAIL streams.owned.w1.py: stream a and stream b are both open for it", out)
+        self.assertEqual(code, 1)
+
+    def test_window_gap_is_residuals(self):  # OW14, OW18
+        _, _, line = self.merge_line(1, "a1")
+        self.prog([line], residual=True, b_owns=[W("w1.py", "merged:b/1a")])
+        self.branch(SA)
+        self.commit({"w1.py": "x\n"})
+        self.assertIn("FAIL streams.owned.w1.py: owned by stream r", self.run_gate()[0])
+        self.branch(NAME + "/r/main")
+        self.commit({"w1.py": "y\n"})
+        out = self.run_gate()[0]
+        self.assertIn("PASS streams.owned\n", out)
+        self.commit({"b-owned.py": "y\n"})                     # a path in another stream's open window
+        self.assertIn("FAIL streams.owned.b-owned.py: owned by stream b", self.run_gate()[0])
+
+    def test_path_before_from_after_until(self):  # OW16, OW19 (own window passes)
+        _, _, line = self.merge_line(1, "a1")
+        self.prog([line], residual=True, b_owns=[W("w1.py", "merged:b/1a")])
+        self.branch(SB)
+        self.commit({"w1.py": "x\n"})
+        self.assertIn("FAIL streams.owned.w1.py: owned by stream r", self.run_gate()[0])       # after a's until, before b's from
+        self.branch(SA)
+        self.commit({"w1.py": "y\n"})
+        self.assertIn("FAIL streams.owned.w1.py: owned by stream r", self.run_gate()[0])       # a's own path after its until
+
+    def test_event_ancestry_per_commit(self):  # OW17, ME4, ME17, ME18
+        self.branch(SB)
+        git(self.root, "checkout", "-q", "main")
+        streams, bd, names = self.layout(a_owns=[W("w1.py", None, "merged:a/a1"), W("w2.py", None, "merged:a/a2")],
+                                         b_owns=[W("w1.py", "merged:a/a1"), W("w2.py", "merged:a/a2")])
+        _, m1, l1 = self.merge_line(1, "a1")
+        h7 = git(self.root, "rev-parse", "--short=7", "HEAD")
+        head2, m2 = self.pr("pr2", "a", [ckpt("a1", "a1.1", h7), ckpt("a2", "a2.1", h7)])
+        l2 = mline(2, head2, m2, "a", "a2")
+        self.program(merged=MERGED_HEAD + l1 + "\n" + l2 + "\n", streams=streams, bd=bd, status=status_page(names))
+        git(self.root, "checkout", "-q", SB)
+        c = {}
+        c[1] = self.commit({"w1.py": "1\n"})
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync1", m1)
+        c[2] = self.commit({"w1.py": "2\n"})
+        c[3] = self.commit({"w2.py": "3\n"})
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync2", m2)
+        c[4] = self.commit({"w2.py": "4\n"})
+        out, code = self.run_gate()
+        # the oracle: a commit fails for its path when the path's opening merge is not an ancestor of it
+        want = {"w1.py": [c[i] for i in c if not self.is_anc(m1, c[i]) and i in (1, 2)],
+                "w2.py": [c[i] for i in c if not self.is_anc(m2, c[i]) and i in (3, 4)]}
+        self.assertEqual((want["w1.py"], want["w2.py"]), ([c[1]], [c[3]]))
+        for path, bad in want.items():
+            line = [l for l in out.splitlines() if l.startswith("FAIL streams.owned.%s:" % path)]
+            self.assertEqual(len(line), 1, out)
+            self.assertIn("(%s)" % bad[0][:7], line[0])
+            for i in c:
+                if c[i] not in bad and path[1] == str(1 if i in (1, 2) else 2):
+                    self.assertNotIn(c[i][:7], line[0])
+        self.assertEqual(code, 1)
+        git(self.root, "checkout", "-q", "-b", "tip", c[4])
+        self.assertTrue(self.is_anc(m2, "HEAD"))                                                 # ME18: HEAD holds both
+
+    def is_anc(self, a, b):
+        p = subprocess.run(["git", "-C", self.root, "merge-base", "--is-ancestor", a, b])
+        return p.returncode == 0
+
+    def test_streams_ignore_colour_and_abbrev_config(self):  # EN1, EN2
+        _, _, line = self.merge_line(1, "a1")
+        self.prog([line])
+        self.branch(SA)
+        self.commit({"b-owned.py": "x\n"})
+        first = self.run_gate()
+        for k, v in (("color.ui", "never"), ("color.diff", "never"), ("core.abbrev", "12"), ("color.branch", "always"),
+                     ("diff.renames", "true"), ("log.showSignature", "true")):
+            git(self.root, "config", k, v)
+        self.assertEqual(self.run_gate(), first)
+        self.assertEqual(first[1], 1)
+        self.assertNotIn("\x1b", first[0])
+
+
+class Stacked(Fx):
+    """Stacked rows: ``a`` is stacked on ``b``; the parent branch ``SB`` holds ``b``'s work until ``merged:b`` holds."""
+
+    merge_line = Windows.merge_line
+
+    def stacked_program(self, lines=(), stacked=True):
+        a = stream("a", ["a-owned.py", "tests/test_a.py"], merge_order=2, **({"stacked_on": "b"} if stacked else {}))
+        b = stream("b", ["b-owned.py", "tests/test_b.py"], merge_order=1)
+        bd = bd_of(a, b)
+        bd["edges"] = [{"from": x, "to": y} for x in ("1a.1", "1b.1") for y in ("a1.1", "a2.1")]
+        self.program(merged=MERGED_HEAD + "".join(l + "\n" for l in lines), streams=row(a, b), bd=bd, status=status_page(("a", "b")))
+
+    def parent_and_child(self):
+        self.branch(SB)
+        self.commit({"b-owned.py": "b1\n"})
+        self.commit({"b-owned.py": "b2\n"})
+        self.branch(SA, SB)
+        self.commit({"a-owned.py": "a1\n"})
+
+    def b_merged_line(self):
+        git(self.root, "checkout", "-q", "main")
+        return self.merge_line(1, "1b", sid="b", ckpts=["1a", "1b"], branch="prb")
+
+    def test_stacked_before_and_after(self):  # BS4, BS5, OW22
+        self.parent_and_child()
+        _, m, line = self.b_merged_line()
+        self.stacked_program([line])
+        git(self.root, "checkout", "-q", SA)
+        out, code = self.run_gate()
+        self.assertIn("PASS streams.owned\n", out)                  # BS4: base is SB, b's commits in the parent are not judged
+        self.assertEqual(code, 0, out)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync", m)
+        out, code = self.run_gate()                                  # BS5: merged:b holds, base is main, b's commits are judged
+        self.assertIn("FAIL streams.owned.b-owned.py: owned by stream b", out)
+        self.assertEqual(code, 1)
+
+    def test_stacked_parent_branch_missing(self):  # BS6
+        self.parent_and_child()
+        self.stacked_program()
+        git(self.root, "checkout", "-q", SA)
+        git(self.root, "branch", "-D", SB)
+        out, code = self.run_gate()
+        self.assertTrue(out.startswith("FAIL streams.input:"), out)
+        self.assertEqual(code, 1)
+
+    def test_stacked_parent_merge_exempt(self):  # OW24
+        for stacked, want in ((True, "PASS streams.owned\n"), (False, "FAIL streams.owned.b-owned.py")):
+            with self.subTest(stacked=stacked):
+                self.branch(SB)
+                self.commit({"b-owned.py": "b1\n"})
+                self.stacked_program(stacked=stacked)
+                self.branch(SA)
+                self.commit({"a-owned.py": "a1\n"})
+                git(self.root, "merge", "-q", "--no-ff", "-m", "take parent", SB)
+                out, _ = self.run_gate()
+                self.assertIn(want, out)
+                git(self.root, "checkout", "-q", "main")
+                for b in (SA, SB, INT):
+                    git(self.root, "branch", "-D", b)
+
+
+class Carried(Windows):
+    """Carried sets (ME2, ME5-ME8, ME10): b's windows open at ``merged:b/1a``, ``merged:b/1b`` and ``merged:b``."""
+
+    def probe(self, ckpts, block, h7=None):
+        """Merge one PR of stream b, cut a branch from main, change each window path as b; the failing paths."""
+        layout = {"a_owns": [W("w1a.py", None, "merged:b/1a"), W("w1b.py", None, "merged:b/1b"), W("wall.py", None, "merged:b")],
+                  "b_owns": [W("w1a.py", "merged:b/1a"), W("w1b.py", "merged:b/1b"), W("wall.py", "merged:b")]}
+        streams, bd, names = self.layout(**layout)
+        _, _, line = self.merge_line(1, block, sid="b", ckpts=ckpts, h7=h7)
+        self.program(merged=MERGED_HEAD + line + "\n", streams=streams, bd=bd, status=status_page(names))
+        self.branch(SB)
+        self.commit({"w1a.py": "x\n", "w1b.py": "x\n", "wall.py": "x\n"})
+        out = self.run_gate()[0]
+        self.assertIn("PASS streams.map", out)
+        return sorted(l.split(":")[0][len("FAIL streams.owned."):] for l in out.splitlines() if l.startswith("FAIL streams.owned."))
+
+    def test_one_pr_carries_both_sub_blocks(self):  # ME2, ME5
+        self.assertEqual(self.probe(["1a", "1b"], "1b"), [])
+
+    def test_one_task_missing_checkpoint(self):  # ME7
+        self.assertEqual(self.probe(["1b"], "1b"), ["w1a.py", "wall.py"])
+
+    def test_block_named_is_carried(self):  # ME8
+        self.assertEqual(self.probe(["1a"], "1b"), [])
+
+    def test_checkpoint_head_not_ancestor_not_carried(self):  # ME6
+        git(self.root, "checkout", "-q", "-b", "side", "main")
+        side = self.commit({"side.txt": "s\n"})
+        git(self.root, "checkout", "-q", "main")
+        self.assertEqual(self.probe(["1a", "1b"], "1b", h7=side[:7]), ["w1a.py", "wall.py"])   # 1b is named (ME8), 1a is not carried
+
+    def test_events_program_start_only(self):  # ME1
+        streams, bd, names = self.layout(a_owns=[W("w1.py", None, "merged:b/1a")], b_owns=[W("w1.py", "merged:b/1a")])
+        self.program(streams=streams, bd=bd, status=status_page(names))
+        self.branch(SB)
+        self.commit({"w1.py": "x\n"})
+        self.assertIn("FAIL streams.owned.w1.py: owned by stream a", self.run_gate()[0])
+
+
+class Rows(Fx):
+    def stream(self, files, name=SA):
+        self.branch(name)
+        return self.commit(files)
+
+    def test_branch_defaults_given_detached_differs(self):  # AV1, AV4, AV5, BR13, BR14
+        self.program()
+        self.stream({"b-owned.py": "x\n"})
+        self.assertIn("FAIL streams.owned.b-owned.py", self.run_gate()[0])                  # AV1: current branch
+        git(self.root, "tag", SA + "-tag")
+        git(self.root, "checkout", "-q", "--detach")
+        out, code = self.run_gate("--branch", SA)                                            # AV4/BR13
+        self.assertIn("FAIL streams.owned.b-owned.py", out)
+        self.assertEqual(code, 1)
+        git(self.root, "checkout", "-q", "main")
+        self.assertEqual(self.run_gate("--branch", SA)[0].count("FAIL streams.owned"), 0)    # AV5: HEAD (main) is judged
+        git(self.root, "tag", "-f", SA, "HEAD")                                              # BR14: a tag of the branch's name
+        git(self.root, "checkout", "-q", SA + "-tag")
+        self.assertIn("FAIL streams.owned.b-owned.py", self.run_gate("--branch", SA)[0])
+
+    def test_branch_kinds(self):  # BR1, BR2
+        self.program()
+        for name, kind in ((NAME + "/a/g1", "group"), (SA, "stream"), (INT, "integration"), (REC, "records")):
+            git(self.root, "checkout", "-q", "-B", name, "main" if name != INT else INT)
+            out = self.run_gate()[0]
+            self.assertIn("PASS streams.owned\n", out, name)
+
+    def test_main_json_and_exit_codes(self):  # AV12, AV16, OU5, OU6
+        from gates import gate_streams
+        self.program()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(gate_streams.main(["--root", self.root]), 0)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(gate_streams.main(["--root", self.root, "--bogus"]), 1)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            entry.main(["check", "streams", "--json", "--root", self.root])
+        out = buf.getvalue()
+        self.assertEqual(out.count("\n"), 1)
+        self.assertTrue(out.startswith('{"gate": "streams", "ok": true, "lines": ['), out)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            entry.main(["check", "streams", "--root", self.root, "--help"])
+        self.assertTrue(out.getvalue().startswith("FAIL streams.input: help requested"), out.getvalue())
+
+    def test_no_forbidden_names_in_new_code(self):  # AV15, V3
+        for rel in ("gates/gate_streams.py", "gates/lib/gitinfo.py"):
+            with open(os.path.join(REPO, *rel.split("/")), encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertNotIn("ExceptionGroup", text, rel)
+            self.assertNotIn("except*", text, rel)
+
+    def test_status_edit_on_stream_branch_is_owned_fail(self):  # ST4
+        self.program()
+        self.stream({PROGDIR + "/status.md": "x\n"})
+        out = self.run_gate()[0]
+        self.assertIn("FAIL streams.owned.%s/status.md:" % PROGDIR, out)
+        self.assertIn("PASS streams.status.%s" % NAME, out)
+
+    def test_request_valid(self):  # RQ1
+        from tests.test_programs_lib import RID, req_row
+        self.program(requests={RID: req_row()})
+        self.assertIn("PASS streams.request\n", self.run_gate()[0])
+
+    def test_integration_rows(self):  # IN3, IN13, IN17, IN18, IG7, IG9
+        self.program()
+        git(self.root, "checkout", "-q", INT)
+        self.commit({PS + "/a-plan/x.md": "x\n"})
+        self.assertIn("FAIL streams.owned.%s/a-plan/x.md" % PS, self.run_gate()[0])                  # IN3
+        git(self.root, "reset", "-q", "--hard", "HEAD~1")
+        self.commit({"tests/test_b.py": "x\n"})
+        self.assertIn("FAIL streams.owned.tests/test_b.py", self.run_gate()[0])                      # IN18
+        git(self.root, "reset", "-q", "--hard", "HEAD~1")
+        os.remove(os.path.join(self.root, "a-owned.py"))
+        commit_all(self.root, "delete")
+        self.assertIn("FAIL streams.owned.a-owned.py", self.run_gate()[0])                           # IN17
+        git(self.root, "reset", "-q", "--hard", "HEAD~1")
+        self.assertNotIn("streams.integration", self.run_gate()[0])                                  # IG9
+        self.branch(SA, INT)
+        self.commit({"a-owned.py": "ff\n"})
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--ff-only", SA)                                              # IN13, IG7
+        out = self.run_gate()[0]
+        self.assertIn("FAIL streams.owned.a-owned.py: only program records may change", out)
+
+    def test_no_ff_merge_second_parent_not_judged_as_program(self):  # IN6 decision (first-parent range)
+        self.program()
+        self.branch(SA, "main")
+        self.commit({"a-owned.py": "1\n"})
+        self.commit({"b-owned.py": "2\n"})                   # a second-parent commit that is another stream's
+        git(self.root, "checkout", "-q", INT)
+        git(self.root, "merge", "-q", "--no-ff", "-m", "combined", SA)
+        out = self.run_gate()[0]
+        self.assertIn("FAIL streams.owned.b-owned.py: a merge of stream a may change only paths it owns", out)
+        self.assertNotIn("only program records", out)
+
+    def test_records_rows(self):  # RC8, RC9, RC10
+        self.program()
+        self.branch(REC)
+        self.commit({PG + "/program-plan.md": "p2\n"})
+        self.put("src/t.py", "x\n")
+        git(self.root, "add", "src/t.py")
+        self.assertIn("FAIL streams.owned.src/t.py:", self.run_gate()[0])                            # RC10
+        git(self.root, "reset", "-q", "--hard")
+        git(self.root, "checkout", "-q", "main")
+        self.commit({"src/main_moved.py": "x\n"})
+        git(self.root, "checkout", "-q", REC)
+        self.assertIn("PASS streams.owned\n", self.run_gate()[0])                                    # RC9: main's move is not judged
+        git(self.root, "merge", "-q", "--no-ff", "-m", "sync", "main")
+        self.assertIn("PASS streams.owned\n", self.run_gate()[0])                                    # D-Q26
+
+    def test_shared_delete_and_own_row(self):  # SH9, SH10
+        sh = [{"path": "reg.md", "rule": "append-rows"}, {"path": "own.md", "rule": "own-row"}]
+        self.commit({"reg.md": "| h |\n| r1 |\n", "own.md": "| a | 1 |\n| b | 2 |\n"})
+        self.program(streams=streams_row(shared=sh))
+        self.branch(SA)
+        os.remove(os.path.join(self.root, "reg.md"))
+        commit_all(self.root, "delete")
+        self.assertIn("FAIL streams.shared.reg.md:", self.run_gate()[0])
+        self.commit({"reg.md": "| h |\n| r1 |\n", "own.md": "| a | 1 |\n| b | 2 |\n| a | 5 |\n"})
+        self.assertNotIn("streams.shared.own.md", self.run_gate()[0])
+
+    def test_plan_hunk_rows(self):  # PF4-PF12
+        self.program()
+        base = PLAN_A
+        for edit, ok in ((lambda t: t.replace("body two", "body two\n\nmore two"), True),                 # nested section, innermost
+                         (lambda t: t.replace("# plan a\n", "# plan a2\n"), False),                         # before the first heading
+                         (lambda t: t.replace("### Task b9.9: foreign", "### Task a1.1: foreign"), False),   # the old header line is b9.9's
+                         (lambda t: t + "\n### Task a1.2: new\n\nx\n", False),                              # a section of no task of a
+                         (lambda t: t.replace("body one\n\n", ""), True),                                   # a deletion inside own section
+                         (lambda t: t.replace("foreign body\n", ""), False)):
+            self.stream({PG + "/a-plan.md": edit(base)}, name=SA)
+            out = self.run_gate()[0]
+            self.assertIn("PASS streams.owned\n" if ok else "FAIL streams.owned.%s/a-plan.md:" % PG, out, edit(base))
+            git(self.root, "checkout", "-q", "main")
+            git(self.root, "branch", "-D", SA)
+        self.stream({"a-owned.py": "x\n"})
+        os.remove(os.path.join(self.root, *(PG + "/a-plan.md").split("/")))
+        commit_all(self.root, "rm plan")
+        self.assertIn("plan file is created or deleted", self.run_gate()[0])
+
+    def test_unborn_head(self):  # BS17 (D-Q25 (b) clean tree, (c) a tree with changes)
+        self.program()
+        git(self.root, "checkout", "-q", "--orphan", SA)
+        git(self.root, "rm", "-rfq", "--cached", ".")
+        with open(os.path.join(self.root, ".git", "info", "exclude"), "a", encoding="utf-8") as fh:
+            fh.write("*\n")
+        out, code = self.run_gate()
+        self.assertIn("PASS streams.owned\n", out)
+        self.assertEqual(code, 0)
+        self.put("b-owned.py", "x\n")
+        git(self.root, "add", "-f", "b-owned.py")
+        out, code = self.run_gate()
+        self.assertIn("FAIL streams.owned.<unborn>: the branch has no commit yet and the tree holds b-owned.py", out)
+        self.assertEqual(code, 1)
+
+    def test_leading_dash_branch_equals_form(self):  # AV6 (D-Q4 (b)): `--branch=-x` reaches the gate's own check
+        out, code = self.run_gate("--branch=-x")
+        self.assertEqual((out, code), ("FAIL streams.input: --branch: '-x' is not a branch name\n", 1))
+
+    PLAN2 = ("# p\n\n### Task a1.1: one\n\nbody one\n\n#### Task b8.8: nested foreign\n\nnested body\n\n##### sub heading\n\nsub body\n\n"
+             "### Notes\n\nnotes text\n\n### Task a2.1: two\n\nbody two\n\n## Appendix\n\ntail text\n")
+
+    def test_plan_sections_nested_and_same_level(self):  # PF rows: innermost section decides; a section ends at a heading of its level
+        self.commit({PG + "/a-plan.md": self.PLAN2})
+        self.program()
+        for old, new, ok in (("body one", "body one edited", True), ("nested body", "nested edited", False), ("sub body", "sub edited", False),
+                             ("notes text", "notes edited", False), ("body two", "body two edited", True), ("tail text", "tail edited", False)):
+            self.stream({PG + "/a-plan.md": self.PLAN2.replace(old, new)})
+            out = self.run_gate()[0]
+            self.assertIn("PASS streams.owned\n" if ok else "FAIL streams.owned.%s/a-plan.md:" % PG, out, old)
+            git(self.root, "checkout", "-q", "main")
+            git(self.root, "branch", "-D", SA)
+
+    def test_plan_file_mode_change_has_no_hunks(self):  # PF: a change with no hunk is refused
+        self.program()
+        self.branch(SA)
+        os.chmod(os.path.join(self.root, *(PG + "/a-plan.md").split("/")), 0o755)
+        commit_all(self.root, "mode")
+        self.assertIn("plan file hunks cannot be read", self.run_gate()[0])
+
+    def test_request_base_of_integration_is_head(self):  # RQ3 / D-Q12: on integration the base is HEAD, not the branch's tip
+        from tests.test_programs_lib import RID, req_row
+        self.program(requests={RID: req_row()})
+        git(self.root, "checkout", "-q", "-b", "work", INT)
+        self.commit({PROGDIR + "/requests/%s.yml" % RID: yamlsub.emit(req_row(need="other"))})
+        out = self.run_gate("--branch", INT)[0]
+        self.assertIn("PASS streams.request\n", out)
+
+    def test_odd_paths_and_many_failures(self):  # OU4, OU9, OU1
+        self.program()
+        files = {"sp ace.txt": "x\n", "uniࡰ.txt": "x\n", "-dash.txt": "x\n", "q'uote.txt": "x\n"}
+        files.update(("many/f%03d.txt" % i, "x\n") for i in range(60))
+        self.stream(files)
+        out, code = self.run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(sum(l.startswith("FAIL streams.owned.") for l in out.splitlines()), 64)
+        self.assertIn("FAIL streams.owned.sp ace.txt:", out)
+        ids = self.ids(out)
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_deterministic_across_hash_seeds(self):  # OU7, V5
+        self.program()
+        self.stream({"b-owned.py": "x\n", "new.txt": "y\n"})
+        outs = set()
+        for seed in ("0", "1", "4242"):
+            env = dict(os.environ, PYTHONHASHSEED=seed)
+            p = subprocess.run([sys.executable, "-m", "gates", "check", "streams", "--root", self.root], cwd=REPO, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            outs.add((p.stdout, p.returncode))
+        self.assertEqual(len(outs), 1)
+
+    def test_subprocess_matches_in_process_for_every_line(self):  # streams.input/none/branch/map/status/request/owned/integration/shared
+        sh = [{"path": "reg.md", "rule": "append-rows"}]
+        bad = {"schema": "request/1", "id": "R-20261101-abcd", "from_stream": "a", "to_stream": "a", "files": ["a-owned.py"],
+               "interface": "docs/x.md#y", "need": "n", "status": "open", "raised_at": {"sha": "a" * 7, "by": "a"}}
+        seen = set()
+
+        def both(*argv):
+            inproc = self.run_gate(*argv)
+            self.assertEqual(self.subprocess_gate(*argv), inproc)
+            seen.update(self.ids(inproc[0]))
+            return inproc[0]
+
+        self.assertEqual(both(), "PASS streams.none\n")
+        self.assertIn("FAIL streams.input:", both("--branch", "a b"))
+        self.assertIn("FAIL streams.branch:", both("--branch", NAME + "/a"))
+        self.commit({"reg.md": "| h |\n| r1 |\n"})
+        self.program(streams=streams_row(shared=sh), status=status_page(("a",)), requests={"R-20261101-abcd": bad})
+        out = both()
+        self.assertIn("FAIL streams.status.%s" % NAME, out)
+        self.assertIn("FAIL streams.request.from.R-20261101-abcd", out)
+        self.branch(SA)
+        self.commit({"b-owned.py": "x\n", "reg.md": "| h |\nnote\n"})
+        git(self.root, "merge", "-q", "--no-ff", "-m", "bad", INT)
+        out = both()
+        for want in ("FAIL streams.owned.b-owned.py", "FAIL streams.integration.", "FAIL streams.shared.reg.md", "streams.map.%s" % NAME):
+            self.assertIn(want, out)
+        self.assertEqual(len(seen & {"streams.input", "streams.none", "streams.branch"}), 3)
 
 
 if __name__ == "__main__":
