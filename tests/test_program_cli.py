@@ -460,6 +460,47 @@ class After(Fx):
         self.assertEqual(self.cli("merged", "--line", good, "--line", good)[0], 1)
         self.assertEqual(self.clean(), "")
 
+    def test_streams_file_that_streams_1_refuses_is_a_named_line(self):  # F-2 (final review of PR-P2); CR6, CR8, CR10, CL5, PE19, PG5
+        rid = self.new_request()
+        self.commit_iw()
+        main = git(self.work, "rev-parse", "main")
+        good = ("MERGED pr=7 head=%s merge=%s merged_by=u at=2026-11-01T10:00:00Z final=no stream=a block=A1 approval=host"
+                % ("1" * 40, "2" * 40))
+        calls = (("status", "a", "--used", "3"),
+                 ("request new", "--from", "a", "--to", "b", "--file", "b/x.py", "--interface", "spec.md:1", "--need", "x",
+                  "--by", "a"),
+                 ("request set", rid, "--status", "accepted", "--by", "b"),
+                 ("sync-log", "--main", main, "--merged-main", "no", "--tests", "PASS"),
+                 ("merged", "--line", good))
+        path = os.path.join(self.folder(), "streams.yml")
+        row = streams_row()
+        shapes = (("no streams key", {k: v for k, v in row.items() if k != "streams"}),
+                  ("streams is an int", dict(row, streams=5)),
+                  ("streams is a mapping", dict(row, streams={"a": 1})),
+                  ("an item without id", dict(row, streams=[{k: v for k, v in row["streams"][0].items() if k != "id"}])),
+                  ("an item that is a string", dict(row, streams=["a"])),
+                  ("id is an int", dict(row, streams=[dict(row["streams"][0], id=5)])),
+                  ("worktrees is an int", dict(row, worktrees=5)))
+        for name, bad in shapes:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(yamlsub.emit(bad))
+            commit_all(self.iw, name)
+            before = {n: self.read(n) for n in ("status.md", "sync-log.md", "merged.md")}
+            for call in calls:
+                with self.subTest(shape=name, call=call[0]):
+                    code, out, err = self.cli(call[0], *call[1:])
+                    self.assertEqual((code, out), (1, ""), err)
+                    self.assertNotIn("Traceback", err)
+                    self.assertIn("program %s: streams.yml: streams/1: " % call[0], err)
+                    self.assertEqual({n: self.read(n) for n in before}, before)
+                    self.assertEqual(self.clean(), "")
+        p = subprocess.run([sys.executable, "-m", "gates", "program", "merged", NAME, "--line", good, "--root", self.iw],
+                           cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+        self.assertEqual((p.returncode, p.stdout), (1, b""))
+        self.assertNotIn(b"Traceback", p.stderr)
+        self.assertIn(b"streams.yml: streams/1: ", p.stderr)
+
     def test_checks_before_io(self):  # PG7: an argv error never reaches git
         with mock.patch("gates.lib.gitinfo._run", side_effect=AssertionError("git ran")):
             self.assertEqual(self.cli("status", "a", "--used", "x")[0], 1)

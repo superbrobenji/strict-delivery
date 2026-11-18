@@ -42,7 +42,8 @@ class CreateC(Fx):
                                                                               estimate=10 ** 599)))
         code, out, err = self.create()
         self.assertEqual((code, err), (0, ""))
-        rows = programs.status_rows(open(os.path.join(self.folder(), "status.md"), encoding="utf-8").read())
+        with open(os.path.join(self.folder(), "status.md"), encoding="utf-8") as fh:
+            rows = programs.status_rows(fh.read())
         self.assertEqual([r["estimate"] for r in rows], ["0", "1" + "0" * 599])
 
     def test_create_passes_plans_to_breakdown_errors(self):  # CR10, D-Q2: a stream plan outside paths.plans is refused

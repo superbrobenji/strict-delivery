@@ -620,6 +620,18 @@ def _ownership_errors(row: dict, cfg: dict, held: Optional[frozenset], known: se
                     errs.append("shared: '%s' duplicates '%s'" % (it["path"], sp))
             shared_keys.append((k, it["path"]))
     recs = _records(row, cfg)
+    # F-1 (final review of PR-P2): the program folder, the global record directories, the program plan's file and
+    # its workspace are "owned by program commits on <program>/integration and by no stream" (programs design §12),
+    # and "a change under [them] fails" (plan, `streams.owned`): a shared entry equal to, under or covering one
+    # would let a stream branch change a record, so it is refused; the same for a stream's implicit workspace.
+    for sk, sp in shared_keys:
+        if any(_entries_overlap(sk, r) for r in recs):
+            errs.append("shared: %s: overlaps the program records (program folder, decisions, findings, the "
+                        "program plan)" % sp)
+        for st in _stream_list(row):
+            slug = _slug_of(st.get("plan"), p["plans"])
+            if slug is not None and _entries_overlap(sk, _ends("%s/%s/" % (p["plan_state"], slug))):
+                errs.append("shared: %s: overlaps the plan workspace of stream %s" % (sp, st["id"]))
     for st in _stream_list(row):
         sid = st["id"]
         per = st.get("period")

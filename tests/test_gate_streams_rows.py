@@ -210,6 +210,21 @@ class RowsF(base.Fx):
         self.assertIn("FAIL streams.owned.%s/a-plan.md: plan hunk at line" % PG, self.run_gate()[0])
 
     # ---- shared files
+    def test_shared_entry_over_program_records_fails_closed(self):  # F-1 (final review of PR-P2), the reviewer's probe
+        for path, change in ((".strict-delivery/state/decisions/", ".strict-delivery/state/decisions/notes.md"),
+                             (PROGDIR + "/status.md", PROGDIR + "/status.md")):
+            for rule in ("append-rows", "own-row"):
+                with self.subTest(path=path, rule=rule):
+                    self.program(streams=streams_row(shared=[{"path": path, "rule": rule}]))
+                    self.branch(SA)
+                    self.commit({change: "| x | 1 |\n"})
+                    out, code = self.run_gate()
+                    self.assertEqual(code, 1, out)
+                    self.assertIn("FAIL streams.map.%s: shared: %s: overlaps the program records" % (NAME, path), out)
+                    git(self.root, "checkout", "-q", "main")
+                    git(self.root, "branch", "-D", SA)
+                    git(self.root, "branch", "-D", INT)
+
     def test_shared_row_grammar(self):  # SH11, SH12, SH19, OW4, TF5
         self.shared_program(extra={"tests/test_x.py": "| t |\n"})
         self.branch(SA)

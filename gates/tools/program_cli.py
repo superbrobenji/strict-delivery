@@ -157,7 +157,12 @@ def _pushed(program: str) -> None:
 
 
 def _load(root: str, cfg: dict, program: str) -> "programs.Program":
-    return programs.load_program(root, cfg, program, None)
+    prog = programs.load_program(root, cfg, program, None)
+    # F-2 (final review of PR-P2): every subcommand reads ``streams.yml`` by key; a file that ``streams/1`` refuses
+    # (no ``streams``, a non-list, an item without ``id``) is refused here with a named line, never a traceback
+    # (the P2.2 table rows CR6, CR8, CR10, CL5, PE19, PG5).
+    _fail(["streams/1: " + e for e in schema.validate(schema.schemas()["streams"], prog.streams, cfg)], "streams.yml")
+    return prog
 
 
 def _rel(cfg: dict, program: str, name: str) -> str:

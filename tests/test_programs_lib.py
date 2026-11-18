@@ -606,6 +606,27 @@ class Streams(unittest.TestCase):
         del r["shared"]
         self.assertEqual(streams_errors(r, NAME, CFG), [])
 
+    def test_shared_entry_over_records_or_plan_workspaces(self):  # F-1 (final review of PR-P2), design §12
+        d, f = ".strict-delivery/state/decisions", ".strict-delivery/state/findings"
+        prog = ".strict-delivery/state/programs/%s" % NAME
+        records = (prog + "/status.md", prog + "/", prog, d + "/x.md", d + "/", f + "/f.yml", PROGRAM_PLAN,
+                   PS + "/program-plan/ledger.md", PS + "/program-plan/", ".strict-delivery/state/", ".STRICT-DELIVERY/state/Decisions/",
+                   PS + "/", "docs/")      # "docs/" covers the program plan's file
+        workspaces = (PS + "/a-plan/", PS + "/a-plan/ledger.md", PS + "/b-plan/x", PS + "/B-PLAN/")
+        for rule in ("append-rows", "own-row"):
+            for path in records:
+                r = two(["a.py"], ["zz.py"]); r["shared"] = [{"path": path, "rule": rule}]
+                self.assertTrue(any("shared: %s: overlaps the program records" % path in e for e in streams_errors(r, NAME, CFG)), (path, rule))
+            for path in workspaces:
+                r = two(["a.py"], ["zz.py"]); r["shared"] = [{"path": path, "rule": rule}]
+                self.assertTrue(any("shared: %s: overlaps the plan workspace of stream" % path in e for e in streams_errors(r, NAME, CFG)), (path, rule))
+        for path in ("docs/x.md", "docs/other/", "gates.py", PS + "/a-plan.md", PS + "/other-plan/x", d + "-other/x", prog + "-other/x",
+                     ".strict-delivery/state-other/"):
+            r = two(["a.py"], ["zz.py"]); r["shared"] = [{"path": path, "rule": "append-rows"}]
+            self.assertEqual(streams_errors(r, NAME, CFG), [], path)
+        r = two(["a.py"], ["zz.py"]); r["shared"] = [{"path": d + "/x.md", "rule": "own-row"}]   # reached with `held` too
+        self.assertTrue(any("overlaps the program records" in e for e in streams_errors(r, NAME, CFG, S0)))
+
     def test_wrong_typed_fields_never_raise(self):
         r = S()
         r["streams"][0].update({"depends_on": "x", "owns": 5, "merge_order": True, "plan": None, "residual": "yes"})
@@ -936,6 +957,21 @@ class Residual(unittest.TestCase):
         self.assertTrue(residual_reachable(streams, b, PS, "f.py"))
         # no residual stream
         self.assertFalse(residual_reachable(S(), bd({"a": ["a1.1"], "b": ["b1.1"]}), PS, "x.py"))
+
+    def test_residual_reachable_fixpoint_second_pass(self):  # F-5 (final review of PR-P2), plan: "until nothing changes"
+        a, ps, pc = "merged:a", PS_, PC
+        for order in ("ab", "ba"):    # the twostep row with the entries in either file order: b's window opens only
+            ents = {"a": [W("twostep.py", ps, a)], "b": [W("twostep.py", a, "merged:b")]}   # once a's loop pass closed a's
+            sts = {"a": stream("a", ents["a"], merge_order=1), "b": stream("b", ents["b"], merge_order=2)}
+            streams = row(*[sts[k] for k in order], stream("y", ["zz-y.py"], merge_order=3),
+                          stream("residual", residual=True, period=(ps, pc), merge_order=4))
+            b = bd({"a": ["a1.1"], "b": ["b1.1"], "y": ["y1.1"], "residual": ["r1.1"]})
+            self.assertTrue(residual_reachable(streams, b, PS, "twostep.py"), order)
+            # the contradiction: b's window ends at program-close, which never holds, so it stays open in both orders
+            sts["b"] = stream("b", [W("twostep.py", a, pc)], merge_order=2)
+            streams = row(*[sts[k] for k in order], stream("y", ["zz-y.py"], merge_order=3),
+                          stream("residual", residual=True, period=(ps, pc), merge_order=4))
+            self.assertFalse(residual_reachable(streams, b, PS, "twostep.py"), order)
 
     def test_record_residual_reachable(self):
         for p, want in [("gates/__main__.py", True), ("CLAUDE.md", True), (".claude-plugin/plugin.json", True),
