@@ -528,7 +528,7 @@ def _sync_log(ns) -> int:
 def _merged(ns) -> int:
     line = _req("--line", ns.line)
     given_root = _root_arg(ns.root)
-    parsed = checkpoints.merged_lines(line)
+    parsed = checkpoints.merged_lines(_LEDGER_FIRST + "\n" + line)   # merged_lines skips the first line of a file
     if len(parsed) != 1 or parsed[0]["stream"] is None or parsed[0]["block"] is None:
         raise GateError("--line: not one MERGED line with stream and block")
     ln = parsed[0]
