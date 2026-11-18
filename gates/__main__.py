@@ -54,6 +54,11 @@ def _findings(args: List[str]) -> int:
     return findings_cli.main(args)
 
 
+def _program(args: List[str]) -> int:
+    from gates.tools import program_cli
+    return program_cli.main(args)
+
+
 def _loopstats(args: List[str]) -> int:
     from gates import loopstats
     return loopstats.main(args)
@@ -117,7 +122,7 @@ def _hook(args: List[str]) -> int:
 
 COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "claims": _claims, "decisions": _decisions,
                                                    "findings": _findings, "githook": _githook, "githooks": _githooks, "hook": _hook,
-                                                   "index": _index, "loopstats": _loopstats, "run_all": _run_all}
+                                                   "index": _index, "loopstats": _loopstats, "program": _program, "run_all": _run_all}
 
 
 def main(argv: List[str]) -> int:

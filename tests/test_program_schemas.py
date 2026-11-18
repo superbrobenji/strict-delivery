@@ -416,8 +416,8 @@ class ProgramFiles(GitIsolatedTestCase):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out = p.stdout.decode("utf-8")
         self.assertEqual(p.returncode, 0, out + p.stderr.decode("utf-8"))
-        for kind in ("streams", "request", "status", "sync-log", "merged-log"):
-            self.assertNotIn("schema." + kind, out)
+        for kind in ("streams", "request", "status", "sync-log", "merged-log", "breakdown"):
+            self.assertIn("PASS schema." + kind, out)  # declared and unchecked: no program folder, no breakdown.yml
         self.assertNotIn("FAIL", out)
 
 
@@ -700,14 +700,14 @@ class KindsAndVersions(unittest.TestCase):
     def test_known_kinds_hold_the_program_kinds(self):  # KK1
         self.assertIn("merged-log", KNOWN_KINDS)
         self.assertEqual(KNOWN_KINDS.index("merged-log"), KNOWN_KINDS.index("sync-log") + 1)  # D-A21
-        self.assertEqual(len(KNOWN_KINDS), 21)
-        self.assertEqual(len(set(KNOWN_KINDS)), 21)
-        self.assertNotIn("breakdown", KNOWN_KINDS)  # Task P2.2's (D-Q20 of its table)
+        self.assertEqual(len(KNOWN_KINDS), 22)
+        self.assertEqual(len(set(KNOWN_KINDS)), 22)
+        self.assertEqual(KNOWN_KINDS.index("breakdown"), KNOWN_KINDS.index("merged-log") + 1)  # Task P2.2, D-Q20
 
     def test_schemas_dir_loads_and_stems_known(self):  # KK2
         loaded, problems = schema.scan_dir()
         self.assertEqual(problems, [])
-        self.assertEqual(len(loaded), 15)
+        self.assertEqual(len(loaded), 16)
         for kind in ("streams", "request", "status", "sync-log", "merged-log"):
             self.assertIn(kind, loaded)
             self.assertIn(kind, KNOWN_KINDS)
@@ -718,10 +718,10 @@ class KindsAndVersions(unittest.TestCase):
         for kind, row in (("streams", streams_row()), ("request", request_row())):
             self.assertEqual(migrations.migrate(kind, copy.deepcopy(row)), row)
 
-    def test_no_producer_declares_the_program_kinds(self):  # KK4: check schema is unchanged by this task
+    def test_producers_declare_the_program_kinds(self):  # KK4 as changed by Task P2.2
         declared = schema.produced_kinds()
-        for kind in ("streams", "request", "status", "sync-log", "merged-log"):
-            self.assertNotIn(kind, declared)
+        for kind in ("streams", "request", "status", "sync-log", "merged-log", "breakdown"):
+            self.assertIn(kind, declared)  # P2.2: gates.tools.program_cli declares them (RG1)
 
     def test_minimal_config_loads_for_these_tests(self):
         self.assertEqual(minimal_config()["schema"], "config/2")
