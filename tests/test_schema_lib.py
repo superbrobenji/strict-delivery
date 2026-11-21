@@ -971,6 +971,70 @@ class NestedGlobLoad(Dirs):
             p, m = self.bad(dict(BASE, files=[{"dir": "d", "glob": "*/handoff.md", "exclude": ex}]))
             self.assertEqual(m, "%s: files.0.exclude: must be a list of strings" % p, ex)
 
+    # ---- Task 6E.1-x, owner answer 2026-11-22 (a): rows X5, X7, X8, X9, X15, X16, X18 (load side)
+    def ex(self, entry, glob="*/*/*"):
+        files = [{"dir": "d", "glob": glob, "exclude": entry}]
+        return dict(BASE, files=files)
+
+    def ex_refused(self, entry, text, glob="*/*/*"):
+        p, m = self.bad(self.ex(entry, glob))
+        self.assertEqual(m, "%s: files.0.exclude: %s" % (p, text), entry)
+
+    def test_exclude_path_entry_segment_count_must_match_glob(self):  # X5
+        for entry, glob in (("p-b/*", "*/mutations/*"), ("*/*", "*/*/*"), ("a/b/c/d", "*/*/*"), ("a/b", "*"),
+                            ("a/b/c", "*/*")):
+            with self.subTest(entry=entry, glob=glob):
+                self.ex_refused([entry], "exclude entry '%s': must have as many segments as the glob" % entry, glob)
+        for entry, glob in (("a/b", "*/*"), ("a/b/c", "*/*/*"), ("*/*", "*/handoff.md")):
+            with self.subTest(entry=entry, glob=glob):
+                self.assertEqual(self.sch(files=[{"dir": "d", "glob": glob, "exclude": [entry]}]).files[0]["exclude"],
+                                 [entry])
+
+    def test_exclude_malformed_path_entries_refused(self):  # X7
+        for e in ("/a/b", "a/b/", "a//b", "//", "/"):
+            with self.subTest(entry=e):
+                self.ex_refused([e], "exclude entry '%s': %s" % (e, EMPTY_SEG), "*/*/*" if e.count("/") > 1 else "*/*")
+        for e in ("./a/b", "a/../b", "a/b/.", "a/./b"):
+            with self.subTest(entry=e):
+                self.ex_refused([e], "exclude entry '%s': %s" % (e, DOT_SEG))
+        self.ex_refused(["a/**/b"], "exclude entry 'a/**/b': '**' is not supported")
+        self.ex_refused(["a/[/]b"], "exclude entry 'a/[/]b': " + SPAN)
+        head = "must be a supported glob: the bracket expression [%s] holds "
+        self.ex_refused(["a/[z-a]"], "exclude entry 'a/[z-a]': " + (head % "z-a") + "the reversed range z-a", "*/*")
+        self.ex_refused(["a/[é]"], "exclude entry 'a/[é]': " + (head % "é") + NOT_ALLOWED % "U+00E9", "*/*")
+        self.ex_refused(["ok/ok", "a//b"], "exclude entry 'a//b': " + EMPTY_SEG, "*/*")  # the second entry, same key
+
+    def test_exclude_unclosed_bracket_is_a_literal_as_in_the_glob(self):  # X7 (bracket_problem accepts a lone "[")
+        for e in ("a/[b", "a/[]b"):
+            with self.subTest(entry=e):
+                self.assertEqual(self.sch(files=[{"dir": "d", "glob": "*/*", "exclude": [e]}]).files[0]["exclude"], [e])
+
+    def test_exclude_type_refused(self):  # X8
+        for ex in ("a", [1], [None], [True], ["a", 2], None, {"a": 1}, 5):
+            with self.subTest(exclude=ex):
+                self.ex_refused(ex, "must be a list of strings", "*/*")
+
+    def test_exclude_empty_entry_refused(self):  # X9
+        for ex in ([""], ["a", ""], ["a/b", ""]):
+            with self.subTest(exclude=ex):
+                self.ex_refused(ex, "an exclude entry must not be empty", "*/*")
+
+    def test_exclude_plain_names_are_not_validated_as_patterns(self):  # X1, X2 (load side, D-X2)
+        for e in ("index.yml", "*.yml", "[z-a]", "a b", "**", "é", "a\\b"):
+            with self.subTest(entry=e):
+                self.assertEqual(self.sch(files=[{"dir": "d", "glob": "*", "exclude": [e]}]).files[0]["exclude"], [e])
+
+    def test_exclude_pc1_load_same_on_both(self):  # X15, X16
+        for e in ("9" * 4300 + "/m/*", "9" * 4301 + "/m/*", "\U0001f6dd/m/*", "Ꟁ/ꟁ/ࡰ", "9" * 4301):
+            with self.subTest(entry=e[:12] + str(len(e))):
+                self.assertEqual(self.sch(files=[{"dir": "d", "glob": "*/*/*", "exclude": [e]}]).files[0]["exclude"], [e])
+
+    def test_exclude_on_a_path_item_refused(self):  # X18
+        for ex in (["a/b"], ["a"], []):
+            with self.subTest(exclude=ex):
+                p, m = self.bad(dict(BASE, files=[{"path": "config", "exclude": ex}]))
+                self.assertEqual(m, "%s: files.0: a path item is exactly {path: <paths key>}" % p)
+
     def test_glob_refusal_names_the_item_index(self):  # NG12: the index is the item's position
         p, m = self.bad(dict(BASE, files=[{"path": "config"}, {"dir": "d", "glob": "a//b"}]))
         self.assertEqual(m, "%s: files.1.glob: %s" % (p, EMPTY_SEG))
@@ -1424,9 +1488,83 @@ class NestedFiles(GitIsolatedTestCase):
         self.assertEqual(self.listing("*/handoff.md", exclude=["handoff.md"]), [])
         both = [PS + "/a/handoff.md", PS + "/b/handoff.md"]
         self.assertEqual(self.listing("*/handoff.md", exclude=["a"]), both)
-        self.assertEqual(self.listing("*/handoff.md", exclude=["a/handoff.md"]), both)
+        # owner answer 2026-11-22 (a): an entry with "/" is a path pattern, so this one now excludes a/handoff.md
+        self.assertEqual(self.listing("*/handoff.md", exclude=["a/handoff.md"]), [PS + "/b/handoff.md"])
         self.touch(PS + "/a/skip.md")
         self.assertEqual(self.listing("a/*.md", exclude=["skip.md"]), [PS + "/a/handoff.md"])
+
+    # ---- Task 6E.1-x, owner answer 2026-11-22 (a), legacy pre-schema transcripts: rows X1-X4, X6, X10, X15, X16
+    MG = "*/mutations/*"
+    T = "/mutations/T.txt"
+
+    def test_exclude_plain_name_is_literal_basename(self):  # X1
+        self.touch(PS + "/a/index.yml")
+        self.touch(PS + "/a/y.yml")
+        self.touch(PS + "/b/index.yml")
+        self.assertEqual(self.listing("*/*.yml", exclude=["index.yml"]), [PS + "/a/y.yml"])
+
+    def test_exclude_plain_name_never_fnmatch(self):  # X2
+        for n in ("x.yml", "*.yml", "y.yml"):
+            self.touch(PS + "/a/" + n)
+        self.assertEqual(self.listing("*/*.yml", exclude=["*.yml"]), [PS + "/a/x.yml", PS + "/a/y.yml"])
+        self.assertEqual(self.listing("*/*.yml", exclude=["x.y?l"]), [PS + "/a/*.yml", PS + "/a/x.yml", PS + "/a/y.yml"])
+
+    def test_exclude_path_pattern_matches(self):  # X3
+        self.touch(PS + "/p-b" + self.T)
+        self.assertEqual(self.listing(self.MG, exclude=["p-b/mutations/*"]), [])
+        self.touch(PS + "/p-b/mutations/U.txt")
+        self.touch(PS + "/p-b/other/V.txt")
+        self.assertEqual(self.listing(self.MG, exclude=["p-b/mutations/T.txt"]), [PS + "/p-b/mutations/U.txt"])
+        self.assertEqual(self.listing(self.MG, exclude=["p-?/mutations/T.t?t"]), [PS + "/p-b/mutations/U.txt"])
+        self.assertEqual(self.listing(self.MG, exclude=["*/mutations/T*"]), [PS + "/p-b/mutations/U.txt"])
+
+    def test_exclude_path_pattern_sibling_dirs_still_listed(self):  # X4
+        for d in ("p", "p-b", "p-bb"):
+            self.touch(PS + "/" + d + self.T)
+        self.assertEqual(self.listing(self.MG, exclude=["p-b/mutations/*"]), [PS + "/p-bb" + self.T, PS + "/p" + self.T])
+
+    def test_exclude_path_pattern_is_case_sensitive(self):  # X6
+        self.touch(PS + "/p-b" + self.T)
+        self.assertEqual(self.listing(self.MG, exclude=["P-B/mutations/*"]), [PS + "/p-b" + self.T])
+        self.assertEqual(self.listing(self.MG, exclude=["p-b/MUTATIONS/*"]), [PS + "/p-b" + self.T])
+        self.assertEqual(self.listing(self.MG, exclude=["p-b/mutations/t.TXT"]), [PS + "/p-b" + self.T])
+
+    def test_exclude_mixed_entries_both_semantics(self):  # X10
+        self.touch(PS + "/p-b" + self.T)
+        self.touch(PS + "/p/mutations/index.yml")
+        self.touch(PS + "/p" + self.T)
+        self.assertEqual(self.listing(self.MG, exclude=["index.yml", "p-b/mutations/*"]), [PS + "/p" + self.T])
+        self.assertEqual(self.listing(self.MG, exclude=["p-b/mutations/*"]),
+                         [PS + "/p/mutations/T.txt", PS + "/p/mutations/index.yml"])
+
+    def test_exclude_pattern_with_wrong_segment_count_matches_nothing(self):  # X5 (defence in depth, hand-built)
+        self.touch(PS + "/p-b" + self.T)
+        s = self.sch(self.MG, exclude=["p-b/mutations/*"])
+        for bad in (["p-b/*"], ["p-b/mutations/*/x"], ["*/*"]):  # load refuses these; the listing must still not match
+            with self.subTest(entry=bad):
+                s.files[0]["exclude"] = bad
+                self.assertEqual(files_of(s, self.root, self.cfg), [PS + "/p-b" + self.T])
+
+    def test_exclude_pc1_long_numeric_segments(self):  # X15 (a file name is at most 255 bytes; the entry may be 4300+)
+        for n in (4300, 4301):
+            long_entry = "9" * n + "/mutations/*"
+            self.assertEqual(self.sch(self.MG, exclude=[long_entry]).files[0]["exclude"], [long_entry])
+        name = "9" * 250
+        self.touch(PS + "/" + name + self.T)
+        self.touch(PS + "/p" + self.T)
+        self.assertEqual(self.listing(self.MG, exclude=[name + "/mutations/*"]), [PS + "/p" + self.T])
+        self.assertEqual(self.listing(self.MG, exclude=["9" * 4301 + "/mutations/*"]),
+                         [PS + "/" + name + self.T, PS + "/p" + self.T])
+
+    def test_exclude_pc1_unicode_names_same_on_both(self):  # X16: U+1F6DD is Cn in Unicode 13 (3.9), So in 15 (3.13)
+        names = ["\U0001f6dd", "Ꟁ", "ࡰ"]  # not "ꟁ" too: the fixture file system folds case, so it is the same directory
+        for n in names:
+            self.touch(PS + "/" + n + self.T)
+        for n in names:
+            with self.subTest(name=n):
+                self.assertEqual(self.listing(self.MG, exclude=[n + "/mutations/*"]),
+                                 [PS + "/" + m + self.T for m in sorted(names) if m != n])
+        self.assertEqual(self.listing(self.MG, exclude=["?/mutations/*"]), [])
 
     def test_nested_glob_unreadable_directory(self):  # NE13 (D-Q4)
         if os.geteuid() == 0:

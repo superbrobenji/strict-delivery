@@ -4,7 +4,9 @@ decisions" D-1-Q1 to D-1-Q13). Every expected value is written out here by hand 
 read back from ``evidence``. The production path is a file committed in a temp repository, read back with
 ``gitinfo.show`` and parsed, against schemas loaded from ``gates/schemas`` with ``load_schema``. Neither kind is declared
 before Rq-6-2 lands, so the schemas are used directly here."""
+import contextlib
 import copy
+import io
 import os
 import random
 import shlex
@@ -14,6 +16,7 @@ import types
 import unittest
 from unittest import mock
 
+from gates import __main__ as gates_main
 from gates.lib import config, evidence, gitinfo, ids, print_table, schema
 from gates.lib.evidence import package_entries, parse_transcript, render_pin, run_pin, split_cite, transcript_errors
 from gates.lib.result import GateError
@@ -122,7 +125,9 @@ class SchemaFiles(GitIsolatedTestCase):
         s = load_schema(TS_YML)
         self.assertEqual((s.kind, s.version, s.format), ("mutation-transcript", 1, "markdown"))
         self.assertEqual(s.first_line, TAG_T)
-        self.assertEqual(s.files, [{"dir": "plan_state", "glob": "*/mutations/*"}])
+        # owner answer 2026-11-22 (a), legacy pre-schema transcripts (Task 6E.1-x, row X11): exactly the owner's entry
+        self.assertEqual(s.files, [{"dir": "plan_state", "glob": "*/mutations/*",
+                                    "exclude": ["2026-10-31-strict-delivery-framework-b/mutations/*"]}])
         self.assertEqual(sorted(s.rules), ["FINDING", "MUTANT", "RUN", "TEST"])
         self.assertIsNone(s.table)
         self.assertIsNone(s.headings)
@@ -185,6 +190,44 @@ class SchemaFiles(GitIsolatedTestCase):
     def test_transcript_schema_used_directly(self):  # SC8
         self.assertFalse(hasattr(evidence, "PRODUCES"))
         self.assertEqual(validate_markdown(load_schema(TS_YML), good()), [])
+
+    # ---- Task 6E.1-x, owner answer 2026-11-22 (a), legacy pre-schema transcripts: rows X12, X13, X14
+    LEGACY = "2026-10-31-strict-delivery-framework-b"
+    PS = ".strict-delivery/state/plans"
+
+    def _gate(self, root):
+        """``python3 -m gates check schema --root`` through ``gates.__main__.main`` with the transcript kind produced."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(schema, "produced_kinds", return_value={"mutation-transcript"}):
+            code = gates_main.main(["check", "schema", "--root", root])
+        self.assertEqual(err.getvalue(), "")
+        return code, out.getvalue().splitlines()
+
+    def test_legacy_folder_transcript_not_checked(self):  # X12
+        root, _ = self._tree([self.PS + "/" + self.LEGACY + "/mutations/x.txt"])
+        self.assertEqual(self._gate(root), (0, ["PASS schema.kinds", "PASS schema.config", "PASS schema.mutation-transcript"]))
+
+    def test_transcript_elsewhere_still_checked(self):  # X13
+        root, _ = self._tree([self.PS + "/other-plan/mutations/x.txt", self.PS + "/" + self.LEGACY + "/mutations/x.txt",
+                              self.PS + "/" + self.LEGACY + "-b/mutations/x.txt",
+                              self.PS + "/2026-10-31-strict-delivery-framework/mutations/x.txt"])
+        code, lines = self._gate(root)
+        first = "first line: expected '%s'" % TAG_T
+        self.assertEqual(code, 1)
+        self.assertEqual(lines[2:], ["FAIL schema.mutation-transcript.%s/%s: %s" % (self.PS, rel, first) for rel in (
+            self.LEGACY + "-b/mutations/x.txt", "2026-10-31-strict-delivery-framework/mutations/x.txt",
+            "other-plan/mutations/x.txt")])  # path order: "-" sorts before "/"
+
+    def test_real_repository_legacy_transcripts_not_listed(self):  # X14
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        legacy = os.path.join(repo, *self.PS.split("/"), self.LEGACY, "mutations")
+        on_disk = sorted(os.listdir(legacy))
+        self.assertEqual(len(on_disk), 42)
+        listed = files_of(load_schema(TS_YML), repo, config.load(repo))
+        self.assertEqual([p for p in listed if "/" + self.LEGACY + "/" in p], [])
+        for n in on_disk:
+            self.assertNotIn(self.PS + "/" + self.LEGACY + "/mutations/" + n, listed)
 
     def test_report_files_listed(self):  # RL2
         rv = "docs/strict-delivery/reviews"
