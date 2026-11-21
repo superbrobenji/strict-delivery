@@ -1243,6 +1243,34 @@ class RunPin(GitIsolatedTestCase):
                     run_pin(v, "exit 0")
                 self.assertIn("root", str(cm.exception))
 
+    def test_run_pin_root_nul_and_surrogate(self):  # RN15, RN16, Y4, D-1-Q5 (a), F-20261121-74tv
+        bad = ["a\0b", "\0", self.root + "\0", "a\ud800b", "\ud800", "a\udfffb", "\udc80", self.root + "\ud800"]
+        with mock.patch.object(evidence.subprocess, "run", side_effect=AssertionError("called")):
+            for root in bad:
+                for run in ["exit 0", ["x"]]:
+                    with self.subTest(root=repr(root), run=type(run).__name__):
+                        with self.assertRaises(GateError) as cm:
+                            run_pin(root, run)
+                        self.assertTrue(str(cm.exception).startswith("root:"), str(cm.exception))
+            with self.subTest("bad root before bad run"):
+                with self.assertRaises(GateError) as cm:
+                    run_pin("a\0", "exit 0\0")
+                self.assertTrue(str(cm.exception).startswith("root:"))
+
+    def test_run_pin_root_invariants_kept(self):  # what the replaced check held, still held
+        self.assertEqual(run_pin(self.root, "exit 3"), 3)  # a good root still runs
+        self.assertEqual(run_pin(self.root, ["/no/such/prog"]), 127)
+        for root in ["", os.path.join(self.tmp, "nonexistent")]:  # an empty or missing root is 127, as it was
+            for run in ["exit 0", ["x"]]:
+                with self.subTest(root=root, run=type(run).__name__):
+                    self.assertEqual(run_pin(root, run), 127)
+        with self.assertRaises(GateError) as cm:  # the type check is first and still names root
+            run_pin(None, "exit 0\0")
+        self.assertTrue(str(cm.exception).startswith("root:"))
+        with self.assertRaises(GateError) as cm:  # a good root with a bad run still names run
+            run_pin(self.root, "exit 0\0")
+        self.assertIn("run", str(cm.exception))
+
     def test_run_pin_non_oserror(self):  # RN16: refused before exec, as GateError naming run
         for v in ["exit 0\0", ["a\0"], ["a", "b\0"], "a\ud800", ["\ud800"], "a\udfff", ["\udfff"], "a\udc80"]:
             with self.subTest(repr(v)):

@@ -72,9 +72,12 @@ def render_pin(cfg: dict, test_id: str) -> tuple:
 def run_pin(root: str, run: object) -> int:
     """The exit code of ``run`` at ``root`` (a shell string through ``/bin/sh -c``, a list with no shell), with the
     inherited environment, no timeout, stdin from /dev/null and the output discarded. ``OSError`` is 127. A signal-killed
-    child gives the negative signal number. GateError for a ``run`` or ``root`` that is not the exact type."""
+    child gives the negative signal number. GateError for a ``run`` or ``root`` that is not the exact type, or that
+    holds NUL or a lone surrogate."""
     if type(root) is not str:
         raise GateError("root: must be a str path")
+    if _BAD_EXEC_CHARS.search(root):
+        raise GateError("root: holds NUL or a lone surrogate")
     if type(run) is str and run != "":
         bad = _BAD_EXEC_CHARS.search(run)
     elif type(run) is list and run and all(type(e) is str for e in run):
