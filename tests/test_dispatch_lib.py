@@ -1038,6 +1038,41 @@ class ProgramErrorsTest(ProgFx):
         add_program(spaced)
         self.assertEqual(dispatch.program_errors(sec(brief), "stream_controller", spaced, self.cfg_, True), [])
 
+    def test_program_errors_shallow_clone(self):                   # BL24 shallow clone
+        add_program(self.root)
+        brief = "program: %s\nstream: a" % NAME
+        shallow = os.path.join(self.tmp, "shallow")
+        git(self.tmp, "clone", "-q", "--depth", "1", "--no-single-branch", "file://" + self.root, shallow)
+        git(shallow, "branch", NAME + "/integration", "origin/" + NAME + "/integration")
+        self.assertTrue(os.path.exists(os.path.join(shallow, ".git", "shallow")))
+        got = dispatch.program_errors(sec(brief), "stream_controller", shallow, self.cfg_, True)
+        self.assertEqual(got, [])
+        self.assertEqual(self.pe(brief), got)                      # same verdict as the plain fixture
+
+    def test_program_errors_merge_in_progress(self):               # BL24 MERGE_HEAD
+        add_program(self.root)
+        brief = "program: %s\nstream: a" % NAME
+        git(self.root, "checkout", "-q", "-b", "side", "main")
+        write_record(self.root, "side.yml", {"k": "v"})
+        commit_all(self.root, "side")
+        git(self.root, "checkout", "-q", "main")
+        write_record(self.root, "main.yml", {"k": "w"})
+        commit_all(self.root, "main")
+        git(self.root, "merge", "--no-commit", "--no-ff", "side")
+        self.assertTrue(os.path.exists(os.path.join(self.root, ".git", "MERGE_HEAD")))
+        self.assertEqual(self.pe(brief), [])
+
+    def test_program_errors_newline_in_path(self):                 # BL24 newline in the checkout path
+        brief = "program: %s\nstream: a" % NAME
+        nl = os.path.join(self.tmp, "a\nb")
+        try:
+            os.mkdir(nl)
+        except OSError as exc:
+            self.skipTest("filesystem refuses a newline in a directory name: %s" % exc)
+        make_repo(nl, config_for("strict"))
+        add_program(nl)
+        self.assertEqual(dispatch.program_errors(sec(brief), "stream_controller", nl, self.cfg_, True), [])
+
     def test_program_errors_shape(self):                           # BL25, V2
         add_program(self.root)
         hostile = ("\x00\r\né Ꟁ೏\\" + "x" * 5000, "١", "﻿", "\x1b[31m")
