@@ -1,17 +1,21 @@
 """Tests of gates/lib/schema.py; rows K1-K7, L1-L13, T1-T16, R1-R9, G1-G3, M1-M5, P1-P3, F1-F6 of the 1b.1 table."""
+import builtins
 import copy
+import errno
 import fnmatch
 import os
 import re
 import tempfile
 import unittest
+import warnings
 from unittest import mock
 
 from gates.lib import config, schema, yamlsub
 from gates.lib.result import GateError
-from gates.lib.schema import KNOWN_KINDS, SchemaError, files_of, load_schema, produced_kinds, schemas, validate
+from gates.lib.schema import KNOWN_KINDS, LayoutError, SchemaError, entries_of, files_of, load_schema, produced_kinds
+from gates.lib.schema import schemas, validate, validate_front_matter
 from gates.lib.schema import validate_markdown
-from tests.helpers import GitIsolatedTestCase, commit_all, make_repo
+from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, int_limit, make_repo
 
 NOT_ALLOWED = ("%s, which is not allowed: inside [ ] use an optional leading ! then characters or ranges x-y "
                "(x <= y) of printable ASCII other than ! - [ \\ ] ^ & ~ |")
@@ -72,6 +76,15 @@ def _ref_match(name: str, pat: str) -> bool:
 CFG = copy.deepcopy(config.DEFAULTS)
 BASE = {"kind": "thing", "version": 1, "format": "yaml", "files": [{"path": "config"}],
         "fields": {"schema": {"type": "str"}}}
+THING = "thing/%d" % BASE["version"]  # the tag of every record checked against a schema built from BASE
+MD_VERSION = 1  # the version of the markdown schema md() builds
+H_VERSION = 1  # the version of the front-matter schema Dirs.fm() builds (kind h)
+L_VERSION = 1  # the version of the markdown `lines` schema Dirs.ln() builds (kind l)
+HTAG = "h/%d" % H_VERSION
+LTAG = "<!-- schema: l/%d -->" % L_VERSION
+PS = ".strict-delivery/state/plans"  # config.DEFAULTS paths.plan_state, written out by hand
+STAND_IN = "CHECKPOINT [^ ]+ [^ ]+ head=[0-9a-f]{7,40}"  # the stand-in pattern of the table's notation W
+GOOD_LINE = "CHECKPOINT a b head=abcdef0"
 
 
 class Dirs(unittest.TestCase):
@@ -103,10 +116,31 @@ class Dirs(unittest.TestCase):
         return path, str(cm.exception)
 
     def md(self, **over):
-        d = {"kind": "in-force", "version": 1, "format": "markdown", "files": [{"path": "config"}],
-             "first_line": "<!-- schema: in-force/1 -->"}
+        d = {"kind": "in-force", "version": MD_VERSION, "format": "markdown", "files": [{"path": "config"}],
+             "first_line": "<!-- schema: in-force/%d -->" % MD_VERSION}
         d.update(over)
         return load_schema(self.put("in-force.yml", d))
+
+    def fm_data(self, **over):
+        d = {"kind": "h", "version": H_VERSION, "format": "front-matter", "files": [{"path": "config"}],
+             "fields": {"schema": {"type": "str"}, "plan": {"type": "str"}}}
+        d.update(over)
+        return d
+
+    def fm(self, **over):
+        return load_schema(self.put("h.yml", self.fm_data(**over)))
+
+    def ln_data(self, lines, **over):
+        d = {"kind": "l", "version": L_VERSION, "format": "markdown", "files": [{"path": "config"}],
+             "first_line": LTAG, "lines": lines}
+        d.update(over)
+        return d
+
+    def ln(self, lines, **over):
+        return load_schema(self.put("l.yml", self.ln_data(lines, **over)))
+
+    def stand_in(self, **over):
+        return self.ln([{"word": "CHECKPOINT", "pattern": STAND_IN}], **over)
 
 
 def rt(d):
@@ -117,7 +151,7 @@ def rt(d):
 class KnownKinds(unittest.TestCase):
     def test_K1_known_kinds_match_appendix(self):
         self.assertEqual(KNOWN_KINDS, ("config", "decision", "finding", "claim", "request", "streams", "context",
-                                       "handoff", "ledger", "status", "sync-log", "overview", "in-force",
+                                       "handoff", "ledger", "status", "sync-log", "merged-log", "breakdown", "overview", "in-force",
                                        "decision-index", "finding-index", "mutation-transcript", "review-report",
                                        "receipt", "claude-block", "gitignore-block"))
 
@@ -128,8 +162,9 @@ class KnownKinds(unittest.TestCase):
 class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
-        self.assertEqual(sorted(got), ["claim", "config", "decision", "decision-index", "finding", "finding-index",
-                                       "in-force", "overview"])  # Task 1c.3 adds the four generated kinds
+        self.assertEqual(sorted(got), ["breakdown", "claim", "config", "context", "decision", "decision-index", "finding", "finding-index",
+                                       "handoff", "in-force", "ledger", "merged-log", "overview", "request", "status",
+                                       "streams", "sync-log"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
 
     def test_K6_fixture_dir_and_bad_file_raises_naming_it(self):
@@ -175,7 +210,7 @@ class SchemasDir(Dirs):
         bad = self.put("claim.yml", dict(BASE, kind="claim", format="json"))
         loaded, problems = schema.scan_dir(self.sd)
         self.assertEqual(sorted(loaded), ["decision"])
-        self.assertEqual(problems, [("claim", "%s: format: must be yaml or markdown" % bad)])
+        self.assertEqual(problems, [("claim", "%s: format: must be yaml, markdown or front-matter" % bad)])  # D-Q3
 
     def test_K3_missing_dir_is_empty_unreadable_dir_raises(self):
         self.assertEqual(schema.scan_dir(os.path.join(self.tmp, "nope")), ({}, []))
@@ -228,11 +263,11 @@ class LoadSchema(Dirs):
     def test_L4_format(self):
         for val in ("json", "YAML", None):
             p, m = self.bad(dict(BASE, format=val))
-            self.assertEqual(m, "%s: format: must be yaml or markdown" % p, val)
+            self.assertEqual(m, "%s: format: must be yaml, markdown or front-matter" % p, val)  # D-Q3 (changed on purpose)
         d = dict(BASE)
         del d["format"]
         p, m = self.bad(d)
-        self.assertEqual(m, "%s: format: must be yaml or markdown" % p)
+        self.assertEqual(m, "%s: format: must be yaml, markdown or front-matter" % p)
 
     def test_L5_top_level_keys_by_format(self):
         p, m = self.bad(dict(BASE, first_line="x"))
@@ -287,9 +322,9 @@ class LoadSchema(Dirs):
     def test_L7_field_type(self):
         for t in schema.TYPES:
             extra = {"enum": {"values": ["a"]}, "list": {"items": {"type": "str"}}, "map": {"fields": {"x": {"type": "str"}}},
-                     "id": {"id_kind": "decision"}}.get(t, {})
+                     "id": {"id_kind": "decision"}, "one_of": {"of": [{"type": "str"}]}}.get(t, {})
             self.sch({"v": dict(type=t, **extra)})
-        self.assertEqual(len(schema.TYPES), 13)
+        self.assertEqual(len(schema.TYPES), 14)  # Task P2.1 part i adds one_of (D-A1)
         for t in ("string", "float", None, 5):
             p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {"type": t}}))
             self.assertTrue(m.startswith("%s: fields.v.type: must be one of str, text" % p), m)
@@ -393,7 +428,7 @@ class Types(Dirs):
         s = self.sch({"v": dict(spec, required=False)}, **kw)
         for value, expected in cases:
             with self.subTest(spec=spec["type"], value=repr(value)):
-                self.assertEqual(validate(s, {"schema": "thing/1", "v": value}, CFG),
+                self.assertEqual(validate(s, {"schema": THING, "v": value}, CFG),
                                  [e if e.startswith("v.") else "v: " + e for e in expected])
 
     def test_T1_str(self):
@@ -464,8 +499,8 @@ class Types(Dirs):
         cfg = copy.deepcopy(CFG)
         cfg["ids"]["finding"] = "FX"
         s = self.sch({"v": {"type": "id", "id_kind": "finding"}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "v": "FX-20261031-k3f9"}, cfg), [])  # prefix from cfg
-        self.assertEqual(len(validate(s, {"schema": "thing/1", "v": "F-20261031-k3f9"}, cfg)), 1)
+        self.assertEqual(validate(s, {"schema": THING, "v": "FX-20261031-k3f9"}, cfg), [])  # prefix from cfg
+        self.assertEqual(len(validate(s, {"schema": THING, "v": "F-20261031-k3f9"}, cfg)), 1)
 
     def test_T10_sha(self):
         m = "must be 7 to 40 lowercase hex digits"
@@ -535,20 +570,20 @@ class Types(Dirs):
     def test_T14_none(self):
         s = self.sch({"n": {"type": "str", "nullable": True, "required": False},
                       "z": {"type": "str", "required": False}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "n": None}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "z": None}, CFG), ["z: must not be null"])
+        self.assertEqual(validate(s, {"schema": THING, "n": None}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "z": None}, CFG), ["z: must not be null"])
 
     def test_T15_nested_depth(self):
         s = self.sch({"a": {"type": "list", "items": {"type": "map", "fields": {"b": {"type": "int"}}}},
                       "m": {"type": "any-map", "required": False}})
-        self.assertEqual(validate(s, rt({"schema": "thing/1", "a": [{"b": 1}, {"b": "x"}]}), CFG),
+        self.assertEqual(validate(s, rt({"schema": THING, "a": [{"b": 1}, {"b": "x"}]}), CFG),
                          ["a.1.b: must be an integer"])
         deep = cur = {}
         for _ in range(1000):
             cur["k"] = {}
             cur = cur["k"]
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": [], "m": deep}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": [], "m": {"x": [1, {"y": 2}]}}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": [], "m": deep}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": [], "m": {"x": [1, {"y": 2}]}}, CFG), [])
 
     def test_T16_top_level_not_a_mapping(self):
         s = self.sch()
@@ -559,9 +594,9 @@ class Types(Dirs):
 class Conditions(Dirs):
     def test_R1_required_nullable(self):
         s = self.sch({"a": {"type": "str"}, "b": {"type": "str", "required": False}})
-        self.assertEqual(validate(s, {"schema": "thing/1"}, CFG), ["a: required key is missing"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x", "b": None}, CFG), ["b: must not be null"])
+        self.assertEqual(validate(s, {"schema": THING}, CFG), ["a: required key is missing"])
+        self.assertEqual(validate(s, {"schema": THING, "a": "x"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": "x", "b": None}, CFG), ["b: must not be null"])
 
     def cond(self):
         return self.sch({"status": {"type": "enum", "values": ["open", "answered", "x"]},
@@ -570,22 +605,22 @@ class Conditions(Dirs):
 
     def test_R2_required_when_top_level(self):
         s = self.cond()
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "answered"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "answered"}, CFG),
                          ["answer: required key is missing (required_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "answered", "answer": "y"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x"}, CFG), [])  # not matched: optional
+        self.assertEqual(validate(s, {"schema": THING, "status": "answered", "answer": "y"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "status": "x"}, CFG), [])  # not matched: optional
         s2 = self.sch({"status": {"type": "str"}, "a": {"type": "str", "required": True,
                                                          "required_when": [{"status": ["z"]}]}})
-        self.assertEqual(validate(s2, {"schema": "thing/1", "status": "y"}, CFG), [])  # required: true is overridden
+        self.assertEqual(validate(s2, {"schema": THING, "status": "y"}, CFG), [])  # required: true is overridden
 
     def test_R3_absent_when_top_level(self):
         s = self.cond()
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "open", "answer": "x"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "open", "answer": "x"}, CFG),
                          ["answer: must be absent (absent_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "open", "answer": None}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "open", "answer": None}, CFG),
                          ["answer: must be absent (absent_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "open"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x", "answer": "y"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "status": "open"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "status": "x", "answer": "y"}, CFG), [])
 
     def nested(self):
         return self.sch({"o": {"type": "map", "fields": {
@@ -595,7 +630,7 @@ class Conditions(Dirs):
 
     def test_R4_conditions_inside_nested_map(self):
         s = self.nested()
-        v = lambda o: validate(s, {"schema": "thing/1", "o": o}, CFG)
+        v = lambda o: validate(s, {"schema": THING, "o": o}, CFG)
         self.assertEqual(v({"kind": "issue", "number": 3}), [])
         self.assertEqual(v({"kind": "issue"}), ["o.number: required key is missing (required_when matches)"])
         self.assertEqual(v({"kind": "issue", "number": 3, "plan": "p"}), ["o.plan: must be absent (absent_when matches)"])
@@ -603,50 +638,50 @@ class Conditions(Dirs):
 
     def test_R5_condition_sibling_absent(self):
         s = self.cond()
-        self.assertEqual(validate(s, {"schema": "thing/1"}, CFG), ["status: required key is missing"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "answer": "y"}, CFG), ["status: required key is missing"])
+        self.assertEqual(validate(s, {"schema": THING}, CFG), ["status: required key is missing"])
+        self.assertEqual(validate(s, {"schema": THING, "answer": "y"}, CFG), ["status: required key is missing"])
 
     def test_R6_condition_sibling_of_other_type(self):
         s = self.sch({"status": {"type": "any-map", "required": False},
                       "a": {"type": "str", "required_when": [{"status": ["1"]}]},
                       "b": {"type": "str", "required_when": [{"status": [1]}]}})
         for status in (1, True, [1], {"x": 1}, None):
-            errs = validate(s, {"schema": "thing/1", "status": status}, CFG)
+            errs = validate(s, {"schema": THING, "status": status}, CFG)
             self.assertNotIn("a: required key is missing (required_when matches)", errs, status)
         self.assertIn("b: required key is missing (required_when matches)",
-                      validate(s, {"schema": "thing/1", "status": 1}, CFG))
+                      validate(s, {"schema": THING, "status": 1}, CFG))
         self.assertNotIn("b: required key is missing (required_when matches)",
-                         validate(s, {"schema": "thing/1", "status": True}, CFG))
+                         validate(s, {"schema": THING, "status": True}, CFG))
         s2 = self.sch({"status": {"type": "str", "required": False},
                        "a": {"type": "str", "required_when": [{"status": ["1"]}]}})
-        self.assertEqual(validate(s2, {"schema": "thing/1", "status": "1"}, CFG),
+        self.assertEqual(validate(s2, {"schema": THING, "status": "1"}, CFG),
                          ["a: required key is missing (required_when matches)"])
-        self.assertEqual(validate(s2, {"schema": "thing/1", "status": 1}, CFG), ["status: must be a non-empty string"])
+        self.assertEqual(validate(s2, {"schema": THING, "status": 1}, CFG), ["status: must be a non-empty string"])
 
     def test_R7_several_conditions(self):
         s = self.sch({"status": {"type": "str"},
                       "a": {"type": "str", "required_when": [{"status": ["x"]}, {"status": ["y"]}]}})
         for st, n in (("x", 1), ("y", 1), ("z", 0)):
-            self.assertEqual(len(validate(s, {"schema": "thing/1", "status": st}, CFG)), n, st)
+            self.assertEqual(len(validate(s, {"schema": THING, "status": st}, CFG)), n, st)
         s = self.sch({"status": {"type": "str"}, "a": {"type": "str", "required": False, "absent_when": [
             {"status": ["x"]}, {"status": ["y"]}]}})
-        self.assertEqual(len(validate(s, {"schema": "thing/1", "status": "y", "a": "q"}, CFG)), 1)
-        self.assertEqual(len(validate(s, {"schema": "thing/1", "status": "x", "a": "q"}, CFG)), 1)
+        self.assertEqual(len(validate(s, {"schema": THING, "status": "y", "a": "q"}, CFG)), 1)
+        self.assertEqual(len(validate(s, {"schema": THING, "status": "x", "a": "q"}, CFG)), 1)
 
     def test_R8_condition_with_several_siblings(self):
         s = self.sch({"a": {"type": "str"}, "b": {"type": "str"},
                       "c": {"type": "str", "required_when": [{"a": ["x"], "b": ["y"]}]}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x", "b": "n"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "n", "b": "y"}, CFG), [])
-        self.assertEqual(validate(s, {"schema": "thing/1", "a": "x", "b": "y"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "a": "x", "b": "n"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": "n", "b": "y"}, CFG), [])
+        self.assertEqual(validate(s, {"schema": THING, "a": "x", "b": "y"}, CFG),
                          ["c: required key is missing (required_when matches)"])
 
     def test_R9_both_rules_match(self):
         s = self.sch({"status": {"type": "str"}, "a": {"type": "str", "required_when": [{"status": ["x"]}],
                                                       "absent_when": [{"status": ["x"]}]}})
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x", "a": "v"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "x", "a": "v"}, CFG),
                          ["a: must be absent (absent_when matches)"])
-        self.assertEqual(validate(s, {"schema": "thing/1", "status": "x"}, CFG),
+        self.assertEqual(validate(s, {"schema": THING, "status": "x"}, CFG),
                          ["a: required key is missing (required_when matches)"])
 
 
@@ -661,7 +696,7 @@ class Tag(Dirs):
         s2 = self.sch(kind="decision", version=2)
         self.assertEqual(validate(s2, {"schema": "decision/1"}, CFG),
                          ["schema: expected decision/2, got decision/1; run /strict-delivery:upgrade"])
-        self.assertEqual(validate(s, {"schema": "decision/1", "v": 1}, CFG), [])
+        self.assertEqual(validate(s, {"schema": "decision/%d" % s.version, "v": 1}, CFG), [])
 
     def test_G2_wrong_kind_malformed_or_missing(self):
         s = self.dec()
@@ -681,7 +716,7 @@ class Tag(Dirs):
 
 
 class Markdown(Dirs):
-    TAG = "<!-- schema: in-force/1 -->"
+    TAG = "<!-- schema: in-force/%d -->" % MD_VERSION
 
     def test_M1_first_line(self):
         s = self.md()
@@ -746,7 +781,8 @@ class Producers(unittest.TestCase):
             return produced_kinds()
 
     def test_P1_union(self):
-        self.assertEqual(produced_kinds(), {"decision", "decision-index", "finding", "finding-index", "in-force", "overview"})  # Tasks 1c.3, 1d.1, 1d.2
+        self.assertEqual(produced_kinds(), {"breakdown", "claim", "decision", "decision-index", "finding", "finding-index", "in-force", "merged-log",
+                                           "overview", "request", "status", "streams", "sync-log"})  # Tasks 1c.3, 1d.1, 1d.2, 2c.1; P2.2: the program tool's six
         self.assertEqual(self.kinds([]), set())
         self.assertEqual(self.kinds(["prod_claim"]), {"claim"})
         self.assertEqual(self.kinds(["prod_claim_decision", "prod_decision", "prod_empty"]), {"claim", "decision"})
@@ -864,5 +900,1052 @@ class Files(GitIsolatedTestCase):
         commit_all(self.root, "x")
 
 
+EMPTY_SEG = "must not have an empty segment (no leading, trailing or doubled '/')"
+DOT_SEG = "'.' and '..' segments are not allowed"
+SPAN = "a [...] class may not hold '/'"
+STAR2 = "'**' is not supported"
+
+
+class NestedGlobLoad(Dirs):
+    """Producer 1 of the P1.1 table (rows NG1-NG12): ``load_schema`` of a nested ``glob``."""
+
+    def gs(self, g):
+        return self.sch(files=[{"dir": "decisions", "glob": g}])
+
+    def refused(self, g, text):
+        p, m = self.bad(dict(BASE, files=[{"dir": "decisions", "glob": g}]))
+        self.assertEqual(m, "%s: files.0.glob: %s" % (p, text), g)
+
+    def test_nested_glob_valid_forms_load(self):  # NG1
+        for g in ("*/handoff.md", "*/requests/*.yml", "*/a/b/c.md", "a*/[xy]*.md"):
+            with self.subTest(glob=g):
+                self.assertEqual(self.gs(g).files, [{"dir": "decisions", "glob": g}])
+
+    def test_bad_glob_segments_refused(self):  # NG2, NG3, NG4, NG12 (the plan's name)
+        for g in ("a//b", "//", "a///b", "/x", "x/", "/", "/x/"):
+            with self.subTest(glob=g):
+                self.refused(g, EMPTY_SEG)
+        for g in ("./x", "../x", "x/./y", "x/../y", ".", "..", "x/.", "x/.."):
+            with self.subTest(glob=g):
+                self.refused(g, DOT_SEG)
+
+    def test_one_segment_glob_unchanged(self):  # NG5
+        for g in ("*.yml", "index.yml", "*", "?", "[a-c]*"):
+            with self.subTest(glob=g):
+                self.assertEqual(self.gs(g).files, [{"dir": "decisions", "glob": g}])
+
+    def test_nested_glob_bracket_grammar_reused(self):  # NG6
+        self.assertEqual(self.gs("[a-c]*/x.md").files[0]["glob"], "[a-c]*/x.md")
+        self.assertEqual(self.gs("a[!b]/x.md").files[0]["glob"], "a[!b]/x.md")
+        head = "must be a supported glob: the bracket expression [%s] holds "
+        for g, body, why in (("[z-a]/x.md", "z-a", "the reversed range z-a"), ("[-a]/x", "-a", NOT_ALLOWED % "U+002D"),
+                             ("x/[é]", "é", NOT_ALLOWED % "U+00E9")):
+            with self.subTest(glob=g):
+                self.refused(g, (head % body) + why)
+
+    def test_nested_glob_bracket_across_slash(self):  # NG7 (D-Q1)
+        for g in ("a[/]b", "[a/b]*", "a[!/]b", "a/b[/]c", "a[]/]b", "a[!]/]b", "a[x]/b[/]"):
+            with self.subTest(glob=g):
+                self.refused(g, SPAN)
+        for g in ("a[x/y", "a]x/y", "[/y"):  # no class is closed: each [ or ] is a literal, as fnmatch reads it
+            with self.subTest(glob=g):
+                self.assertEqual(self.gs(g).files[0]["glob"], g)
+
+    def test_nested_glob_double_star_refused(self):  # NG8 (D-Q2)
+        for g in ("**/handoff.md", "a/**/b", "a**/x", "**", "x/**", "*/**.md"):
+            with self.subTest(glob=g):
+                self.refused(g, STAR2)
+
+    def test_nested_glob_unicode_segment_same_on_both(self):  # NG9, V2
+        for g in ("a b/x", "é/x", "ࡰ*/x", "a\\b/x", "\U0001fae8/Ⱟ*", "x/ౝ"):
+            with self.subTest(glob=g):
+                self.assertEqual(self.gs(g).files[0]["glob"], g)
+
+    def test_nested_glob_exclude_list_checked(self):  # NG11
+        ok = [{"dir": "d", "glob": "*/handoff.md", "exclude": ["x"]}]
+        self.assertEqual(self.sch(files=ok).files, ok)
+        ok2 = [{"dir": "d", "glob": "*/handoff.md", "exclude": ["a/handoff.md"]}]
+        self.assertEqual(self.sch(files=ok2).files, ok2)
+        for ex in ("x", [1], None):
+            p, m = self.bad(dict(BASE, files=[{"dir": "d", "glob": "*/handoff.md", "exclude": ex}]))
+            self.assertEqual(m, "%s: files.0.exclude: must be a list of strings" % p, ex)
+
+    def test_glob_refusal_names_the_item_index(self):  # NG12: the index is the item's position
+        p, m = self.bad(dict(BASE, files=[{"path": "config"}, {"dir": "d", "glob": "a//b"}]))
+        self.assertEqual(m, "%s: files.1.glob: %s" % (p, EMPTY_SEG))
+
+    def test_glob_non_string_still_refused(self):  # NG10 (existing rule, kept)
+        for g in ("", 1, None, ["a"]):
+            p, m = self.bad(dict(BASE, files=[{"dir": "d", "glob": g}]))
+            self.assertEqual(m, "%s: files.0.glob: a dir item needs a non-empty string dir and glob" % p, g)
+
+
+EXPECTED_FILES = [  # written by hand from gates/schemas/*.yml, in sorted file order
+    ("claim", [{"dir": "claims", "glob": "*.yml"}]),
+    ("config", [{"path": "config"}]),
+    ("decision", [{"dir": "decisions", "glob": "*.yml", "exclude": ["index.yml"]}]),
+    ("decision-index", [{"dir": "decisions", "glob": "index.yml"}]),
+    ("finding", [{"dir": "findings", "glob": "*.yml", "exclude": ["index.yml"]}]),
+    ("finding-index", [{"dir": "findings", "glob": "index.yml"}]),
+    ("in-force", [{"dir": "decisions", "glob": "in-force.md"}]),
+    ("overview", [{"path": "index"}]),
+]
+
+
+class FrontMatterSchema(Dirs):
+    """Producer 3 (rows FS1-FS7): ``load_schema`` of a front-matter schema."""
+
+    def test_front_matter_schema_loads(self):  # FS1
+        s = self.fm()
+        self.assertEqual((s.format, s.kind, s.version), ("front-matter", "h", H_VERSION))
+        self.assertEqual(s.fields, {"schema": {"type": "str"}, "plan": {"type": "str"}})
+        self.assertEqual((s.first_line, s.table, s.headings, s.lines), (None, None, None, None))
+
+    def test_front_matter_schema_field_rule(self):  # FS2
+        want = "fields.schema: must be declared as a required, non-nullable str"
+        for fields in ({"plan": {"type": "str"}}, {"schema": {"type": "str", "required": False}},
+                       {"schema": {"type": "str", "nullable": True}}, {"schema": {"type": "text"}},
+                       {"schema": {"type": "str", "required_when": [{"plan": ["x"]}]}, "plan": {"type": "str"}},
+                       {"schema": {"type": "str", "required": False, "absent_when": [{"plan": ["x"]}]},
+                        "plan": {"type": "str"}}):
+            with self.subTest(fields=fields):
+                p, m = self.bad(self.fm_data(fields=fields), name="h.yml")
+                self.assertEqual(m, "%s: %s" % (p, want))
+
+    def test_front_matter_schema_fields_checked(self):  # FS3
+        d = self.fm_data()
+        del d["fields"]
+        p, m = self.bad(d, name="h.yml")
+        self.assertEqual(m, "%s: fields: required key is missing" % p)
+        p, m = self.bad(self.fm_data(fields=[]), name="h.yml")
+        self.assertEqual(m, "%s: fields: must be a mapping of field names to specs" % p)
+        p, m = self.bad(self.fm_data(fields={"schema": {"type": "str"}, "x": {"type": "nope"}}), name="h.yml")
+        self.assertIn("%s: fields.x.type: must be one of " % p, m)
+
+    def test_body_keys_by_format(self):  # FS4 (D-Q6)
+        for key, val in (("first_line", "x"), ("table", ["a"]), ("headings", ["## A"]),
+                         ("lines", [{"word": "A", "pattern": "A"}])):
+            with self.subTest(key=key):
+                p, m = self.bad(self.fm_data(**{key: val}), name="h.yml")
+                self.assertEqual(m, "%s: %s: unknown key for a front-matter schema" % (p, key))
+        p, m = self.bad(dict(BASE, lines=[{"word": "A", "pattern": "A"}]))
+        self.assertEqual(m, "%s: lines: unknown key for a yaml schema" % p)
+        p, m = self.bad(self.fm_data(kinds=[]), name="h.yml")
+        self.assertEqual(m, "%s: kinds: unknown key for a front-matter schema" % p)
+        md = {"kind": "thing", "version": 1, "format": "markdown", "files": [{"path": "config"}], "first_line": "x"}
+        p, m = self.bad(dict(md, fields={"schema": {"type": "str"}}))
+        self.assertEqual(m, "%s: fields: unknown key for a markdown schema" % p)
+
+    def test_format_values(self):  # FS5
+        self.assertEqual(self.sch().format, "yaml")
+        self.assertEqual(self.md().format, "markdown")
+        self.assertEqual(self.fm().format, "front-matter")
+        for val in ("Front-Matter", "frontmatter", "front_matter", "json", "front-matter ", None, 5, ["front-matter"]):
+            with self.subTest(format=val):
+                p, m = self.bad(self.fm_data(format=val), name="h.yml")
+                self.assertEqual(m, "%s: format: must be yaml, markdown or front-matter" % p)
+
+    def test_formats_literal(self):  # FS6
+        self.assertEqual(schema.FORMATS, ("yaml", "markdown", "front-matter"))
+
+    def test_old_schemas_unchanged(self):  # FS7
+        listed = sorted(os.listdir(schema.SCHEMAS_DIR))
+        later = ["breakdown.yml", "context.yml", "handoff.yml", "ledger.yml","merged-log.yml", "request.yml", "status.yml", "streams.yml",
+                 "sync-log.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas
+        self.assertEqual(listed, sorted([k + ".yml" for k, _ in EXPECTED_FILES] + later))
+        got = [name for name in listed if name not in later]  # the old vocabulary's files only
+        loaded = [load_schema(os.path.join(schema.SCHEMAS_DIR, name)) for name in got]
+        self.assertEqual({s.kind: s.files for s in loaded}, dict(EXPECTED_FILES))
+        for s in loaded:
+            self.assertEqual(s.lines, None)
+            self.assertIn(s.format, ("yaml", "markdown"))
+
+
+class LinesLoad(Dirs):
+    """Producer 5 (rows LW1-LW13): ``load_schema`` of markdown ``lines``."""
+
+    def refused(self, lines, key, text, **over):
+        p, m = self.bad(self.ln_data(lines, **over), name="l.yml")
+        self.assertEqual(m, "%s: %s: %s" % (p, key, text), lines)
+
+    def test_lines_valid_forms(self):  # LW1
+        one = [{"word": "CHECKPOINT", "pattern": STAND_IN}]
+        two = one + [{"word": "Ruling", "pattern": "Ruling .*"}]
+        self.assertEqual(self.ln(one).lines, one)
+        self.assertEqual(self.ln(two).lines, two)
+        self.assertEqual(self.ln(two, table=["a", "b"]).lines, two)
+        self.assertEqual(self.ln(two, table=["a", "b"]).table, ["a", "b"])
+        self.assertEqual(self.ln(two, headings=["## A"]).headings, ["## A"])
+        self.assertEqual(self.ln(two).first_line, LTAG)
+        self.assertEqual((self.ln(two).table, self.ln(two).headings), (None, None))
+
+    def test_markdown_schema_without_lines_unchanged(self):  # LW2
+        s = self.md()
+        self.assertIsNone(s.lines)
+        self.assertEqual(validate_markdown(s, s.first_line + "\nCHECKPOINT bad\nRuling x\n"), [])
+
+    def test_lines_shape_refused(self):  # LW3 (D-Q9)
+        for bad in ("x", {"word": "A", "pattern": "A"}, 5, None, True):
+            with self.subTest(lines=bad):
+                self.refused(bad, "lines", "must be a non-empty list")
+        self.refused([], "lines", "must be a non-empty list")
+        for item in ("A", 5, None, ["A"]):
+            with self.subTest(item=item):
+                self.refused([item], "lines.0", "must be a mapping")
+        self.refused([{"word": "A", "pattern": "A", "x": 1}], "lines.0.x", "unknown key")
+        self.refused([{"word": "A"}], "lines.0.pattern", "required key is missing")
+        self.refused([{"pattern": "A"}], "lines.0.word", "required key is missing")
+        self.refused([{"word": "A", "pattern": "A"}, {"pattern": "B"}], "lines.1.word", "required key is missing")
+        for v in (1, None, True, ["A"]):
+            with self.subTest(word=v):
+                self.refused([{"word": v, "pattern": "A"}], "lines.0.word", "must be a string")
+            with self.subTest(pattern=v):
+                self.refused([{"word": "A", "pattern": v}], "lines.0.pattern", "must be a string")
+
+    def test_lines_word_refused(self):  # LW4 (D-Q10)
+        want = "must be printable ASCII with no whitespace"
+        for w in ("", "A B", "A\tB", " A", "A ", "A\nB", "A B", "A\u0085B", "A　B", "A​B", "A᠎B",
+                  "A\x00", "A\x7f", "é", "ࡰ", "\U0001fae8", "A B", "A\rB"):
+            with self.subTest(word=w):
+                self.refused([{"word": w, "pattern": "A"}], "lines.0.word", want)
+
+    def test_lines_word_forms(self):  # LW5
+        for w in ("CHECKPOINT", "Ruling", "A:B", "a", "x-y", "[x]", "*"):
+            with self.subTest(word=w):
+                self.assertEqual(self.ln([{"word": w, "pattern": "A"}]).lines[0]["word"], w)
+        for w in ("Ruling:", ":", "A::"):
+            with self.subTest(word=w):
+                self.refused([{"word": w, "pattern": "A"}], "lines.0.word", "must not end with ':'")
+
+    def test_lines_repeated_word_refused(self):  # LW6
+        rep = "repeats the word of an earlier item"
+        self.refused([{"word": "A", "pattern": "A"}, {"word": "A", "pattern": "A"}], "lines.1.word", rep)
+        self.refused([{"word": "A", "pattern": "A"}, {"word": "A", "pattern": "B"}], "lines.1.word", rep)
+        self.refused([{"word": "A", "pattern": "A"}, {"word": "B", "pattern": "B"}, {"word": "B", "pattern": "C"}],
+                     "lines.2.word", rep)
+        got = self.ln([{"word": "A", "pattern": "A"}, {"word": "a", "pattern": "a"}]).lines
+        self.assertEqual([x["word"] for x in got], ["A", "a"])
+
+    def test_invalid_regex_refused(self):  # LW7
+        for pat in ("(", "[", "*a", "\\", "a{2,1}", "(?:", ")", "a)", "[b-a]", "\\1(a)", "a**", "a{1}{2}"):
+            with self.subTest(pattern=pat):
+                p, m = self.bad(self.ln_data([{"word": "X", "pattern": pat}]), name="l.yml")
+                self.assertTrue(m.startswith("%s: lines.0.pattern: not a valid regular expression (" % p), m)
+
+    def test_pattern_dialect_same_on_both(self):  # LW8, V4 (D-Q11): refused by the dialect, not by re.compile
+        cases = (("a\\++", POSSESSIVE), ("a*+", POSSESSIVE), ("a++", POSSESSIVE), ("a?+", POSSESSIVE), ("a{2}+", POSSESSIVE),
+                 ("(?>a)", GROUP_Q), ("a(?i)b", GROUP_Q), ("(?i:a)", GROUP_Q), ("(?P<n>x)", GROUP_Q),
+                 ("(?P<a>x)(?P<a>y)", GROUP_Q), ("(?<n>x)", GROUP_Q), ("(?<=a)b", GROUP_Q), ("(?(1)a|b)", GROUP_Q),
+                 ("(?#c)", GROUP_Q), ("(?", GROUP_Q), ("(a)*", QUANT), ("(a)+", QUANT), ("(a){2}", QUANT),
+                 ("(?:a|b)+", QUANT), ("(a|aa)+b", QUANT), ("(?=a)*", QUANT), ("(a)*?", QUANT),
+                 ("\\w", ESC), ("\\W", ESC), ("\\d", ESC), ("\\D", ESC), ("\\s", ESC), ("\\S", ESC), ("\\b", ESC),
+                 ("\\B", ESC), ("[\\d]", ESC), ("a\\w+", ESC), ("é", ASCII), ("a\tb", ASCII), ("a\x7fb", ASCII),
+                 ("a\nb", ASCII), ("ࡰ", ASCII), ("\U0001fae8", ASCII), ("a b", ASCII))
+        for pat, text in cases:
+            with self.subTest(pattern=pat):
+                self.refused([{"word": "X", "pattern": pat}], "lines.0.pattern", text)
+        for pat in (STAND_IN, "CHECKPOINT x", "Ruling.*", "[A-Za-z]+ [0-9]{2,4}", "(?:a|b)c", "a(?=b)b", "a(?!b)",
+                    "(a|b)?c", "x\\.y", "x\\\\y", "^a$", "\\(?a", "\\)*", "[)*]x", "[^ ]+", "a{,3}", "a{2,3}?",
+                    "[(?]", "(?:" * 20 + "a" + ")" * 20, "((((a))))", "[]a)*]", "[^]a)*]", "(a)" * 25, "(?:a)" * 25):  # "a\\++" is refused: the textual rule
+            with self.subTest(accepted=pat):
+                self.assertEqual(self.ln([{"word": "X", "pattern": pat}]).lines[0]["pattern"], pat)
+
+    def test_pattern_compiled_with_ascii_flag(self):  # D-Q11: the compiled object carries re.ASCII
+        s = self.ln([{"word": "X", "pattern": "X [^ ]+"}, {"word": "Y", "pattern": "Y"}])
+        self.assertEqual(sorted(s.rules), ["X", "Y"])
+        for word, (pattern, compiled) in s.rules.items():
+            self.assertTrue(compiled.flags & re.ASCII, word)
+            self.assertEqual(compiled.flags, re.compile("x", re.ASCII).flags, word)  # no IGNORECASE, DOTALL, MULTILINE
+            self.assertEqual(compiled.pattern, pattern)
+        self.assertEqual(s.rules["X"][0], "X [^ ]+")
+
+    def test_pattern_variable_count_cap(self):  # F-20261118-ff4c: at most 24 variable quantifiers and alternations
+        many = "more than 24 quantifiers and alternations"
+        ok = ("a?" * 24, "a?|" * 12, "(?:a|a)" * 24, "a{2,3}" * 24, "a{2,}" * 24, "a{,3}" * 24, "a*?" * 12, "a??" * 12,
+              "a{2}" * 100, "a{2}?" * 24, "a{2,3}?" * 12, "[?][*][+][|]" * 100, "\\?\\*\\+\\|" * 100, "(?:a)" * 100, "(?=a)" * 100,
+              "(?!a)" * 100, "{x" * 100, "{}" * 100, "a" * 5000, "a+" * 12 + "b*" * 12, "a*?" * 6 + "a|" * 12)  # a lazy ? counts: "a*?" is 2
+        for pat in ok:
+            with self.subTest(loads=pat[:30], n=len(pat)):
+                self.assertEqual(self.ln([{"word": "X", "pattern": pat}]).lines[0]["pattern"], pat)
+        for pat in ("a?" * 25, "a?" * 25 + "a" * 25, "a?|" * 12 + "a?", "(?:a|a)" * 25, "a{2,3}" * 25, "a{2,}" * 25,
+                    "a{,3}" * 25, "a*" * 25, "a+" * 25, "a|" * 25, "a*?" * 13, "a??" * 13, "a{2}?" * 25, "a{2,3}?" * 13, "a*?" * 12 + "b|", "(?:a|b)?" * 13,
+                    "a?" * 24 + "b|c"):
+            with self.subTest(refused=pat[:30], n=len(pat)):
+                self.refused([{"word": "X", "pattern": pat}], "lines.0.pattern", many)
+
+    def test_pattern_group_nesting_cap(self):  # LW9: no RecursionError can differ between interpreters
+        deep = "(?:" * 21 + "a" + ")" * 21
+        want = "groups nested more than 20 deep are not supported"
+        self.refused([{"word": "X", "pattern": deep}], "lines.0.pattern", want)
+        self.refused([{"word": "X", "pattern": "(?:" * 1000 + ")" * 1000}], "lines.0.pattern", want)
+        self.refused([{"word": "X", "pattern": "(" * 1000 + ")" * 1000}], "lines.0.pattern", want)
+
+    def test_pattern_other_exceptions_are_schema_errors(self):  # LW9 (D-Q11: every exception of re.compile)
+        path = self.put("l.yml", self.ln_data([{"word": "X", "pattern": "a"}]))
+        for exc in (RuntimeError("invalid SRE code"), OverflowError("x"), RecursionError("x"), ValueError("v"),
+                    MemoryError(), Exception("e"), re.error("boom")):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch.object(schema.re, "compile", side_effect=exc):
+                    with self.assertRaises(SchemaError) as cm:
+                        load_schema(path)
+                name = "re.error: boom" if isinstance(exc, re.error) else type(exc).__name__  # 3.13 names the class PatternError
+                self.assertEqual(str(cm.exception),
+                                 "%s: lines.0.pattern: not a valid regular expression (%s)" % (path, name))
+        for pat in ("a{4294967296}", "a{99999999999999999999}"):  # a real OverflowError on both interpreters
+            with self.subTest(pattern=pat):
+                p, m = self.bad(self.ln_data([{"word": "X", "pattern": pat}]), name="l.yml")
+                self.assertEqual(m, "%s: lines.0.pattern: not a valid regular expression (OverflowError)" % p)
+
+    def test_pattern_warnings_under_w_error(self):  # LW10: one verdict and one text whatever the warning filter
+        for pat in ("[a--b]", "[[a]", "[a&&b]", "[a||b]", "[a~~b]"):
+            texts = set()
+            for mode in ("default", "ignore", "error", "always"):
+                with warnings.catch_warnings():
+                    warnings.simplefilter(mode)
+                    p, m = self.bad(self.ln_data([{"word": "X", "pattern": pat}]), name="l.yml")
+                    texts.add(m)
+            with self.subTest(pattern=pat):
+                self.assertEqual(len(texts), 1, texts)
+                self.assertTrue(next(iter(texts)).startswith("%s: lines.0.pattern: not a valid regular expression (" % p))
+        with warnings.catch_warnings():  # a clean pattern loads under -W error, and loading emits no warning
+            warnings.simplefilter("error")
+            self.assertEqual(self.stand_in().lines[0]["pattern"], STAND_IN)
+
+    def test_pattern_size_and_cost(self):  # LW11 (D-Q9 empty; D-Q12 settled by the dialect)
+        self.refused([{"word": "X", "pattern": ""}], "lines.0.pattern", "must not be empty")
+        big = "a" * 100000
+        self.assertEqual(self.ln([{"word": "X", "pattern": big}]).lines[0]["pattern"], big)
+        self.refused([{"word": "X", "pattern": "(a|aa)+b"}], "lines.0.pattern", QUANT)
+
+    def test_lines_pattern_roundtrip(self):  # LW12: written with yamlsub.emit, read back byte for byte
+        for pat in ("a: b", "a #b", "x\\.y", "\"q\"", "'q'", "[ab]c", "{x", "&x", "!x", "a -- b", "x:y", "- a",
+                    "a\\\\b", "% x", "@x", "`x", "|x", ">x", "x #", "# x", " lead", "trail "):
+            with self.subTest(pattern=pat):
+                got = self.ln([{"word": "X", "pattern": pat}]).lines[0]["pattern"]
+                self.assertEqual(got, pat)
+
+    def test_pattern_classes_at_load(self):  # LW13
+        for pat in ("\\w", "\\d", "\\s", "\\S", "[^\\s]+"):
+            with self.subTest(pattern=pat):
+                self.refused([{"word": "X", "pattern": pat}], "lines.0.pattern", ESC)
+        self.assertEqual(self.ln([{"word": "X", "pattern": "[^ ]+"}]).lines[0]["pattern"], "[^ ]+")
+
+
+POSSESSIVE = "possessive quantifiers are not supported"
+GROUP_Q = "'(?' is only supported as (?: (?= or (?!"
+QUANT = "a quantified group is not supported (a ')' followed by '*', '+' or '{')"
+ESC = "the escapes \\w \\W \\d \\D \\s \\S \\b \\B are not supported"
+ASCII = "must be printable ASCII (U+0020-U+007E)"
+SYMLINK = "is a symlink; directories must be real directories"
+TOO_BIG = ["front matter: line 3: integer too large"]
+
+
+class NestedFiles(GitIsolatedTestCase):
+    """Producer 2 (rows NE1-NE17): ``entries_of`` / ``files_of`` with a nested glob."""
+
+    def setUp(self):
+        super().setUp()
+        self.n = 0
+        self.root = make_repo(self.work)
+        self.cfg = config.load(self.root)
+
+    def fresh(self):
+        """Another fixture repository (a new directory, so no case needs files removed)."""
+        self.n += 1
+        d = os.path.join(self.tmp, "w%d" % self.n)
+        os.mkdir(d)
+        self.root = make_repo(d)
+        return self.root
+
+    def sch(self, glob=None, exclude=None, files=None):
+        sd = os.path.join(self.tmp, "sd")
+        os.makedirs(sd, exist_ok=True)
+        if files is None:
+            item = {"dir": "plan_state", "glob": glob}
+            if exclude is not None:
+                item["exclude"] = exclude
+            files = [item]
+        with open(os.path.join(sd, "thing.yml"), "w") as fh:
+            fh.write(yamlsub.emit(dict(BASE, files=files)))
+        return load_schema(os.path.join(sd, "thing.yml"))
+
+    def touch(self, rel, text="a: 1\n"):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text)
+
+    def listing(self, glob, **kw):
+        return files_of(self.sch(glob, **kw), self.root, self.cfg)
+
+    def test_nested_glob_lists_files_in_subdirectories(self):  # NE1, plan Step 1
+        self.touch(PS + "/b/handoff.md")
+        self.touch(PS + "/a/handoff.md")
+        self.assertEqual(self.listing("*/handoff.md"), [PS + "/a/handoff.md", PS + "/b/handoff.md"])
+        self.assertEqual(entries_of(self.sch("*/handoff.md"), self.root, self.cfg),
+                         [(PS + "/a/handoff.md", True), (PS + "/b/handoff.md", True)])
+
+    def test_nested_glob_symlinked_directory_refused(self):  # plan Step 1, NE4
+        self.touch(PS + "/a/handoff.md")
+        os.makedirs(os.path.join(self.tmp, "elsewhere"))
+        os.symlink(os.path.join(self.tmp, "elsewhere"), os.path.join(self.root, PS, "link"))
+        with self.assertRaises(LayoutError) as cm:
+            self.listing("*/handoff.md")
+        self.assertEqual((cm.exception.rel, str(cm.exception)), (PS + "/link", SYMLINK))
+
+    def test_nested_glob_file_in_middle_skipped(self):  # plan Step 1, NE4
+        self.touch(PS + "/a/handoff.md")
+        self.touch(PS + "/c", "plain file")
+        self.assertEqual(self.listing("*/handoff.md"), [PS + "/a/handoff.md"])
+
+    def test_nested_glob_sorted_by_full_path(self):  # NE2, NE15 order
+        for name in ("a", "a-b", "a b"):
+            self.touch(PS + "/" + name + "/handoff.md")
+        self.assertEqual(self.listing("*/handoff.md"),
+                         [PS + "/a b/handoff.md", PS + "/a-b/handoff.md", PS + "/a/handoff.md"])
+        self.touch(PS + "/a/x/f.md")
+        self.touch(PS + "/a-b/x/f.md")
+        self.assertEqual(self.listing("*/x/f.md"), [PS + "/a-b/x/f.md", PS + "/a/x/f.md"])
+
+    def test_nested_glob_directory_without_match_skipped(self):  # NE3
+        self.touch(PS + "/a/handoff.md")
+        self.touch(PS + "/c/notes.md")
+        os.makedirs(os.path.join(self.root, PS, "d"))
+        self.assertEqual(self.listing("*/handoff.md"), [PS + "/a/handoff.md"])
+
+    def test_nested_glob_middle_entry_kinds(self):  # NE4
+        s = self.sch("*/handoff.md")
+        for kind in ("file", "symlink to dir", "symlink to file", "dangling symlink", "fifo", "directory"):
+            with self.subTest(kind=kind):
+                self.fresh()
+                self.touch(PS + "/a/handoff.md")
+                c = os.path.join(self.root, PS, "c")
+                if kind == "file":
+                    self.touch(PS + "/c", "x")
+                elif kind == "symlink to dir":
+                    os.makedirs(os.path.join(self.tmp, "t%d" % self.n))
+                    os.symlink(os.path.join(self.tmp, "t%d" % self.n), c)
+                elif kind == "symlink to file":
+                    self.touch("real.md")
+                    os.symlink(os.path.join(self.root, "real.md"), c)
+                elif kind == "dangling symlink":
+                    os.symlink("nowhere", c)
+                elif kind == "fifo":
+                    os.mkfifo(c)
+                else:
+                    self.touch(PS + "/c/handoff.md")
+                if kind in ("symlink to dir", "symlink to file", "dangling symlink"):
+                    with self.assertRaises(LayoutError) as cm:
+                        files_of(s, self.root, self.cfg)
+                    self.assertEqual((cm.exception.rel, str(cm.exception)), (PS + "/c", SYMLINK))
+                elif kind == "directory":
+                    self.assertEqual(files_of(s, self.root, self.cfg), [PS + "/a/handoff.md", PS + "/c/handoff.md"])
+                else:
+                    self.assertEqual(files_of(s, self.root, self.cfg), [PS + "/a/handoff.md"])
+
+    def test_nested_glob_last_segment_kinds_listed(self):  # NE5
+        self.touch("real.md")
+        base = os.path.join(self.root, PS)
+        self.touch(PS + "/a/handoff.md")
+        os.makedirs(base + "/b")
+        os.symlink(os.path.join(self.root, "real.md"), base + "/b/handoff.md")
+        os.makedirs(base + "/c")
+        os.symlink("nowhere", base + "/c/handoff.md")
+        os.makedirs(base + "/d")
+        os.mkfifo(base + "/d/handoff.md")
+        os.makedirs(base + "/e/handoff.md")
+        want = [PS + "/%s/handoff.md" % x for x in "abcde"]
+        self.assertEqual(self.listing("*/handoff.md"), want)
+        self.assertEqual({fg for _, fg in entries_of(self.sch("*/handoff.md"), self.root, self.cfg)}, {True})
+
+    def test_nested_glob_depth(self):  # NE6
+        for rel in ("f.md", "a/f.md", "a/b/f.md", "a/b/c/f.md"):
+            self.touch(PS + "/" + rel)
+        for glob, want in (("f.md", "f.md"), ("*/f.md", "a/f.md"), ("*/*/f.md", "a/b/f.md"),
+                           ("*/*/*/f.md", "a/b/c/f.md")):
+            with self.subTest(glob=glob):
+                self.assertEqual(self.listing(glob), [PS + "/" + want])
+        self.assertEqual(self.listing("*/*/*/*/f.md"), [])
+
+    def test_nested_glob_missing_levels(self):  # NE7 (D-Q4)
+        self.assertEqual(self.listing("*/handoff.md"), [])  # plan_state absent
+        self.touch(PS + "/a/handoff.md")
+        self.assertEqual(self.listing("c/handoff.md"), [])  # nothing named c
+        real = os.lstat
+
+        def vanishing(path, *a, **kw):
+            if path.endswith(PS + "/a"):
+                raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
+            return real(path, *a, **kw)
+        with mock.patch.object(schema.os, "lstat", side_effect=vanishing):
+            with self.assertRaises(LayoutError) as cm:
+                self.listing("*/handoff.md")
+        self.assertEqual((cm.exception.rel, str(cm.exception)), (PS + "/a", "cannot read (No such file or directory)"))
+
+    def test_nested_glob_dir_component_checks_unchanged(self):  # NE8
+        self.touch(PS + "/a/handoff.md")
+        s = self.sch("*/handoff.md")
+        other = os.path.join(self.tmp, "other")
+        os.rename(os.path.join(self.root, PS), other)
+        os.symlink(other, os.path.join(self.root, PS))
+        with self.assertRaises(LayoutError) as cm:
+            files_of(s, self.root, self.cfg)
+        self.assertEqual((cm.exception.rel, str(cm.exception)), (PS, SYMLINK))
+        self.fresh()
+        self.touch(".strict-delivery/state", "x")
+        with self.assertRaises(LayoutError) as cm:
+            self.listing("*/handoff.md")
+        self.assertEqual((cm.exception.rel, str(cm.exception)), (".strict-delivery/state", "is not a directory"))
+
+    def test_nested_glob_odd_names_same_on_both(self):  # NE9, V5
+        names = [".h", "a b", "é", "ࡰ", "\U0001fae8", "Ⱟ", "ౝ"]
+        for n in names:
+            self.touch(PS + "/" + n + "/handoff.md")
+        self.assertEqual(self.listing("*/handoff.md"), [PS + "/" + n + "/handoff.md" for n in sorted(names)])
+        self.assertEqual(sorted(names), [".h", "a b", "é", "ࡰ", "ౝ", "Ⱟ", "\U0001fae8"])
+        self.assertEqual(self.listing("ࡰ/handoff.md"), [PS + "/ࡰ/handoff.md"])
+        self.assertEqual(self.listing("?/handoff.md"), [PS + "/" + n + "/handoff.md"
+                                                         for n in ("é", "ࡰ", "ౝ", "Ⱟ", "\U0001fae8")])
+
+    def test_nested_glob_segment_matching(self):  # NE10
+        for n in ("a", "a1", "a2", "ab", "b", "c"):
+            self.touch(PS + "/" + n + "/handoff.md")
+        h = "/handoff.md"
+        self.assertEqual(self.listing("a?/handoff.md"), [PS + "/" + n + h for n in ("a1", "a2", "ab")])
+        self.assertEqual(self.listing("[ab]/handoff.md"), [PS + "/a" + h, PS + "/b" + h])
+        self.assertEqual(self.listing("a/handoff.md"), [PS + "/a" + h])
+        self.assertEqual(self.listing("[!ab]*/handoff.md"), [PS + "/c" + h])
+
+    def test_nested_glob_exclude_last_segment_only(self):  # NE11
+        self.touch(PS + "/a/handoff.md")
+        self.touch(PS + "/b/handoff.md")
+        self.assertEqual(self.listing("*/handoff.md", exclude=["handoff.md"]), [])
+        both = [PS + "/a/handoff.md", PS + "/b/handoff.md"]
+        self.assertEqual(self.listing("*/handoff.md", exclude=["a"]), both)
+        self.assertEqual(self.listing("*/handoff.md", exclude=["a/handoff.md"]), both)
+        self.touch(PS + "/a/skip.md")
+        self.assertEqual(self.listing("a/*.md", exclude=["skip.md"]), [PS + "/a/handoff.md"])
+
+    def test_nested_glob_unreadable_directory(self):  # NE13 (D-Q4)
+        if os.geteuid() == 0:
+            self.skipTest("root reads every directory")
+        self.touch(PS + "/c/handoff.md")
+        self.touch(PS + "/a/handoff.md")
+        s = self.sch("*/handoff.md")
+        for rel in (PS + "/c", PS):
+            with self.subTest(rel=rel):
+                full = os.path.join(self.root, rel)
+                os.chmod(full, 0)
+                self.addCleanup(os.chmod, full, 0o755)
+                with self.assertRaises(LayoutError) as cm:
+                    files_of(s, self.root, self.cfg)
+                self.assertEqual((cm.exception.rel, str(cm.exception)),
+                                 (rel, "cannot read the directory (Permission denied)"))
+                os.chmod(full, 0o755)
+
+    def test_nested_glob_with_path_items(self):  # NE14
+        self.touch(PS + "/a/handoff.md")
+        self.touch(".strict-delivery/context.yml")
+        s = self.sch(files=[{"path": "context"}, {"dir": "plan_state", "glob": "*/handoff.md"}])
+        self.assertEqual(files_of(s, self.root, self.cfg), [".strict-delivery/context.yml", PS + "/a/handoff.md"])
+        self.assertEqual(schema.expected_paths(s, self.cfg), [".strict-delivery/context.yml"])
+
+    def test_nested_glob_real_repository(self):  # NE16
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        got = files_of(self.sch("*/handoff.md"), repo, config.load(repo))
+        want = [PS + "/2026-10-31-strict-delivery-framework-b/handoff.md", PS + "/2026-10-31-strict-delivery-framework/handoff.md"]
+        self.assertEqual([g for g in got if g in want], want)
+        self.assertTrue(all(g.endswith("/handoff.md") and g.count("/") == PS.count("/") + 2 for g in got), got)
+        self.assertEqual(got, sorted(got))
+
+    def test_nested_glob_root_must_be_the_toplevel(self):  # NE15 with a nested glob
+        sub = os.path.join(self.root, "sub")
+        os.mkdir(sub)
+        with self.assertRaises(GateError) as cm:
+            files_of(self.sch("*/handoff.md"), sub, self.cfg)
+        self.assertEqual(str(cm.exception), "git rev-parse --show-toplevel: root must be the repository top level")
+
+    def test_nested_glob_unknown_dir_key(self):  # NE17
+        s = self.sch(files=[{"dir": "stat", "glob": "*/handoff.md"}])
+        with self.assertRaises(SchemaError) as cm:
+            files_of(s, self.root, self.cfg)
+        self.assertEqual(str(cm.exception), "%s: files: 'stat' is not a key of paths" % s.path)
+
+
+class FrontMatterValidate(Dirs):
+    """Producer 4 (rows FM1-FM16): ``validate_front_matter``."""
+
+    def setUp(self):
+        super().setUp()
+        self.hs = self.fm()
+        self.t = "---\nschema: %s\nplan: p\n---\n" % HTAG
+
+    def v(self, text, schema_=None):
+        return validate_front_matter(schema_ or self.hs, text, CFG)
+
+    def test_front_matter_valid(self):  # FM1, plan Step 1
+        self.assertEqual(self.v("---\nschema: h/1\nplan: p\n---\nbody\n".replace("h/1", HTAG)), [])
+        self.assertEqual(self.v(self.t), [])
+        self.assertEqual(self.v(self.t[:-1]), [])  # no newline after the closing line
+        self.assertEqual(self.v("---\nschema: %s\nplan: p\n---" % HTAG), [])
+
+    def test_front_matter_body_is_free_text(self):  # FM1
+        for body in ("---\n", "...\n", "\t\n", "a\x00b\n", "a\rb\n", "﻿\n", "\u0085\n", "\ud800\n", "x: [\n",
+                     "\x7f", " ", "-" * 100, "x" * 1000000):
+            with self.subTest(body=body[:12]):
+                self.assertEqual(self.v(self.t + body), [])
+
+    def test_front_matter_first_line(self):  # FM2
+        want = ["front matter: first line must be '---'"]
+        rest = "schema: %s\nplan: p\n---\n" % HTAG
+        for first in ("", "x", "", " ---", "---  ", "--- ", "----", "-- -", "---x", "﻿---", "---\r", "- --",
+                      " ---"):
+            with self.subTest(first=first):
+                self.assertEqual(self.v(first + "\n" + rest), want)
+        self.assertEqual(self.v(""), want)
+        self.assertEqual(self.v("\n---\n" + rest), want)
+        self.assertEqual(self.v(self.t.replace("\n", "\r\n")), want)
+
+    def test_front_matter_missing_closer(self):  # FM3, plan Step 1
+        want = ["front matter: no closing '---' line"]
+        self.assertEqual(self.v("---\nschema: %s\n" % HTAG), want)
+        for text in ("---\n", "---", "---\nschema: %s\nplan: p\n--- \n" % HTAG, "---\nplan: p\n----\n",
+                     "---\nplan: p\n...\n", "---\nplan: p\n ---\n", "---\nplan: p\n---\r\n", "---\nplan: p\n\t---\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.v(text), want)
+
+    def test_front_matter_closer_forms(self):  # FM3
+        self.assertEqual(self.v("---\nschema: %s\nplan: p\n---" % HTAG), [])  # the closer at EOF with no newline
+        self.assertEqual(self.v("---\nschema: %s\nplan: p\n---\n" % HTAG), [])
+
+    def test_front_matter_first_closer_wins(self):  # FM4
+        self.assertEqual(self.v(self.t + "more: 1\n---\nx\n---\n"), [])
+        self.assertEqual(self.v("---\nschema: %s\nplan: |\n  x\n---\n" % HTAG), [])
+        self.assertEqual(self.v("---\nschema: %s\nplan: |\n  x\n---\ny: 1\n---\n" % HTAG), [])
+
+    def test_front_matter_empty_is_not_a_mapping(self):  # FM5, FM6, FM11
+        want = ["front matter: must be a mapping"]
+        for text in ("---\n---\n", "---\n# c\n---\n", "---\n\n---\n", "---\n- a\n---\n", "---\njust text\n---\n",
+                     "---\n5\n---\n", "---\ntrue\n---\n", "---\nnull\n---\n", "---\n- a\n- b\n---\nschema: %s\n" % HTAG):
+            with self.subTest(text=text):
+                self.assertEqual(self.v(text), want)
+
+    def test_front_matter_yaml_line_is_file_line(self):  # FM7, plan Step 1
+        self.assertIn("front matter: line 4:", self.v("---\nschema: %s\nplan: p\nx: [\n---\n" % HTAG)[0])
+        cases = (("---\nschema: %s\nplan: p\nx: [\n---\n" % HTAG, "front matter: line 4: unterminated flow sequence"),
+                 ("---\nschema: [\nplan: p\n---\n", "front matter: line 2: unterminated flow sequence"),
+                 ("---\na: 1\na: 2\n---\n", "front matter: line 3: duplicate key 'a'"),
+                 ("---\nschema: %s\n...\nplan: p\n---\n" % HTAG, "front matter: line 3: document markers are not supported"),
+                 ("---\nschema:\t%s\n---\n" % HTAG, "front matter: line 2: tab used as a separator after ':'"),
+                 ("---\nschema: %s\nplan: p\nz: [\n---\nz: ]\n" % HTAG, "front matter: line 4: unterminated flow sequence"))
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(self.v(text), [want])
+
+    def test_front_matter_control_characters(self):  # FM8
+        want = ["front matter: line 2: control character not allowed"]
+        for ch in ("\r", "\x00", "\x01", "\x7f", "\ud800", "\x1f", "\x0b"):
+            with self.subTest(ch=ch):
+                self.assertEqual(self.v("---\nschema: %s%s\nplan: p\n---\n" % (HTAG, ch)), want)
+
+    def test_front_matter_integer_limits_same_on_both(self):  # FM9, V1
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                self.assertEqual(self.v("---\nschema: %s\nplan: 5\n---\n" % HTAG), ["plan: must be a non-empty string"])
+                self.assertEqual(self.v("---\nschema: %s\nplan: %s\n---\n" % (HTAG, "9" * 1000)),
+                                 TOO_BIG if limit == 640 else ["plan: must be a non-empty string"])  # see U2 of the report
+                for n in (1001, 4300, 4301):
+                    with self.subTest(limit=limit, digits=n):
+                        self.assertEqual(self.v("---\nschema: %s\nplan: %s\n---\n" % (HTAG, "9" * n)), TOO_BIG)
+
+    def test_front_matter_schema_errors_unprefixed(self):  # FM10
+        def t(body):
+            return "---\n" + body + "---\n"
+        self.assertEqual(self.v(t("schema: %s\nplan: p\nzzz: 1\n" % HTAG)), ["zzz: unknown key"])
+        self.assertEqual(self.v(t("schema: %s\n" % HTAG)), ["plan: required key is missing"])
+        self.assertEqual(self.v(t("schema: %s\nplan: 5\n" % HTAG)), ["plan: must be a non-empty string"])
+        self.assertEqual(self.v(t("schema: %s\nplan: null\n" % HTAG)), ["plan: must not be null"])
+        self.assertEqual(self.v(t("schema: h/2\nplan: p\n")),
+                         ["schema: expected %s, got h/2; run /strict-delivery:upgrade" % HTAG])
+        self.assertEqual(self.v(t("schema: x/1\nplan: p\n")), ["schema: expected %s, got x/1" % HTAG])
+        self.assertEqual(self.v(t("plan: p\n")), ["schema: expected %s, got (missing)" % HTAG])
+        long = self.v(t("schema: %s\nplan: p\n" % ("a" * 4301)))
+        self.assertEqual(long, ["schema: expected %s, got %s" % (HTAG, "a" * 4301)])
+        self.assertEqual(self.v(t("zzz: 1\nplan: p\nschema: %s\nyyy: 2\n" % HTAG)), ["zzz: unknown key", "yyy: unknown key"])
+
+    def test_front_matter_yaml_subset_applies(self):  # FM12
+        self.assertEqual(self.v("---\nschema: %s\nplan: a: b: c\n---\n" % HTAG),
+                         ["front matter: line 3: ':' followed by whitespace is not allowed in a plain scalar"])
+        for val in ('"x: y"', "|\n  text", "|-\n  text", "'q'", "a b", "a#b"):
+            with self.subTest(value=val):
+                self.assertEqual(self.v("---\nschema: %s\nplan: %s\n---\n" % (HTAG, val)), [])
+        for val in ("[a, b]", "\n  - a\n  - b"):
+            with self.subTest(value=val):
+                self.assertEqual(self.v("---\nschema: %s\nplan: %s\n---\n" % (HTAG, val)),
+                                 ["plan: must be a non-empty string"])
+        self.assertEqual(self.v("---\nschema: %s\nplan: {a: b}\n---\n" % HTAG),
+                         ["front matter: line 3: flow mappings are not supported"])
+
+    def test_front_matter_numeric_sha_needs_quotes(self):  # FM13
+        s = self.fm(fields={"schema": {"type": "str"}, "head": {"type": "sha"}})
+        for head, want in (("1234567", ["head: must be 7 to 40 lowercase hex digits"]), ("0123456", []),
+                           ("1234567e1", []), ('"1234567"', []), ("abcdef0", [])):
+            with self.subTest(head=head):
+                self.assertEqual(self.v("---\nschema: %s\nhead: %s\n---\n" % (HTAG, head), s), want)
+
+    def test_front_matter_text_types(self):  # FM14 (D-Q8)
+        class S(str):
+            pass
+        for text in (None, b"---\n", 5, S(self.t), [], True):
+            with self.subTest(text=type(text).__name__):
+                self.assertEqual(self.v(text), ["front matter: text must be a string"])
+
+    def test_front_matter_split_on_newline_only(self):  # FM15
+        for ch in (" ", "\u0085", " ", "\x0c"):
+            with self.subTest(ch=ch):
+                self.assertEqual(self.v("---\nschema: %s\nplan: a%sb\n---\n" % (HTAG, ch)),
+                                 ["front matter: line 3: control character not allowed"] if ch == "\x0c" else [])
+        self.assertEqual(self.v("---\nschema: %s \nplan: p\n---\n" % HTAG),
+                         ["schema: expected %s, got %s " % (HTAG, HTAG)])
+
+    def test_front_matter_large_input(self):  # FM16
+        keys = "".join("k%d: 1\n" % i for i in range(100000))
+        got = self.v("---\nschema: %s\nplan: p\n%s---\n" % (HTAG, keys))
+        self.assertEqual(len(got), 100000)
+        self.assertEqual((got[0], got[-1]), ("k0: unknown key", "k99999: unknown key"))
+
+    def test_front_matter_returns_a_list_and_leaves_the_schema(self):
+        got = self.v(self.t)
+        self.assertIs(type(got), list)
+        self.assertEqual(self.hs.fields, {"schema": {"type": "str"}, "plan": {"type": "str"}})
+
+
+class LinesValidate(Dirs):
+    """Producer 6 (rows LV1-LV17): ``validate_markdown`` with ``lines``."""
+
+    def setUp(self):
+        super().setUp()
+        self.ls = self.stand_in()
+
+    def v(self, *lines, schema_=None):
+        return validate_markdown(schema_ or self.ls, "\n".join((LTAG,) + lines))
+
+    def err(self, n, pat=STAND_IN, word="CHECKPOINT"):
+        return "line %d: '%s' line does not match %s" % (n, word, pat)
+
+    def test_lines_pattern_checked(self):  # LV1, plan Step 1
+        self.assertEqual(validate_markdown(self.ls, LTAG + "\nCHECKPOINT bad\nprose CHECKPOINT x\n"),
+                         ["line 2: 'CHECKPOINT' line does not match " + STAND_IN])
+
+    def test_lines_conforming_line_passes(self):  # LV2
+        self.assertEqual(self.v(GOOD_LINE, "prose", GOOD_LINE + "", ""), [])
+        self.assertEqual(self.v("CHECKPOINT xࡰ y head=" + "a" * 40), [])
+
+    def test_lines_word_with_colon(self):  # plan Step 1: "Ruling (x): y" is keyword-led
+        rs = self.ln([{"word": "Ruling", "pattern": "Ruling: .*"}])
+        self.assertEqual(validate_markdown(rs, LTAG + "\nRuling (x): y\n"),
+                         ["line 2: 'Ruling' line does not match Ruling: .*"])
+        self.assertEqual(validate_markdown(rs, LTAG + "\nRuling: y\n"), [])
+        self.assertEqual(validate_markdown(rs, LTAG + "\nRuling y\n"), ["line 2: 'Ruling' line does not match Ruling: .*"])
+
+    def test_lines_first_token_rule(self):  # LV3, LV4
+        cases = (("CHECKPOINT", True), ("CHECKPOINT:", True), ("CHECKPOINT::", False), ("CHECKPOINT:x", False),
+                 ("CHECKPOINT\tx", False), ("checkpoint x", False), ("CHECKPOINTS x", False), ("CHECKPOINT  x", True),
+                 ("prose CHECKPOINT x", False), ("x CHECKPOINT", False), ("a: CHECKPOINT", False),
+                 ("CHECKPOINT: a b head=abcdef0", True), ("CHECKPOINT a", True), ("Checkpoint a", False))
+        for line, keyword_led in cases:
+            with self.subTest(line=line):
+                self.assertEqual(self.v(line), [self.err(2)] if keyword_led else [])
+
+    def test_lines_token_rule_against_reference_oracle(self):  # the table's Oracle section
+        def keyword_led(line):  # the plan's rule written independently: first token to the first space, one ':' off
+            tok = line.split(" ", 1)[0]
+            if tok.endswith(":"):
+                tok = tok[:-1]
+            return tok == "CHECKPOINT"
+        words = ("CHECKPOINT", "CHECKPOINT:", "CHECKPOINT::", "checkpoint", "CHECKPOINTS", "CHECKPOINT\t", "CHECKPOINT:x",
+                 "", "x", "Z:")
+        sufs = ("", " x", ":x", "  x", " x y", "\tx", " CHECKPOINT", " " + GOOD_LINE[11:], "\r", " a b head=abcdef0")
+        pres = ("", " ", "x ", "  ", "\t")
+        lines = [p + w + s for p in pres for w in words for s in sufs]
+        fm = re.compile(STAND_IN)
+        want = ["line %d: 'CHECKPOINT' line does not match %s" % (i + 2, STAND_IN)
+                for i, ln in enumerate(lines) if keyword_led(ln) and not fm.fullmatch(ln)]
+        self.assertGreater(len(want), 8)
+        self.assertGreater(len([ln for ln in lines if keyword_led(ln) and fm.fullmatch(ln)]), 0)
+        self.assertEqual(self.v(*lines), want)
+
+    def test_lines_leading_space_never_keyword(self):  # LV5
+        self.assertEqual(self.v(" CHECKPOINT x", "  CHECKPOINT", "   ", "", " ", " CHECKPOINT"), [])
+
+    def test_lines_first_line_not_checked(self):  # LV6
+        self.assertEqual(validate_markdown(self.ls, LTAG), [])
+        s = self.stand_in(first_line="CHECKPOINT ok")
+        self.assertEqual(validate_markdown(s, "CHECKPOINT ok\nCHECKPOINT ok\n"), [self.err(2)])
+        self.assertEqual(validate_markdown(s, "CHECKPOINT ok\n"), [])
+        self.assertEqual(validate_markdown(self.ls, "CHECKPOINT bad\nCHECKPOINT bad\n"),
+                         ["first line: expected '%s'" % LTAG])
+
+    def test_lines_match_is_case_sensitive(self):  # F-20261118-qmmm: only re.ASCII, no IGNORECASE
+        upper = self.ln([{"word": "CHECKPOINT", "pattern": "CHECKPOINT X"}])
+        self.assertEqual(validate_markdown(upper, LTAG + "\nCHECKPOINT X\n"), [])
+        self.assertEqual(validate_markdown(upper, LTAG + "\nCHECKPOINT x\n"), [self.err(2, "CHECKPOINT X")])
+        lower = self.ln([{"word": "Ruling", "pattern": "Ruling: [a-z]+"}])
+        self.assertEqual(validate_markdown(lower, LTAG + "\nRuling: abc\n"), [])
+        self.assertEqual(validate_markdown(lower, LTAG + "\nRuling: ABC\nRuling: abC\n"),
+                         [self.err(2, "Ruling: [a-z]+", "Ruling"), self.err(3, "Ruling: [a-z]+", "Ruling")])
+        self.assertEqual(validate_markdown(lower, LTAG + "\nruling: abc\n"), [])  # the word is case sensitive too
+
+    def test_lines_fullmatch_decides(self):  # LV7, LV8
+        def s_(pat, word="CHECKPOINT"):
+            return self.ln([{"word": word, "pattern": pat}])
+        s = s_("CHECKPOINT x")
+        self.assertEqual(validate_markdown(s, LTAG + "\nCHECKPOINT x\n"), [])
+        self.assertEqual(validate_markdown(s, LTAG + "\nCHECKPOINT x y\n"), [self.err(2, "CHECKPOINT x")])
+        self.assertEqual(validate_markdown(s, LTAG + "\nx CHECKPOINT x\n"), [])
+        self.assertEqual(validate_markdown(s, LTAG + "\nCHECKPOINT xx\n"), [self.err(2, "CHECKPOINT x")])
+        a = s_("^CHECKPOINT x$")
+        self.assertEqual(validate_markdown(a, LTAG + "\nCHECKPOINT x\nCHECKPOINT x \n"), [self.err(3, "^CHECKPOINT x$")])
+        d = s_("a$", "a")
+        self.assertEqual(validate_markdown(d, LTAG + "\na\na \n"), [self.err(3, "a$", "a")])
+
+    def test_lines_errors_in_order_with_line_numbers(self):  # LV9
+        two = self.ln([{"word": "CHECKPOINT", "pattern": STAND_IN}, {"word": "Ruling", "pattern": "Ruling: .+"}])
+        got = validate_markdown(two, "\n".join((LTAG, "CHECKPOINT bad", GOOD_LINE, "Ruling: ok", "prose", "Ruling",
+                                                 "", "CHECKPOINT", "Ruling: x")))
+        self.assertEqual(got, [self.err(2), self.err(6, "Ruling: .+", "Ruling"), self.err(8)])
+
+    def test_lines_beside_table_and_headings(self):  # LV10
+        t = self.stand_in(table=["id"])
+        self.assertEqual(validate_markdown(t, "\n".join((LTAG, "| x |", "|---|", "CHECKPOINT bad"))),
+                         ["table: header must be '| id |', got '| x |'", self.err(4)])
+        self.assertEqual(validate_markdown(t, "\n".join((LTAG, "| id |", "|---|", "| CHECKPOINT x |", "CHECKPOINT bad"))),
+                         [self.err(5)])
+        h = self.stand_in(headings=["## One"])
+        self.assertEqual(validate_markdown(h, "\n".join((LTAG, "## Two", "CHECKPOINT bad"))),
+                         ["headings: expected [## One], got [## Two]", self.err(3)])
+        self.assertEqual(validate_markdown(h, "\n".join((LTAG, "## One", GOOD_LINE))), [])
+        self.assertEqual(validate_markdown(self.ls, LTAG + "\n| CHECKPOINT |\n"), [])
+
+    def test_lines_fences_not_special(self):  # LV11
+        self.assertEqual(self.v("```", "CHECKPOINT bad", "```", "> CHECKPOINT x", "- CHECKPOINT x", "* CHECKPOINT x"),
+                         [self.err(3)])
+
+    def test_lines_line_ends(self):  # LV12
+        self.assertEqual(validate_markdown(self.ls, (LTAG + "\nCHECKPOINT bad\n").replace("\n", "\r\n")),
+                         ["first line: expected '%s'" % LTAG])
+        loose = self.ln([{"word": "CHECKPOINT", "pattern": "CHECKPOINT [^ ]+"}])
+        self.assertEqual(self.v("CHECKPOINT x\r", schema_=loose), [])  # a stray CR stays in the line: [^ ] takes it
+        ascii_only = self.ln([{"word": "CHECKPOINT", "pattern": "CHECKPOINT [!-~]+"}])
+        self.assertEqual(self.v("CHECKPOINT x\r", schema_=ascii_only), [self.err(2, "CHECKPOINT [!-~]+")])
+        self.assertEqual(self.v("CHECKPOINT a b", "CHECKPOINT a\u0085b", schema_=loose), [])
+        self.assertEqual(self.v("CHECKPOINT bad CHECKPOINT bad"), [self.err(2)])
+        self.assertEqual(self.v(*([""] * 1000 + ["CHECKPOINT bad"])), [self.err(1002)])
+        self.assertEqual(validate_markdown(self.ls, LTAG + "\nCHECKPOINT bad"), [self.err(2)])  # no final newline
+
+    def test_lines_unicode_class_verdict_same_on_both(self):  # LV13, V2
+        loose = self.ln([{"word": "CHECKPOINT", "pattern": "CHECKPOINT [^ ]+ [^ ]+ head=[0-9a-f]{7,40}"}])
+        for ch in ("ࡰ", "\U0001fae8", "Ⱟ", "ౝ", " ", "é", "٥"):
+            with self.subTest(ch=ch):
+                self.assertEqual(self.v("CHECKPOINT %s %s head=abcdef0" % (ch, ch), schema_=loose), [])
+        digits = self.ln([{"word": "X", "pattern": "X [0-9]+"}])
+        self.assertEqual(self.v("X 123", "X ٥", schema_=digits), [self.err(3, "X [0-9]+", "X")])  # [0-9] is ASCII
+        self.assertEqual(self.v("X ࡰ", schema_=digits), [self.err(2, "X [0-9]+", "X")])
+
+    def test_lines_long_line_same_on_both(self):  # LV14, V1
+        digits = self.ln([{"word": "CHECKPOINT", "pattern": "CHECKPOINT [0-9]+"}])
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                for n in (4300, 4301, 1000000):
+                    with self.subTest(limit=limit, digits=n):
+                        self.assertEqual(self.v("CHECKPOINT " + "9" * n, schema_=digits), [])
+                        self.assertEqual(self.v("CHECKPOINT " + "9" * n + "x", schema_=digits),
+                                         [self.err(2, "CHECKPOINT [0-9]+")])
+                self.assertEqual(self.v("9" * 4301 + " x"), [])  # a numeric first token is just a token
+
+    def test_lines_text_not_str(self):  # LV15
+        for text in (None, b"%s\nCHECKPOINT bad" % LTAG.encode(), 5):
+            self.assertEqual(validate_markdown(self.ls, text), ["first line: text must be a string"])
+
+    def test_lines_many_lines(self):  # LV17
+        got = self.v(*(["CHECKPOINT bad"] * 100000))
+        self.assertEqual(len(got), 100000)
+        self.assertEqual((got[0], got[-1]), (self.err(2), self.err(100001)))
+
+    def test_lines_keyword_reasons_are_plain_text(self):
+        got = self.v("CHECKPOINT ࡰ")
+        self.assertEqual(got, [self.err(2)])
+
+
+class OneOf(Dirs):
+    """Task P2.1 part i, decision D-A1: the ``one_of`` union spec (``of: [spec, ...]``, pairwise distinct base types,
+    the alternative picked by ``type(value)`` exactly, no trial and backtrack)."""
+
+    OWNS = {"type": "one_of", "of": [{"type": "str"},
+                                      {"type": "map", "fields": {"path": {"type": "str"},
+                                                                 "from": {"type": "str", "required": False}}}]}
+
+    def field(self, spec=None):
+        return self.sch({"v": dict(spec or self.OWNS, required=False)})
+
+    def check(self, s, value):
+        return validate(s, {"schema": THING, "v": value}, CFG)
+
+    def test_one_of_is_a_type(self):
+        self.assertIn("one_of", schema.TYPES)
+        self.assertEqual(len(schema.TYPES), 14)
+        self.assertEqual(self.field().fields["v"]["type"], "one_of")
+
+    def test_one_of_valid_alternatives(self):  # the owns item of streams.yml: a string or a window map
+        s = self.field()
+        for value in ("src/", {"path": "src/"}, {"path": "src/", "from": "merged:a"}):
+            with self.subTest(value=repr(value)):
+                self.assertEqual(self.check(s, value), [])
+
+    def test_one_of_checks_the_matching_alternative_only(self):
+        s = self.field()
+        self.assertEqual(self.check(s, ""), ["v: must be a non-empty string"])
+        self.assertEqual(self.check(s, {}), ["v.path: required key is missing"])
+        self.assertEqual(self.check(s, {"path": "p", "x": 1}), ["v.x: unknown key"])
+        self.assertEqual(self.check(s, {"path": 5}), ["v.path: must be a non-empty string"])
+
+    def test_one_of_no_matching_alternative_names_the_allowed_types(self):
+        s = self.field()
+        class S(str):
+            pass
+        for value in (5, True, 1.5, ["a"], S("a"), b"x", ()):
+            with self.subTest(value=repr(value)):
+                self.assertEqual(self.check(s, value), ["v: must be a string or a mapping"])
+
+    def test_one_of_base_types(self):
+        alts = [{"type": "int", "min": 1}, {"type": "bool"}, {"type": "list", "items": {"type": "str"}},
+                {"type": "enum", "values": ["a", "b"]}]
+        s = self.field({"type": "one_of", "of": alts})
+        self.assertEqual(self.check(s, 3), [])
+        self.assertEqual(self.check(s, 0), ["v: must be at least 1"])
+        self.assertEqual(self.check(s, True), [])  # a bool is the bool alternative, never the int one
+        self.assertEqual(self.check(s, ["x"]), [])
+        self.assertEqual(self.check(s, [5]), ["v.0: must be a non-empty string"])
+        self.assertEqual(self.check(s, "a"), [])
+        self.assertEqual(self.check(s, "c"), ["v: must be one of a, b"])
+        self.assertEqual(self.check(s, {"x": 1}), ["v: must be an integer or true or false or a list or a string"])
+        only_int = self.field({"type": "one_of", "of": [{"type": "int"}, {"type": "str"}]})
+        self.assertEqual(self.check(only_int, False), ["v: must be an integer or a string"])
+
+    def test_one_of_string_types_share_one_base_type(self):
+        for t in ("text", "id", "sha", "glob", "cite", "sha-path"):
+            extra = {"id": {"id_kind": "decision"}}.get(t, {})
+            with self.subTest(t=t):
+                p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {
+                    "type": "one_of", "of": [{"type": "str"}, dict(type=t, **extra)]}}))
+                self.assertIn("same base type", m)
+
+    def test_one_of_nullable_and_required_belong_to_the_union(self):
+        s = self.sch({"v": dict(self.OWNS, nullable=True)})
+        self.assertEqual(self.check(s, None), [])
+        self.assertEqual(validate(s, {"schema": THING}, CFG), ["v: required key is missing"])
+        s = self.field()
+        self.assertEqual(self.check(s, None), ["v: must not be null"])
+
+    def test_one_of_inside_a_list(self):  # streams.yml owns: list of (str or map)
+        s = self.sch({"v": {"type": "list", "min": 1, "items": self.OWNS}})
+        self.assertEqual(self.check(s, ["a/", {"path": "b/"}]), [])
+        self.assertEqual(self.check(s, ["a/", 5]), ["v.1: must be a string or a mapping"])
+
+    def test_one_of_load_refusals(self):
+        def spec(**kw):
+            return dict(BASE, fields={"schema": {"type": "str"}, "v": dict({"type": "one_of"}, **kw)})
+        p, m = self.bad(spec())
+        self.assertEqual(m, "%s: fields.v.of: required by type one_of" % p)
+        for of in ([], "x", {"a": 1}, None, 5):
+            with self.subTest(of=repr(of)):
+                p, m = self.bad(spec(of=of))
+                self.assertEqual(m, "%s: fields.v.of: must be a non-empty list of field specs" % p)
+        p, m = self.bad(spec(of=["str"]))
+        self.assertEqual(m, "%s: fields.v.of.0: a field spec must be a mapping" % p)
+        p, m = self.bad(spec(of=[{"type": "str"}, {"type": "str"}]))
+        self.assertEqual(m, "%s: fields.v.of.1: has the same base type (str) as alternative 0; the alternatives need "
+                         "distinct base types" % p)
+        p, m = self.bad(spec(of=[{"type": "map", "fields": {"a": {"type": "str"}}}, {"type": "any-map"}]))
+        self.assertIn("same base type (map)", m)
+        p, m = self.bad(spec(of=[{"type": "str"}, {"type": "enum", "values": ["a"]}]))
+        self.assertIn("same base type (str)", m)
+        p, m = self.bad(spec(of=[{"type": "int"}, {"type": "enum", "values": [1]}]))
+        self.assertIn("same base type (int)", m)
+        p, m = self.bad(spec(of=[{"type": "one_of", "of": [{"type": "str"}]}]))
+        self.assertEqual(m, "%s: fields.v.of.0.type: a one_of alternative cannot itself be one_of" % p)
+        p, m = self.bad(spec(of=[{"type": "str"}, {"type": "one_of", "of": [{"type": "int"}]}]))
+        self.assertEqual(m, "%s: fields.v.of.1.type: a one_of alternative cannot itself be one_of" % p)
+        p, m = self.bad(spec(of=[{"type": "nope"}]))
+        self.assertIn("fields.v.of.0.type: must be one of", m)
+        p, m = self.bad(spec(of=[{"type": "map"}]))
+        self.assertEqual(m, "%s: fields.v.of.0.fields: required by type map" % p)
+        for key, val in (("required", False), ("nullable", True), ("required_when", [{"schema": ["x"]}]),
+                         ("absent_when", [{"schema": ["x"]}])):
+            with self.subTest(key=key):
+                p, m = self.bad(spec(of=[{"type": "str", key: val}]))
+                self.assertEqual(m, "%s: fields.v.of.0.%s: not used inside one_of" % (p, key))
+
+    def test_of_is_used_by_one_of_only(self):
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {"type": "str", "of": [{"type": "str"}]}}))
+        self.assertEqual(m, "%s: fields.v.of: not used by type str" % p)
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {"type": "one_of", "of": [{"type": "str"}],
+                                                                              "min": 1}}))
+        self.assertEqual(m, "%s: fields.v.min: not used by type one_of" % p)
+
+    def test_one_of_alternative_with_its_own_items_and_fields_is_checked(self):
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "str"}, "v": {
+            "type": "one_of", "of": [{"type": "list", "items": {"type": "str"}}, {"type": "str", "min": 1}]}}))
+        self.assertEqual(m, "%s: fields.v.of.1.min: not used by type str" % p)
+
+    def test_one_of_schema_field_cannot_be_the_tag(self):  # a yaml schema declares schema as a required str
+        p, m = self.bad(dict(BASE, fields={"schema": {"type": "one_of", "of": [{"type": "str"}]}}))
+        self.assertEqual(m, "%s: fields.schema: must be declared as a required, non-nullable str" % p)
+
+
+class VersionRows(Dirs):
+    """Skeleton rows V1-V5 of the P1.1 table that no producer row already covers."""
+
+    def test_digit_limits_same_on_both(self):  # V1
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                for n in (1000, 1001, 4300, 4301):
+                    with self.subTest(limit=limit, digits=n):
+                        s = self.sch(files=[{"dir": "decisions", "glob": "9" * n + "/x"}])
+                        self.assertEqual(s.files[0]["glob"], "9" * n + "/x")
+                hs = self.fm()
+                text = "---\nschema: %s\nplan: %s\n---\n"
+                self.assertEqual(validate_front_matter(hs, text % (HTAG, "9" * 1000), CFG),
+                                 TOO_BIG if limit == 640 else ["plan: must be a non-empty string"])
+                self.assertEqual(validate_front_matter(hs, text % (HTAG, "9" * 1001), CFG), TOO_BIG)
+
+    def test_unicode_version_independent(self):  # V2
+        hs = self.fm()
+        for ch in ("ࡰ", "\U0001fae8", "Ⱟ", "ౝ"):
+            with self.subTest(ch=ch):
+                self.assertEqual(validate_front_matter(hs, "---\nschema: %s\nplan: a%sb\n---\n" % (HTAG, ch), CFG), [])
+                p, m = self.bad(self.ln_data([{"word": "A" + ch, "pattern": "A"}]), name="l.yml")
+                self.assertEqual(m, "%s: lines.0.word: must be printable ASCII with no whitespace" % p)
+                p, m = self.bad(self.ln_data([{"word": "A", "pattern": "A" + ch}]), name="l.yml")
+                self.assertEqual(m, "%s: lines.0.pattern: %s" % (p, ASCII))
+                self.assertEqual(self.sch(files=[{"dir": "d", "glob": ch + "*/x"}]).files[0]["glob"], ch + "*/x")
+                self.assertEqual(validate_markdown(self.stand_in(), LTAG + "\nCHECKPOINT %s %s head=abcdef0\n" % (ch, ch)), [])
+
+    def test_exception_groups(self):  # V3 (the gate half is in tests/test_gate_schema.py)
+        beg = getattr(builtins, "BaseExceptionGroup", None)
+        eg = getattr(builtins, "ExceptionGroup", None)
+        if beg is None:
+            self.skipTest("BaseExceptionGroup is absent on this interpreter (3.9)")
+        hs = self.fm()
+        for exc in (beg("x", [KeyboardInterrupt()]), eg("x", [ValueError()])):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch.object(yamlsub, "parse", side_effect=exc):
+                    with self.assertRaises(beg) as cm:
+                        validate_front_matter(hs, "---\nschema: %s\nplan: p\n---\n" % HTAG, CFG)
+                self.assertIs(cm.exception, exc)
+
+
+if __name__ == "__main__":
+    unittest.main()
 if __name__ == "__main__":
     unittest.main()

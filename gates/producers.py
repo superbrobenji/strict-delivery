@@ -4,4 +4,5 @@ Each later gate or tool module defines ``PRODUCES``, a tuple of kind names, and 
 module's dotted name here.
 """
 
-PRODUCER_MODULES: tuple = ("gates.tools.index", "gates.tools.decisions_cli", "gates.tools.findings_cli")
+PRODUCER_MODULES: tuple = ("gates.tools.index", "gates.tools.decisions_cli", "gates.tools.findings_cli",
+                           "gates.tools.claims_cli", "gates.gate_checkpoint", "gates.tools.program_cli")

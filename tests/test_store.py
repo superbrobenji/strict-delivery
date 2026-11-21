@@ -21,6 +21,7 @@ A = "DEC-20261031-k3f9"
 B = "DEC-20261031-m4n5"
 C = "DEC-20261031-p6q7"
 FID = "F-20261031-k3f9"
+FTAG = "finding/%d" % migrations.current_version("finding")  # Global Constraints "Test fixtures"
 FID2 = "F-20261031-m4n5"
 DTAG = "decision/%d" % decisions._schema().version  # Global Constraints "Test fixtures"
 
@@ -208,7 +209,7 @@ class LoadTest(Base):
         root, s = self.newstore()
         write_record(root, "%s/%s.yml" % (DIR, A), row(A))
         self.writefile(root, "index.yml", "a: [1\n")
-        self.writefile(root, "in-force.md", "<!-- schema: in-force/1 -->\n")
+        self.writefile(root, "in-force.md", "<!-- schema: in-force/%d -->\n" % migrations.current_version("in-force"))
         self.assertEqual([r.id for r in s.load()], [A])
 
     def test_every_other_entry_refused_naming_it(self):  # S2 (owner Q-1a3-3, Q-1a3-4)
@@ -828,19 +829,19 @@ class BaseErrorsChangeTest(GitCase):
 class BaseErrorsFindingTest(GitCase):
     def test_closed_finding_changed_to_merged_is_immutable(self):  # B5, spec 7.2 exception is the cleanup step's
         store = Store(self.root, "finding", self.cfg)
-        self.put(FID, {"schema": "finding/1", "id": FID, "status": "closed"}, rel=FDIR)
-        self.put(FID2, {"schema": "finding/1", "id": FID2, "status": "open"}, rel=FDIR)
+        self.put(FID, {"schema": FTAG, "id": FID, "status": "closed"}, rel=FDIR)
+        self.put(FID2, {"schema": FTAG, "id": FID2, "status": "open"}, rel=FDIR)
         commit_all(self.root, "findings")
         self.fork()
-        self.put(FID, {"schema": "finding/1", "id": FID, "status": "merged"}, rel=FDIR)
-        self.put(FID2, {"schema": "finding/1", "id": FID2, "status": "closed"}, rel=FDIR)
+        self.put(FID, {"schema": FTAG, "id": FID, "status": "merged"}, rel=FDIR)
+        self.put(FID2, {"schema": FTAG, "id": FID2, "status": "closed"}, rel=FDIR)
         errs = base_errors(self.root, store, "main", lambda r: r["status"] in ("closed", "merged"), never)
         self.assertEqual([s for s, _ in errs], ["immutable." + FID])
         self.assertEqual(errs[0][1], "resolved records are immutable; record the change as a new finding")
 
     def test_deleted_finding_uses_may_delete(self):  # B3
         store = Store(self.root, "finding", self.cfg)
-        self.put(FID, {"schema": "finding/1", "id": FID, "status": "closed"}, rel=FDIR)
+        self.put(FID, {"schema": FTAG, "id": FID, "status": "closed"}, rel=FDIR)
         commit_all(self.root, "finding")
         self.fork()
         git(self.root, "rm", "-q", "--", "%s/%s.yml" % (FDIR, FID))

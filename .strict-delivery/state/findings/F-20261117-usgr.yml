@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261117-usgr
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/docs-reg8/plan-review-1.md:116-124 (F-5, plan review 1); severity LOW stated at source. Under owner Q-REG7-4 (a) (2026-11-17, relayed by the program controller), the spec :621 cell now reads run_all, then commands.test; plan :6240 still quotes the old cell text and says no task owns it.
+severity: LOW
+class: "plan statements of the strict pre-commit cell: {plan :6240 (Block 6 gaps and divergences)}"
+siblings: []
+cites:
+  - file: docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md
+    lines: "6240"
+    sha: fe677c0
+  - file: docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md
+    lines: "621"
+    sha: fe677c0
+repro: "`awk 'NR==6240' <plan>; awk 'NR==621' <spec>` at fe677c0 (run 2026-11-17) prints: - Gap: spec section 12's strict pre-commit cell reads \"run_all + gate suite on every supported runtime\". No task in the plan outline or in any detailed section seen so far runs a target project's gates on every supported runtime. Task 6R.1 tests `run_all`'s gate set per profile only. The program plan should name an owner for this cell. | | pre-commit | schema, register, decisions | run_all | run_all, then `commands.test` | (section sign written as 'section ' because the register takes ASCII only; source plan-review-1.md:121)"
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2b.2
+pin: null
+ruling: null
+evidence: []
+review_round: 1
+caused_by_change: true
+dimension: "spec/plan consistency"
+history:
+  - status: open
+    sha: fe677c08d674de635c9a6b0eb9fb21b1384b642a
+    by: docs-reg8

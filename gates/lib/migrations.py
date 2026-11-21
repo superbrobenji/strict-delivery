@@ -20,7 +20,14 @@ def _decision_1(row: dict) -> dict:
     return new
 
 
-MIGRATIONS: dict = {("decision", 1): _decision_1}
+def _config_1(row: dict) -> dict:
+    """``config/1`` -> ``config/2``: the tag only; the new keys are optional and defaulted (spec 15)."""
+    new = copy.deepcopy(row)
+    new["schema"] = "config/2"
+    return new
+
+
+MIGRATIONS: dict = {("decision", 1): _decision_1, ("config", 1): _config_1}
 
 
 def _check_kind(kind: object) -> str:

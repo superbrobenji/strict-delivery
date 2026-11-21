@@ -1,0 +1,25 @@
+schema: finding/1
+id: F-20261117-z3kv
+status: open
+source: "U-1 (docs-reg8 plan review 1, unrelated): .superpowers/sdd/2026-10-31-strict-delivery-framework/docs-reg8/plan-review-1.md:130-135; severity LOW stated at source"
+severity: LOW
+class: "statements that the harness keeps an agent alive while its children run: {programs 4.2:104 (fixed here), plan :2274}. Programs 4.4 :120-122 and main section 8 :491-495 (\"writes its handoff and returns\") are the separate, already recorded mismatch (docs-reg8-log.md:9, stream-b10-report.md:64)."
+siblings: []
+cites:
+  - file: docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md
+    lines: "2274"
+    sha: 90d967d
+repro: "`git grep -n -i 'stays alive' -- docs` at a810d32 hits only plan :2274 (run 2026-11-17; source plan-review-1.md:132)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+review_round: 1
+caused_by_change: false
+dimension: "harness facts in the plan"
+history:
+  - status: open
+    sha: a810d326745ed8f53c70bdb775a4cf39d9295b09
+    by: docs-reg8

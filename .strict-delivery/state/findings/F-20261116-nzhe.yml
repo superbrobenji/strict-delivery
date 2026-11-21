@@ -1,0 +1,25 @@
+schema: finding/1
+id: F-20261116-nzhe
+status: open
+source: "UR-r1: SDD/stream-a2-g0-log.md:29, SDD/g0/review-1.md:79 (SDD = .superpowers/sdd/2026-10-31-strict-delivery-framework)"
+severity: LOW
+class: "stale gate-list prose: the repo skill's gate statements {cites, decisions, register}"
+siblings: []
+cites:
+  - file: .claude/skills/strict-delivery-repo/SKILL.md
+    lines: "21"
+    sha: f3ec748
+repro: "At f3ec748 (checked 2026-11-16, and at 2ab84d6 and a5de4db per source) python3 -m gates check cites, check decisions and check register each exit 0, while SKILL.md:21 says check cites fails cites.input until its module lands and that decisions and register are not registered."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+review_round: 1
+caused_by_change: false
+dimension: "stale gate-list prose"
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

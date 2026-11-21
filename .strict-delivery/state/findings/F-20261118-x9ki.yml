@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-x9ki
+status: open
+source: "PR-P2 final review: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/final-review-P2.md F-1"
+severity: MEDIUM
+class: "streams.yml shared path over a protected path: a shared entry equal to, under or covering the program folder, paths.decisions, paths.findings, the program plan's file or its workspace (or another stream's plan workspace, the committing stream's plan file) is accepted by streams_errors and judged before the record check in gate_streams.stream_reason (gate_streams.py:332-338, programs.py:613-621; P:2837)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c76520077fa4bb9833572b065d2f63e97dc1ee06
+    by: stream-a13
+review_round: 3
+caused_by_change: true
+dimension: streams.yml shared paths against protected paths (P2.1 streams_errors, P2.3 stream_reason order)

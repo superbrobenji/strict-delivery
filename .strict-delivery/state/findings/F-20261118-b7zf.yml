@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-b7zf
+status: open
+source: "P1.1 task review 2: .superpowers/sdd/2026-10-31-strict-delivery-framework/g5/P1.1-review-2.md R2-1 (docstring part; the cost behaviour is F-20261118-ff4c's residual, not caused by the fix)"
+severity: LOW
+class: "false cost statement in the dialect docstring: 'that count only bounds it' (the cap bounds no cost: a* x24 + b hangs on 40 chars); gates/lib/schema.py:213-221"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P1.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f9ee4f6f374fb8cb3ee62e91eeac0bbb79b79a30
+    by: stream-a9
+review_round: 2
+caused_by_change: true
+dimension: pattern cost (D-Q11, D-Q12)

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-xsyj
+status: open
+source: "PR-2c1 final review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g4/final-review-1.md FR-3"
+severity: LOW
+class: "numeric-text and length rows M8/X1: the 4301-character --recommend subTest never runs (cap-at-4300 mutant survives); tests/test_decisions_cli.py test_ask_recommend_label_forms"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 311554fb63abe9be94ced284d1c1d1cb283d9f69
+    by: stream-a9
+review_round: 3
+caused_by_change: true
+dimension: label length 4300/4301

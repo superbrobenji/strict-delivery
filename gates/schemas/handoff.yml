@@ -1,0 +1,162 @@
+kind: handoff
+version: 1
+format: front-matter
+files:
+  - dir: plan_state
+    glob: "*/handoff.md"
+fields:
+  schema:
+    type: str
+  plan:
+    type: str
+  spec:
+    type: list
+    min: 1
+    items:
+      type: str
+  branch:
+    type: str
+  head:
+    type: sha
+  base:
+    type: sha
+  ledger:
+    type: str
+  resume:
+    type: str
+  block:
+    type: str
+  next_task:
+    type: str
+  findings_in_flight:
+    type: list
+    items:
+      type: id
+      id_kind: finding
+  open_decisions:
+    type: list
+    items:
+      type: id
+      id_kind: decision
+  rulings:
+    type: int
+    min: 0
+  grant:
+    type: str
+    nullable: true
+  live_subagents:
+    type: list
+    items:
+      type: map
+      fields:
+        agent:
+          type: str
+        task:
+          type: str
+        worktree:
+          type: str
+        transcript:
+          type: str
+        last_record:
+          type: str
+        jobs:
+          type: list
+          items:
+            type: map
+            fields:
+              id:
+                type: str
+              state:
+                type: enum
+                values:
+                  - running
+                  - finished
+                  - stopped
+  role:
+    type: str
+  budget:
+    type: map
+    fields:
+      tokens:
+        type: int
+        min: 1
+      minutes:
+        type: int
+        min: 1
+  program:
+    type: str
+    required: false
+  stream:
+    type: str
+    required: false
+  worktrees:
+    type: list
+    min: 1
+    items:
+      type: map
+      fields:
+        path:
+          type: str
+        branch:
+          type: str
+          nullable: true
+        head:
+          type: sha
+        porcelain:
+          type: text
+  required_reads:
+    type: list
+    required: false
+    items:
+      type: map
+      fields:
+        path:
+          type: str
+        lines:
+          type: str
+          required: false
+        why:
+          type: str
+  skills:
+    type: list
+    min: 1
+    items:
+      type: str
+  ledger_from:
+    type: int
+    min: 2
+  batch_cut:
+    type: sha
+    nullable: true
+  questions:
+    type: list
+    items:
+      type: map
+      fields:
+        qid:
+          type: str
+        class:
+          type: str
+        question:
+          type: str
+        effect:
+          type: enum
+          values:
+            - lasting
+            - one-off
+        options:
+          type: list
+          min: 2
+          items:
+            type: map
+            fields:
+              label:
+                type: str
+              cost:
+                type: str
+        recommended:
+          type: str
+          required: false
+        source:
+          type: str
+          required: false

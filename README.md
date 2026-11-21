@@ -47,9 +47,9 @@ only), so the target project can be in any language.
 | register row per change, binding decisions, no gate bypass | yes | yes | yes |
 | claims register (doc statements checked) | no | yes | yes |
 | dispatch contract and model tiers enforced | no | yes | yes |
-| adversarial top-tier verifier per block | no | no | yes |
+| adversarial top-tier verifier per stream | no | no | yes |
 | mutation proof that tests can fail | no | per finding | every pin |
-| pre-commit | schema, register, decisions gates | `run_all` (every gate) | `run_all` plus the gate suite on every supported runtime |
+| pre-commit | schema, register, decisions gates | `run_all` (every gate) | `run_all`, then `commands.test` |
 | tasks per block | no cap | 5 | 3 |
 
 This repository is configured as `strict` and follows it by hand for now: `run_all`, the git
@@ -83,8 +83,14 @@ planned owner step.
 - Stack command detection (the input for `init`)
 - Base playbook, the skill and the agent prompt blocks, with a checker for their text
 - Gate output identical on Python 3.9 and 3.13, the two tested versions (frozen Unicode tables)
+- Gate command-line error text identical on both versions (a restricted argument parser) and a frozen case-fold table for decision text (#21)
+- Playbook and prompt-block rules from the build so far: a threshold for asking the owner, an explicit model on every dispatch, no handback while child agents run (#15, #19)
+- The plan and the stream breakdown re-based on the owner's answers of 2026-11-10 and 2026-11-14 (revision 6, #16), and the findings register kept current (#18, #20)
+- This overview itself (#14)
+- `run_all`, every enabled gate in one command (#17), `loopstats`, the fix-loop stopping math (#22), and the git hooks tool `gates/tools/githooks.py` with the CI workflow (#23)
+- `findings new` loop fields: `--review-round`, `--caused-by-change` and `--dimension` write the finding fields `loopstats` counts (#24)
 
-Merged pull requests: #1-#13.
+Merged pull requests: #1-#24.
 
 ## Roadmap to v0.1
 
@@ -97,8 +103,12 @@ Merged pull requests: #1-#13.
 
 A few smaller follow-up blocks (for example Block 1d3) are registered, not yet scheduled; the plan has the full list.
 
-Target: mid-November 2026. Progress and every decision are in the ledger under
-`.strict-delivery/state/plans/`.
+Target: about 60.0 hours of work from 2026-11-17 14:00 to the v0.1.0 tag (revision 7 of the
+stream breakdown, `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md`,
+section 7, after the delivery-process redesign of that day). That is Friday 2026-11-20 if the
+work ran around the clock, and Friday 2026-11-27 at eight working hours a day. The estimate
+does not include waiting for owner answers or for usage limits. Progress and every decision
+are in the ledger under `.strict-delivery/state/plans/`.
 
 ## License
 

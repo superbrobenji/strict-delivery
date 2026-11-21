@@ -9,7 +9,7 @@ import unicodedata
 SPEC_ROLES = (
     "program_controller", "stream_controller", "controller", "implementer", "implementer_transcription",
     "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer", "audit_reviewer", "audit_verifier",
-    "investigator",
+    "investigator", "plan_writer", "plan_reviewer", "drafter",
 )
 B_ROLES = SPEC_ROLES[2:]
 PROGRAM_ROLES = SPEC_ROLES[:2]
@@ -55,6 +55,10 @@ LABELS = {
     "audit_reviewer": ("Verification method.", "Coverage first.", "Method.") + _TAIL,
     "audit_verifier": ("Verification method.", "Method.", "Verdict.") + _TAIL,
     "investigator": ("Verification method.", "Read-only.") + _TAIL,
+    "plan_writer": ("Verification method.", "Draft only.", "Plan shape.", "Input domain.") + _TAIL,
+    "plan_reviewer": ("Verification method.", "Read-only.", "Method.", "Input domain.", "No out-of-scope bucket.",
+                      "Verdict.") + _TAIL,
+    "drafter": ("Verification method.", "Draft only.", "Input domain.") + _TAIL,
 }
 
 # A str must occur as a whole token; a tuple inside means any one of its members.
@@ -67,12 +71,14 @@ REQUIRED = {
     "Commit gate.": ("python3 -m gates run_all",),
     "Input domain.": ("input-domain table",),
     "Unstated behaviour.": ("NEEDS_DECISION", "mutant"),
-    "No out-of-scope bucket.": ("class-narrowing question for the owner", "missing input-domain table is a finding"),
+    "No out-of-scope bucket.": ("class-narrowing question for the controller", "missing input-domain table is a finding"),
     "Oracle.": ("production path", "independent expected value"),
     "Finding class.": ("class: <dimension>: <members>",),
     "Continuation.": ("handoff", "BLOCKED: budget", "Nothing continues from inherited memory"),
     "Dispatch discipline.": tuple("`%s`" % h for h in DISPATCH_HEADINGS) + ("fork",),
     "Read-only.": ("no tracked file",),
+    "Draft only.": ("draft file", "no tracked file"),
+    "Plan shape.": ("Input-domain dimensions", "assertions as code", "owner question"),
 }
 
 _TOKEN_CHARS = frozenset("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-")

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-bc74
+status: open
+source: "P2.1 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/P2.1-review-1.md R1-3"
+severity: MEDIUM
+class: load_program at a ref accepts a symlink or subfolder in requests/ that it refuses in the working tree (gates/lib/programs.py:1240; D-A9, row PR9)
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 0d12bf3e3ef40e4b4657bac12e548d51358003a2
+    by: stream-a11
+review_round: 1
+caused_by_change: true
+dimension: D-A9 load_program stray entries

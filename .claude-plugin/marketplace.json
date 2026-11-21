@@ -1,0 +1,17 @@
+{
+  "name": "strict-delivery",
+  "owner": {
+    "name": "Benjamin Swanepoel"
+  },
+  "plugins": [
+    {
+      "name": "strict-delivery",
+      "source": "./",
+      "version": "0.0.0",
+      "description": "Strict delivery process for agent-built software: roles, gates and hooks that verify every change."
+    }
+  ],
+  "allowCrossMarketplaceDependenciesOn": [
+    "claude-plugins-official"
+  ]
+}

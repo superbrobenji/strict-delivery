@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-rtq4
+status: open
+source: "P2.3 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/P2.3-review-1.md R1-1"
+severity: LOW
+class: "plan Step 1 test names absent (plan :2857-2893): test_stream_may_not_edit_request, test_integration_merged_into_stream_fails, test_stream_judged_against_main, test_integration_merge_of_main_exempt, test_integration_non_merge_outside_folder_fails, test_append_rows_rule exist under other names"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 32e77ec0784a4da5a8f885e3655b2d86620edff9
+    by: stream-a13
+review_round: 1
+caused_by_change: true
+dimension: plan Step 1 test names

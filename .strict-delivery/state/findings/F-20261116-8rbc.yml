@@ -1,0 +1,24 @@
+schema: finding/1
+id: F-20261116-8rbc
+status: open
+source: "UF-1: SDD/stream-a2-g3-report.md:44 (SDD = .superpowers/sdd/2026-10-31-strict-delivery-framework; severity not stated at source; no reproducer file kept at source, only f1_39.txt/f1_313.txt under scratchpad g3/)"
+severity: LOW
+class: "argparse help text by interpreter: the options heading in every parser built on _GateParser / gate_args"
+siblings: []
+cites:
+  - file: gates/lib/result.py
+    lines: 86-97
+    sha: f3ec748
+repro: "python3 -m gates findings new -h (any gates parser on -h, --help or -hh, stderr): the options heading is 'optional arguments:' on /usr/bin/python3 (3.9.6) and 'options:' on python3.13 (checked 2026-11-16 at f3ec748). Source scripts f1_39.txt and f1_313.txt under scratchpad g3/ (not kept)."
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+caused_by_change: false
+dimension: "argparse help text by interpreter"
+history:
+  - status: open
+    sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
+    by: docs-reg7

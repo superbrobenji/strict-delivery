@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-9ays
+status: open
+source: "2c.1 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g4/2c.1-review-1.md F1"
+severity: LOW
+class: "mint union of three registers: the finding register input untested (mutant dropping finding survives); gates/tools/claims_cli.py:251-252"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 3b8b8420a0c89c758a920912e9db0d846701397e
+    by: stream-a9
+review_round: 1
+caused_by_change: true
+dimension: mint collision across the registers

@@ -1,0 +1,16 @@
+{
+  "name": "strict-delivery",
+  "version": "0.0.0",
+  "description": "Strict delivery process for agent-built software: roles, gates and hooks that verify every change.",
+  "author": {
+    "name": "Benjamin Swanepoel"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/superbrobenji/strict-delivery",
+  "dependencies": [
+    {
+      "name": "superpowers",
+      "marketplace": "claude-plugins-official"
+    }
+  ]
+}
