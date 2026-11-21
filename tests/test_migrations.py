@@ -55,12 +55,13 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(current_version("claim"), data["version"])
 
     def test_missing_or_broken_schema_file_raises(self):  # V2
-        # A known kind with no schema file: "context" (Task P2.1 part i ships request.yml, so "request" is no longer
-        # the fixture; "context" has no schema file yet).
+        # A known kind with no schema file: an empty patched SCHEMAS_DIR (Task 5a.1 ships context.yml; a shipped kind
+        # is never the fixture again; domain decision PD23).
         self.assertIn("context", schema.KNOWN_KINDS)
-        self.assertFalse(os.path.lexists(os.path.join(schema.SCHEMAS_DIR, "context.yml")))
-        with self.assertRaises(schema.SchemaError):
-            current_version("context")
+        with tempfile.TemporaryDirectory() as empty:
+            with mock.patch.object(schema, "SCHEMAS_DIR", empty):
+                with self.assertRaises(schema.SchemaError):
+                    current_version("context")
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "decision.yml"), "w", encoding="utf-8") as fh:
                 fh.write("kind: decision\nversion: 0\nformat: yaml\n")

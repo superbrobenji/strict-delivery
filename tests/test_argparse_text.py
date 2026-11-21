@@ -914,6 +914,7 @@ class TestParserSites(unittest.TestCase):
             ("gates/run_all.py", "gate_args"),
             ("gates/tools/claims_cli.py", "_GateParser"), ("gates/tools/claims_cli.py", "add_parser"),
             ("gates/tools/claims_cli.py", "add_parser"), ("gates/tools/claims_cli.py", "add_subparsers"),
+            ("gates/tools/context_cli.py", "gate_args"),  # Task 5a.1: the context tool, built by gate_args
             ("gates/tools/decisions_cli.py", "gate_args"), ("gates/tools/findings_cli.py", "_GateParser"),
             ("gates/tools/findings_cli.py", "add_parser"), ("gates/tools/findings_cli.py", "add_parser"),
             ("gates/tools/findings_cli.py", "add_subparsers"), ("gates/tools/index.py", "gate_args"),
