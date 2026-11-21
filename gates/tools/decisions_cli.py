@@ -25,6 +25,7 @@ PRODUCES = ("decision",)
 _rng = random.SystemRandom()  # the mint's generator (decision D-6); tests patch it to force a collision
 _SUBS = ("ask", "batch", "decide", "find", "withdraw")
 _TOPIC = re.compile(r"[a-z0-9][a-z0-9-]*")
+_TAG = re.compile(r"q:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9-]*")  # the upward-question tag q:<plan>:<qid> (Task P4.1 D-Q1)
 _PLAN = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _WORD = re.compile(r"[0-9A-Za-z]+")
 _EFFECTS = ("lasting", "one-off")
@@ -51,6 +52,13 @@ def _slug(flag: str, value: str, pattern: "re.Pattern") -> str:
     if not pattern.fullmatch(value):
         raise GateError("%s: must match %s" % (flag, pattern.pattern))
     return value
+
+
+def _topic(flag: str, value: str) -> str:
+    """A topic: ``_TOPIC``'s form, or exactly the question tag ``q:<name>:<name>`` (Task P4.1 D-Q1); no other colon."""
+    if _TAG.fullmatch(value):
+        return value
+    return _slug(flag, value, _TOPIC)
 
 
 def _glob(flag: str, value: str) -> str:
@@ -211,7 +219,7 @@ def _ask(ns) -> int:
     _unique("--option label", [o["label"] for o in options])
     cls = _text("--class", ns.cls)
     by = _text("--by", ns.by)
-    topics = _unique("--topic", [_slug("--topic", t, _TOPIC) for t in ns.topic or []])
+    topics = _unique("--topic", [_topic("--topic", t) for t in ns.topic or []])
     globs = _unique("--applies-to", [_pattern("--applies-to", g) for g in ns.applies_to or []])
     if ns.effect not in _EFFECTS:
         raise GateError("--effect: must be lasting or one-off")
@@ -305,7 +313,7 @@ def _withdraw(ns) -> int:
 
 def _find(ns) -> int:
     terms = [_text("TERM", t) for t in ns.terms]
-    topic = _slug("--topic", ns.topic, _TOPIC) if ns.topic is not None else None
+    topic = _topic("--topic", ns.topic) if ns.topic is not None else None
     path = _glob("--path", ns.path) if ns.path is not None else None
     root, cfg = _setup(ns.root)
     decs = index._records(root, "decision", cfg, decisions.validate)
