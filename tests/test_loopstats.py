@@ -300,9 +300,12 @@ class TestCli(Fixture):
                            ("plain", plain), ("subdir", sub), ("no config", bare_repo)):
             with self.subTest(name):
                 self.refused(argv + ["--root", root], "")
-        write_record(self.root, ".strict-delivery/config.yml", dict(minimal_config(), escape_cost={
-            "CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}))
-        self.refused(argv + ["--root", self.root], "escape_cost")
+        # E19: a config/1 file (escape_cost present) is refused as a whole, before the key is looked at
+        write_record(self.root, ".strict-delivery/config.yml", dict(
+            minimal_config(), schema="config/1", escape_cost={"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}))
+        err = self.refused(argv + ["--root", self.root], "config/2")
+        self.assertEqual(err, "loopstats: .strict-delivery/config.yml: schema: must be 'config/2'; "
+                              "run /strict-delivery:upgrade\n")
 
     def test_cli_default_root(self):  # D10: --root defaults to result.repo_root()
         from unittest import mock
@@ -330,24 +333,20 @@ class TestCli(Fixture):
         self.put(bad)
         self.assertIn(bad["id"], self.refused(self.base(), "severity"))
 
-    def test_escape_cost_shape_refused(self):
-        # E2: under config/2 config.load refuses a malformed escape_cost with its own message; a well-formed one is
-        # refused by loopstats itself (fail closed) until the registered follow-up "6E.3 escape_cost read after
-        # config/2" reads it. Every shape exits 1 with one stderr line.
+    def test_escape_cost_shape_refused(self):  # E18, K2b, K4
+        # config.load refuses a malformed escape_cost with its own message (first line of defence on the CLI path);
+        # every shape exits 1 with one stderr line. Well-formed values are read: see test_cli_ev_line.
         self.golden_fixture()
         full = {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}
         cfg = ".strict-delivery/config.yml"
         lead = "loopstats: " + cfg + ": "
-        closed = ("loopstats: escape_cost is set, but loopstats does not read it yet "
-                  "(follow-up task 6E.3 escape_cost read after config/2)")
         low = lead + "escape_cost.LOW: must be an integer of at least 0"
         digits_cap = lead + "escape_cost.LOW: must be an integer of at most 600 digits"
         shapes = {
-            "valid": (full, closed),
             "missing LOW": ({k: 1 for k in ("CRITICAL", "HIGH", "MEDIUM")}, lead + "escape_cost.LOW: required key is missing"),
             "INFO": (dict(full, INFO=1), lead + "unknown key 'escape_cost.INFO'"),
             "negative": (dict(full, LOW=-1), low), "bool": (dict(full, LOW=True), low),
-            "string": (dict(full, LOW="2"), low), "zeros": ({k: 0 for k in full}, closed),
+            "string": (dict(full, LOW="2"), low),
             "U+1FAE8 key": (dict(full, **{"\U0001FAE8": 1}), lead + "unknown key 'escape_cost.\\U0001fae8'"),
         }
         # PC1: emit refuses an integer over yamlsub.MAX_INT_CHARS, so the digit rows are written as text; the parser's
@@ -384,16 +383,19 @@ class TestCli(Fixture):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual((p.returncode, p.stdout.decode()), (0, GOLDEN))
 
-    def test_pc1_long_numbers(self):  # K1
+    def test_pc1_long_numbers(self):  # K1 (F1): literal refusal texts, identical for 4300 and 4301 digits
         self.golden_fixture()
         for digits in (4300, 4301):
             with self.subTest(argv=digits):
-                self.refused(self.base(rounds="9" * digits), "--rounds")
-                self.refused(self.base("--narrowed", "9" * digits), "--narrowed")
+                self.assertEqual(self.refused(self.base(rounds="9" * digits), "--rounds"),
+                                 "loopstats: --rounds: must be an integer from 1 to 99\n")
+                self.assertEqual(self.refused(self.base("--narrowed", "9" * digits), "--narrowed"),
+                                 "loopstats: --narrowed: must be an integer from 1 to 99\n")
         path = os.path.join(self.root, FDIR, fid(0) + ".yml")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         self.assertIn("review_round: 1\n", text)
+        want = "loopstats: %s/%s.yml: integer too large (line 24)\n" % (FDIR, fid(0))
         msgs = []
         for digits in (4300, 4301):
             with self.subTest(row=digits):
@@ -401,9 +403,8 @@ class TestCli(Fixture):
                     fh.write(text.replace("review_round: 1\n", "review_round: %s\n" % ("9" * digits)))
                 code, out, err = self.run_main(self.base())
                 self.assertEqual((code, out), (1, ""))
-                self.assertTrue(err.startswith("loopstats: ") and "Traceback" not in err, err)
-                msgs.append(err.replace(str(digits), "N"))
-        self.assertEqual(msgs[0].count("\n"), 1)
+                msgs.append(err)
+        self.assertEqual(msgs, [want, want])
 
     def test_pc1_unicode_task(self):  # K2
         task = "1x.\U0001F6DD"
@@ -414,6 +415,101 @@ class TestCli(Fixture):
         self.assertIn("task=1x.\\U0001f6dd rounds=1 ", out)
         self.assertTrue(out.endswith("-> CONTINUE\n"))
         self.assertIn("Loopstats: 1x.\\U0001f6dd r1:", out)
+
+    # ---- 6E.3b: escape_cost is read (E11-E16, E20, O1b, O5)
+    def set_cost(self, **costs):
+        full = dict({"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}, **costs)
+        write_record(self.root, ".strict-delivery/config.yml", dict(minimal_config(), escape_cost=full))
+
+    def ev_line(self, *extra, rounds="4"):
+        code, out, err = self.run_main(self.base(*extra, rounds=rounds))
+        self.assertEqual((code, err), (0, ""))
+        evs = [ln for ln in out.splitlines() if ln.startswith("EV ")]
+        self.assertEqual(len(evs), 1, out)
+        return evs[0]
+
+    def test_cli_ev_line(self):  # E11, E20
+        self.golden_fixture()  # E_next = 34/4, 17 MEDIUM of N = 34: value = 17/4 * MEDIUM
+        for cost, want in ((1, "EV value=4.250 -> continue"), (0, "EV value=0.000 -> stop"),
+                           (2, "EV value=8.500 -> continue")):
+            with self.subTest(medium=cost):
+                self.set_cost(MEDIUM=cost)
+                self.assertEqual(self.ev_line("--narrowed", "2"), want)
+        self.set_cost(CRITICAL=0, HIGH=0, MEDIUM=0, LOW=0)
+        self.assertEqual(self.ev_line(), "EV value=0.000 -> stop")
+
+    def test_cli_ev_line_value_one(self):  # E11, E9: series 8,4,2,1: W = 16,8,4,2, E_next = 1, 15 MEDIUM of N = 30
+        self.put_series(8, 4, 2, 1)
+        for cost, want in ((0, "EV value=0.000 -> stop"), (1, "EV value=0.500 -> stop"),
+                           (2, "EV value=1.000 -> stop"), (3, "EV value=1.500 -> continue")):
+            with self.subTest(medium=cost):
+                self.set_cost(MEDIUM=cost)
+                self.assertEqual(self.ev_line(), want)
+
+    def test_cli_escape_cost_600_digits(self):  # E20, K4: a 600-digit LOW weighs nothing without a LOW finding
+        self.golden_fixture()
+        self.set_cost(LOW=10 ** 600 - 1)
+        self.assertEqual(self.ev_line("--narrowed", "2"), "EV value=4.250 -> continue")
+
+    def test_cli_ev_no_fit(self):  # E13
+        self.set_cost()
+        self.assertEqual(self.ev_line(rounds="4"), "EV n/a: no fit")  # N = 0: no counted finding
+        self.put(frow(0, 1))
+        self.assertEqual(self.ev_line(rounds="1"), "EV n/a: no fit")  # k = 1
+
+    def test_cli_ev_unset_no_fit(self):  # E14, D-3b-Q3: unset wins over no fit
+        self.put(frow(0, 1))
+        self.assertEqual(self.ev_line(rounds="1"), "EV unset: escape_cost not configured")
+        self.assertEqual(self.ev_line(rounds="4"), "EV unset: escape_cost not configured")
+
+    def test_cli_output_golden_with_cost(self):  # O1b: all four costs 1, no --narrowed
+        self.golden_fixture()
+        self.set_cost()
+        want = (
+            "LOOPSTATS plan=p task=1x.1 rounds=4 X=4,5,3,5 W=8,10,6,10 N=34 S=52 narrowed=none\n"
+            "RULE-T p=0.591 u=+0.15 q=1(boundary) R=unbounded E_next=8.500\n"
+            "RULE-N nu=1.000 fired=yes\n"
+            "EV value=4.250 -> continue\n"
+            "VERDICT STOP_NARROW (Rule N fired: new dimensions keep arriving)\n"
+            "Loopstats: 1x.1 r4: X=4,5,3,5 W=8,10,6,10 p=0.591 q=1(boundary) nu=1.000 -> STOP_NARROW\n")
+        self.assertEqual(self.run_main(self.base()), (0, want, ""))
+        # E15: with --narrowed 2 the output is GOLDEN with only the EV line replaced, exit 0
+        self.assertEqual(self.run_main(self.base("--narrowed", "2")),
+                         (0, GOLDEN.replace("EV unset: escape_cost not configured", "EV value=4.250 -> continue"), ""))
+
+    def test_cli_json_ev(self):  # E16, E17: the JSON ev is the text after "EV ", every other key unchanged
+        self.golden_fixture()
+        jargv = self.base("--narrowed", "2", "--json")
+        self.assertEqual(self.run_main(jargv), (0, GOLDEN_JSON, ""))
+        self.set_cost()
+        code, out, err = self.run_main(jargv)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out), dict(json.loads(GOLDEN_JSON), ev="value=4.250 -> continue"))
+        self.set_cost(MEDIUM=2)
+        self.assertEqual(json.loads(self.run_main(jargv)[1])["ev"], "value=8.500 -> continue")
+        self.set_cost(MEDIUM=0)
+        self.assertEqual(json.loads(self.run_main(jargv)[1])["ev"], "value=0.000 -> stop")
+        self.set_cost()
+        self.assertEqual(json.loads(self.run_main(self.base("--json", rounds="4", plan="none"))[1])["ev"],
+                         "n/a: no fit")
+
+    def test_ev_display_rounding(self):  # E12, Q8: the line rounds half to even, the verdict is on the exact value
+        self.assertEqual((cli._fmt(Fraction(9996, 10000)), cli._fmt(Fraction(10004, 10000))), ("1.000", "1.000"))
+        lo = ev([16, 8, 4, 2], {"MEDIUM": 15}, {"MEDIUM": Fraction(9996, 5000)})
+        hi = ev([16, 8, 4, 2], {"MEDIUM": 15}, {"MEDIUM": Fraction(10004, 5000)})
+        self.assertEqual((lo["value"], lo["verdict"]), (Fraction(9996, 10000), "stop"))
+        self.assertEqual((hi["value"], hi["verdict"]), (Fraction(10004, 10000), "continue"))
+
+    def test_ev_value_half_to_even(self):  # O5: 1/2000 -> 0.5 -> 0; 3/2000 -> 1.5 -> 2
+        self.assertEqual((cli._fmt(Fraction(1, 2000)), cli._fmt(Fraction(3, 2000))), ("0.000", "0.002"))
+
+    def test_sources_state_no_stale_text(self):  # E21, K3
+        for rel in ("gates/lib/loopstats.py", "gates/loopstats.py", "tests/test_loopstats.py"):
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
+                text = fh.read()
+            for bad in ("does not read" + " it yet", "refuses it " + "until", "Exception" + "Group", "except" + "*"):
+                with self.subTest(rel=rel, bad=bad):
+                    self.assertNotIn(bad, text)
 
 
 class TestRows(Fixture):
@@ -486,17 +582,130 @@ class TestRows(Fixture):
             self.rep([], rounds=1, narrowed=[1])
         self.assertEqual(self.rep(series(1, 1, 1, 1), narrowed=[3, 1, 3])["narrowed"], [1, 3])
 
-    def test_escape_cost_deferred(self):  # R8, D7
-        full = {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}
-        for value in (full, None, {}, "x"):
-            cfg = dict(self.cfg, escape_cost=value)
+    # ---- 6E.3b: escape_cost is read (E1-E10c)
+    FULL = {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 1}
+
+    def cost_cfg(self, **costs):
+        return dict(self.cfg, escape_cost=dict(self.FULL, **costs))
+
+    def test_ev_unset(self):  # E1
+        r = self.rep(series(4, 5, 3, 5))
+        self.assertIsNone(r["ev"])
+        self.assertIs(r["escape_cost_set"], False)
+        for rows, rounds in ((series(4, 5), 2), (series(6, 3, 1), 3), (series(8, 4, 2, 1), 4)):
+            self.assertIsNone(small_signals(rows, "p", "1x.1", rounds, [], self.cfg)["ev_below_one"])
+
+    def test_report_reads_escape_cost(self):  # E2, E17: ev is the ev() result, read from the cost
+        rows = series(4, 5, 3, 5)
+        r = report(rows, "p", "1x.1", 4, [], self.cost_cfg())
+        self.assertIs(r["escape_cost_set"], True)
+        self.assertEqual(r["ev"], {"value": Fraction(17, 4), "verdict": "continue"})
+        r = report(rows, "p", "1x.1", 4, [], self.cost_cfg(MEDIUM=2))
+        self.assertEqual(r["ev"], {"value": Fraction(17, 2), "verdict": "continue"})
+        r = report(rows, "p", "1x.1", 4, [], self.cost_cfg(MEDIUM=0))
+        self.assertEqual(r["ev"], {"value": 0, "verdict": "stop"})
+
+    def test_ev_never_changes_verdict(self):  # E2, E15: advice only (plan :5899)
+        scenarios = (("CLEAN", series(2, 1, 0), 3, []), ("LOW_PLATEAU", series(1, 1, sev="LOW"), 2, []),
+                     ("CONTINUE", series(1), 1, []), ("STOP_NARROW", series(4, 5, 3, 5), 4, []),
+                     ("ESCALATE", series(4, 5, 3, 5), 4, [2]))
+        for word, rows, rounds, narrowed in scenarios:
+            for cfg in (self.cost_cfg(), self.cost_cfg(MEDIUM=0, LOW=0), self.cost_cfg(MEDIUM=1000, LOW=1000)):
+                with self.subTest(word=word, cfg=cfg["escape_cost"]):
+                    plain = report(rows, "p", "1x.1", rounds, narrowed, self.cfg)
+                    with_cost = report(rows, "p", "1x.1", rounds, narrowed, cfg)
+                    self.assertEqual(plain["verdict"], word)
+                    drop = ("ev", "escape_cost_set")
+                    self.assertEqual({k: v for k, v in plain.items() if k not in drop},
+                                     {k: v for k, v in with_cost.items() if k not in drop})
+
+    def test_escape_cost_shape_refused_library(self):  # E3, K2b, K4, K5, O4 (the -1 refusal keeps _fmt's input >= 0)
+        full = self.FULL
+        rows = series(1, 1)
+        cases = (
+            ("None", None, "escape_cost: must be a mapping"), ("empty", {}, "escape_cost.CRITICAL: required key is missing"),
+            ("str", "x", "escape_cost: must be a mapping"), ("list", [], "escape_cost: must be a mapping"),
+            ("missing LOW", {k: 1 for k in ("CRITICAL", "HIGH", "MEDIUM")}, "escape_cost.LOW: required key is missing"),
+            ("INFO", dict(full, INFO=1), "escape_cost.INFO: unknown key"),
+            ("-1", dict(full, LOW=-1), "escape_cost.LOW: must be an integer of at least 0"),
+            ("True", dict(full, LOW=True), "escape_cost.LOW: must be an integer of at least 0"),
+            ("'2'", dict(full, LOW="2"), "escape_cost.LOW: must be an integer of at least 0"),
+            ("2.0", dict(full, LOW=2.0), "escape_cost.LOW: must be an integer of at least 0"),
+            ("critical", dict(full, critical=1), "escape_cost.critical: unknown key"),
+            ("U+1FAE8", dict(full, **{"\U0001FAE8": 1}), "escape_cost.\\U0001fae8: unknown key"),
+            ("600 digits + 1", dict(full, LOW=10 ** 600), "escape_cost.LOW: must be an integer of at most 600 digits"),
+            ("4301 digits", dict(full, HIGH=10 ** 4300), "escape_cost.HIGH: must be an integer of at most 600 digits"),
+        )
+        for name, value, text in cases:
             for fn in (report, small_signals):
-                with self.subTest(fn=fn.__name__, value=value), self.assertRaises(GateError) as cm:
-                    fn(series(1, 1), "p", "1x.1", 2, [], cfg)
-                self.assertIn("escape_cost", str(cm.exception))
-                self.assertIn("config/2", str(cm.exception))
-        self.assertNotIn("escape_cost", self.cfg)
-        self.assertIsNone(small_signals(series(8, 4, 2, 1), "p", "1x.1", 4, [], self.cfg)["ev_below_one"])
+                with self.subTest(case=name, fn=fn.__name__), self.assertRaises(GateError) as cm:
+                    fn(rows, "p", "1x.1", 2, [], dict(self.cfg, escape_cost=value))
+                self.assertEqual(str(cm.exception), text)
+        int_key = dict(full)
+        int_key[5] = 1
+        with self.assertRaises(GateError) as cm:  # a non-string key is named, not crashed on
+            report(rows, "p", "1x.1", 2, [], dict(self.cfg, escape_cost=int_key))
+        self.assertEqual(str(cm.exception), "escape_cost.5: unknown key")
+
+    def test_escape_cost_600_digits(self):  # E4, K4
+        big = 10 ** 600 - 1
+        r = report(series(4, 5, 3, 5, sev="LOW"), "p", "1x.1", 4, [], self.cost_cfg(LOW=big))
+        self.assertEqual(r["ev"], {"value": Fraction(17, 4) * big, "verdict": "continue"})  # W = N = 17, boundary
+
+    def test_ev_all_zero(self):  # E5
+        cfg = dict(self.cfg, escape_cost={k: 0 for k in self.FULL})
+        r = report(series(8, 4, 2, 1), "p", "1x.1", 4, [], cfg)
+        self.assertEqual(r["ev"], {"value": 0, "verdict": "stop"})
+        self.assertIs(small_signals(series(8, 4, 2, 1), "p", "1x.1", 4, [], cfg)["ev_below_one"], True)
+
+    def test_ev_counts_counted_severities_only(self):  # E6
+        rows = [rec(frow(0, 1, "LOW")), rec(frow(1, 2, "HIGH")), rec(frow(2, 2, "MEDIUM")),
+                rec(frow(3, 2, "CRITICAL", caused=False)), rec(frow(4, 2, "INFO"))]
+        cfg = self.cost_cfg(CRITICAL=100, HIGH=5, MEDIUM=3, LOW=2)
+        r = report(rows, "p", "1x.1", 2, [], cfg)
+        self.assertEqual((r["W"], r["N"], r["severities"]), ([1, 6], 7, {"LOW": 1, "HIGH": 1, "MEDIUM": 1}))
+        self.assertEqual(r["ev"], {"value": 5, "verdict": "continue"})  # 7/2 * (1/7) * (2 + 5 + 3)
+
+    def test_ev_no_fit(self):  # E7
+        cfg = self.cost_cfg()
+        r = report([rec(frow(0, 1))], "p", "1x.1", 1, [], cfg)
+        self.assertEqual((r["ev"], r["escape_cost_set"]), (None, True))
+        r = report([], "p", "1x.1", 4, [], cfg)
+        self.assertEqual((r["ev"], r["escape_cost_set"]), (None, True))
+
+    def test_ev_s_zero(self):  # E8
+        r = report(series(5, 0, 0, 0), "p", "1x.1", 4, [], self.cost_cfg())
+        self.assertEqual((r["verdict"], r["ev"]), ("CLEAN", {"value": 0, "verdict": "stop"}))
+
+    def test_ev_value_one(self):  # E9: series 8,4,2,1 has E_next = 1 and 15 MEDIUM of N = 30
+        for cost, value, word in ((0, 0, "stop"), (1, Fraction(1, 2), "stop"), (2, 1, "stop"), (3, Fraction(3, 2), "continue")):
+            with self.subTest(medium=cost):
+                r = report(series(8, 4, 2, 1), "p", "1x.1", 4, [], self.cost_cfg(MEDIUM=cost))
+                self.assertEqual(r["ev"], {"value": value, "verdict": word})
+
+    def test_small_signals_ev_below_one(self):  # E10
+        r8421 = series(8, 4, 2, 1)
+        for cost, want in ((0, True), (1, True), (2, False), (3, False)):  # value MEDIUM / 2; 1 is not below one
+            with self.subTest(medium=cost):
+                self.assertIs(small_signals(r8421, "p", "1x.1", 4, [], self.cost_cfg(MEDIUM=cost))["ev_below_one"], want)
+        # rounds = 3, series 6,3,1: W = 12,6,2, E_next = 1.009.., half of N is MEDIUM: value 0.50.. and 1.009..
+        for cost, want in ((1, True), (2, False)):
+            with self.subTest(rounds=3, medium=cost):
+                self.assertIs(small_signals(series(6, 3, 1), "p", "1x.1", 3, [], self.cost_cfg(MEDIUM=cost))["ev_below_one"], want)
+        self.assertIsNone(small_signals(series(8, 4), "p", "1x.1", 2, [], self.cost_cfg())["ev_below_one"])  # rounds < 3
+        self.assertIsNone(small_signals([], "p", "1x.1", 4, [], self.cost_cfg())["ev_below_one"])  # set, no fit (Q2)
+        self.assertIsNone(small_signals(r8421, "p", "1x.1", 4, [], self.cfg)["ev_below_one"])  # unset
+
+    def test_small_signals_refuses_like_report(self):  # E10b
+        cost = self.cost_cfg()
+        for rows, rounds, narrowed, cfg in (
+                (series(1, 1), 2, [], dict(cost, escape_cost=dict(self.FULL, LOW=-1))), (series(1, 1), 0, [], cost),
+                (series(8, 4, 2, 1), 4, [4], cost), (series(1) + [rec(frow(10, 1, review_round=_DROP))], 2, [], cost)):
+            with self.subTest(rounds=rounds, narrowed=narrowed), self.assertRaises(GateError):
+                small_signals(rows, "p", "1x.1", rounds, narrowed, cfg)
+        a = small_signals(series(4, 5, 3, 5), "p", "1x.1", 4, [], self.cfg)
+        b = small_signals(series(4, 5, 3, 5), "p", "1x.1", 4, [], self.cost_cfg(MEDIUM=1000))
+        self.assertEqual((a["rule_n"], a["converging"]), (b["rule_n"], b["converging"]))
 
     def test_small_signals_p_exactly_alpha(self):  # S9 (review-1 F4): p == 1/10 at k = 10, one LOW in review 1
         rows = [rec(frow(0, 1, "LOW"))]
