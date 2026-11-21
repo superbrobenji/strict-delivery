@@ -4,7 +4,8 @@
 ``python3 -m gates githook <pre-commit|pre-push> --root R [git's args]`` (``main``) is what a shim execs:
 ``pre-commit`` refuses a tracked file with unstaged changes before any gate runs, runs ``run_all`` and, on the strict
 profile, ``commands.test``; ``pre-push`` refuses a tree with any tracked change or a pushed sha other than ``HEAD``
-(a deletion is allowed), then runs ``run_all``. ``python3 -m gates githooks <install|status> [--root R]``
+(a deletion is allowed) or a push whose remote ref is ``refs/heads/<base_branch>`` (``githook.base``: open a pull
+request), then runs ``run_all``. ``python3 -m gates githooks <install|status> [--root R]``
 (``manage``) writes and checks the two shims. The root is always the ``--root`` value; ``CLAUDE_PROJECT_DIR`` is
 never read, and every git call runs with ``-C root`` (``gitinfo``), so a relative ``GIT_INDEX_FILE`` stays the
 target's after the shim's ``cd``. Standard library only.
@@ -259,7 +260,7 @@ def _staged_paths(root: str) -> List[str]:
 
 
 def _updates(data: bytes) -> list:
-    """The ``(local ref, local sha)`` of each line git gives a pre-push hook on stdin (``<local ref> <local sha>
+    """The ``(local ref, local sha, remote ref)`` of each line git gives a pre-push hook on stdin (``<local ref> <local sha>
     <remote ref> <remote sha>``); a trailing empty line is ignored; anything else malformed is a GateError."""
     lines = data.split(b"\n")
     while lines and lines[-1] == b"":
@@ -278,8 +279,18 @@ def _updates(data: bytes) -> list:
         for i in (2, 4):
             if not _SHA.fullmatch(fields[i - 1]):
                 raise GateError("pre-push line %d: field %d is not a lowercase hex sha of 40 or 64 digits" % (n, i))
-        out.append((fields[0], fields[1]))
+        out.append((fields[0], fields[1], fields[2]))
     return out
+
+
+def _base_lines(base: str, updates: list) -> list:
+    """One ``githook.base`` FAIL line per update whose remote ref is exactly ``refs/heads/<base>`` (Task P3.1, owner
+    directive: the base branch changes through a pull request only; a deletion is a push to it too). Stdin and the
+    configured name only, no git call. Stated limit (D-Q5): ``git push --mirror`` sends no line for a remote branch it
+    deletes, so the hook cannot see that; host branch protection covers it."""
+    target = "refs/heads/" + base
+    return [Line("FAIL", "githook.base", "%s is protected; open a pull request" % base)
+            for _local, _sha, remote in updates if remote == target]
 
 
 def _flagged_lines(root: str) -> list:
@@ -306,15 +317,17 @@ def _pre_commit(root: str) -> int:
 def _pre_push(root: str, stdin: bytes) -> int:
     head = gitinfo.head_sha(root)
     updates = _updates(stdin)
+    base = config.load(root)["base_branch"]
     changed = _staged_paths(root)
     changed += [p for p in gitinfo.unstaged_paths(root) if p not in changed]
     lines = _flagged_lines(root)  # D-14: the flagged lines, then the dirty lines, then the push-sha lines
     lines += [Line("FAIL", "githook.dirty", "%s: tracked file has a change; commit it before pushing" % p)
               for p in changed]
-    for ref, sha in updates:
+    for ref, sha, _remote in updates:
         if sha != head and sha != "0" * len(sha):  # an all-zero local sha is a deletion
             lines.append(Line("FAIL", "githook.push-sha",
                               "%s: pushes %s, not HEAD %s; check out the branch to push it" % (ref, sha, head)))
+    lines += _base_lines(base, updates)  # D-Q4: after the flagged, dirty and push-sha lines
     if lines:
         return _report(Result("githook", lines))
     return _report(_gates(root))

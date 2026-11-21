@@ -24,7 +24,7 @@ from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = ".strict-delivery/config.yml"
-BASE = "b7afa88"  # Task 2b.2's reviewed head: the config at the base holds exactly three keys
+BASE = "b7afa88"  # Task 2b.2's reviewed head: the config at the base holds exactly the three keys schema, framework_version, profile
 COMMANDS_TEST = (
     "python3 -c \"import sys; sys.exit(0 if sys.version_info[:2] == (3, 9) else 'commands.test: python3 is not Python 3.9')\" "
     "&& python3.13 -c \"import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else "
@@ -84,7 +84,7 @@ class ConfigTest(GitIsolatedTestCase):
         self.assertNotIn("tier4", raw.get("models", {}).get("tiers", {}))
         self.assertNotIn("top_tier_fallback", raw)
 
-    def test_config_only_three_keys_added(self):  # G3: commands, top_tier_roles and (config/2) reviews
+    def test_config_only_four_keys_added(self):  # G3 (edited, RC5): commands, top_tier_roles, reviews and merge (Q-M1)
         p = subprocess.run(["git", "-C", REPO, "show", "%s:%s" % (BASE, CONFIG)], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)
         self.assertEqual(p.returncode, 0, p.stderr.decode("utf-8", "replace"))
@@ -95,8 +95,8 @@ class ConfigTest(GitIsolatedTestCase):
         # exempt literal (P:32): the content of the config at BASE, read from git; its tag is that commit's own
         self.assertEqual(base, {"schema": "config/1", "framework_version": "0.0.0", "profile": "strict"})
         current = dict(self.load_raw())
-        self.assertEqual(sorted(set(current) - set(base)), ["commands", "reviews", "top_tier_roles"])
-        for key in ("commands", "reviews", "top_tier_roles"):
+        self.assertEqual(sorted(set(current) - set(base)), ["commands", "merge", "reviews", "top_tier_roles"])
+        for key in ("commands", "merge", "reviews", "top_tier_roles"):
             del current[key]
         # this repository is migrated to config/2 (Task 2c.2): the base keys under the migrated tag
         self.assertEqual(current, migrations.migrate("config", base))
@@ -369,6 +369,45 @@ def step_order(text):
     return kinds
 
 
+def job_text(text, name):
+    """The raw lines of the job ``name`` (its ``  name:`` line to the next line at two-space indent), joined, no trailing
+    blank: Task P3.1 adds a second job, so the matrix job's pins read this job only."""
+    out = None
+    for ln in text.split("\n"):
+        if out is None:
+            if ln == "  %s:" % name:
+                out = [ln]
+        elif re.match(r"  \S", ln) or (ln and not ln[0].isspace()):
+            break
+        else:
+            out.append(ln)
+    while out and out[-1] == "":  # trailing blank lines only: a space at the end of the last line is part of the job
+        out.pop()
+    return "" if out is None else "\n".join(out) + "\n"
+
+
+# the matrix job as Task 2b.3 wrote it (the table's WF10): "The existing run_all job is unchanged"
+GATES_JOB = (
+    "  gates:\n"
+    "    runs-on: ${{ matrix.os }}\n"
+    "    strategy:\n"
+    "      fail-fast: false\n"
+    "      matrix:\n"
+    "        os: [ubuntu-24.04, macos-15]\n"
+    "        python-version: [\"3.9\", \"3.13\"]\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1\n"
+    "        with:\n"
+    "          fetch-depth: 0\n"
+    "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0\n"
+    "        with:\n"
+    "          python-version: ${{ matrix.python-version }}\n"
+    "      - run: python -m unittest discover -s tests -t . -v\n"
+    "      - run: python -m gates index\n"
+    "      - run: python -m gates run_all --base origin/${{ github.event_name == 'pull_request' && github.base_ref || "
+    "github.event.repository.default_branch }}\n")
+
+
 def lookup(payload, path):
     cur = payload
     for part in path.split("."):
@@ -399,6 +438,7 @@ class WorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = read_text(os.path.join(REPO, WORKFLOW))
+        cls.gates = job_text(cls.text, "gates")  # the matrix job: W3, W6, W7, W10 read it alone (Task P3.1, D-Q6)
 
     def test_workflow_is_not_a_data_file(self):  # W1
         self.assertNotIn("schema:", self.text)
@@ -410,25 +450,25 @@ class WorkflowTest(unittest.TestCase):
     def test_workflow_triggers(self):  # W2: both events, no filter that skips a branch
         self.assertEqual(top_block(self.text, "on"), ["  push:", "  pull_request:"])
 
-    def test_workflow_matrix(self):  # W3, W4, W5
+    def test_workflow_matrix(self):  # W3, W4, W5 (W3 scoped to the matrix job, edited on purpose)
         self.assertEqual(oses(self.text), [["ubuntu-24.04", "macos-15"]])
         self.assertEqual(pythons(self.text), [['"3.9"', '"3.13"']])
-        self.assertEqual([ln for ln in code_lines(self.text) if "runs-on:" in ln], ["    runs-on: ${{ matrix.os }}"])
+        self.assertEqual([ln for ln in code_lines(self.gates) if "runs-on:" in ln], ["    runs-on: ${{ matrix.os }}"])
         self.assertNotIn("latest", self.text)
         for word in ("include:", "exclude:"):
             self.assertNotIn(word, self.text)
         self.assertEqual([ln.strip() for ln in code_lines(self.text) if "fail-fast" in ln], ["fail-fast: false"])
-        self.assertEqual([st["python-version"] for st in steps(self.text) if "python-version" in st],
+        self.assertEqual([st["python-version"] for st in steps(self.gates) if "python-version" in st],
                          ["${{ matrix.python-version }}"])
 
-    def test_workflow_runs_suite_index_run_all_in_order(self):  # W6, W11
-        self.assertEqual(step_order(self.text), ["checkout", "setup-python", "unittest", "index", "run_all"])
-        self.assertEqual([st["run"] for st in steps(self.text) if "run" in st],
+    def test_workflow_runs_suite_index_run_all_in_order(self):  # W6, W11 (scoped to the matrix job, edited on purpose)
+        self.assertEqual(step_order(self.gates), ["checkout", "setup-python", "unittest", "index", "run_all"])
+        self.assertEqual([st["run"] for st in steps(self.gates) if "run" in st],
                          [SUITE, "python -m gates index", RUN_ALL])
 
-    def test_workflow_full_history(self):  # W7
-        self.assertEqual(steps(self.text)[0]["fetch-depth"], "0")
-        self.assertEqual(sum("fetch-depth" in ln for ln in code_lines(self.text)), 1)
+    def test_workflow_full_history(self):  # W7 (scoped to the matrix job, edited on purpose)
+        self.assertEqual(steps(self.gates)[0]["fetch-depth"], "0")
+        self.assertEqual(sum("fetch-depth" in ln for ln in code_lines(self.gates)), 1)
 
     def test_workflow_names_no_branch(self):  # W8: no branch name literal
         self.assertNotIn("origin/main", self.text)
@@ -447,16 +487,18 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(evaluate(expr, payload("pull_request", "release/1", "trunk")), "release/1")
         self.assertEqual(evaluate(expr, payload("push", "", "dev")), "dev")
 
-    def test_actions_pinned(self):  # W10
-        found = uses(self.text)
-        self.assertEqual(len(found), 2)
-        for value in found:
-            self.assertRegex(value, r"[^@\s]+@[0-9a-f]{40}")
-            self.assertIsNotNone(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", value), value)
-        self.assertEqual(found, ["%s@%s" % (repo, PINS[repo][0]) for repo in ("actions/checkout",
-                                                                              "actions/setup-python")])
-        for repo, (sha, tag) in PINS.items():  # the trailing comment names the tag
-            self.assertIn("uses: %s@%s  # %s\n" % (repo, sha, tag), self.text)
+    def test_actions_pinned(self):  # W10 (the matrix job's two; the pull-request job's are pinned below), WF12
+        for scope in (self.gates, job_text(self.text, "pull-request")):
+            found = uses(scope)
+            self.assertEqual(len(found), 2)
+            for value in found:
+                self.assertRegex(value, r"[^@\s]+@[0-9a-f]{40}")
+                self.assertIsNotNone(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", value), value)
+            self.assertEqual(found, ["%s@%s" % (repo, PINS[repo][0]) for repo in ("actions/checkout",
+                                                                                  "actions/setup-python")])
+            for repo, (sha, tag) in PINS.items():  # the trailing comment names the tag
+                self.assertIn("uses: %s@%s  # %s\n" % (repo, sha, tag), scope)
+        self.assertEqual(len(uses(self.text)), 4)  # no other action anywhere
 
     def test_workflow_permissions(self):  # W12
         self.assertEqual(top_block(self.text, "permissions"), ["  contents: read"])
@@ -471,11 +513,130 @@ class WorkflowTest(unittest.TestCase):
         text = "\n".join(ln + "  # \U0001F6DD" if ln else ln for ln in self.text.split("\n"))  # K2
         self.assertEqual((pythons(text), oses(text), uses(text), steps(text), step_order(text),
                           top_block(text, "on"), top_block(text, "permissions")), base)
-        for fn in (code_lines, top_block, flow_items, steps, step_order, evaluate):
+        for fn in (code_lines, top_block, flow_items, steps, step_order, evaluate, job_text):
             self.assertIsNone(re.search(r"\bint\(", inspect.getsource(fn)), fn.__name__)
 
     def test_no_exception_group_in_workflow(self):  # K3
         self.assertNotIn("Exception" + "Group", self.text)
+
+    # ---- Task P3.1: the pull-request job (rows WF1-WF16; decision D-Q6)
+    def pr(self):
+        return job_text(self.text, "pull-request")
+
+    def test_pr_job_checks_out_head_sha(self):  # WF1, plan :2949-2951; review 4 F-Pp4-4
+        self.assertIn("github.event.pull_request.head.sha", self.text)
+        self.assertIn("check streams --branch", self.text)
+        self.assertEqual(steps(self.pr())[0]["ref"], "${{ github.event.pull_request.head.sha }}")  # not the test-merge ref
+        self.assertNotIn("refs/pull", self.text)
+        self.assertNotIn("merge_commit_sha", self.text)
+
+    def test_pr_job_full_history(self):  # WF2
+        self.assertEqual(steps(self.pr())[0]["fetch-depth"], "0")
+        self.assertEqual(sum("fetch-depth" in ln for ln in code_lines(self.pr())), 1)
+
+    def test_pr_job_streams_command(self):  # WF3: the head ref reaches the shell through env, never through ${{ }} in run
+        sts = steps(self.pr())
+        last = sts[-1]
+        self.assertEqual(last["run"], 'python -m gates check streams --branch "$HEAD_REF"')
+        self.assertEqual(last["HEAD_REF"], "${{ github.head_ref }}")
+        for st in sts:
+            self.assertNotIn("${{", st.get("run", ""))
+        self.assertEqual(self.pr().count("github.head_ref"), 1)  # only in that env line
+        self.assertEqual(self.pr().count("${{"), 2)  # the checkout ref and the env value, nothing else
+
+    def test_pr_job_creates_integration_before_streams(self):  # WF4
+        names = [st.get("name") for st in steps(self.pr())]
+        make = names.index("Create the local integration branches")
+        check = names.index("Check the streams of the head branch")
+        self.assertLess(make, check)
+        self.assertEqual(self.pr().count("git branch "), 1)
+        self.assertEqual(self.pr().count("refs/remotes/origin/*/integration"), 1)
+
+    def test_pr_job_passes_branch(self):  # WF7: a detached checkout has no branch; the gate must be told it
+        for ln in code_lines(self.text):
+            if "check streams" in ln:
+                self.assertIn('--branch "$HEAD_REF"', ln)
+
+    def test_pr_job_only_on_pull_request(self):  # WF8: github.head_ref is empty on a push, and --branch "" is refused
+        self.assertIn("    if: github.event_name == 'pull_request'", code_lines(self.pr()))
+        self.assertEqual(sum("if:" in ln for ln in code_lines(self.text)), 1)
+
+    def test_pr_job_runner(self):  # WF13 and the table's D-Q6: ubuntu-24.04, one Python 3.13, nothing else
+        self.assertIn("    runs-on: ubuntu-24.04", code_lines(self.pr()))
+        self.assertEqual([st["python-version"] for st in steps(self.pr()) if "python-version" in st], ['"3.13"'])
+        self.assertNotIn("matrix", self.pr())
+        self.assertEqual(top_block(self.text, "permissions"), ["  contents: read"])
+
+    def test_gates_job_unchanged(self):  # WF10: the run_all job is byte for byte what Task 2b.3 wrote
+        self.assertEqual(self.gates, GATES_JOB)
+        self.assertEqual(self.text.count("  gates:\n"), 1)
+
+
+class PullRequestJobTest(GitIsolatedTestCase):
+    """The creation step of the pull-request job, run as the shell would run it on a clone with remote branches."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.script = cls.step_script(job_text(read_text(os.path.join(REPO, WORKFLOW)), "pull-request"),
+                                     "Create the local integration branches")
+
+    @staticmethod
+    def step_script(job, name):
+        lines = job.split("\n")
+        at = lines.index("      - name: " + name)
+        body = []
+        for ln in lines[at + 1:]:
+            if ln.startswith("      - "):
+                break
+            body.append(ln)
+        start = body.index("        run: |")
+        return "\n".join(ln[10:] for ln in body[start + 1:] if ln.strip()) + "\n"
+
+    def clone(self, branches):
+        src = make_repo(self.work)
+        for b in branches:
+            git(src, "checkout", "-q", "-b", b, "main")
+            commit_all(src, "tip of " + b)  # each branch has its own tip: a branch made from HEAD is not the origin one
+        git(src, "checkout", "-q", "main")
+        remote = os.path.join(self.tmp, "remote.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(src, "push", "-q", remote, "--all")
+        dst = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", remote, dst)
+        git(dst, "checkout", "-q", "--detach")  # the job checks out the head sha: no local branch
+        return dst
+
+    def local(self, root):
+        return git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads").split("\n")
+
+    def run_step(self, root):
+        return subprocess.run(["sh", "-c", self.script], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    def test_pr_job_no_integration_ref_is_not_an_error(self):  # WF5: an empty list of refs creates nothing and succeeds
+        root = self.clone(["feat"])
+        before = self.local(root)
+        p = self.run_step(root)
+        self.assertEqual((p.returncode, p.stdout), (0, b""))
+        self.assertEqual(self.local(root), before)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gates_main.main(["check", "streams", "--root", root, "--branch", "feat"])
+        self.assertEqual((out.getvalue(), code), ("PASS streams.none\n", 0))
+        out = io.StringIO()  # a program-shaped head ref with no integration branch is the gate's own refusal
+        with contextlib.redirect_stdout(out):
+            code = gates_main.main(["check", "streams", "--root", root, "--branch", "20260101-x/integration"])
+        self.assertEqual((out.getvalue(), code),
+                         ("FAIL streams.input: branch 20260101-x/integration does not exist locally; create it from the remote\n", 1))
+
+    def test_pr_job_branch_name_forms(self):  # WF6: p/integration is created from origin; nested names and others are not
+        root = self.clone(["feat", "20260101-x/integration", "20260102-y/integration", "a/b/integration", "integration"])
+        p = self.run_step(root)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        said = p.stdout.decode("utf-8").split("\n")[:-1]  # git branch says only that each new branch tracks its origin
+        self.assertEqual([ln.split("'")[1] for ln in said], ["20260101-x/integration", "20260102-y/integration"])
+        self.assertEqual(self.local(root), ["20260101-x/integration", "20260102-y/integration", "main"])  # main: the clone's own
+        for name in ("20260101-x/integration", "20260102-y/integration"):
+            self.assertEqual(git(root, "rev-parse", name), git(root, "rev-parse", "origin/" + name))
 
 
 if __name__ == "__main__":
