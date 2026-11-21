@@ -582,3 +582,551 @@ class SmallErrorsTest(GitIsolatedTestCase):
         self.assertEqual(small_errors(self.line(a, b), [self.fid], self.root, self.cfg), plain)
         a, b = self.fix({"src/small.txt": "x\n"})
         self.assertEqual(small_errors(self.line(a, b), [self.fid], self.root, self.cfg), [])
+
+
+# ---------------------------------------------------------------- Task P4.3: required and program_errors
+# Rows RQ1-RQ15, PC1-PC11, BL1-BL26, V1-V4, LM10 of task-P4.3-domain.md with the binding decisions D-Q1..D-Q4 (a).
+# Expected values are written by hand from the plan lines P:3200-3205 and the table, never read from ``dispatch``.
+import json
+import re
+import subprocess
+import sys
+
+from gates.lib import config as config_lib
+from gates.lib import yamlsub
+from tests.test_programs_lib import NAME, STATUS_TEXT, row, stream
+
+PROGS = ".strict-delivery/state/programs"
+ENVS = ("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS")
+
+
+def add_program(root, name=NAME, streams=("a", "b"), base="main", back="main", with_folder=True):
+    """The program ``name`` on ``<name>/integration`` cut from ``base`` (HEAD is left on ``back``)."""
+    git(root, "checkout", "-q", "-b", name + "/integration", base)
+    if with_folder:
+        d = PROGS + "/" + name
+        r = row(*[stream(s, [s + "/"], merge_order=i + 1) for i, s in enumerate(streams)], program=name)
+        write_record(root, d + "/streams.yml", r)
+        for f, t in (("status.md", STATUS_TEXT), ("sync-log.md", "<!-- schema: sync-log/1 -->\n"),
+                     ("merged.md", "<!-- schema: merged-log/1 -->\n")):
+            with open(os.path.join(root, d, f), "w", encoding="utf-8") as fh:
+                fh.write(t)
+    commit_all(root, "program " + name)
+    git(root, "checkout", "-q", back)
+
+
+def config_for(profile="strict"):
+    return dict(minimal_config(), profile=profile)
+
+
+class ProgFx(GitIsolatedTestCase):
+    def setUp(self):
+        super().setUp()
+        for name in ENVS:
+            os.environ.pop(name, None)
+        self.root = make_repo(self.work, config_for("strict"))
+        for key, val in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.root, "config", key, val)
+
+    def cfg(self, profile="strict"):
+        write_record(self.root, ".strict-delivery/config.yml", config_for(profile))
+        commit_all(self.root, "config " + profile)
+        return config_lib.load(self.root)
+
+    def refs(self):
+        return git(self.root, "for-each-ref", "--format=%(refname) %(objectname)")
+
+
+def sec(brief, **others):
+    d = {"Brief": brief}
+    d.update(others)
+    return d
+
+
+class RequiredTest(ProgFx):
+    def test_required_on_light_when_program_live(self):            # RQ1, RQ2, RQ5, RQ14
+        light = self.cfg("light")
+        r = dispatch.required(self.root, light)
+        self.assertIs(r, False)                                     # RQ1
+        self.assertIs(dispatch.required(self.root, self.cfg("strict")), True)      # RQ5 none
+        add_program(self.root)
+        self.assertIs(dispatch.required(self.root, light), True)    # RQ2
+        self.assertIs(dispatch.required(self.root, self.cfg("strict")), True)      # RQ5 live
+
+    def test_required_each_profile(self):                          # RQ3, RQ4
+        for live in (False, True):
+            if live:
+                add_program(self.root)
+            self.assertIs(dispatch.required(self.root, self.cfg("standard")), True, live)
+            self.assertIs(dispatch.required(self.root, self.cfg("strict")), True, live)
+
+    def test_required_two_live_programs(self):                     # RQ6
+        light = self.cfg("light")
+        add_program(self.root)
+        add_program(self.root, "20261102-y")
+        self.assertIs(dispatch.required(self.root, light), True)
+
+    def test_required_branch_without_folder_light_false(self):     # RQ7
+        light = self.cfg("light")
+        add_program(self.root, with_folder=False)
+        self.assertIs(dispatch.required(self.root, light), False)
+
+    def test_required_stream_records_branch_and_tag_alone_false(self):   # RQ8
+        light = self.cfg("light")
+        for b in (NAME + "/a/main", NAME + "/records"):
+            git(self.root, "branch", b, "main")
+        git(self.root, "tag", NAME + "/integration", "main")
+        self.assertIs(dispatch.required(self.root, light), False)
+
+    def test_required_ignores_current_branch(self):                # RQ9
+        light = self.cfg("light")
+        add_program(self.root)
+        for how in ("on integration", "on main", "detached"):
+            if how == "on integration":
+                git(self.root, "checkout", "-q", NAME + "/integration")
+            elif how == "on main":
+                git(self.root, "checkout", "-q", "main")
+            else:
+                git(self.root, "checkout", "-q", "--detach", "main")
+            with self.subTest(how):
+                self.assertIs(dispatch.required(self.root, light), True)
+
+    def test_required_ignores_colour_and_abbrev_config(self):      # RQ10 (the fixture sets all three)
+        light = self.cfg("light")
+        git(self.root, "config", "diff.noprefix", "true")
+        self.assertIs(dispatch.required(self.root, light), False)
+        add_program(self.root)
+        self.assertIs(dispatch.required(self.root, light), True)
+
+    def test_required_live_programs_raises(self):                  # RQ11, D-Q1 (a): True, never False
+        light = self.cfg("light")
+        nogit = os.path.join(self.tmp, "nogit")
+        os.mkdir(nogit)
+        for profile in ("light", "standard", "strict"):
+            with self.subTest(profile):
+                self.assertIs(dispatch.required(nogit, dict(light, profile=profile)), True)
+
+    def test_required_cfg_forms(self):                             # RQ12, D-Q1 (a)
+        for profile in ("", "Strict", None, 5, ["strict"], "light "):
+            with self.subTest(profile=profile):
+                self.assertIs(dispatch.required(self.root, dict(config_lib.load(self.root), profile=profile)), True)
+        c = dict(config_lib.load(self.root))
+        del c["profile"]
+        self.assertIs(dispatch.required(self.root, c), True)
+        for bad in (None, [], "light", 3):
+            with self.subTest(cfg=bad):
+                with self.assertRaises(ValueError) as cm:
+                    dispatch.required(self.root, bad)
+                self.assertIn("cfg", str(cm.exception))
+
+    def test_required_root_forms(self):                            # RQ13, D-Q1 (a)
+        class S(str):
+            pass
+        light = self.cfg("light")
+        for bad in (None, b"x", S(self.root), 5, ["x"]):
+            with self.subTest(root=repr(bad)):
+                with self.assertRaises(ValueError) as cm:
+                    dispatch.required(bad, light)
+                self.assertIn("root", str(cm.exception))
+                with self.assertRaises(ValueError):
+                    dispatch.required(bad, dict(light, profile="strict"))     # types checked before the short-circuit
+        for ok_but_unusable in ("", os.path.join(self.tmp, "missing"), os.path.join(self.root, ".strict-delivery", "config.yml")):
+            with self.subTest(root=ok_but_unusable):
+                self.assertIs(dispatch.required(ok_but_unusable, light), True)
+
+    def test_required_is_read_only(self):                          # RQ15
+        light = self.cfg("light")
+        add_program(self.root)
+        before = (git(self.root, "status", "--porcelain", "--untracked-files=all"), self.refs())
+        dispatch.required(self.root, light)
+        dispatch.required(self.root, dict(light, profile="strict"))
+        self.assertEqual((git(self.root, "status", "--porcelain", "--untracked-files=all"), self.refs()), before)
+
+
+class ProgramErrorsTest(ProgFx):
+    def setUp(self):
+        super().setUp()
+        self.cfg_ = config_lib.load(self.root)
+
+    def pe(self, brief, role="stream_controller", live=True, **others):
+        return dispatch.program_errors(sec(brief, **others), role, self.root, self.cfg_, live)
+
+    def sfx(self, errs):
+        return [s for s, _ in errs]
+
+    def test_program_live_claim_checked_against_git(self):         # PC1-PC4
+        self.assertEqual(self.pe("b", "implementer", False), [])               # PC1
+        e = self.pe("b", "implementer", True)                                  # PC4
+        self.assertEqual(self.sfx(e), ["program"])
+        self.assertIn("true", e[0][1])
+        self.assertIn("false", e[0][1])
+        add_program(self.root)
+        self.assertEqual(self.pe("b", "implementer", True), [])                # PC2
+        e = self.pe("b", "implementer", False)                                 # PC3
+        self.assertEqual(self.sfx(e), ["program"])
+        self.assertIn("true", e[0][1])
+        self.assertIn("false", e[0][1])
+        self.assertTrue(("program", e[0][1]) in e)
+
+    def test_claim_two_live_programs(self):                        # PC5
+        add_program(self.root)
+        add_program(self.root, "20261102-y")
+        self.assertEqual(self.pe("b", "implementer", True), [])
+        self.assertEqual(self.sfx(self.pe("b", "implementer", False)), ["program"])
+
+    def test_non_program_roles_only_claim_checked(self):           # PC7, BL11
+        for live_fx in (False, True):
+            if live_fx:
+                add_program(self.root)
+            for role in ("implementer", "controller", "task_reviewer", "drafter", "unknown", ""):
+                for claim in (False, True):
+                    with self.subTest(role=role, fx=live_fx, claim=claim):
+                        got = self.sfx(self.pe("no program line", role, claim))
+                        self.assertEqual(got, [] if claim == live_fx else ["program"])
+
+    def test_claim_pair_precedes_brief_pairs(self):                # PC8
+        add_program(self.root)
+        got = self.pe("b", "stream_controller", False)
+        self.assertEqual(got[0][0], "program")
+        self.assertIn("program_live", got[0][1])
+        self.assertTrue(len(got) >= 2)
+
+    def test_program_errors_argument_types(self):                  # PC6, PC9, PC10, D-Q1 (a)
+        class S(str):
+            pass
+        for claim in (1, 0, None, "true", []):
+            with self.subTest(claim=claim):
+                with self.assertRaises(ValueError) as cm:
+                    dispatch.program_errors(sec("b"), "implementer", self.root, self.cfg_, claim)
+                self.assertIn("program_live", str(cm.exception))
+        for bad in (None, [], "Brief"):
+            with self.subTest(sections=bad):
+                with self.assertRaises(ValueError) as cm:
+                    dispatch.program_errors(bad, "implementer", self.root, self.cfg_, False)
+                self.assertIn("sections", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            dispatch.program_errors({"Brief": 5}, "implementer", self.root, self.cfg_, False)
+        self.assertIn("Brief", str(cm.exception))
+        self.assertEqual(dispatch.program_errors({}, "implementer", self.root, self.cfg_, False), [])   # no Brief: ""
+        for role in (None, S("implementer"), 5):
+            with self.subTest(role=role):
+                with self.assertRaises(ValueError) as cm:
+                    dispatch.program_errors(sec("b"), role, self.root, self.cfg_, False)
+                self.assertIn("role", str(cm.exception))
+        for bad in (None, [], "x"):
+            with self.assertRaises(ValueError) as cm:
+                dispatch.program_errors(sec("b"), "implementer", self.root, bad, False)
+            self.assertIn("cfg", str(cm.exception))
+        for bad in (None, b"x", S(self.root)):
+            with self.assertRaises(ValueError) as cm:
+                dispatch.program_errors(sec("b"), "implementer", bad, self.cfg_, False)
+            self.assertIn("root", str(cm.exception))
+
+    def test_program_errors_git_failure(self):                     # PC11, D-Q3: live_programs' GateError escapes
+        nogit = os.path.join(self.tmp, "nogit")
+        os.mkdir(nogit)
+        for root in (nogit, ""):
+            with self.subTest(root=root):
+                with self.assertRaises(GateError):
+                    dispatch.program_errors(sec("b"), "implementer", root, self.cfg_, False)
+
+    # ---- the program: line
+    def test_program_line_required(self):                          # BL1
+        add_program(self.root)
+        for role in ("program_controller", "stream_controller"):
+            with self.subTest(role):
+                got = self.pe("b", role)
+                self.assertEqual(self.sfx(got)[0], "program")
+                self.assertEqual(self.pe("", role)[0][0], "program")
+
+    def test_stream_controller_names_known_stream(self):           # BL2, BL13, BL14
+        add_program(self.root)
+        self.assertEqual(self.pe("program: %s\nstream: a" % NAME), [])
+        self.assertEqual(self.pe("program: %s\nstream: b" % NAME), [])
+        for s in ("nope", "c"):
+            with self.subTest(stream=s):
+                got = self.pe("program: %s\nstream: %s" % (NAME, s))
+                self.assertEqual(self.sfx(got), ["stream"])
+        self.assertEqual(self.pe("program: %s" % NAME, "program_controller"), [])
+
+    def test_program_line_closed_program(self):                    # BL3, BL4
+        add_program(self.root)
+        add_program(self.root, "20261103-nofolder", with_folder=False)
+        for p in ("20261102-y", "20261103-nofolder"):
+            with self.subTest(p):
+                got = self.pe("program: %s\nstream: a" % p)
+                self.assertEqual(self.sfx(got)[0], "program")
+
+    def test_two_program_lines_refused(self):                      # BL5
+        add_program(self.root)
+        add_program(self.root, "20261102-y")
+        for brief in ("program: %s\nprogram: %s" % (NAME, NAME), "program: %s\nprogram: 20261102-y" % NAME):
+            with self.subTest(brief):
+                for role in ("program_controller", "stream_controller"):
+                    self.assertEqual(self.pe(brief + "\nstream: a", role)[0][0], "program")
+
+    def test_program_line_leading_space(self):                     # BL6
+        add_program(self.root)
+        for lead in (" ", "\t", "  "):
+            with self.subTest(repr(lead)):
+                self.assertEqual(self.pe(lead + "program: " + NAME, "program_controller")[0][0], "program")
+
+    def test_program_line_forms(self):                             # BL7
+        add_program(self.root)
+        for brief in ("Program: " + NAME, "program:" + NAME, "program:  " + NAME, "program: " + NAME + " ",
+                      "program: " + NAME + "\r", "program: ", "program: " + NAME + " extra", "program: <p>",
+                      "program: " + NAME + "\r\nstream: a", "PROGRAM: " + NAME):
+            with self.subTest(repr(brief)):
+                self.assertEqual(self.pe(brief, "program_controller")[0][0], "program")
+
+    def test_program_line_name_grammar(self):                      # BL8, V1b
+        add_program(self.root)
+        for name in ("x", "20261301-x", "20260229-x", "20261101-", "20261101-X", "20261101-a/b", "20261101-..",
+                     "20261101-" + "x" * 4301, "20261101-x\x00", "20261101-é", "١" * 8 + "-x", "20261101-x ",
+                     "20261101-x" + "١"):
+            with self.subTest(repr(name[:30])):
+                got = self.pe("program: " + name, "program_controller")
+                self.assertEqual(self.sfx(got), ["program"])
+                self.assertLess(len(got[0][1]), 300, got)                  # the quoted value is cut, whatever its length
+
+    def test_program_line_only_in_brief(self):                     # BL9
+        add_program(self.root)
+        line = "program: %s\nstream: a\n" % NAME
+        for sect in ("Task", "Findings", "Claims", "Report", "Strict block", "Role", "Model"):
+            with self.subTest(sect):
+                self.assertEqual(self.pe("nothing here", "stream_controller", True, **{sect: line})[0][0], "program")
+
+    def test_program_line_position(self):                          # BL10
+        add_program(self.root)
+        pl, sl = "program: " + NAME, "stream: a"
+        small = "small-re-review: plan=p"
+        for brief in (pl + "\n" + sl, sl + "\n" + pl, "x\n" + pl + "\ny\n" + sl + "\nz", "\n" + pl + "\n\n" + sl + "\n",
+                      small + "\n" + pl + "\n" + sl, pl + "\n" + small + "\n" + sl):
+            with self.subTest(repr(brief)):
+                self.assertEqual(self.pe(brief), [])
+
+    def test_non_program_roles_need_no_program_line(self):         # BL11
+        add_program(self.root)
+        for role in ("implementer", "controller", "task_reviewer"):
+            self.assertEqual(self.pe("none", role, True), [])
+
+    def test_stream_line_ignored_for_program_controller(self):     # BL12
+        add_program(self.root)
+        base = self.pe("program: " + NAME, "program_controller")
+        for extra in ("stream: a", "stream: nope", "stream: a\nstream: b", "stream:x", " stream: a", "stream: "):
+            with self.subTest(extra):
+                self.assertEqual(self.pe("program: %s\n%s" % (NAME, extra), "program_controller"), base)
+        bad = self.pe("x\nstream: nope", "program_controller")
+        self.assertNotIn("stream", self.sfx(bad))
+
+    def test_stream_line_required(self):                           # BL15
+        add_program(self.root)
+        self.assertEqual(self.sfx(self.pe("program: " + NAME)), ["stream"])
+
+    def test_two_stream_lines_refused(self):                       # BL16
+        add_program(self.root)
+        for extra in ("stream: a\nstream: b", "stream: a\nstream: a"):
+            self.assertEqual(self.sfx(self.pe("program: %s\n%s" % (NAME, extra))), ["stream"])
+
+    def test_stream_line_forms(self):                              # BL17
+        add_program(self.root)
+        for v in (" stream: a", "Stream: a", "stream:a", "stream: a ", "stream: a\r", "stream: ", "stream: integration",
+                  "stream: records", "stream: A", "stream: a/b", "stream: aé", "stream: " + "a" * 4301,
+                  "stream: a\x00", "\tstream: a", "stream:  a"):
+            with self.subTest(repr(v[:30])):
+                self.assertEqual(self.sfx(self.pe("program: %s\n%s" % (NAME, v))), ["stream"])
+
+    def test_stream_integration_and_records_refused_even_if_listed(self):   # BL17, M17
+        add_program(self.root, streams=("a", "integration", "records"))
+        for s in ("integration", "records"):
+            with self.subTest(s):
+                self.assertEqual(self.sfx(self.pe("program: %s\nstream: %s" % (NAME, s))), ["stream"])
+
+    def test_stream_looked_up_in_named_program(self):              # BL18, M16
+        add_program(self.root)
+        add_program(self.root, "20261102-y", streams=("c",))
+        self.assertEqual(self.sfx(self.pe("program: %s\nstream: c" % NAME)), ["stream"])
+        self.assertEqual(self.pe("program: 20261102-y\nstream: c"), [])
+        self.assertEqual(self.sfx(self.pe("program: 20261102-y\nstream: a")), ["stream"])
+
+    def test_stream_read_from_integration_tip(self):               # BL19, M15
+        add_program(self.root, streams=("a", "b"))
+        git(self.root, "checkout", "-q", "main")
+        write_record(self.root, PROGS + "/" + NAME + "/streams.yml",
+                     row(stream("c", ["c/"], merge_order=1), program=NAME))      # working tree and main only
+        commit_all(self.root, "main lists c")
+        write_record(self.root, PROGS + "/" + NAME + "/streams.yml", row(stream("d", ["d/"], merge_order=1), program=NAME))
+        self.assertEqual(self.pe("program: %s\nstream: a" % NAME), [])
+        self.assertEqual(self.sfx(self.pe("program: %s\nstream: c" % NAME)), ["stream"])
+        self.assertEqual(self.sfx(self.pe("program: %s\nstream: d" % NAME)), ["stream"])
+
+    def test_stream_pair_when_program_unresolved(self):            # BL20, D-Q4 (a)
+        add_program(self.root)
+        got = self.pe("program: nope\nstream: a")
+        self.assertEqual(got[0][0], "program")
+        self.assertIn(("stream", "stream not checked: the program line failed"), got)
+        got = self.pe("stream: a")
+        self.assertIn(("stream", "stream not checked: the program line failed"), got)
+        self.assertEqual(len(got), 2)
+
+    def test_stream_program_files_unreadable(self):                # BL21, D-Q3
+        add_program(self.root)
+        d = os.path.join(PROGS, NAME)
+        bad = {"yaml error": "a: [\n", "duplicate key": "a: 1\na: 2\n", "list": "- 1\n", "bom": "﻿schema: streams/1\n",
+               "cr": "schema: streams/1\r\n"}
+        for name, text in bad.items():
+            with self.subTest(name):
+                git(self.root, "checkout", "-q", NAME + "/integration")
+                with open(os.path.join(self.root, d, "streams.yml"), "w", encoding="utf-8", newline="") as fh:
+                    fh.write(text)
+                commit_all(self.root, name)
+                git(self.root, "checkout", "-q", "main")
+                got = self.pe("program: %s\nstream: a" % NAME)
+                self.assertEqual(self.sfx(got), ["stream"])
+                self.assertIn("streams.yml", got[0][1])
+                git(self.root, "checkout", "-q", NAME + "/integration")
+                git(self.root, "reset", "-q", "--hard", "HEAD~1")
+                git(self.root, "checkout", "-q", "main")
+        for f in ("status.md", "sync-log.md", "merged.md"):
+            with self.subTest(f):
+                git(self.root, "checkout", "-q", NAME + "/integration")
+                git(self.root, "rm", "-q", d + "/" + f)
+                git(self.root, "commit", "-q", "-m", "rm " + f)
+                git(self.root, "checkout", "-q", "main")
+                got = self.pe("program: %s\nstream: a" % NAME)
+                self.assertEqual(self.sfx(got), ["stream"])
+                self.assertIn(f, got[0][1])
+                git(self.root, "checkout", "-q", NAME + "/integration")
+                git(self.root, "reset", "-q", "--hard", "HEAD~1")
+                git(self.root, "checkout", "-q", "main")
+
+    def test_stream_list_shapes(self):                             # BL22
+        add_program(self.root)
+        git(self.root, "checkout", "-q", NAME + "/integration")
+        r = row(stream("a", ["a/"], merge_order=1), program=NAME)
+        r["streams"] = [5, "x", {"id": 3}, {"id": "a"}, {"id": "a"}, {"nid": "b"}]
+        write_record(self.root, PROGS + "/" + NAME + "/streams.yml", r)
+        commit_all(self.root, "odd")
+        git(self.root, "checkout", "-q", "main")
+        self.assertEqual(self.pe("program: %s\nstream: a" % NAME), [])
+        self.assertEqual(self.sfx(self.pe("program: %s\nstream: b" % NAME)), ["stream"])
+
+    def test_integration_tag_does_not_hide_branch(self):           # BL23, M18
+        add_program(self.root)
+        git(self.root, "tag", NAME + "/integration", "main")
+        self.assertEqual(self.pe("program: %s\nstream: a" % NAME), [])
+
+    def test_program_errors_git_states(self):                      # BL24
+        add_program(self.root)
+        brief = "program: %s\nstream: a" % NAME
+        git(self.root, "config", "diff.noprefix", "true")
+        for how in ("detached", "on integration"):
+            git(self.root, "checkout", "-q", "--detach" if how == "detached" else NAME + "/integration")
+            with self.subTest(how):
+                self.assertEqual(self.pe(brief), [])
+        git(self.root, "checkout", "-q", "main")
+        unborn = os.path.join(self.tmp, "unborn")
+        os.mkdir(unborn)
+        git(unborn, "init", "-q", "-b", "main")
+        for key, val in (("user.email", "a@b.invalid"), ("user.name", "x")):
+            git(unborn, "config", key, val)
+        got = dispatch.program_errors(sec(brief), "stream_controller", unborn, self.cfg_, False)
+        self.assertEqual(got[0][0], "program")
+        spaced = os.path.join(self.tmp, "a b")
+        os.mkdir(spaced)
+        make_repo(spaced, config_for("strict"))
+        add_program(spaced)
+        self.assertEqual(dispatch.program_errors(sec(brief), "stream_controller", spaced, self.cfg_, True), [])
+
+    def test_program_errors_shallow_clone(self):                   # BL24 shallow clone
+        add_program(self.root)
+        brief = "program: %s\nstream: a" % NAME
+        shallow = os.path.join(self.tmp, "shallow")
+        git(self.tmp, "clone", "-q", "--depth", "1", "--no-single-branch", "file://" + self.root, shallow)
+        git(shallow, "branch", NAME + "/integration", "origin/" + NAME + "/integration")
+        self.assertTrue(os.path.exists(os.path.join(shallow, ".git", "shallow")))
+        got = dispatch.program_errors(sec(brief), "stream_controller", shallow, self.cfg_, True)
+        self.assertEqual(got, [])
+        self.assertEqual(self.pe(brief), got)                      # same verdict as the plain fixture
+
+    def test_program_errors_merge_in_progress(self):               # BL24 MERGE_HEAD
+        add_program(self.root)
+        brief = "program: %s\nstream: a" % NAME
+        git(self.root, "checkout", "-q", "-b", "side", "main")
+        write_record(self.root, "side.yml", {"k": "v"})
+        commit_all(self.root, "side")
+        git(self.root, "checkout", "-q", "main")
+        write_record(self.root, "main.yml", {"k": "w"})
+        commit_all(self.root, "main")
+        git(self.root, "merge", "--no-commit", "--no-ff", "side")
+        self.assertTrue(os.path.exists(os.path.join(self.root, ".git", "MERGE_HEAD")))
+        self.assertEqual(self.pe(brief), [])
+
+    def test_program_errors_newline_in_path(self):                 # BL24 newline in the checkout path
+        brief = "program: %s\nstream: a" % NAME
+        nl = os.path.join(self.tmp, "a\nb")
+        try:
+            os.mkdir(nl)
+        except OSError as exc:
+            self.skipTest("filesystem refuses a newline in a directory name: %s" % exc)
+        make_repo(nl, config_for("strict"))
+        add_program(nl)
+        self.assertEqual(dispatch.program_errors(sec(brief), "stream_controller", nl, self.cfg_, True), [])
+
+    def test_program_errors_shape(self):                           # BL25, V2
+        add_program(self.root)
+        hostile = ("\x00\r\né Ꟁ೏\\" + "x" * 5000, "١", "﻿", "\x1b[31m")
+        for h in hostile:
+            for brief in ("program: " + h, "program: %s\nstream: %s" % (NAME, h), "program: %s\nprogram: %s" % (h, h)):
+                with self.subTest(repr(h[:12]), brief=repr(brief[:20])):
+                    got = self.pe(brief)
+                    self.assertIsInstance(got, list)
+                    self.assertTrue(got)
+                    for item in got:
+                        self.assertIs(type(item), tuple)
+                        self.assertEqual(len(item), 2)
+                        self.assertIn(item[0], ("program", "stream"))
+                        self.assertTrue(item[1] and item[1].isascii() and re.fullmatch(r"[\x20-\x7e]+", item[1]), item)
+                        self.assertLess(len(item[1]), 600, item)               # a hostile 5000-char value is cut
+
+    def test_program_line_unicode_version_free(self):              # V2, M12
+        add_program(self.root)
+        for ch in ("Ꟁ", "ꟁ", "ೳ", "⿼", "١", "É"):
+            for brief in ("program: 20261101-%s" % ch, "Program: " + NAME.replace("x", ch)):
+                with self.subTest(hex(ord(ch)), brief=brief):
+                    self.assertEqual(self.sfx(self.pe(brief, "program_controller")), ["program"])
+        self.assertEqual(self.pe("program: " + NAME, "program_controller"), [])
+
+    def test_brief_split_on_lf_only(self):                         # V4
+        add_program(self.root)
+        for sep in ("\x85", " ", "\x0b", "\x0c", "\x1c", " "):
+            with self.subTest(hex(ord(sep))):
+                self.assertEqual(self.sfx(self.pe("x%sprogram: %s" % (sep, NAME), "program_controller")), ["program"])
+
+    def test_program_errors_read_only(self):                       # BL26
+        add_program(self.root)
+        before = (git(self.root, "status", "--porcelain", "--untracked-files=all"), self.refs())
+        for brief in ("program: \x00", "program: %s\nstream: é" % NAME, "program: %s\nstream: a" % NAME):
+            self.pe(brief)
+        self.assertEqual((git(self.root, "status", "--porcelain", "--untracked-files=all"), self.refs()), before)
+
+    def test_big_numerals_in_streams_yml(self):                    # V1a
+        add_program(self.root)
+        git(self.root, "checkout", "-q", NAME + "/integration")
+        p = os.path.join(self.root, PROGS, NAME, "streams.yml")
+        with open(p, encoding="utf-8") as fh:
+            text = fh.read()
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(text.replace("estimate: 5", "estimate: " + "9" * 4301))
+        commit_all(self.root, "big")
+        git(self.root, "checkout", "-q", "main")
+        got = self.pe("program: %s\nstream: a" % NAME)
+        self.assertTrue(got == [] or self.sfx(got) == ["stream"], got)     # never a traceback, on both interpreters
+
+    def test_no_exception_group_in_dispatch_files(self):           # LM10, V3
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for rel in ("gates/lib/dispatch.py", "gates/gate_dispatch.py"):
+            with open(os.path.join(here, rel), encoding="utf-8") as fh:
+                src = fh.read()
+            self.assertNotIn("ExceptionGroup", src)
+            self.assertNotIn("except*", src)
