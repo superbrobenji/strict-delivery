@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-74tv
+status: open
+source: "6E.1 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/records/6E.1-review-1.md F1"
+severity: LOW
+class: "run_pin argument types: root (RN15/Y4, RN16): NUL in root, lone surrogate in root (gates/lib/evidence.py:76-86 raises ValueError/UnicodeEncodeError, not GateError)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6E.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e521bc89adfb27808e06919aaa732b0213f9fcb3
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: "run_pin argument types: root"
