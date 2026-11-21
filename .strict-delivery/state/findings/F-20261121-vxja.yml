@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-vxja
+status: open
+source: "4a.2 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4a2-review-1.md R1-1"
+severity: LOW
+class: "PC3 mutation evidence: mutants argued equivalent without the survivor run on the targeted modules plus their importers on both interpreters; members: M16, M27, M54"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 3f97ea85a684d099dd429870d602c97079672079
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: PC3 mutation evidence for argued-equivalent mutants
