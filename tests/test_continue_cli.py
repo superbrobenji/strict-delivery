@@ -7,6 +7,7 @@ import ast
 import builtins
 import contextlib
 import datetime
+import errno
 import io
 import json
 import os
@@ -1536,6 +1537,57 @@ class TestInputJson(Fx):
             self.addCleanup(os.chmod, ro, 0o700)
             self.refuse("cannot be created", *self.flags(os.path.join(ro, "x.json")))
             self.assertEqual(os.listdir(ro), [])
+
+    def _failing_open(self, real_open=builtins.open):
+        """An ``open`` for ``continue_cli``: the exclusive-create handle writes 3 bytes, then raises ENOSPC."""
+        def fake(path, mode="r", *a, **k):
+            fh = real_open(path, mode, *a, **k)
+            if mode != "x":
+                return fh
+
+            class Handle:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    fh.close()
+                    return False
+
+                def write(self, text):
+                    fh.write(text[:3])
+                    fh.flush()
+                    raise OSError(errno.ENOSPC, "No space left on device")
+            return Handle()
+        return fake
+
+    def test_input_json_write_failure_leaves_nothing(self):  # IJ7, D-Q11: a failed write leaves nothing behind
+        f = self.f("partial.json")
+        with mock.patch.object(continue_cli, "open", self._failing_open(), create=True):
+            self.refuse("cannot be created (No space left on device)", *self.flags(f))
+        self.assertFalse(os.path.lexists(f))
+        self.ok(*self.flags(f))  # the retry behaves as a first attempt
+        with open(f, encoding="utf-8") as fh:
+            self.assertEqual(json.loads(fh.read())["dispatcher"]["id"], "session")
+
+    def test_input_json_failed_create_removes_nothing(self):  # IJ7: only a file this call created is removed
+        exist = self.put_file(self.f("keep.json"), "KEEP")
+        with mock.patch.object(continue_cli, "open", self._failing_open(), create=True):
+            self.refuse("cannot be created (File exists)", *self.flags(exist))
+        with open(exist) as fh:
+            self.assertEqual(fh.read(), "KEEP")
+
+    def test_input_json_unlink_failure_still_refuses(self):  # IJ7: fail closed, name the leftover path
+        f = self.f("stuck.json")
+        real_unlink = os.unlink
+
+        def unlink(p, *a, **k):  # only the --input-json file fails; the module's temp-dir cleanup still works
+            if p == f:
+                raise OSError(errno.EPERM, "Operation not permitted")
+            return real_unlink(p, *a, **k)
+        with mock.patch.object(continue_cli, "open", self._failing_open(), create=True), \
+                mock.patch.object(continue_cli.os, "unlink", side_effect=unlink):
+            err = self.refuse("cannot be created (No space left on device)", *self.flags(f))
+        self.assertIn("the partial file could not be removed: " + f, err)
 
     def test_input_json_prompt_roundtrip(self):  # IJ8
         self.led("Dispatched: x\r\nlone\rcr\nuni é   end\n")

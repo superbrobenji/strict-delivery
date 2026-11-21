@@ -389,11 +389,20 @@ def _self_check(root: str, prompts: str, body: str) -> None:
 
 
 def _create(path: str, body: str) -> None:
+    created = False
     try:
         with open(path, "x", encoding="utf-8", newline="") as fh:
+            created = True
             fh.write(body)
     except OSError as e:
-        raise GateError("--input-json: %s cannot be created (%s)" % (path, e.strerror or type(e).__name__)) from None
+        left = ""
+        if created:  # the file is ours (exclusive create): a partial one is removed, as store.create does
+            try:
+                os.unlink(path)
+            except OSError:
+                left = "; the partial file could not be removed: %s" % path
+        raise GateError("--input-json: %s cannot be created (%s)%s"
+                        % (path, e.strerror or type(e).__name__, left)) from None
 
 
 def _parser() -> _GateParser:
