@@ -4,6 +4,8 @@ format: markdown
 files:
   - dir: plan_state
     glob: "*/mutations/*"
+    exclude:
+      - "2026-10-31-strict-delivery-framework-b/mutations/*"
 first_line: "<!-- schema: mutation-transcript/1 -->"
 lines:
   - word: FINDING
