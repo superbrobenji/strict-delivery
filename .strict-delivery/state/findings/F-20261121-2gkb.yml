@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-2gkb
+status: open
+source: "P4.3 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g8/P4.3-review-1.md R1-2"
+severity: LOW
+class: program_controller.md Merge relay. says push the integration branch after every commit; plan :3207 says work branches are pushed at every checkpoint
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P4.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7a0d7a920ccd9521503b19d7ba0e96189b0fabaf
+    by: stream-a14
+review_round: 1
+caused_by_change: true
+dimension: program_controller prose
