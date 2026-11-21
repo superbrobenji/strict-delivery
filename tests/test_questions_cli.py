@@ -324,7 +324,7 @@ class Registration(unittest.TestCase):
             self.assertNotIn("\nfrom gates.tools import questions_cli", fh.read())  # imported inside the function
 
     def test_usage_lists_questions(self):  # QR2
-        want = ("usage: python3 -m gates <command> [args]\ncommands: check, claims, decisions, findings, githook, "
+        want = ("usage: python3 -m gates <command> [args]\ncommands: check, claims, continue, decisions, findings, githook, "
                 "githooks, hook, index, loopstats, program, questions, run_all\n")
         p = subprocess.run([sys.executable, "-m", "gates", "bogus"], cwd=REPO, env=dict(os.environ, PYTHONPATH=REPO),
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
