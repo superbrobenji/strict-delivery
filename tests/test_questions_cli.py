@@ -701,10 +701,13 @@ class QuestionFields(Fx):
         out = self.lst()[1].splitlines()
         self.assertEqual(out[0], "pending a-plan:q0 a: Q 0?")
         self.assertEqual((len(out), out[-1]), (1000, "pending a-plan:q999 a: Q 999?"))
-        self.hand("a", [Q("q%d" % i) for i in range(12)])  # ask one by one: twelve, each a decisions ask
+
+    def test_many_questions_ask_run(self):  # HQ11: 200 pending questions through ask, one by one (1000 takes over 9 minutes: the register is re-read per question, decision of the controller 2026-11-21)
+        self.hand("a", [Q("q%d" % i) for i in range(200)])
         code, out, err = self.ask()
-        self.assertEqual((code, err, len(out.splitlines())), (0, "", 12))
-        self.assertEqual([l.split()[1] for l in out.splitlines()], ["a-plan:q%d" % i for i in range(12)])
+        self.assertEqual((code, err, len(out.splitlines())), (0, "", 200))
+        self.assertEqual([l.split()[1] for l in out.splitlines()], ["a-plan:q%d" % i for i in range(200)])
+        self.assertEqual(len(self.recs()), 200)
 
     def test_questions_wrong_type(self):  # HQ12
         for v in ('"x"', "{a: 1}", "null"):
@@ -975,6 +978,14 @@ class AskTests(Fx):
                          (head, "boss", [], []))
         self.assertTrue(not any(k in row for k in ("plan", "program", "stream")))
         self.assertEqual(recs[new[1]]["topics"], [["q:a-plan:q2"][0]])
+
+    def test_ask_uses_question_source_when_given(self):  # plan :3107-3108 (AM7, HQ9)
+        self.hand("a", [Q("q1", source="r/worker-report.md"), Q("q2")])
+        code, out, err = self.ask()
+        self.assertEqual((code, err), (0, ""))
+        new_src, new_plain = [l.split()[-1] for l in out.splitlines()]
+        self.assertEqual(self.recs()[new_src]["source"], "r/worker-report.md")
+        self.assertEqual(self.recs()[new_plain]["source"], HA)
 
     def test_ask_twice_asks_nothing_new(self):  # AS3
         self.hand("a", [Q("q1")])
