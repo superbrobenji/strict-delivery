@@ -707,7 +707,7 @@ class KindsAndVersions(unittest.TestCase):
     def test_schemas_dir_loads_and_stems_known(self):  # KK2
         loaded, problems = schema.scan_dir()
         self.assertEqual(problems, [])
-        self.assertEqual(len(loaded), 17)
+        self.assertEqual(len(loaded), 18)
         for kind in ("streams", "request", "status", "sync-log", "merged-log"):
             self.assertIn(kind, loaded)
             self.assertIn(kind, KNOWN_KINDS)

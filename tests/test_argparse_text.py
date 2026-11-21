@@ -918,7 +918,9 @@ class TestParserSites(unittest.TestCase):
             ("gates/tools/decisions_cli.py", "gate_args"), ("gates/tools/findings_cli.py", "_GateParser"),
             ("gates/tools/findings_cli.py", "add_parser"), ("gates/tools/findings_cli.py", "add_parser"),
             ("gates/tools/findings_cli.py", "add_subparsers"), ("gates/tools/index.py", "gate_args"),
-            ("gates/tools/program_cli.py", "_GateParser")])  # P2.2: one parser per subcommand, built by _parser
+            ("gates/tools/program_cli.py", "_GateParser"),
+            ("gates/tools/receipt_cli.py", "_GateParser"), ("gates/tools/receipt_cli.py", "add_parser"),
+            ("gates/tools/receipt_cli.py", "add_subparsers")])  # P2.2: one parser per subcommand, built by _parser
         self.assertEqual(keywords, [])
 
 
