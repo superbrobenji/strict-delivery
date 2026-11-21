@@ -164,7 +164,7 @@ class HookCase(GitIsolatedTestCase):
     def hook_path(self, root, name):
         return os.path.join(gitinfo.hooks_dir(root), name)
 
-    def push_line(self, local_ref, local_sha, remote_ref="refs/heads/main", remote_sha=ZEROS):
+    def push_line(self, local_ref, local_sha, remote_ref="refs/heads/work", remote_sha=ZEROS):
         return ("%s %s %s %s\n" % (local_ref, local_sha, remote_ref, remote_sha)).encode("utf-8")
 
 
@@ -1245,7 +1245,7 @@ class PrePushTest(HookCase):
         for kind, flags in FLAG_KINDS:
             with self.subTest(kind):
                 d, remote = setup(flags, False)
-                rc, out = self.git_run(d, "push", "-q", "origin", "main")
+                rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
                 self.assertNotEqual(rc, 0, out)
                 self.assertEqual(out.split("error: failed to push")[0], flagged_line("a.txt"))  # git adds its own error
                 self.assertNotIn("PASS", out)  # no gate line
@@ -1268,7 +1268,7 @@ class PrePushTest(HookCase):
             d, remote = setup(FLAG_KINDS[0][1], False)
             git(d, "update-index", "--no-assume-unchanged", "a.txt")
             git(d, "checkout", "-q", "--", "a.txt")
-            rc, out = self.git_run(d, "push", "-q", "origin", "main")
+            rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
             self.assertEqual(rc, 0, out)
 
     def test_pre_push_refuses_fsmonitor_hidden_change(self):  # FM5, FM8 (Q-G1-4 (a), D-18; review-2 U-R2-1)
@@ -1291,7 +1291,7 @@ class PrePushTest(HookCase):
             for staged, want in ((False, dirty % "a.txt"), (True, dirty % "b.txt" + dirty % "a.txt")):
                 with self.subTest(source=source, staged=staged):
                     d, remote, env = setup(source, staged)
-                    rc, out = self.run_proc(["git", "-C", d, "push", "-q", "origin", "main"], env=self.env(**env))
+                    rc, out = self.run_proc(["git", "-C", d, "push", "-q", "origin", "main:work"], env=self.env(**env))
                     self.assertNotEqual(rc, 0, out)
                     self.assertEqual(out.split("error: failed to push")[0], want)  # git adds its own error; no gate line
                     self.assertEqual(git(remote, "for-each-ref"), "")  # the remote is unchanged
@@ -1306,19 +1306,230 @@ class PrePushTest(HookCase):
         remote = os.path.join(self.tmp, "remote.git")
         git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
         git(d, "remote", "add", "origin", remote)
-        rc, out = self.git_run(d, "push", "-q", "origin", "main")
+        rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
         self.assertEqual(rc, 0, out)
         self.assertIn("PASS schema.config", out)
-        pushed = git(remote, "rev-parse", "refs/heads/main")
+        pushed = git(remote, "rev-parse", "refs/heads/work")
         self.assertEqual(pushed, self.head(d))
         write_file(d, "c.txt")
         git(d, "add", "c.txt")
         git(d, "commit", "-q", "--no-verify", "-m", "second")
         write_file(d, "a.txt", "dirty\n")
-        rc, out = self.git_run(d, "push", "-q", "origin", "main")
+        rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
         self.assertNotEqual(rc, 0)
         self.assertIn("FAIL githook.dirty: a.txt: tracked file has a change; commit it before pushing\n", out)
-        self.assertEqual(git(remote, "rev-parse", "refs/heads/main"), pushed)  # the remote is unchanged
+        self.assertEqual(git(remote, "rev-parse", "refs/heads/work"), pushed)  # the remote is unchanged
+
+
+BASE_LINE = "FAIL githook.base: %s is protected; open a pull request\n"
+
+
+class BaseRefusalTest(HookCase):
+    """Task P3.1 producer 5: ``githook pre-push`` refuses a stdin line whose remote ref is ``refs/heads/<base_branch>``
+    (owner directive; rows PP1-PP25, decisions D-Q4 (a) and D-Q5 (a)). The expected texts are written out by hand."""
+
+    def push(self, root, stdin):
+        return self.hook(["pre-push", "--root", root, "origin", "url"], stdin)
+
+    def based(self, base):
+        return self.repo(config=dict(minimal_config(), profile="standard", base_branch=base))
+
+    def refused(self, d, stdin, want):
+        called = self.fake_gates()
+        rc, out, err = self.push(d, stdin)
+        self.assertEqual((rc, out, err), (1, want, ""))
+        self.assertEqual(called, [])  # before any gate runs
+
+    def passes(self, d, stdin):
+        called = self.fake_gates()
+        rc, out, err = self.push(d, stdin)
+        self.assertEqual((rc, err), (0, ""), out)
+        self.assertEqual(called, list(GATES5))
+        self.assertNotIn("githook.base", out)
+
+    def test_push_work_branch_passes(self):  # PP1
+        d = self.repo()
+        self.passes(d, self.push_line("refs/heads/feat", self.head(d), "refs/heads/feat"))
+
+    def test_push_to_base_refused(self):  # PP2, PP3, PP15; plan :2946-2948
+        d = self.repo()
+        head = self.head(d)
+        for local in ("HEAD", "refs/heads/main"):
+            with self.subTest(local=local):
+                self.refused(d, self.push_line(local, head, "refs/heads/main", "a" * 40), BASE_LINE % "main")
+        called = self.fake_gates()
+        rc, out, err = self.push(d, self.push_line("HEAD", head, "refs/heads/main"))
+        self.assertTrue(rc != 0 and "githook.base" in out + err)
+
+    def test_delete_base_refused(self):  # PP4: a deletion of the remote base branch; other deletions stay allowed
+        d = self.repo()
+        for zeros, old in (("0" * 40, "a" * 40), ("0" * 64, "a" * 64)):
+            with self.subTest(width=len(zeros)):
+                self.refused(d, self.push_line("(delete)", zeros, "refs/heads/main", old), BASE_LINE % "main")
+        self.passes(d, self.push_line("(delete)", ZEROS, "refs/heads/old", "a" * 40))
+
+    def test_base_among_several_lines(self):  # PP5, PP6
+        d = self.repo()
+        head = self.head(d)
+        work = self.push_line("refs/heads/feat", head, "refs/heads/feat")
+        base = self.push_line("HEAD", head, "refs/heads/main")
+        other = self.push_line("refs/heads/other", head, "refs/heads/other")
+        self.refused(d, work + base + other, BASE_LINE % "main")
+        self.refused(d, base + work + other, BASE_LINE % "main")
+
+    def test_base_twice(self):  # PP17, D-Q4: one line per offending stdin line (git itself refuses two updates to one ref)
+        d = self.repo()
+        base = self.push_line("HEAD", self.head(d), "refs/heads/main")
+        self.refused(d, base + base, (BASE_LINE % "main") * 2)
+
+    def test_base_branch_configured_name(self):  # PP7
+        d = self.based("trunk")
+        head = self.head(d)
+        self.refused(d, self.push_line("HEAD", head, "refs/heads/trunk"), BASE_LINE % "trunk")
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/main"))  # main is not the base here
+
+    def test_base_with_slash(self):  # PP8
+        d = self.based("release/1.0")
+        head = self.head(d)
+        self.refused(d, self.push_line("HEAD", head, "refs/heads/release/1.0"), BASE_LINE % "release/1.0")
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/release"))
+
+    def test_base_exact_match_only(self):  # PP9: no prefix, suffix, nested name or case folding
+        d = self.repo()
+        head = self.head(d)
+        for remote in ("refs/heads/mainx", "refs/heads/xmain", "refs/heads/main/x", "refs/heads/feature/main",
+                       "refs/heads/Main", "refs/heads/MAIN", "refs/heads/mai", "refs/heads/main-tag"):
+            with self.subTest(remote=remote):
+                self.passes(d, self.push_line("HEAD", head, remote))
+
+    def test_base_other_namespaces_pass(self):  # PP10, PP11: a tag, a remote-tracking name or refs/for is not the branch
+        d = self.repo()
+        head = self.head(d)
+        for remote in ("refs/tags/main", "refs/remotes/origin/main", "refs/for/main", "refs/notes/main", "main", "heads/main"):
+            with self.subTest(remote=remote):
+                self.passes(d, self.push_line("HEAD", head, remote))
+
+    def test_base_any_local_side(self):  # PP12: the rule reads the remote ref only
+        d = self.repo()
+        head = self.head(d)
+        for local, sha in (("HEAD", head), (head, head), ("(delete)", ZEROS), ("refs/heads/feat", head),
+                           ("refs/tags/v1", head)):
+            with self.subTest(local=local[:12]):
+                self.refused(d, self.push_line(local, sha, "refs/heads/main"), BASE_LINE % "main")
+
+    def test_base_and_push_sha(self):  # PP13, D-Q4: the push-sha line, then the base line; never a gate
+        d = self.repo()
+        head = self.head(d)
+        git(d, "branch", "other")
+        write_file(d, "c.txt")
+        git(d, "add", "c.txt")
+        git(d, "commit", "-q", "-m", "second")
+        head, other = self.head(d), git(d, "rev-parse", "other")
+        self.refused(d, self.push_line("refs/heads/other", other, "refs/heads/main"),
+                     "FAIL githook.push-sha: refs/heads/other: pushes %s, not HEAD %s; check out the branch to push it\n"
+                     % (other, head) + BASE_LINE % "main")
+
+    def test_base_and_dirty(self):  # PP14, D-Q4: the dirty line, then the base line
+        d = self.repo()
+        write_file(d, "a.txt", "two\n")
+        self.refused(d, self.push_line("HEAD", self.head(d), "refs/heads/main"),
+                     "FAIL githook.dirty: a.txt: tracked file has a change; commit it before pushing\n" + BASE_LINE % "main")
+
+    def test_base_line_text(self):  # PP16: the name goes through the frozen print table, whatever the interpreter
+        for name, shown in (("maࡰn", "ma\\u0870n"), ("m" * 300, "m" * 300), ("aⰯb", "a\\u2c2fb")):
+            with self.subTest(name=name[:6]):
+                d = self.based(name)
+                self.refused(d, self.push_line("HEAD", self.head(d), "refs/heads/" + name), BASE_LINE % shown)
+
+    def test_p31_unicode_same_on_both(self):  # V2: the remote ref equals the configured name byte for byte; no case method
+        d = self.based("maࡰn")
+        head = self.head(d)
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/MAࡰN"))
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/maࡱn"))
+
+    def test_base_branch_odd_names(self):  # PP23: a name with a space can never equal a remote ref (four fields)
+        d = self.based("a b")
+        head = self.head(d)
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/a"))
+        rc, out, err = self.push(d, b"HEAD %s refs/heads/a b %s\n" % (head.encode(), ZEROS.encode()))
+        self.assertEqual((rc, err), (1, ""))
+        self.assertEqual(out, "FAIL githook.input: pre-push line 1: expected 4 fields, found 5\n")
+
+    def test_base_malformed_stdin_is_input(self):  # PP18: the stdin is validated before the base rule
+        d = self.repo()
+        called = self.fake_gates()
+        rc, out, err = self.push(d, self.push_line("HEAD", "a" * 39, "refs/heads/main"))
+        self.assertEqual((rc, out, err), (1, "FAIL githook.input: pre-push line 1: field 2 is not a lowercase hex sha of "
+                                             "40 or 64 digits\n", ""))
+        self.assertEqual(called, [])
+
+    def test_base_empty_stdin(self):  # PP19
+        d = self.repo()
+        self.passes(d, b"")
+
+    def test_base_needs_config(self):  # PP22: head, then stdin, then config: a missing config is githook.input
+        d = self.repo()
+        os.unlink(os.path.join(d, CONFIG))
+        called = self.fake_gates()
+        rc, out, err = self.push(d, self.push_line("HEAD", self.head(d), "refs/heads/main"))
+        self.assertEqual((rc, err), (1, ""))
+        self.assertTrue(out.startswith("FAIL githook.input: ") and out.count("\n") == 1, out)
+        self.assertIn("config.yml", out)
+        self.assertEqual(called, [])
+        u = os.path.join(self.tmp, "unborn2")
+        os.mkdir(u)
+        git(u, "init", "-q", "-b", "main")
+        rc, out, err = self.push(u, self.push_line("HEAD", "a" * 40, "refs/heads/main"))
+        self.assertEqual(out, "FAIL githook.input: git rev-parse HEAD failed (exit 128)\n")  # HEAD is read first
+
+    def test_base_rule_adds_no_git_call(self):  # PP24: stdin and config only
+        with open(os.path.join(FRAMEWORK, "gates", "tools", "githooks.py"), encoding="utf-8") as fh:
+            tree = __import__("ast").parse(fh.read())
+        fn = [n for n in tree.body if isinstance(n, __import__("ast").FunctionDef) and n.name == "_base_lines"]
+        self.assertEqual(len(fn), 1)
+        names = {n.id for n in __import__("ast").walk(fn[0]) if isinstance(n, __import__("ast").Name)}
+        self.assertFalse(names & {"gitinfo", "subprocess", "os", "config"}, names)
+
+    def test_mirror_delete_limit(self):  # PP20, D-Q5 (a): git sends no stdin line for a remote branch a mirror deletes
+        d = self.repo()
+        remote = os.path.join(self.tmp, "mirror.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(d, "remote", "add", "origin", remote)
+        git(d, "push", "-q", "origin", "main")
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/feat")  # the remote may delete main: it is not its current branch
+        git(d, "branch", "-m", "main", "feat")  # the clone no longer has a local main
+        seen = os.path.join(self.tmp, "stdin.bin")  # a recording hook: what git itself writes on the hook's stdin
+        hook = os.path.join(gitinfo.hooks_dir(d), "pre-push")
+        os.makedirs(os.path.dirname(hook), exist_ok=True)
+        with open(hook, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\ncat > '%s'\n" % seen)
+        os.chmod(hook, 0o755)
+        rc, out = self.git_run(d, "push", "-q", "--mirror", "origin")
+        self.assertEqual(rc, 0, out)
+        heads = git(remote, "for-each-ref", "--format=%(refname)", "refs/heads").split("\n")
+        self.assertEqual(heads, ["refs/heads/feat"])  # main is gone from the remote
+        stdin = read_bytes(seen)
+        self.assertNotIn(b"refs/heads/main", stdin)  # git sent no line for the deleted branch: the stated limit
+        called = self.fake_gates()
+        rc, out, err = self.push(d, stdin)
+        self.assertEqual((rc, err), (0, ""))  # so the hook cannot refuse it; host branch protection covers this
+        self.assertNotIn("githook.base", out)
+
+    def test_real_push_to_base_refused(self):  # PP25: through real git, the shim, a bare remote made here
+        d = self.repo(install=True)
+        remote = os.path.join(self.tmp, "real.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(d, "remote", "add", "origin", remote)
+        git(d, "checkout", "-q", "-b", "feat")
+        rc, out = self.git_run(d, "push", "-q", "origin", "HEAD:main")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("FAIL githook.base: main is protected; open a pull request\n", out)
+        self.assertNotIn("PASS", out)  # before any gate
+        self.assertEqual(git(remote, "for-each-ref"), "")  # the push did not happen
+        rc, out = self.git_run(d, "push", "-q", "origin", "feat")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(git(remote, "rev-parse", "refs/heads/feat"), self.head(d))
+        self.assertEqual(git(remote, "for-each-ref", "--format=%(refname)"), "refs/heads/feat")
 
 
 class InstallTest(HookCase):
