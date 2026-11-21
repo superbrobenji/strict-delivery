@@ -1,0 +1,7 @@
+schema: profile/1
+profile: standard
+defaults:
+  top_tier_roles: [final_verifier, exception_reviewer]
+policy:
+  block:
+    max_tasks: 5

@@ -51,6 +51,9 @@ EXPECTED = {
                           "exclude": [".strict-delivery/**", ".github/workflows/**", ".claude/**", "CLAUDE.md"],
                           "tier": "tier2"}},
     "context": {"max_lines": 2000, "max_bytes": 100000},
+    # Written by hand from the plan (Task 4a.2: the strict profile, P:4265-4267), not read from profiles/.
+    "top_tier_roles": ["final_verifier", "exception_reviewer"],
+    "block": {"max_tasks": 3},
 }
 TAG = minimal_config()["schema"]
 
@@ -329,8 +332,8 @@ class RequiredKeysTest(ConfigCase):
                 self.assertNotIn("\\\\n", out)
 
     def test_not_yet_landed_keys_accepted_unchecked(self):  # C18
-        extra = {"commands": {"test": "make test"}, "roles": 5, "block": [1, 2], "rulings": None,
-                 "dispatch": "x", "budgets": {"a": {"b": 1}}, "overrides": [], "top_tier_roles": [""],
+        extra = {"commands": {"test": "make test"}, "roles": 5, "rulings": None,
+                 "dispatch": "x", "budgets": {"a": {"b": 1}}, "top_tier_roles": [""],
                  "top_tier_fallback": True}
         cfg = self.with_extra(extra)
         want = copy.deepcopy(EXPECTED)
@@ -580,7 +583,11 @@ class Config2Test(ConfigCase):
         cannot write an empty mapping (``emit`` refuses it; ``{}`` is a flow mapping, refused), so the rows that
         hold ``{}`` reach the validator only this way."""
         data = dict(minimal_config(), **extra)
-        with mock.patch.object(yamlsub, "load", return_value=data):
+        real = yamlsub.load  # only the config file is replaced: config.load also reads profiles/<p>.yml (Task 4a.2)
+
+        def fake(path, shown):
+            return data if shown == config.CONFIG_PATH else real(path, shown)
+        with mock.patch.object(yamlsub, "load", side_effect=fake):
             return config.load(self.root)
 
     def unknown(self, extra, dotted):

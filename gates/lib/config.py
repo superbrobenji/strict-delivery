@@ -6,7 +6,7 @@ import os
 import posixpath
 import re
 
-from gates.lib import print_table, yamlsub
+from gates.lib import ids, print_table, profiles, result, yamlsub
 from gates.lib.dispatch import MAX_DIGITS
 from gates.lib.gitinfo import LONG_HEX, _require_toplevel
 from gates.lib.result import GateError
@@ -57,7 +57,9 @@ CONFIG_KEYS = ("schema", "framework_version", "profile", "commands", "paths", "i
                "budgets", "drift", "overrides", "base_branch", "decisions", "limits", "merge", "escape_cost",
                "reviews", "context")
 _REQUIRED = ("schema", "framework_version", "profile")
-_PROFILES = ("light", "standard", "strict")
+_PROFILES = profiles.PROFILES
+# An override of a limit: the two caps, or one role's child cap (the role grammar of the ``roles`` ids, decision D13).
+_LIMITS_KEY = re.compile(r"limits\.(max_depth|max_concurrent|max_children\.[a-z][a-z0-9_]*)")
 _OPEN_MAPS = ("models.tiers",)  # mappings that keep keys the defaults do not name
 
 
@@ -155,6 +157,14 @@ def _validate_escape_cost(ec: object) -> None:
         _int_min(ec[k], "escape_cost." + k, 0)
 
 
+def _validate_ids(cfg: dict) -> None:
+    for k, v in cfg["ids"].items():
+        if not isinstance(v, str) or not re.fullmatch(r"[A-Z]+", v):
+            raise _bad("ids." + k, "must be a prefix of capital letters A-Z")
+    if len(set(cfg["ids"].values())) != len(cfg["ids"]):
+        raise _bad("ids", "the four prefixes must be distinct")
+
+
 def _validate(cfg: dict) -> None:
     tag = cfg["schema"]
     if tag != CONFIG_TAG:
@@ -167,11 +177,7 @@ def _validate(cfg: dict) -> None:
         raise _bad("profile", "must be one of light, standard, strict")
     for k, v in cfg["paths"].items():
         _check_path("paths." + k, v)
-    for k, v in cfg["ids"].items():
-        if not isinstance(v, str) or not re.fullmatch(r"[A-Z]+", v):
-            raise _bad("ids." + k, "must be a prefix of capital letters A-Z")
-    if len(set(cfg["ids"].values())) != len(cfg["ids"]):
-        raise _bad("ids", "the four prefixes must be distinct")
+    _validate_ids(cfg)
     bb = cfg["base_branch"]
     if not isinstance(bb, str) or bb == "":
         raise _bad("base_branch", "must be a non-empty string")
@@ -204,8 +210,77 @@ def _validate(cfg: dict) -> None:
         _int_min(cfg["context"][k], "context." + k, 1)
 
 
+def _refuse_file_policy_keys(data: dict, keys: frozenset, profile: str) -> None:
+    """Step 3: a file key the profile presets is refused; a ``block`` that is not a mapping cannot be merged (D9)."""
+    for key in sorted(keys):
+        parts = key.split(".")
+        node = data
+        for i, seg in enumerate(parts):
+            if seg not in node:
+                break
+            if i == len(parts) - 1:
+                raise _bad(key, "preset by profile %s; change it under overrides with the authorising decision"
+                           % profile)
+            node = node[seg]
+            if type(node) is not dict:
+                raise _bad(".".join(parts[:i + 1]), "must be a mapping")
+
+
+def _set_path(cfg: dict, key: str, value: object) -> None:
+    parts = key.split(".")
+    node = cfg
+    for seg in parts[:-1]:
+        node = node.setdefault(seg, {})
+    node[parts[-1]] = copy.deepcopy(value)
+
+
+def _apply_overrides(cfg: dict, overrides: object, keys: frozenset, profile: str) -> None:
+    """Step 5: check each override entry in file order and apply its value (authorisation is gate_decisions')."""
+    from gates.lib import schema  # function-local: schema imports this module (D4)
+    if type(overrides) is not dict:
+        raise _bad("overrides", "must be a mapping")
+    if "limits" in cfg:  # an override never repairs an invalid direct value (D14)
+        _validate_limits(cfg["limits"])
+    sch = None
+    for key, entry in overrides.items():
+        name = "overrides." + result.safe_text(key)
+        if type(key) is not str or not (key in keys or _LIMITS_KEY.fullmatch(key)):
+            raise _bad(name, "not a policy key of profile %s and not a limits key" % profile)
+        if type(entry) is not dict:
+            raise _bad(name, "must be a mapping")
+        for f in entry:
+            if f not in ("value", "decision"):
+                raise _bad(name + "." + result.safe_text(f), "unknown key")
+        for f in ("value", "decision"):
+            if f not in entry:
+                raise _bad(name + "." + f, "required key is missing")
+        value = entry["value"]
+        if type(value) not in (int, float, str, bool, list):
+            raise _bad(name + ".value", "must be a scalar or a list")
+        if key in keys:
+            if sch is None:
+                sch = schema.load_schema(profiles.PROFILE_SCHEMA)
+            doc = {"schema": "profile/1", "profile": profile, "defaults": {}, "policy": {}}
+            _set_path(doc["policy"], key, value)
+            errs = schema.validate(sch, doc, {})
+            if errs:
+                raise _bad(name + ".value", errs[0].partition(": ")[2])
+            if type(value) is int and value >= 10 ** MAX_DIGITS:
+                raise _bad(name + ".value", "must be an integer of at most %d digits" % MAX_DIGITS)
+        else:
+            _int_min(value, name + ".value", 1)
+        problem = ids.id_problem(entry["decision"], cfg["ids"]["decision"])
+        if problem:
+            raise _bad(name + ".decision", problem)
+        _set_path(cfg, key, value)
+
+
 def load(root: str) -> dict:
-    """The merged config of the tree at ``root``; a GateError names whatever is wrong."""
+    """The merged config of the tree at ``root``; a GateError names whatever is wrong.
+
+    Order: the file's keys are checked; ``DEFAULTS``, then the profile's ``defaults`` for keys the file omits, then the
+    file's keys; a file key the profile presets is refused; the profile's ``policy``; each ``overrides`` value;
+    ``_validate``."""
     _require_toplevel(root)
     path = os.path.join(root, CONFIG_PATH)
     if not os.path.lexists(path):
@@ -222,11 +297,28 @@ def load(root: str) -> dict:
     for k in _REQUIRED:
         if k not in data:
             raise _bad(k, "required key is missing")
+    profile = data["profile"]
+    if type(profile) is not str or profile not in _PROFILES:  # before the profile file is read (decision D3)
+        raise _bad("profile", "must be one of light, standard, strict")
+    preset = profiles.load(profile)
+    keys = profiles.policy_keys(preset)
     cfg = copy.deepcopy(DEFAULTS)
+    for k, v in preset["defaults"].items():
+        if k not in data:
+            cfg[k] = copy.deepcopy(v)
+    _refuse_file_policy_keys(data, keys, profile)
     for k, v in data.items():
         if k in cfg and type(cfg[k]) is dict:
             _merge_map(cfg[k], v, k)
         else:
-            cfg[k] = v
+            cfg[k] = copy.deepcopy(v)
+    for key in sorted(keys):
+        node = preset["policy"]
+        for seg in key.split("."):
+            node = node[seg]
+        _set_path(cfg, key, node)
+    if "overrides" in data:
+        _validate_ids(cfg)  # the decision prefix is checked against a validated prefix (decision D10)
+        _apply_overrides(cfg, data["overrides"], keys, profile)
     _validate(cfg)
     return cfg

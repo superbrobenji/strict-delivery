@@ -429,7 +429,10 @@ class Config(GateCase):
     def test_C12_unlanded_keys(self):
         pre = "FAIL schema.config..strict-delivery/config.yml: "
         for key in ("commands", "models", "roles", "block", "rulings", "dispatch", "budgets", "drift", "overrides"):
-            ok = {"models": {"tiers": {"tier1": "x"}}, "drift": {"estimate_factor_pct": 5}}.get(key, {"x": [1, {"y": 2}]})
+            ok = {"models": {"tiers": {"tier1": "x"}}, "drift": {"estimate_factor_pct": 5},
+                  # Task 4a.2: config.load now checks the shape of an override entry; this one is valid
+                  "overrides": {"limits.max_depth": {"value": 2, "decision": "DEC-20261111-abcd"}},
+                  }.get(key, {"x": [1, {"y": 2}]})
             write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ok}))
             self.assertEqual(self.lines()[0], ["PASS schema.kinds", "PASS schema.config"], key)
             write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ["a"]}))
