@@ -13,11 +13,14 @@ import unittest
 from unittest import mock
 
 from gates import __main__ as gates_main
-from gates.lib import checkpoints, config, dispatch, ids, migrations, schema, yamlsub
+from gates.lib import checkpoints, config, dispatch, findings, gitinfo, ids, migrations, schema, store, yamlsub
 from gates.lib.checkpoints import (checkpoint_lines, handoff_errors, ledger_errors, merged_lines, parse_handoff,
                                    plan_slug, question_errors, resume_line)
 from gates.lib.schema import files_of, load_schema, validate_front_matter, validate_markdown
-from tests.helpers import INT_LIMITS, GitIsolatedTestCase, int_limit, make_repo, minimal_config
+from gates.lib.checkpoints import (cap_errors, last_line_errors, ledger_rulings, ledger_tasks, plan_tasks, record_errors,
+                                   records_at)
+from gates.lib.result import GateError
+from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config, write_record
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HANDOFF_YML = os.path.join(schema.SCHEMAS_DIR, "handoff.yml")
@@ -1696,6 +1699,1104 @@ class FixRound1(unittest.TestCase):
             with self.subTest(path=p):
                 self.assertEqual(he(required_reads=[{"path": p, "why": "w"}]), [bad])
         self.assertEqual(he(required_reads=[{"path": "dir/a.md", "why": "w"}]), [])
+
+
+
+# ================================================================ Task 6K.1: block cap, rulings cap, record agreement
+# Rows LT, PT, LR, CE, RA, RE, LL and V1-V4 of task-6K.1-domain.md and its "Controller decisions" D-K-Q1 to D-K-Q17.
+# Every expected value is typed here by hand; the pure-Python references below use no regular expression.
+
+class SubS(str):
+    pass
+
+
+class SubI(int):
+    pass
+
+
+class SubL(list):
+    pass
+
+
+class SubD(dict):
+    pass
+
+
+def L6(block, task, tests="4/5", gates="PASS"):
+    return "CHECKPOINT %s %s head=abcdef1 tests=%s gates=%s next=x" % (block, task, tests, gates)
+
+
+def lines6(*body):
+    """``checkpoint_lines`` of a ledger whose lines are ``body`` (the first line is the schema line)."""
+    return checkpoint_lines(LH + "\n".join(body) + "\n")
+
+
+def raw6(block, task, **kw):
+    d = {"line": 2, "block": block, "task": task, "head": "abcdef1", "passed": 4, "total": 5, "gates": "PASS", "next": "x"}
+    d.update(kw)
+    return d
+
+
+def H6(block="1a", rulings=0, **kw):
+    d = {"block": block, "rulings": rulings, "findings_in_flight": [], "open_decisions": []}
+    d.update(kw)
+    return d
+
+
+def cfgx(max_tasks=None, per_block=None, block=None, rulings=None):
+    """``cfg()`` plus ``block.max_tasks`` and ``rulings.max_per_block`` when given (a ``block`` / ``rulings`` value
+    given whole replaces the mapping)."""
+    c = cfg()
+    if max_tasks is not None:
+        c["block"] = {"max_tasks": max_tasks}
+    if per_block is not None:
+        c["rulings"] = {"max_per_block": per_block}
+    if block is not None:
+        c["block"] = block
+    if rulings is not None:
+        c["rulings"] = rulings
+    return c
+
+
+NOBODY = object()
+FOUR = lines6(L6("1a", "1a.1"), L6("1a", "1a.2"), L6("1a", "1a.3"), L6("1a", "1a.4"))
+PLAN_FOUR = "### Task 1a.1: a\n### Task 1a.2: b\n#### Task 1a.3: c\n### Task 1a.4: d\n"
+BAD_NUMBERS = (0, -1, True, False, "3", 3.0, None, [3], {}, SubI(3))
+MSG_TASKS = "block.max_tasks: must be an integer of at least 1"
+MSG_RULINGS = "rulings.max_per_block: must be an integer of at least 1"
+FORBIDDEN_CALLS = (".lower(", ".upper(", ".casefold(", ".isprintable(", ".isalnum(", ".isdigit(", ".isalpha(",
+                   "\\w", "\\d", "\\s", "IGNORECASE", "unicodedata", "splitlines", "BaseExceptionGroup",
+                   "except BaseException", "except:")
+
+
+def ref_tasks(lines_, block):
+    """Reference of ``ledger_tasks``: a loop, ``startswith``, no regular expression."""
+    out = []
+    for ln in lines_:
+        t = ln["task"]
+        if ln["block"] == block and t[:len(block) + 1] == block + "." and len(t) >= len(block) + 2 and t not in out:
+            out.append(t)
+    return out
+
+
+def ref_rulings(items, block):
+    """Reference of ``ledger_rulings`` over a list of ``"R"`` (a Ruling line), ``"A"`` (checkpoint of 1a),
+    ``"B"`` (of 1b), written as a forward walk that resets the count at an other-block checkpoint that lies before the
+    block's last checkpoint (decisions D-K-Q1, D-K-Q2)."""
+    mine = "A" if block == "1a" else "B"
+    other = "B" if block == "1a" else "A"
+    last_mine = -1
+    for i, it in enumerate(items):
+        if it == mine:
+            last_mine = i
+    last_any = -1
+    for i, it in enumerate(items):
+        if it in ("A", "B"):
+            last_any = i
+    n = 0
+    for i, it in enumerate(items):
+        if it == "R":
+            n += 1
+        elif it == other and (i < last_mine or (last_mine == -1 and i == last_any)):
+            n = 0
+    return n
+
+
+class LedgerTasks(unittest.TestCase):
+    def test_ledger_tasks_counts_prefixed_tokens_once(self):  # LT1 LT2 LT6 LT8
+        ls = lines6(L6("1a", "1a.1"), L6("1a", "1a.1"), L6("1a", "1a.2"), L6("1a", "block-end"), L6("1a", "merged"),
+                    L6("1b", "1b.1"), L6("1a", "1ab.1"))
+        self.assertEqual(ledger_tasks(ls, "1a"), ["1a.1", "1a.2"])
+
+    def test_ledger_tasks_first_seen_order(self):  # LT3
+        self.assertEqual(ledger_tasks(lines6(L6("1a", "1a.2"), L6("1a", "1a.1"), L6("1a", "1a.2")), "1a"),
+                         ["1a.2", "1a.1"])
+
+    def test_ledger_tasks_ten_is_not_one(self):  # LT4
+        self.assertEqual(ledger_tasks(lines6(L6("1a", "1a.1"), L6("1a", "1a.10")), "1a"), ["1a.1", "1a.10"])
+
+    def test_ledger_tasks_dot_alone_not_a_task(self):  # LT5
+        ls = lines6(L6("1a", "1a."), L6("1a", "1a.1"))
+        self.assertEqual([x["task"] for x in ls], ["1a.", "1a.1"])  # the reader does return the bare token
+        self.assertEqual(ledger_tasks(ls, "1a"), ["1a.1"])
+
+    def test_ledger_tasks_prefix_is_exact(self):  # LT7
+        ls = lines6(L6("1a", "1a.1"), L6("1ab", "1ab.1"), L6("1ab", "1a.1"))
+        self.assertEqual(ledger_tasks(ls, "1ab"), ["1ab.1"])
+        self.assertEqual(ledger_tasks(ls, "1a"), ["1a.1"])
+
+    def test_ledger_tasks_other_blocks_ignored(self):  # LT9
+        ls = lines6(L6("1b", "1b.1"), L6("1b", "1a.1"), L6("1a", "1b.1"), L6("1a", "1a.7"), L6("1a", "x1a.1"), L6("1a", "1a1a.1"))
+        self.assertEqual(ledger_tasks(ls, "1a"), ["1a.7"])
+
+    def test_ledger_tasks_case_sensitive(self):  # LT10
+        self.assertEqual(ledger_tasks(lines6(L6("1a", "1A.1"), L6("B2", "b2.1"), L6("B2", "B2.1")), "1a"), [])
+        self.assertEqual(ledger_tasks(lines6(L6("B2", "b2.1"), L6("B2", "B2.1")), "B2"), ["B2.1"])
+
+    def test_ledger_tasks_rest_is_any_token_char(self):  # LT11 (the plan's literal rule: prefix plus one more character)
+        toks = ["1a.1.2", "1a..", "1a.-", "1a.1b"]
+        self.assertEqual(ledger_tasks(lines6(*[L6("1a", t) for t in toks]), "1a"), toks)
+        self.assertEqual(ledger_tasks([raw6("1a", "1a.\u00a7")], "1a"), ["1a.\u00a7"])  # a hand-built dict is not narrowed
+
+    def test_ledger_tasks_empty(self):  # LT12
+        self.assertEqual(ledger_tasks([], "1a"), [])
+        self.assertEqual(ledger_tasks(lines6(L6("1b", "1b.1")), "1a"), [])
+        self.assertEqual(ledger_tasks(lines6("prose"), "1a"), [])
+
+    def test_ledger_tasks_block_shape(self):  # LT13
+        for b in ("", "1a.", ".", "1a b", "\u0870", "1a\n", None, True, 1, SubS("1a"), b"1a", "*"):
+            with self.subTest(block=b):
+                with self.assertRaises(ValueError) as cm:
+                    ledger_tasks([], b)
+                self.assertEqual(str(cm.exception), "ledger_tasks: block must be a string of ASCII letters and digits")
+
+    def test_ledger_tasks_argument_types(self):  # LT14
+        good = raw6("1a", "1a.1")
+        bad_lines = (None, (), "x", SubL([good]), [None], ["x"], [SubD(good)], [{"block": "1a"}], [{"task": "1a.1"}],
+                     [raw6(1, "1a.1")], [raw6(True, "1a.1")], [raw6("1a", None)], [raw6("1a", 5)],
+                     [raw6(SubS("1a"), "1a.1")], [raw6("1a", SubS("1a.1"))], [good, None])
+        for v in bad_lines:
+            with self.subTest(lines=repr(v)):
+                with self.assertRaises(ValueError) as cm:
+                    ledger_tasks(v, "1a")
+                self.assertEqual(str(cm.exception), "ledger_tasks: lines must be a list of checkpoint line dicts")
+        self.assertEqual(ledger_tasks([good], "1a"), ["1a.1"])
+
+    def test_ledger_tasks_through_checkpoint_lines(self):  # LT15
+        a, b = L6("1a", "1a.1"), L6("1a", "1a.2")
+        cases = [
+            ("crlf", (LH + a + "\n" + b + "\n").replace("\n", "\r\n"), []),
+            ("lf-first-crlf-rest", LH + a + "\r\n" + b + "\r\n", []),
+            ("no-trailing-newline", LH + a + "\n" + b, ["1a.1", "1a.2"]),
+            ("first-line-missing", a + "\n" + b + "\n", ["1a.2"]),
+            ("leading-space", LH + " " + a + "\n" + b + "\n", ["1a.2"]),
+            ("tests-600", LH + L6("1a", "1a.1", tests="1" * 600 + "/" + "1" * 600) + "\n", ["1a.1"]),
+            ("tests-601", LH + L6("1a", "1a.1", tests="1" * 601 + "/" + "1" * 601) + "\n", []),
+        ]
+        for name, text, want in cases:
+            with self.subTest(case=name):
+                self.assertEqual(ledger_tasks(checkpoint_lines(text), "1a"), want)
+
+    def test_ledger_tasks_unicode_token_same_on_both(self):  # LT16
+        for ch in ("\u0870", "\u00a7", "\u0085", "\u2028", "\u00a0", "\U0001fae8"):
+            with self.subTest(ch=repr(ch)):
+                self.assertEqual(ledger_tasks(lines6(L6("1a", "1a." + ch)), "1a"), [])
+
+    def test_ledger_tasks_matches_reference_over_corpus(self):  # the oracle
+        toks = ["1a.1", "1a.10", "1a.", "1ab.1", "block-end", "merged", "1b.2", "B2.1", "1a.1"]
+        for block in ("1a", "1ab", "1b", "B2"):
+            for i in range(len(toks)):
+                body = [L6(blk, t) for blk in ("1a", "1b") for t in toks[i:i + 4]] + [L6("1ab", "1ab.1"), L6("B2", "B2.1")]
+                ls = lines6(*body)
+                with self.subTest(block=block, i=i):
+                    self.assertEqual(ledger_tasks(ls, block), ref_tasks(ls, block))
+
+
+class PlanTasks(unittest.TestCase):
+    def test_plan_tasks_reads_headings(self):  # PT1
+        self.assertEqual(plan_tasks("### Task 1a.1: x\n### Task 1a.2: y\n### Task 1b.1: z\n", "1a"), ["1a.1", "1a.2"])
+
+    def test_plan_tasks_four_hashes_and_letters(self):  # PT2
+        self.assertEqual(plan_tasks("#### Task B2.1: x\n### Task B2.2b: y\n", "B2"), ["B2.1", "B2.2b"])
+
+    def test_plan_tasks_real_plan(self):  # PT3
+        text = slurp(os.path.join(REPO, "docs", "strict-delivery", "plans", "2026-10-31-strict-delivery-framework.md"))
+        for block in ("1a", "B2", "P1", "6K", "1c", "1c0"):
+            want = []
+            for line in text.split("\n"):
+                for lead in ("### Task ", "#### Task "):
+                    if line.startswith(lead):
+                        rest = line[len(lead):]
+                        tid = rest.split(":", 1)[0] if ":" in rest else ""
+                        if tid.startswith(block + ".") and len(tid) > len(block) + 1 and " " not in tid and tid not in want:
+                            want.append(tid)
+            with self.subTest(block=block):
+                self.assertEqual(plan_tasks(text, block), want)
+                self.assertGreater(len(want), 0)
+        self.assertEqual(plan_tasks(text, "6K")[:2], ["6K.1", "6K.2"])
+        self.assertNotIn("1c0.1", plan_tasks(text, "1c"))
+        self.assertEqual(plan_tasks(text, "1c0")[:1], ["1c0.1"])
+
+    def test_plan_tasks_fence_not_special(self):  # PT4: the rule is line-based and the gate ignores code fences
+        self.assertEqual(plan_tasks("```\n### Task 1a.1: x\n```\n", "1a"), ["1a.1"])
+
+    def test_plan_tasks_condition_heading_not_counted(self):  # PT5
+        self.assertEqual(plan_tasks("### Task 1a.1 (only under x):\n### Task 1a.2 (only under x)\n", "1a"), [])
+
+    def test_plan_tasks_condition_after_colon(self):  # PT6
+        self.assertEqual(plan_tasks("### Task 1a.1: (only if x)\n", "1a"), ["1a.1"])
+
+    def test_plan_tasks_duplicate_raises(self):  # PT7
+        for t in ("### Task 1a.1: a\n### Task 1a.2: b\n### Task 1a.1: c\n", "### Task 1a.1: a\n#### Task 1a.1: c\n"):
+            with self.subTest(text=t):
+                with self.assertRaises(ValueError) as cm:
+                    plan_tasks(t, "1a")
+                self.assertEqual(str(cm.exception), "plan_tasks: task 1a.1 is listed twice")
+
+    def test_plan_tasks_other_block_duplicate_ignored(self):  # PT8
+        self.assertEqual(plan_tasks("### Task 1b.1: a\n### Task 1b.1: b\n### Task 1a.1: c\n", "1a"), ["1a.1"])
+
+    def test_plan_tasks_block_absent(self):  # PT9
+        self.assertEqual(plan_tasks("### Task 1b.1: a\n", "1a"), [])
+        self.assertEqual(plan_tasks("", "1a"), [])
+
+    def test_plan_tasks_block_prefix_exact(self):  # PT10
+        t = "### Task 1ab.1: a\n### Task 1a1.1: b\n### Task 1a.1: c\n"
+        self.assertEqual(plan_tasks(t, "1a"), ["1a.1"])
+        self.assertEqual(plan_tasks(t, "1ab"), ["1ab.1"])
+        self.assertEqual(plan_tasks(t, "1a1"), ["1a1.1"])
+
+    def test_plan_tasks_heading_syntax(self):  # PT11
+        cases = [("##### Task 1a.1:", []), ("## Task 1a.1:", []), (" ### Task 1a.1:", []), ("###  Task 1a.1:", []),
+                 ("###\tTask 1a.1:", []), ("### task 1a.1:", []), ("### Task 1a.1:x", ["1a.1"]), ("### Task  1a.1:", []),
+                 ("### Task 1a.1 :", []), ("### Task 1a.: x", []), ("### Task 1a.1:\r", ["1a.1"]), ("### Task 1a.1", []), ("### Task 1a.1:", ["1a.1"]),
+                 ("x ### Task 1a.1:", [])]
+        for text, want in cases:
+            with self.subTest(heading=repr(text)):
+                self.assertEqual(plan_tasks(text + "\n", "1a"), want)
+
+    def test_plan_tasks_rest_charset_same_on_both(self):  # PT12 and V2a for headings
+        cases = [("1a.1", ["1a.1"]), ("1a.1b", ["1a.1b"]), ("1a.-", []), ("1a.1.2", []), ("1a.\u00e9", []),
+                 ("1a.\u0660", []), ("1a.\u0870", []), ("1a.\ua7c0", []), ("1a.\U0001fae8", []), ("1a.\u2c2f", []),
+                 ("1a.\u0c5d", [])]
+        for tid, want in cases:
+            with self.subTest(id=tid):
+                self.assertEqual(plan_tasks("### Task %s: x\n" % tid, "1a"), want)
+
+    def test_plan_tasks_line_endings(self):  # PT13: split on "\n" only
+        self.assertEqual(plan_tasks("### Task 1a.1: x\r\n### Task 1a.2: y\r\n", "1a"), ["1a.1", "1a.2"])
+        self.assertEqual(plan_tasks("a\n### Task 1a.1: x", "1a"), ["1a.1"])
+        self.assertEqual(plan_tasks("x\r### Task 1a.1: z\n", "1a"), [])
+        for sep in ("\u0085", "\u2028", "\x0c", "\x0b", "\x1c"):
+            with self.subTest(sep=repr(sep)):
+                self.assertEqual(plan_tasks("a" + sep + "### Task 1a.1: x\n", "1a"), [])
+                self.assertEqual(plan_tasks("### Task 1a.1: x" + sep + "y\n", "1a"), ["1a.1"])
+
+    def test_plan_tasks_block_shape(self):  # PT14
+        for b in ("", ".", "1.", "1a|1b", ".*", "1a)", "1a.", "\u0870", None, True, 1, SubS("1a")):
+            with self.subTest(block=b):
+                with self.assertRaises(ValueError) as cm:
+                    plan_tasks("### Task 1a.1: x\n", b)
+                self.assertEqual(str(cm.exception), "plan_tasks: block must be a string of ASCII letters and digits")
+
+    def test_plan_tasks_argument_types(self):  # PT15
+        for v in (None, b"### Task 1a.1: x", True, 1, SubS("### Task 1a.1: x\n")):
+            with self.subTest(plan=repr(v)):
+                with self.assertRaises(ValueError) as cm:
+                    plan_tasks(v, "1a")
+                self.assertEqual(str(cm.exception), "plan_tasks: plan_text must be a string")
+
+
+class LedgerRulings(unittest.TestCase):
+    def test_ledger_rulings_before_between_after(self):  # LR1
+        t = LH + R0 + "\n" + L6("1a", "1a.1") + "\n" + R0 + "\n" + L6("1a", "1a.2") + "\n" + R0 + "\n"
+        self.assertEqual(ledger_rulings(t, "1a"), 3)
+
+    def test_ledger_rulings_segment(self):  # LR2 and D-K-Q1: 1b keeps 2, 1a is 3 (the segment runs to the file's end)
+        t = (LH + "Ruling: a -- b -- c -- d\n" + L6("1a", "1a.3") + "\nRuling: e -- f -- g -- h\n" + L6("1b", "1b.1")
+             + "\nRuling: i -- j -- k -- l\n")
+        self.assertEqual(ledger_rulings(t, "1b"), 2)
+        self.assertEqual(ledger_rulings(t, "1a"), 3)
+
+    def test_ledger_rulings_previous_block_not_counted(self):  # LR3
+        t = LH + R0 + "\n" + L6("1a", "1a.1") + "\n" + R0 + "\n" + L6("1b", "1b.1") + "\n"
+        self.assertEqual(ledger_rulings(t, "1b"), 1)
+
+    def test_ledger_rulings_no_checkpoint_anywhere(self):  # LR4
+        self.assertEqual(ledger_rulings(LH + R0 + "\n" + R0 + "\n", "1a"), 2)
+
+    def test_ledger_rulings_block_without_checkpoint(self):  # LR5
+        t = LH + R0 + "\n" + L6("1a", "1a.1") + "\n" + R0 + "\n" + R0 + "\n"
+        self.assertEqual(ledger_rulings(t, "1b"), 2)
+
+    def test_ledger_rulings_empty(self):  # LR6
+        for t in ("", LH, LH.rstrip("\n")):
+            with self.subTest(text=repr(t)):
+                self.assertEqual(ledger_rulings(t, "1a"), 0)
+
+    def test_ledger_rulings_token_rule_counts(self):  # LR7
+        for ln in ("Ruling: a -- b -- c -- d", "Ruling (x): a -- b -- c -- d", "Ruling:", "Ruling", "Ruling: a\r"):
+            with self.subTest(line=repr(ln)):
+                self.assertEqual(ledger_rulings(LH + ln + "\n", "1a"), 1)
+
+    def test_ledger_rulings_token_rule_refuses(self):  # LR8
+        for ln in (" Ruling: x", "x Ruling: y", "Ruling:\ta", "Ruling:: a", "ruling: a", "RULING: a", "Rulings: a",
+                   "Ruling:a", "- Ruling: a"):
+            with self.subTest(line=repr(ln)):
+                self.assertEqual(ledger_rulings(LH + ln + "\n", "1a"), 0)
+
+    def test_ledger_rulings_other_keywords_not_counted(self):  # LR9
+        t = (LH + "Decision (controller): a -- b -- c -- d\nDecision (owner delegation): a -- b -- c\n" + Q0 + "\n"
+             + M0C.replace("words=approve PR 3", "words=Ruling: x") + "\n")
+        self.assertEqual(ledger_rulings(t, "1a"), 0)
+
+    def test_ledger_rulings_block_reappears(self):  # LR10 and D-K-Q2: only the latest run counts
+        t = (LH + L6("1a", "1a.1") + "\n" + "Ruling: p -- b -- c -- d\n" + L6("1b", "1b.1") + "\n" + "Ruling: q -- b -- c -- d\n"
+             + L6("1a", "1a.2") + "\n" + "Ruling: r -- b -- c -- d\n")
+        # 1a's last run starts after the 1b line: q and r count, p does not (D-K-Q2 verbatim; the table's "1" read
+        # "only r", which D-K-Q2's wording "after the last other-block CHECKPOINT line" does not give)
+        self.assertEqual(ledger_rulings(t, "1a"), 2)
+        self.assertEqual(ledger_rulings(t, "1b"), 3)  # 1b's only run follows the first 1a line: p, q and r
+
+    def test_ledger_rulings_section_sign_and_non_ascii(self):  # LR11 V2c
+        for ch in ("\u00a7", "\u0870", "\u00a0", "caf\u00e9", "\ua7c0", "\U0001fae8"):
+            with self.subTest(ch=repr(ch)):
+                self.assertEqual(ledger_rulings(LH + "Ruling: a%sb -- w -- c -- s\n" % ch, "1a"), 1)
+
+    def test_ledger_rulings_boundary_is_conforming_checkpoint(self):  # LR12
+        for name, boundary in (("malformed", "CHECKPOINT 1b"), ("crlf", L6("1b", "1b.1") + "\r"),
+                               ("indented", " " + L6("1b", "1b.1"))):
+            with self.subTest(case=name):
+                t = LH + R0 + "\n" + L6("1a", "1a.1") + "\n" + R0 + "\n" + boundary + "\n" + R0 + "\n"
+                self.assertEqual(ledger_rulings(t, "1a"), 3)  # not a boundary: the 1a segment starts at the top
+        t = LH + R0 + "\n" + L6("1a", "1a.1") + "\n" + R0 + "\n" + L6("1b", "1b.1", gates="FAIL") + "\n" + R0 + "\n"
+        self.assertEqual(ledger_rulings(t, "1b"), 2)  # a conforming line with gates=FAIL is a boundary
+
+    def test_ledger_rulings_line_one_skipped(self):  # LR13
+        self.assertEqual(ledger_rulings(R0 + "\n" + R0 + "\n", "1a"), 1)
+
+    def test_ledger_rulings_line_endings(self):  # LR14
+        self.assertEqual(ledger_rulings("<!-- schema: ledger/1 -->\r\n" + R0 + "\r\n" + R0 + "\r\n", "1a"), 2)
+        self.assertEqual(ledger_rulings(LH + R0, "1a"), 1)
+        for sep in ("\u0085", "\u2028", "\x0b", "\x0c", "\x1c"):
+            with self.subTest(sep=repr(sep)):
+                self.assertEqual(ledger_rulings(LH + "Ruling: a" + sep + "Ruling: b\n", "1a"), 1)
+
+    def test_ledger_rulings_block_shape(self):  # LR15
+        for b in ("", ".", "1a.", "1a|1b", "\u0870", None, True, 1, SubS("1a")):
+            with self.subTest(block=b):
+                with self.assertRaises(ValueError) as cm:
+                    ledger_rulings(LH, b)
+                self.assertEqual(str(cm.exception), "ledger_rulings: block must be a string of ASCII letters and digits")
+
+    def test_ledger_rulings_argument_types(self):  # LR16
+        for v in (None, b"x", True, 1, SubS(LH)):
+            with self.subTest(text=repr(v)):
+                with self.assertRaises(ValueError) as cm:
+                    ledger_rulings(v, "1a")
+                self.assertEqual(str(cm.exception), "the ledger text must be a string")
+
+    def test_ledger_rulings_returns_int(self):  # LR17
+        for n in (0, 1, 10000):
+            r = ledger_rulings(LH + (R0 + "\n") * n, "1a")
+            self.assertEqual(r, n)
+            self.assertIs(type(r), int)
+
+    def test_ledger_rulings_matches_reference_over_corpus(self):  # the oracle: every sequence of R, A, B up to length 6
+        names = {"R": R0, "A": L6("1a", "1a.1"), "B": L6("1b", "1b.1")}
+        seqs = [[]]
+        for n in range(1, 7):
+            seqs += [list(s) for s in __import__("itertools").product("RAB", repeat=n)]
+        for items in seqs:
+            text = LH + "".join(names[i] + "\n" for i in items)
+            for block in ("1a", "1b"):
+                with self.subTest(items="".join(items), block=block):
+                    self.assertEqual(ledger_rulings(text, block), ref_rulings(items, block))
+
+
+class CapErrors(unittest.TestCase):
+    def test_cap_over_fails_and_unset_passes(self):  # CE1 CE3 CE16 (the plan's own test)
+        self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(max_tasks=3), 0),
+                         ["block: 4 tasks in ledger exceed block.max_tasks 3", "block: 4 tasks in plan exceed block.max_tasks 3"])
+        self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(), 0), [])
+        self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(block={}), 0), [])
+        self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(block={"zzz": 1}, rulings={"zzz": 1}), 0), [])
+
+    def test_cap_tasks_at_over_under(self):  # CE2
+        for cap in (1, 3, 5):
+            for n in (0, 1, 2, 3, 4, 5, 6, 9):
+                ls = lines6(*[L6("1a", "1a.%d" % i) for i in range(1, n + 1)]) if n else []
+                plan = "".join("### Task 1a.%d: x\n" % i for i in range(1, n + 1))
+                want = []
+                if n > cap:
+                    want = ["block: %d tasks in ledger exceed block.max_tasks %d" % (n, cap),
+                            "block: %d tasks in plan exceed block.max_tasks %d" % (n, cap)]
+                with self.subTest(cap=cap, n=n):
+                    self.assertEqual(cap_errors(H6(), ls, plan, cfgx(max_tasks=cap), 0), want)
+
+    def test_cap_each_source_alone(self):  # CE3
+        three = lines6(L6("1a", "1a.1"), L6("1a", "1a.2"), L6("1a", "1a.3"))
+        plan3 = "### Task 1a.1: a\n### Task 1a.2: b\n### Task 1a.3: c\n"
+        self.assertEqual(cap_errors(H6(), FOUR, plan3, cfgx(max_tasks=3), 0), ["block: 4 tasks in ledger exceed block.max_tasks 3"])
+        self.assertEqual(cap_errors(H6(), three, PLAN_FOUR, cfgx(max_tasks=3), 0), ["block: 4 tasks in plan exceed block.max_tasks 3"])
+
+    def test_cap_bad_value_raises(self):  # CE4 (the plan's own subTests: 0, -1, True, "3")
+        for v in BAD_NUMBERS:
+            with self.subTest(value=repr(v)):
+                with self.assertRaises(GateError) as cm:
+                    cap_errors(H6(), [], "", cfgx(block={"max_tasks": v}), 0)
+                self.assertEqual(str(cm.exception), MSG_TASKS)
+        for v in (10 ** 1000, 10 ** 4300):  # a valid int of any size: no error, and no text is made of it
+            self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(max_tasks=v), 0), [])
+
+    def test_rulings_cap_unset(self):  # CE5
+        self.assertEqual(cap_errors(H6(rulings=99), [], "", cfgx(), 99), [])
+
+    def test_rulings_cap(self):  # CE6 (the plan's own test)
+        self.assertEqual(cap_errors(H6(rulings=6), [], "", cfgx(per_block=5), 6),
+                         ["rulings: 6 Ruling lines in the ledger exceed rulings.max_per_block 5"])
+        for cap in (1, 3, 5):
+            for n in (0, cap, cap + 1):
+                want = [] if n <= cap else ["rulings: %d Ruling lines in the ledger exceed rulings.max_per_block %d" % (n, cap)]
+                with self.subTest(cap=cap, n=n):
+                    self.assertEqual(cap_errors(H6(rulings=n), [], "", cfgx(per_block=cap), n), want)
+
+    def test_rulings_cap_bad_value_raises(self):  # CE7
+        for v in BAD_NUMBERS:
+            with self.subTest(value=repr(v)):
+                with self.assertRaises(GateError) as cm:
+                    cap_errors(H6(), [], "", cfgx(rulings={"max_per_block": v}), 0)
+                self.assertEqual(str(cm.exception), MSG_RULINGS)
+        self.assertEqual(cap_errors(H6(rulings=3), [], "", cfgx(per_block=10 ** 4300), 3), [])
+
+    def test_rulings_cap_uses_ledger_count(self):  # CE8
+        self.assertEqual(cap_errors(H6(rulings=2), [], "", cfgx(per_block=5), 6),
+                         ["rulings: 6 Ruling lines in the ledger exceed rulings.max_per_block 5", "rulings: handoff says 2, ledger has 6"])
+        self.assertEqual(cap_errors(H6(rulings=9), [], "", cfgx(per_block=5), 3), ["rulings: handoff says 9, ledger has 3"])
+
+    def test_handoff_rulings_must_match_ledger(self):  # CE9 (the plan's own test)
+        self.assertEqual(cap_errors(H6(rulings=2), [], "", cfgx(), 3), ["rulings: handoff says 2, ledger has 3"])
+        self.assertEqual(cap_errors(H6(rulings=4), [], "", cfgx(), 3), ["rulings: handoff says 4, ledger has 3"])
+        self.assertEqual(cap_errors(H6(rulings=3), [], "", cfgx(), 3), [])
+        self.assertEqual(cap_errors(H6(rulings=0), [], "", cfgx(), 0), [])
+        self.assertEqual(cap_errors(H6(rulings=1), [], "", cfgx(per_block=5), 2), ["rulings: handoff says 1, ledger has 2"])
+
+    def test_cap_error_order(self):  # CE10: ledger tasks, plan tasks, rulings cap, rulings mismatch
+        self.assertEqual(cap_errors(H6(rulings=2), FOUR, PLAN_FOUR, cfgx(max_tasks=3, per_block=5), 6), [
+            "block: 4 tasks in ledger exceed block.max_tasks 3", "block: 4 tasks in plan exceed block.max_tasks 3",
+            "rulings: 6 Ruling lines in the ledger exceed rulings.max_per_block 5", "rulings: handoff says 2, ledger has 6"])
+
+    def test_cap_bad_value_before_counting(self):  # CE11
+        with self.assertRaises(GateError):
+            cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(max_tasks=True), 0)
+        with self.assertRaises(GateError):
+            cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(block={"max_tasks": 3}, rulings={"max_per_block": 0}), 0)
+
+    def test_cap_cfg_shape(self):  # CE12
+        for name, c in (("block-int", cfgx(block=5)), ("block-list", cfgx(block=[1])), ("block-none", {**cfg(), "block": None}),
+                        ("block-subclass", cfgx(block=SubD({"max_tasks": 3})))):
+            with self.subTest(case=name):
+                with self.assertRaises(GateError) as cm:
+                    cap_errors(H6(), [], "", c, 0)
+                self.assertEqual(str(cm.exception), "block: must be a mapping")
+        for name, c in (("rulings-int", cfgx(rulings=5)), ("rulings-none", {**cfg(), "rulings": None}),
+                        ("rulings-subclass", cfgx(rulings=SubD({"max_per_block": 3})))):
+            with self.subTest(case=name):
+                with self.assertRaises(GateError) as cm:
+                    cap_errors(H6(), [], "", c, 0)
+                self.assertEqual(str(cm.exception), "rulings: must be a mapping")
+        for c in (None, [], SubD(cfg()), "x"):
+            with self.subTest(cfg=repr(c)):
+                with self.assertRaises(ValueError) as cm:
+                    cap_errors(H6(), [], "", c, 0)
+                self.assertEqual(str(cm.exception), "cap_errors: cfg must be a dict")
+        self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, {"block": {"max_tasks": 5}}, 0), [])  # no other cfg key is read
+
+    def test_cap_handoff_shape(self):  # CE13
+        bad = [None, [], SubD(H6()), "x", {"rulings": 0}, {"block": "1a"}, H6(block=None), H6(block=1), H6(block=True),
+               H6(block=SubS("1a")), H6(block="1a."), H6(rulings=True), H6(rulings=-1), H6(rulings="3"), H6(rulings=3.0),
+               H6(rulings=None), H6(rulings=SubI(1))]
+        for h in bad:
+            with self.subTest(handoff=repr(h)):
+                with self.assertRaises(ValueError) as cm:
+                    cap_errors(h, [], "", cfgx(), 0)
+                self.assertIn("cap_errors: handoff", str(cm.exception))
+        self.assertEqual(cap_errors(H6(extra="x"), [], "", cfgx(), 0), [])
+
+    def test_cap_digit_limits_same_on_both(self):  # CE14 V1c: one verdict on every interpreter and int limit
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                self.assertEqual(cap_errors(H6(rulings=10 ** 599), [], "", cfgx(), 3),
+                                 ["rulings: handoff says %s, ledger has 3" % ("1" + "0" * 599)])
+                for v in (10 ** 600, 10 ** 999, 10 ** 4300):
+                    with self.assertRaises(ValueError) as cm:
+                        cap_errors(H6(rulings=v), [], "", cfgx(), 3)
+                    self.assertEqual(str(cm.exception), "cap_errors: handoff rulings must be an integer of 0 to 600 digits")
+                    with self.assertRaises(ValueError) as cm:
+                        cap_errors(H6(rulings=3), [], "", cfgx(), v)
+                    self.assertEqual(str(cm.exception), "cap_errors: rulings must be an integer of 0 to 600 digits")
+                self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, cfgx(max_tasks=10 ** 4300, per_block=10 ** 4300), 0), [])
+
+    def test_cap_argument_types(self):  # CE15
+        for v in (None, (), "x", SubL(), [None], [{"block": "1a"}]):
+            with self.subTest(lines=repr(v)):
+                with self.assertRaises(ValueError):
+                    cap_errors(H6(), v, "", cfgx(), 0)
+        for v in (None, b"", True, 1, SubS("")):
+            with self.subTest(plan=repr(v)):
+                with self.assertRaises(ValueError):
+                    cap_errors(H6(), [], v, cfgx(), 0)
+        for v in (True, False, -1, "3", 3.0, None, SubI(1)):
+            with self.subTest(rulings=repr(v)):
+                with self.assertRaises(ValueError):
+                    cap_errors(H6(rulings=0), [], "", cfgx(), v)
+
+    def test_cap_end_to_end_with_config_load(self):  # CE16: config.load of a fixture, hand-typed texts
+        with tempfile.TemporaryDirectory() as d:
+            make_repo(d, {**minimal_config(), "block": {"max_tasks": 3}, "rulings": {"max_per_block": 1}})
+            c = config.load(d)
+        text = LH + "".join(L6("1a", "1a.%d" % i) + "\n" for i in range(1, 5)) + R0 + "\n" + R0 + "\n"
+        errs = cap_errors(H6(rulings=2), checkpoint_lines(text), PLAN_FOUR, c, ledger_rulings(text, "1a"))
+        self.assertEqual(errs, ["block: 4 tasks in ledger exceed block.max_tasks 3", "block: 4 tasks in plan exceed block.max_tasks 3",
+                                "rulings: 2 Ruling lines in the ledger exceed rulings.max_per_block 1"])
+
+    def test_cap_real_plan_block(self):  # CE17
+        text = slurp(os.path.join(REPO, "docs", "strict-delivery", "plans", "2026-10-31-strict-delivery-framework.md"))
+        self.assertEqual(cap_errors(H6(block="6K"), [], text, cfgx(max_tasks=3), 0), [])
+        self.assertEqual(cap_errors(H6(block="6K"), [], text, cfgx(max_tasks=1), 0),
+                         ["block: %d tasks in plan exceed block.max_tasks 1" % len(plan_tasks(text, "6K"))])
+
+
+F6 = "F-20261101-abcd"
+D6 = "DEC-20261101-abcd"
+D6B = "DEC-20261102-bn3p"
+
+
+def rec6(id_, status, **row):
+    r = {"id": id_, "status": status}
+    r.update(row)
+    return store.Record(id_, r, "x/%s.yml" % id_)
+
+
+class RecordErrors(unittest.TestCase):
+    def test_record_errors_unresolved_findings_pass(self):  # RE1
+        for st in ("open", "planned", "in-progress", "fixed-unpinned", "pinned", "deferred"):
+            with self.subTest(status=st):
+                self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [rec6(F6, st)], []), [])
+
+    def test_record_agreement(self):  # RE2 (the plan's own test)
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [rec6(F6, "closed")], []),
+                         ["findings_in_flight.%s: resolved (status closed)" % F6])
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [rec6(F6, "merged")], []),
+                         ["findings_in_flight.%s: resolved (status merged)" % F6])
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [rec6(D6, "answered")]),
+                         ["open_decisions.%s: status answered, not open" % D6])
+
+    def test_record_errors_missing_finding(self):  # RE3
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [], []), ["findings_in_flight.%s: no finding record" % F6])
+
+    def test_record_errors_open_decisions(self):  # RE4 RE5
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [rec6(D6, "open")]), [])
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [rec6(D6, "withdrawn")]),
+                         ["open_decisions.%s: status withdrawn, not open" % D6])
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], []), ["open_decisions.%s: no decision record" % D6])
+
+    def test_record_errors_empty(self):  # RE6
+        self.assertEqual(record_errors(H6(), [], []), [])
+        self.assertEqual(record_errors({"block": "1a"}, [], []), [])  # keys absent: empty lists (D-K-Q14)
+        self.assertEqual(record_errors(H6(), [rec6(F6, "closed")], [rec6(D6, "answered")]), [])
+
+    def test_record_errors_order(self):  # RE7: findings first, then decisions, each in the handoff's order
+        h = H6(findings_in_flight=["F-20261101-bbbb", F6], open_decisions=[D6B, D6])
+        self.assertEqual(record_errors(h, [rec6(F6, "closed")], [rec6(D6, "answered")]), [
+            "findings_in_flight.F-20261101-bbbb: no finding record", "findings_in_flight.%s: resolved (status closed)" % F6,
+            "open_decisions.%s: no decision record" % D6B, "open_decisions.%s: status answered, not open" % D6])
+
+    def test_record_errors_odd_status(self):  # RE8 and D-K-Q15
+        for st in (None, 1, "Closed", "", "closed ", "bogus", 2.5, True):
+            with self.subTest(finding_status=repr(st)):
+                self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [rec6(F6, st)], []), [])
+        for st, text in ((None, "None"), (1, "1"), ("Open", "Open"), ("", ""), ("open ", "open "), (2.5, "2.5"), (True, "True")):
+            with self.subTest(decision_status=repr(st)):
+                self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [rec6(D6, st)]),
+                                 ["open_decisions.%s: status %s, not open" % (D6, text)])
+        no_status = store.Record(D6, {"id": D6}, "x/y.yml")
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [no_status]), ["open_decisions.%s: status None, not open" % D6])
+        not_a_dict = store.Record(D6, "not a mapping", "x/y.yml")  # a row the store never returns: read as no status
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [not_a_dict]), ["open_decisions.%s: status None, not open" % D6])
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [rec6(D6, -10 ** 599)]),
+                         ["open_decisions.%s: status -1%s, not open" % (D6, "0" * 599)])
+        for st in ([1], {"a": 1}, 10 ** 600, -10 ** 600, SubS("open"), SubS("answered"), SubI(1)):
+            with self.subTest(refused=repr(st)[:20]):
+                with self.assertRaises(ValueError) as cm:
+                    record_errors(H6(open_decisions=[D6]), [], [rec6(D6, st)])
+                self.assertEqual(str(cm.exception), "record_errors: a decision's status must be a scalar of at most 600 digits")
+        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [rec6(D6, 10 ** 599)]),
+                         ["open_decisions.%s: status 1%s, not open" % (D6, "0" * 599)])
+
+    def test_record_errors_record_identity(self):  # RE9 and D-K-Q13
+        odd = [store.Record(None, {}, "a.yml"), store.Record(5, {}, "b.yml"), store.Record(SubS(F6), {"status": "open"}, "c.yml")]
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6]), odd, []), ["findings_in_flight.%s: no finding record" % F6])
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [rec6(F6, "open"), rec6(F6, "closed")], []), [])
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [rec6(F6, "closed"), rec6(F6, "open")], []),
+                         ["findings_in_flight.%s: resolved (status closed)" % F6])
+        other = store.Record(F6, {"id": F6, "status": "open"}, "x/other-name.yml")  # the file name is not compared
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [other], []), [])
+
+    def test_record_errors_handoff_shapes(self):  # RE10 and D-K-Q14
+        for key in ("findings_in_flight", "open_decisions"):
+            for v in (None, "x", (), {}, ["a", None], ["a", 1], [True], SubL()):
+                with self.subTest(key=key, value=repr(v)):
+                    with self.assertRaises(ValueError) as cm:
+                        record_errors(H6(**{key: v}), [], [])
+                    self.assertEqual(str(cm.exception), "record_errors: handoff %s must be a list of strings" % key)
+        for h in (None, [], SubD(H6()), "x"):
+            with self.assertRaises(ValueError) as cm:
+                record_errors(h, [], [])
+            self.assertEqual(str(cm.exception), "record_errors: handoff must be a dict")
+        self.assertEqual(record_errors(H6(findings_in_flight=[F6, F6]), [], []), ["findings_in_flight.%s: no finding record" % F6] * 2)
+
+    def test_record_errors_argument_types(self):  # RE11
+        good = rec6(F6, "open")
+
+        class Rec2(store.Record):
+            pass
+
+        for v in (None, (good,), [{"id": F6}], [Rec2(F6, {}, "x")], [None], "x", SubL([good])):
+            with self.subTest(findings=repr(v)):
+                with self.assertRaises(ValueError) as cm:
+                    record_errors(H6(), v, [])
+                self.assertEqual(str(cm.exception), "record_errors: findings must be a list of store.Record")
+            with self.subTest(decisions=repr(v)):
+                with self.assertRaises(ValueError) as cm:
+                    record_errors(H6(), [], v)
+                self.assertEqual(str(cm.exception), "record_errors: decisions must be a list of store.Record")
+        with self.assertRaises(ValueError):
+            record_errors(H6(), (r for r in [good]), [])
+        with self.assertRaisesRegex(ValueError, "findings must be"):  # both bad: the findings are checked first
+            record_errors(H6(), None, None)
+
+    def test_record_errors_id_text_same_on_both(self):  # RE12 and V2a for the id
+        for ch in ("\n", "\u0870", "\u00a7", "\U0001fae8", "a" * 4301):
+            i = "F-" + ch
+            with self.subTest(id=repr(i)[:12]):
+                self.assertEqual(record_errors(H6(findings_in_flight=[i]), [], []), ["findings_in_flight.%s: no finding record" % i])
+
+    def test_record_errors_kind_mixup(self):  # RE13
+        self.assertEqual(record_errors(H6(findings_in_flight=[D6], open_decisions=[F6]), [rec6(F6, "open")], [rec6(D6, "open")]),
+                         ["findings_in_flight.%s: no finding record" % D6, "open_decisions.%s: no decision record" % F6])
+
+    def test_record_errors_does_not_mutate(self):  # RE14
+        h, f, d = H6(findings_in_flight=[F6], open_decisions=[D6]), [rec6(F6, "closed")], [rec6(D6, "answered")]
+        h0, f0, d0 = copy.deepcopy(h), copy.deepcopy(f), copy.deepcopy(d)
+        record_errors(h, f, d)
+        self.assertEqual((h, f, d), (h0, f0, d0))
+
+    def test_record_errors_uses_findings_is_resolved(self):  # the sibling: findings.RESOLVED decides, not a copy of it
+        for st in sorted(findings.RESOLVED):
+            self.assertEqual(record_errors(H6(findings_in_flight=[F6]), [rec6(F6, st)], []),
+                             ["findings_in_flight.%s: resolved (status %s)" % (F6, st)])
+
+
+class LastLine(unittest.TestCase):
+    def test_last_line_only(self):  # LL1 LL2 (the plan's own test)
+        self.assertEqual(last_line_errors(lines6(L6("1a", "1a.1", "4/5"), L6("1a", "1a.2", "5/5"))), [])
+        self.assertEqual(last_line_errors(lines6(L6("1a", "1a.2", "5/5", "n/a"))), ["last CHECKPOINT: gates=n/a"])
+
+    def test_last_line_tests_short(self):  # LL3
+        self.assertEqual(last_line_errors(lines6(L6("1a", "1a.1", "4/5"))), ["last CHECKPOINT: tests 4/5"])
+
+    def test_last_line_both_errors(self):  # LL4: gates first, then tests
+        self.assertEqual(last_line_errors(lines6(L6("1a", "1a.1", "4/5", "n/a"))), ["last CHECKPOINT: gates=n/a", "last CHECKPOINT: tests 4/5"])
+
+    def test_last_line_passed_over_total(self):  # LL5
+        self.assertEqual(last_line_errors([raw6("1a", "1a.1", passed=6, total=5)]), ["last CHECKPOINT: tests 6/5"])
+
+    def test_last_line_zero_of_zero(self):  # LL6 and D-K-Q16
+        self.assertEqual(last_line_errors(lines6(L6("1a", "1a.1", "0/0"))), [])
+
+    def test_last_line_empty(self):  # LL7
+        self.assertEqual(last_line_errors([]), ["no CHECKPOINT line"])
+
+    def test_last_line_any_block(self):  # LL8
+        self.assertEqual(last_line_errors(lines6(L6("1a", "1a.1", "5/5"), L6("1b", "1b.1", "1/5"))), ["last CHECKPOINT: tests 1/5"])
+
+    def test_last_line_is_last_element(self):  # LL9 and D-K-Q17: not the highest line number
+        ls = [raw6("1a", "1a.1", line=9, passed=1, total=5), raw6("1a", "1a.2", line=3)]
+        self.assertEqual(last_line_errors(ls), ["last CHECKPOINT: tests 4/5"])
+        ls = [raw6("1a", "1a.1", line=3, passed=1, total=5), raw6("1a", "1a.2", line=9, passed=5)]
+        self.assertEqual(last_line_errors(ls), [])
+
+    def test_last_line_single(self):  # LL10: the line key is not read
+        d = raw6("1a", "1a.1", passed=5, total=5)
+        del d["line"]
+        self.assertEqual(last_line_errors([d]), [])
+
+    def test_last_line_digit_limits_same_on_both(self):  # LL11 V1c
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                big = 10 ** 599
+                self.assertEqual(last_line_errors([raw6("1a", "1a.1", passed=big, total=big)]), [])
+                self.assertEqual(last_line_errors([raw6("1a", "1a.1", passed=big, total=big + 1)]),
+                                 ["last CHECKPOINT: tests %s/%s" % ("1" + "0" * 599, "1" + "0" * 598 + "1")])
+                for v in (10 ** 600, 10 ** 4300):
+                    for kw in ({"passed": v}, {"total": v}):
+                        with self.assertRaises(ValueError) as cm:
+                            last_line_errors([raw6("1a", "1a.1", **kw)])
+                        self.assertEqual(str(cm.exception), "last_line_errors: the last line must have a gates string, and passed and total integers of 0 to 600 digits")
+        # ledger text itself: 600 digits conform, 601 do not (V1b)
+        t600 = lines6(L6("1a", "1a.1", tests="1" * 600 + "/" + "1" * 600))
+        self.assertEqual(last_line_errors(t600), [])
+        t599 = lines6(L6("1a", "1a.1", tests="1" * 599 + "/" + "1" * 600))
+        self.assertEqual(last_line_errors(t599), ["last CHECKPOINT: tests %s/%s" % ("1" * 599, "1" * 600)])
+        self.assertEqual(last_line_errors(lines6(L6("1a", "1a.1", tests="1" * 601 + "/1"))), ["no CHECKPOINT line"])
+
+    def test_last_line_value_types(self):  # LL12
+        for g in (None, True, "PASS ", "pass", "PASS\r", "FAIL", ""):
+            with self.subTest(gates=repr(g)):
+                self.assertEqual(last_line_errors([raw6("1a", "1a.1", passed=5, total=5, gates=g)]), ["last CHECKPOINT: gates=%s" % g])
+        for kw in ({"passed": True}, {"passed": "5"}, {"passed": 5.0}, {"passed": None}, {"total": True}, {"total": "5"},
+                   {"total": None}, {"passed": -1}, {"passed": SubI(4)}, {"gates": 5}, {"gates": ["PASS"]}, {"gates": SubS("PASS")}):
+            with self.subTest(kw=repr(kw)):
+                with self.assertRaises(ValueError) as cm:
+                    last_line_errors([raw6("1a", "1a.1", **kw)])
+                self.assertEqual(str(cm.exception), "last_line_errors: the last line must have a gates string, and passed and total integers of 0 to 600 digits")
+        for bad_last in (None, "x", {}, {"gates": "PASS"}):
+            with self.assertRaises(ValueError):
+                last_line_errors([raw6("1a", "1a.1"), bad_last])
+
+    def test_last_line_argument_types(self):  # LL13
+        for v in (None, (), "x", SubL(), [None], ["x"]):
+            with self.subTest(lines=repr(v)):
+                with self.assertRaises(ValueError) as cm:
+                    last_line_errors(v)
+                self.assertEqual(str(cm.exception), "last_line_errors: lines must be a list of checkpoint line dicts")
+
+    def test_last_line_through_checkpoint_lines(self):  # LL14: a CRLF-ended last line is no CHECKPOINT line
+        t = LH + L6("1a", "1a.1", "4/5") + "\n" + L6("1a", "1a.2", "5/5") + "\r\n"
+        self.assertEqual(last_line_errors(checkpoint_lines(t)), ["last CHECKPOINT: tests 4/5"])
+
+
+class RecordsAt(GitIsolatedTestCase):
+    """``records_at``: records committed in a temp repository, read through git (rows RA1-RA20, V3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = make_repo(self.work, minimal_config())
+        self.cfg = config.load(self.root)
+        self.dir = self.cfg["paths"]["decisions"]
+        self.fdir = self.cfg["paths"]["findings"]
+
+    def put(self, name, row=None, directory=None):
+        write_record(self.root, "%s/%s" % (directory or self.dir, name), row if row is not None else {"id": name[:-4], "status": "open"})
+
+    def put_raw(self, name, data, directory=None):
+        path = os.path.join(self.root, *("%s/%s" % (directory or self.dir, name)).split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+
+    def commit(self, msg="c"):
+        return commit_all(self.root, msg)
+
+    def read(self, ref="HEAD", kind="decision", cfg=None):
+        return records_at(self.root, cfg or self.cfg, ref, kind)
+
+    def test_records_at_reads_another_ref(self):  # RA1 (the plan's own test)
+        git(self.root, "checkout", "-q", "-b", "p/integration")
+        self.put(D6 + ".yml")
+        self.commit("on p/integration")
+        git(self.root, "checkout", "-q", "main")
+        recs = self.read("p/integration")
+        self.assertEqual([r.id for r in recs], [D6])
+        self.assertEqual(recs[0].row, {"id": D6, "status": "open"})
+        self.assertEqual(recs[0].file, "%s/%s.yml" % (self.dir, D6))
+        self.assertIs(type(recs[0]), store.Record)
+        self.assertEqual(self.read("HEAD"), [])
+        self.assertEqual(self.read("main"), [])
+
+    def test_records_at_ref_forms(self):  # RA2
+        self.put(D6 + ".yml")
+        sha = self.commit()
+        git(self.root, "branch", "x/y")
+        for ref in ("HEAD", "main", "HEAD~0", sha, sha[:7], "refs/heads/x/y", "x/y"):
+            with self.subTest(ref=ref):
+                self.assertEqual([r.id for r in self.read(ref)], [D6])
+
+    def test_records_at_ref_missing(self):  # RA3
+        for ref in ("nosuch", "", "-x", "^x", "a" * 41):
+            with self.subTest(ref=ref):
+                with self.assertRaises(GateError):
+                    self.read(ref)
+        with self.assertRaisesRegex(GateError, "git ls-tree failed"):
+            self.read("nosuch")
+        with self.assertRaisesRegex(GateError, "ref must not start with '-'"):
+            self.read("-x")
+        with self.assertRaisesRegex(GateError, "more than 40 hex digits"):
+            self.read("a" * 41)
+
+    def test_records_at_ref_types(self):  # RA4 V4
+        for ref in (None, b"HEAD", True, 3, SubS("HEAD")):
+            with self.subTest(ref=repr(ref)):
+                with self.assertRaisesRegex(GateError, "ref must be a non-empty string"):
+                    self.read(ref)
+
+    def test_records_at_kind(self):  # RA5
+        self.put(D6 + ".yml")
+        self.put(F6 + ".yml", directory=self.fdir)
+        self.commit()
+        self.assertEqual([r.id for r in self.read(kind="decision")], [D6])
+        self.assertEqual([r.id for r in self.read(kind="finding")], [F6])
+        for kind in ("claim", "", None, True, "Decision", SubS("decision"), b"decision"):
+            with self.subTest(kind=repr(kind)):
+                with self.assertRaisesRegex(GateError, "store kind must be 'decision' or 'finding'"):
+                    self.read(kind=kind)
+
+    def test_records_at_directory_absent(self):  # RA6 and D-K-Q12
+        self.assertEqual(self.read(), [])  # no register directory at the ref
+        self.put(D6 + ".yml", directory="elsewhere")
+        self.commit()
+        self.assertEqual(self.read(), [])
+
+    def test_records_at_directory_is_file_or_symlink(self):  # RA6 and D-K-Q12: a file or symlink on the path is a GateError
+        parts = self.dir.split("/")
+        for depth in range(2, len(parts) + 1):  # .strict-delivery itself holds the committed config
+            rel = "/".join(parts[:depth])
+            for kind in ("file", "symlink"):
+                with self.subTest(path=rel, kind=kind):
+                    with tempfile.TemporaryDirectory() as d:
+                        root = make_repo(d, minimal_config())
+                        target = os.path.join(root, *rel.split("/"))
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        if kind == "file":
+                            with open(target, "w") as fh:
+                                fh.write("x\n")
+                        else:
+                            os.symlink("elsewhere", target)
+                        commit_all(root, "c")
+                        with self.assertRaisesRegex(GateError, "%s: not a directory" % re.escape(rel)):
+                            records_at(root, config.load(root), "HEAD", "decision")
+
+    def test_records_at_unparsable_file(self):  # RA7
+        cases = (("a: [\n", "unterminated flow sequence"), ("", "the top level must be a mapping"),
+                 ("- a\n", "the top level must be a mapping"), ("x\n", "the top level must be a mapping"),
+                 ("---\n", ""))
+        for text, why in cases:
+            with self.subTest(text=text):
+                self.put_raw("bad.yml", text.encode())
+                self.commit()
+                with self.assertRaises(GateError) as cm:
+                    self.read()
+                self.assertIn("HEAD:%s/bad.yml" % self.dir, str(cm.exception))
+                self.assertIn(why, str(cm.exception))
+
+    def test_records_at_non_utf8_blob(self):  # RA8
+        self.put_raw("bin.yml", b"\xff\xfe\x00")
+        self.commit()
+        with self.assertRaisesRegex(GateError, "HEAD:%s/bin.yml: .*not valid UTF-8" % re.escape(self.dir)):
+            self.read()
+
+    def test_records_at_bom_and_crlf_like_load(self):  # RA9
+        self.put_raw(D6 + ".yml", b"\xef\xbb\xbfid: " + D6.encode() + b"\nstatus: open\n")
+        self.put_raw(D6B + ".yml", ("id: %s\r\nstatus: open\r\n" % D6B).encode())
+        self.commit()
+        got = self.read()
+        want = [(D6, {"id": D6, "status": "open"}), (D6B, {"id": D6B, "status": "open"})]
+        self.assertEqual([(r.id, r.row) for r in got], want)
+        loaded = store.Store(self.root, "decision", self.cfg).load()
+        self.assertEqual([(r.id, r.row, r.file) for r in got], [(r.id, r.row, r.file) for r in loaded])
+
+    def _nasty(self, name, kind):
+        rel = "%s/%s" % (self.dir, name)
+        path = os.path.join(self.root, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if kind == "symlink":
+            os.symlink("target.yml", path)
+        elif kind == "dir":
+            os.makedirs(path)
+            with open(os.path.join(path, "a.yml"), "w") as fh:
+                fh.write("id: a\n")
+        elif kind == "gitlink":
+            git(self.root, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % ("a" * 40, rel))
+        else:
+            with open(path, "w") as fh:
+                fh.write("x\n")
+        return rel
+
+    def test_records_at_subfolder_symlink_gitlink(self):  # RA10 RA11 RA12 and D-K-Q12
+        self.put(D6 + ".yml")
+        for name, kind in (("sub", "dir"), ("link.yml", "symlink"), ("gl.yml", "gitlink")):
+            with self.subTest(kind=kind):
+                rel = self._nasty(name, kind)
+                if kind == "gitlink":
+                    git(self.root, "commit", "-q", "-m", "g")  # `git add -A` would drop an index-only entry
+                else:
+                    self.commit()
+                with self.assertRaises(GateError) as cm:
+                    self.read()
+                self.assertEqual(str(cm.exception), "HEAD:%s: not a regular file named <id>.yml" % rel)
+                if kind != "gitlink":  # a gitlink has no working-tree file here
+                    with self.assertRaises(GateError):  # the working-tree reader agrees
+                        store.Store(self.root, "decision", self.cfg).load()
+                git(self.root, "rm", "-rq", "--cached", "--ignore-unmatch", rel)
+                path = os.path.join(self.root, *rel.split("/"))
+                if os.path.islink(path) or os.path.isfile(path):
+                    os.unlink(path)
+                else:
+                    import shutil
+                    shutil.rmtree(path, ignore_errors=True)
+                self.commit()
+                self.assertEqual([r.id for r in self.read()], [D6])
+
+    def test_records_at_non_record_names(self):  # RA13
+        self.put(D6 + ".yml")
+        for name in ("notes.txt", ".h.yml", "README", "a.yaml", "A.YML", "x.yml.bak"):
+            with self.subTest(name=name):
+                self.put_raw(name, b"id: x\n")
+                self.commit()
+                with self.assertRaises(GateError) as cm:
+                    self.read()
+                self.assertEqual(str(cm.exception), "HEAD:%s/%s: not a regular file named <id>.yml" % (self.dir, name))
+                git(self.root, "rm", "-q", "-f", "%s/%s" % (self.dir, name))
+                self.commit()
+        self.put_raw("index.yml", b"x: 1\n")  # generated files are skipped
+        self.put_raw("in-force.md", b"x\n")
+        self.commit()
+        self.assertEqual([r.id for r in self.read()], [D6])
+        self.put("\u0870.yml", {"id": "x", "status": "open"})  # a non-ASCII name is a record name, as Store.load takes it
+        self.commit()
+        self.assertEqual(sorted(r.file.rsplit("/", 1)[1] for r in self.read()), sorted([D6 + ".yml", "\u0870.yml"]))
+
+    def test_records_at_returns_rows_unvalidated(self):  # RA14
+        self.put("a.yml", {"status": "open"})
+        self.put("b.yml", {"id": 5})
+        self.put("c.yml", {"id": D6})
+        self.put("d.yml", {"id": D6})
+        self.commit()
+        self.assertEqual([(r.id, r.file.rsplit("/", 1)[1]) for r in self.read()], [(None, "a.yml"), (5, "b.yml"), (D6, "c.yml"), (D6, "d.yml")])
+
+    def test_records_at_sorted_by_name(self):  # RA15
+        self.put("b.yml", {"id": "b"})
+        self.put("a.yml", {"id": "a"})
+        self.commit()
+        self.assertEqual([r.id for r in self.read()], ["a", "b"])
+
+    def test_records_at_root(self):  # RA16
+        self.put(D6 + ".yml")
+        self.commit()
+        sub = os.path.join(self.root, "sub")
+        os.mkdir(sub)
+        with self.assertRaisesRegex(GateError, re.escape("root must be the repository top level")):
+            records_at(sub, self.cfg, "HEAD", "decision")
+        outside = os.path.join(self.tmp, "norepo")
+        os.mkdir(outside)
+        with self.assertRaisesRegex(GateError, "git rev-parse --show-toplevel failed"):
+            records_at(outside, self.cfg, "HEAD", "decision")
+        for root in (None, True, SubS(self.root), "", b"x", 3):
+            with self.subTest(root=repr(root)):
+                with self.assertRaisesRegex(GateError, "root must be a string"):
+                    records_at(root, self.cfg, "HEAD", "decision")
+
+    def test_records_at_cfg_paths(self):  # RA17
+        for bad in (None, [], {}, {"paths": {}}, {"paths": {"findings": "f"}}, {"paths": None}, {"paths": {"decisions": None, "findings": "f"}},
+                    {"paths": {"decisions": "", "findings": "f"}}, SubD(self.cfg),
+                    {"paths": SubD({"decisions": "d", "findings": "f"})}, {"paths": {"decisions": SubS("d"), "findings": "f"}}):
+            with self.subTest(cfg=repr(bad)):
+                with self.assertRaises(GateError) as cm:
+                    records_at(self.root, bad, "HEAD", "decision")
+                self.assertIn("paths.decisions", str(cm.exception))
+        c = copy.deepcopy(self.cfg)
+        c["paths"]["decisions"] = "x/d"
+        self.put(D6 + ".yml", directory="x/d")
+        self.commit()
+        self.assertEqual([r.file for r in records_at(self.root, c, "HEAD", "decision")], ["x/d/%s.yml" % D6])
+        self.assertEqual(self.read(), [])
+
+    def test_records_at_equals_store_load(self):  # RA18: the oracle is the working-tree reader on a clean tree
+        for name in ("c.yml", "a.yml", "b.yml"):
+            self.put(name, {"id": name[:-4], "status": "open", "n": 3, "t": ["x", "y"]})
+        self.commit()
+        loaded = store.Store(self.root, "decision", self.cfg).load()
+        self.assertEqual([(r.id, r.row, r.file) for r in self.read()], [(r.id, r.row, r.file) for r in loaded])
+        self.assertEqual(len(loaded), 3)
+
+    def test_records_at_digit_limits_same_on_both(self):  # RA19 V1a
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                for n, ok in ((1000, True), (1001, False), (4300, False), (4301, False)):
+                    self.put_raw("big.yml", ("id: big\nn: %s\n" % ("9" * n)).encode())
+                    self.commit("n%d" % n)
+                    with self.subTest(limit=limit, n=n):
+                        if ok and limit != 640:  # at 640 a 1000-digit numeral fails in int() (U2 of Task P1.1 report), as in the P1.2 row HF11
+                            self.assertEqual(self.read()[0].row["n"], 10 ** 1000 - 1)
+                        else:
+                            with self.assertRaisesRegex(GateError, "HEAD:%s/big.yml: integer too large" % re.escape(self.dir)):
+                                self.read()
+
+    def test_records_at_writes_nothing(self):  # RA20
+        self.put(D6 + ".yml")
+        sha = self.commit()
+        before = git(self.root, "status", "--porcelain", "--untracked-files=all")
+        index = git(self.root, "ls-files", "-s")
+        self.read()
+        self.assertEqual(git(self.root, "status", "--porcelain", "--untracked-files=all"), before)
+        self.assertEqual(git(self.root, "ls-files", "-s"), index)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), sha)
+
+    def test_records_at_reads_git_not_the_work_tree(self):  # the production path is git: an uncommitted file is invisible
+        self.put(D6 + ".yml")
+        self.commit()
+        self.put(D6B + ".yml")  # written, not committed
+        os.unlink(os.path.join(self.root, *("%s/%s.yml" % (self.dir, D6)).split("/")))
+        self.assertEqual([r.id for r in self.read()], [D6])
+
+    def test_exception_groups_propagate(self):  # V3 for records_at
+        beg = getattr(builtins, "BaseExceptionGroup", None)
+        eg = getattr(builtins, "ExceptionGroup", None)
+        if beg is None:
+            self.skipTest("BaseExceptionGroup is absent on this interpreter (3.9)")
+        self.put(D6 + ".yml")
+        self.commit()
+        for exc in (beg("x", [KeyboardInterrupt()]), eg("x", [ValueError()])):
+            for mod, name in ((gitinfo, "ls_tree_entries"), (gitinfo, "ls_tree"), (gitinfo, "show"), (yamlsub, "parse")):
+                with self.subTest(exc=type(exc).__name__, call=name):
+                    with mock.patch.object(mod, name, side_effect=exc):
+                        with self.assertRaises(beg) as cm:
+                            self.read()
+                    self.assertIs(cm.exception, exc)
+
+
+class SourceRules6K(unittest.TestCase):
+    NEW = ("ledger_tasks", "plan_tasks", "ledger_rulings", "cap_errors", "records_at", "record_errors", "last_line_errors",
+           "_need_block", "_need_lines", "_cap_value", "_digits_ok", "_status_text", "_index_records")
+
+    def test_6k1_source_has_no_unicode_table_calls(self):  # V2b V3: the new code asks no Unicode table and catches no group
+        import inspect
+        for name in self.NEW:
+            obj = getattr(checkpoints, name, None)
+            self.assertIsNotNone(obj, name)
+            src = inspect.getsource(obj)
+            for bad in FORBIDDEN_CALLS:
+                with self.subTest(function=name, call=bad):
+                    self.assertNotIn(bad, src)
+
+    def test_6k1_unicode_version_independent(self):  # V2a: one verdict on every UCD
+        for ch in ("\u0870", "\ua7c0", "\U0001fae8", "\u2c2f", "\u0c5d", "\u00a7"):
+            with self.subTest(ch=repr(ch)):
+                self.assertEqual(plan_tasks("### Task 1a.%s: x\n" % ch, "1a"), [])
+                self.assertEqual(ledger_tasks(lines6(L6("1a", "1a." + ch)), "1a"), [])
+                self.assertEqual(ledger_rulings(LH + "Ruling: a" + ch + "\n", "1a"), 1)
+                self.assertEqual(record_errors(H6(findings_in_flight=["F-" + ch]), [], []), ["findings_in_flight.F-%s: no finding record" % ch])
+
+    def test_6k1_numeric_text_4300_4301_yaml(self):  # V1a: a yaml numeral past 1000 digits never reaches the new functions
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                for n, ok in ((1000, True), (1001, False), (4300, False), (4301, False)):
+                    text = "---\nrulings: %s\n---\n" % ("9" * n)
+                    with self.subTest(limit=limit, n=n):
+                        if ok and limit != 640:  # as above: at 640 a 1000-digit numeral fails in int()
+                            self.assertEqual(parse_handoff(text)["rulings"], 10 ** 1000 - 1)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "integer too large"):
+                                parse_handoff(text)
+        with self.assertRaises(ValueError):  # a 1000-digit handoff value that parsed is refused by cap_errors
+            cap_errors(H6(rulings=10 ** 1000 - 1), [], "", cfgx(), 0)
+
+    def test_6k1_bool_and_subclass_arguments(self):  # V4: bool, int and str subclasses are refused everywhere
+        for v in (True, False, SubI(3)):
+            with self.assertRaises(GateError):
+                cap_errors(H6(), [], "", cfgx(block={"max_tasks": v}), 0)
+            with self.assertRaises(GateError):
+                cap_errors(H6(), [], "", cfgx(rulings={"max_per_block": v}), 0)
+            with self.assertRaises(ValueError):
+                cap_errors(H6(rulings=v), [], "", cfgx(), 0)
+        for fn in (lambda s: ledger_tasks([], s), lambda s: plan_tasks("", s), lambda s: ledger_rulings(LH, s)):
+            with self.assertRaises(ValueError):
+                fn(SubS("1a"))
+        with self.assertRaises(ValueError):
+            plan_tasks(SubS(""), "1a")
+        with self.assertRaises(ValueError):
+            ledger_rulings(SubS(LH), "1a")
 
 
 if __name__ == "__main__":

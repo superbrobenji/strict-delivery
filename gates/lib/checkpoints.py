@@ -16,7 +16,8 @@ import os
 import re
 from typing import Optional
 
-from gates.lib import dispatch, ids, schema, yamlsub
+from gates.lib import dispatch, findings as findings_lib, gitinfo, ids, schema, store, yamlsub
+from gates.lib.result import GateError
 
 CLASS_MODEL = "model-policy"  # the one decision class that carries no recommended option (spec 7.1, design 3.6)
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -514,4 +515,246 @@ def ledger_errors(text: str, cfg: dict, plan_text: Optional[str] = None, stream_
                 errs.append("line %d: unknown stream %s" % (n, m["stream"]))
             if headings is not None and m["block"] is not None and m["block"] not in headings:
                 errs.append("line %d: block %s has no block heading" % (n, m["block"]))
+    return errs
+
+
+# ---------------------------------------------------------------- block size, rulings and record agreement (Task 6K.1)
+# Decisions D-K-Q1 to D-K-Q17 of the Task 6K.1 input-domain table: a wrong argument is a ``ValueError`` (``records_at``,
+# which reaches git, and a bad cap value in ``cfg`` raise ``GateError``); a block is ``[0-9A-Za-z]+``; a count or a
+# number that is put into a message has at most 600 digits (``dispatch.MAX_DIGITS``), so one verdict holds on every
+# interpreter and int conversion limit.
+
+_BLOCK_ARG = re.compile(r"[0-9A-Za-z]+")
+_HEADING = re.compile(r"#{3,4} Task ([0-9A-Za-z]+)\.([0-9A-Za-z]+):")
+_REGISTER_KEY = {"decision": "decisions", "finding": "findings"}
+_LINES_MSG = "%s: lines must be a list of checkpoint line dicts"
+
+
+def _need_block(fn: str, block: object) -> None:
+    if type(block) is not str or _BLOCK_ARG.fullmatch(block) is None:
+        raise ValueError("%s: block must be a string of ASCII letters and digits" % fn)
+
+
+def _need_lines(fn: str, lines: object) -> None:
+    """``lines`` is a ``list`` of ``dict`` that each hold a ``str`` ``block`` and a ``str`` ``task``."""
+    if type(lines) is not list:
+        raise ValueError(_LINES_MSG % fn)
+    for ln in lines:
+        if type(ln) is not dict or type(ln.get("block")) is not str or type(ln.get("task")) is not str:
+            raise ValueError(_LINES_MSG % fn)
+
+
+def _digits_ok(v: object) -> bool:
+    """``v`` is an ``int`` (not a ``bool``, not a subclass) of 0 to 600 digits; compared as a number, never as text."""
+    return type(v) is int and 0 <= v < 10 ** dispatch.MAX_DIGITS
+
+
+def ledger_tasks(lines: list, block: str) -> list:
+    """The distinct ``task`` tokens of the ``CHECKPOINT`` lines of ``block`` (``lines`` come from ``checkpoint_lines``)
+    that start with ``<block>.`` and have at least one more character, in first-seen order. ``block`` is
+    ``[0-9A-Za-z]+``; a wrong argument is a ``ValueError``."""
+    _need_block("ledger_tasks", block)
+    _need_lines("ledger_tasks", lines)
+    prefix = block + "."
+    seen: set = set()
+    out = []
+    for ln in lines:
+        task = ln["task"]
+        if ln["block"] == block and task.startswith(prefix) and len(task) > len(prefix) and task not in seen:
+            seen.add(task)
+            out.append(task)
+    return out
+
+
+def plan_tasks(plan_text: str, block: str) -> list:
+    """The ``<block>.<rest>`` ids of the plan's lines ``### Task <id>:`` or ``#### Task <id>:`` (column 0, one space, the
+    colon right after the id; ``<rest>`` is ``[0-9A-Za-z]+``), in order. Lines are split on the line feed only and code
+    fences are not special. A repeated id of ``block`` is a ``ValueError``."""
+    _need_block("plan_tasks", block)
+    if type(plan_text) is not str:
+        raise ValueError("plan_tasks: plan_text must be a string")
+    seen: set = set()
+    out = []
+    for line in plan_text.split("\n"):
+        m = _HEADING.match(line)
+        if m is None or m.group(1) != block:
+            continue
+        tid = "%s.%s" % (block, m.group(2))
+        if tid in seen:
+            raise ValueError("plan_tasks: task %s is listed twice" % tid)
+        seen.add(tid)
+        out.append(tid)
+    return out
+
+
+def ledger_rulings(ledger_text: str, block: str) -> int:
+    """The number of ``Ruling`` lines in the block's segment of the ledger (decisions D-K-Q1, D-K-Q2). The segment starts
+    after the last ``CHECKPOINT`` line of another block that comes before the block's last ``CHECKPOINT`` line (only the
+    latest run counts), or at the file start when there is none; a block with no ``CHECKPOINT`` line yet starts after the
+    last ``CHECKPOINT`` line of any block. It runs to the end of the file. Boundaries are the conforming lines of
+    ``checkpoint_lines``; a ``Ruling`` line is read by ``_keyword``; line 1 is never read."""
+    _need_block("ledger_rulings", block)
+    cps = checkpoint_lines(ledger_text)
+    mine = [i for i, c in enumerate(cps) if c["block"] == block]
+    before = cps[:mine[-1]] if mine else cps
+    start = 0
+    for c in reversed(before):
+        if c["block"] != block:
+            start = c["line"]
+            break
+    return sum(1 for n, line in enumerate(ledger_text.split("\n"), 1) if n > 1 and n > start and _keyword(line) == "Ruling")
+
+
+def _cap_value(cfg: dict, section: str, key: str) -> Optional[int]:
+    """``cfg[section][key]``: ``None`` when the section or the key is absent; a ``GateError`` naming the key when the
+    section is not a mapping or the value is not an ``int`` of at least 1 (a ``bool`` is refused)."""
+    if section not in cfg:
+        return None
+    sec = cfg[section]
+    if type(sec) is not dict:
+        raise GateError("%s: must be a mapping" % section)
+    if key not in sec:
+        return None
+    v = sec[key]
+    if type(v) is not int or v < 1:
+        raise GateError("%s.%s: must be an integer of at least 1" % (section, key))
+    return v
+
+
+def cap_errors(handoff: dict, lines: list, plan_text: str, cfg: dict, rulings: int) -> list:
+    """The size errors of the handoff's block, ``rulings`` being ``ledger_rulings`` for it. In this order:
+    ``block: <n> tasks in ledger exceed block.max_tasks <m>`` and the same for ``plan`` (when ``block.max_tasks`` is set;
+    Q-B6plan-2 (d)); ``rulings: <n> Ruling lines in the ledger exceed rulings.max_per_block <m>`` (when it is set; judged on
+    the ledger count); ``rulings: handoff says <h>, ledger has <n>`` (always, when they differ). A set cap that is not an
+    ``int`` of at least 1, or a section that is not a mapping, is a ``GateError`` naming the key, raised before any
+    counting. A wrong argument, or a count of more than 600 digits, is a ``ValueError``."""
+    if type(handoff) is not dict:
+        raise ValueError("cap_errors: handoff must be a dict")
+    block = handoff.get("block")
+    if type(block) is not str or _BLOCK_ARG.fullmatch(block) is None:
+        raise ValueError("cap_errors: handoff block must be a string of ASCII letters and digits")
+    if not _digits_ok(handoff.get("rulings")):
+        raise ValueError("cap_errors: handoff rulings must be an integer of 0 to 600 digits")
+    if not _digits_ok(rulings):
+        raise ValueError("cap_errors: rulings must be an integer of 0 to 600 digits")
+    if type(cfg) is not dict:
+        raise ValueError("cap_errors: cfg must be a dict")
+    max_tasks = _cap_value(cfg, "block", "max_tasks")
+    max_rulings = _cap_value(cfg, "rulings", "max_per_block")
+    in_ledger = len(ledger_tasks(lines, block))
+    in_plan = len(plan_tasks(plan_text, block))
+    errs = []
+    if max_tasks is not None:
+        for source, n in (("ledger", in_ledger), ("plan", in_plan)):
+            if n > max_tasks:
+                errs.append("block: %d tasks in %s exceed block.max_tasks %d" % (n, source, max_tasks))
+    if max_rulings is not None and rulings > max_rulings:
+        errs.append("rulings: %d Ruling lines in the ledger exceed rulings.max_per_block %d" % (rulings, max_rulings))
+    if handoff["rulings"] != rulings:
+        errs.append("rulings: handoff says %d, ledger has %d" % (handoff["rulings"], rulings))
+    return errs
+
+
+def records_at(root: str, cfg: dict, ref: str, kind: str) -> list:
+    """The ``store.Record`` list of the ``kind`` (``decision`` or ``finding``) records directly in its configured
+    directory (``cfg["paths"]``) at ``ref``, sorted by file name, read through git (``ls_tree_entries``, ``show``,
+    ``yamlsub.parse``). A symlink, subfolder, gitlink or non-record name under the directory (other than the generated
+    ``index.yml`` and ``in-force.md``) is a ``GateError`` ``<ref>:<path>: not a regular file named <id>.yml``; a file or
+    symlink on the directory's path at ``ref`` is a ``GateError``; an absent directory gives ``[]``; a file that does not
+    parse is a ``GateError`` naming ``<ref>:<path>`` (decision D-K-Q12)."""
+    if type(kind) is not str or kind not in _REGISTER_KEY:
+        raise GateError("store kind must be 'decision' or 'finding'")
+    key = _REGISTER_KEY[kind]
+    paths = cfg.get("paths") if type(cfg) is dict else None
+    directory = paths.get(key) if type(paths) is dict else None
+    if type(directory) is not str or directory == "":
+        raise GateError("config lacks paths.%s" % key)
+    parts = directory.split("/")
+    for i in range(len(parts)):
+        rel = "/".join(parts[:i + 1])
+        modes = [mode for mode, _, name in gitinfo.ls_tree_entries(root, ref, "/".join(parts[:i])) if name == rel]
+        if not modes:
+            return []
+        if modes[0] != "040000":
+            raise GateError("%s: not a directory" % rel)
+    for mode, _, name in gitinfo.ls_tree_entries(root, ref, directory):
+        base = name.rpartition("/")[2]
+        if base in store._GENERATED:
+            continue
+        if mode not in gitinfo._REGULAR or not store._is_record_name(base):
+            raise GateError("%s:%s: not a regular file named <id>.yml" % (ref, name))
+    return [store.Record(row.get("id"), row, name) for name, row in store._records_at(root, ref, directory, ref, "")]
+
+
+def _index_records(records: object, what: str) -> dict:
+    """``{id: Record}`` of a ``list`` of ``store.Record``; the first record of an id wins and a record whose id is not a
+    ``str`` is ignored (decision D-K-Q13). Anything else is a ``ValueError``."""
+    if type(records) is not list or any(type(r) is not store.Record for r in records):
+        raise ValueError("record_errors: %s must be a list of store.Record" % what)
+    out: dict = {}
+    for r in records:
+        if type(r.id) is str and r.id not in out:
+            out[r.id] = r
+    return out
+
+
+def _status_text(v: object) -> str:
+    """The status as it reads in a message (``%s`` of the value, decision D-K-Q15): a ``str``, ``None``, ``bool``,
+    ``float`` or an ``int`` of at most 600 digits; any other value is a ``ValueError``."""
+    if v is None or type(v) in (str, bool, float) or (type(v) is int and -10 ** dispatch.MAX_DIGITS < v < 10 ** dispatch.MAX_DIGITS):
+        return str(v)
+    raise ValueError("record_errors: a decision's status must be a scalar of at most 600 digits")
+
+
+def record_errors(handoff: dict, findings: list, decisions: list) -> list:
+    """The disagreements between a handoff and the registers: for each id of ``findings_in_flight``, in the handoff's
+    order, ``findings_in_flight.<id>: no finding record`` or ``findings_in_flight.<id>: resolved (status <s>)``; then for
+    each id of ``open_decisions``, ``open_decisions.<id>: no decision record`` or ``open_decisions.<id>: status <s>, not
+    open``. ``findings`` and ``decisions`` are lists of ``store.Record``; an absent handoff list is empty."""
+    if type(handoff) is not dict:
+        raise ValueError("record_errors: handoff must be a dict")
+    lists = {}
+    for key in ("findings_in_flight", "open_decisions"):
+        v = handoff.get(key, [])
+        if type(v) is not list or any(type(i) is not str for i in v):
+            raise ValueError("record_errors: handoff %s must be a list of strings" % key)
+        lists[key] = v
+    found = _index_records(findings, "findings")
+    decided = _index_records(decisions, "decisions")
+    errs = []
+    for id_ in lists["findings_in_flight"]:
+        rec = found.get(id_)
+        if rec is None:
+            errs.append("findings_in_flight.%s: no finding record" % id_)
+        elif findings_lib.is_resolved(rec.row):
+            errs.append("findings_in_flight.%s: resolved (status %s)" % (id_, rec.row["status"]))
+    for id_ in lists["open_decisions"]:
+        rec = decided.get(id_)
+        if rec is None:
+            errs.append("open_decisions.%s: no decision record" % id_)
+            continue
+        status = rec.row.get("status") if type(rec.row) is dict else None
+        if not (type(status) is str and status == "open"):
+            errs.append("open_decisions.%s: status %s, not open" % (id_, _status_text(status)))
+    return errs
+
+
+def last_line_errors(lines: list) -> list:
+    """The errors of the last element of ``lines`` (Q-B6plan-5 (a)): ``last CHECKPOINT: gates=<g>`` unless ``gates`` is
+    ``PASS``, then ``last CHECKPOINT: tests <p>/<t>`` unless ``p == t``; ``["no CHECKPOINT line"]`` for an empty list.
+    The last element must hold a ``gates`` ``str`` (or ``None`` or a ``bool``) and ``passed`` and ``total`` ``int`` of 0 to
+    600 digits; otherwise a ``ValueError``."""
+    if type(lines) is not list or any(type(x) is not dict for x in lines):
+        raise ValueError(_LINES_MSG % "last_line_errors")
+    if not lines:
+        return ["no CHECKPOINT line"]
+    last = lines[-1]
+    gates, passed, total = last.get("gates"), last.get("passed"), last.get("total")
+    if not (type(gates) in (str, bool) or gates is None) or not _digits_ok(passed) or not _digits_ok(total):
+        raise ValueError("last_line_errors: the last line must have a gates string, and passed and total integers of 0 to 600 digits")
+    errs = []
+    if gates != "PASS":
+        errs.append("last CHECKPOINT: gates=%s" % gates)
+    if passed != total:
+        errs.append("last CHECKPOINT: tests %d/%d" % (passed, total))
     return errs
