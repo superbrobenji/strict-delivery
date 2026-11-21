@@ -19,7 +19,7 @@ from unittest import mock
 from gates import __main__ as gates_main
 from gates.lib import config, evidence, gitinfo, ids, print_table, schema
 from gates.lib.evidence import package_entries, parse_transcript, render_pin, run_pin, split_cite, transcript_errors
-from gates.lib.result import GateError
+from gates.lib.result import GateError, Result
 from gates.lib.schema import files_of, load_schema, validate_markdown
 from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, int_limit, make_repo, minimal_config
 
@@ -79,6 +79,13 @@ def group(fid=F, test="t", cmd=D, sha=SHA, path=TP) -> list:
 
 def parsed_of(**kw) -> dict:
     return parse_transcript(good(**kw))
+
+
+def rendered(errors) -> str:
+    """The one line ``Result.render`` makes of ``errors`` joined as the gate joins them: the only escaping step."""
+    res = Result("evidence")
+    res.fail("transcript.x", "; ".join(errors))
+    return res.render(False)
 
 
 def errs(text_or_parsed=None, finding=F, test="t", cmd=D, **kw) -> list:
@@ -652,26 +659,59 @@ class TranscriptErrors(unittest.TestCase):
                                 self.assertIn("RUN", str(cm.exception))
                                 self.assertNotIn("9" * 10, str(cm.exception))
 
-    def test_error_text_uses_safe_text(self):  # TE13, K2d
+    def test_error_text_uses_safe_text(self):  # TE13, K2d: the reasons hold raw text, the render escapes it once
         for bad in [U_NEW, "\0", "\r", U_LOW, "\x1b"]:
             with self.subTest(repr(bad)):
                 e = transcript_errors(parsed_of(test="t" + bad, cmd=D + bad), F, "u" + bad, D + "z", cfg())
                 self.assertTrue(e)
                 from gates.lib.result import safe_text
                 joined = "\n".join(e)
-                self.assertNotIn("\n" + bad, joined)
-                self.assertIn(safe_text("t" + bad), joined)
-                self.assertIn(safe_text("u" + bad), joined)
-                self.assertIn(safe_text(D + bad), joined)
-                self.assertEqual(len(joined.split("\n")), len(e))  # every message is one line
-        e = errs(good(test="t" + U_NEW), test="u" + U_NEW)
-        self.assertIn("t\\U0001f6dd", "\n".join(e))  # the frozen Unicode 13 table: unprintable on both interpreters
+                self.assertIn("t" + bad, joined)  # raw in the reason
+                self.assertIn("u" + bad, joined)
+                self.assertIn(D + bad, joined)
+                out = rendered(e)
+                self.assertEqual(len(out.splitlines()), 1, out)  # one line
+                self.assertIn(safe_text("t" + bad), out)
+                self.assertIn(safe_text("u" + bad), out)
+                self.assertIn(safe_text(D + bad), out)
+        out = rendered(errs(good(test="t" + U_NEW), test="u" + U_NEW))
+        self.assertIn("t\\U0001f6dd", out)  # the frozen Unicode 13 table: unprintable on both interpreters
+
+    def test_reasons_escaped_once_through_render(self):  # TE13, K2d (F-20261121-j2wv: the plan, Task 1C, "Result.render's one
+        # safe_text pass is the only escaping": transcript_errors returns raw text, the render escapes it once)
+        chars = (("backslash", "\\", "\\\\"), ("newline", "\n", "\\n"), ("control", "\x01", "\\x01"),
+                 ("lone surrogate", "\ud800", "\\ud800"), ("non-printable", U_NEW, "\\U0001f6dd"))
+        for cname, ch, esc in chars:
+            for field in ("finding", "test", "command"):
+                with self.subTest(char=cname, field=field):
+                    p = parsed_of()
+                    if field == "finding":
+                        p["finding"] = [F + ch]
+                        e = transcript_errors(p, F, "t", D, cfg())
+                        want = "finding: expected %s, got %s" % (F, F + esc)
+                    elif field == "test":
+                        p["test"] = ["t" + ch]
+                        e = transcript_errors(p, F, "t", D, cfg())
+                        want = "test: expected t, got t" + esc
+                    else:
+                        p["runs"][0]["command"] = D + ch
+                        e = transcript_errors(p, F, "t", D, cfg())
+                        want = "RUN 1: command: expected %s, got %s" % (D, D + esc)
+                    raw = want.replace(esc, ch) if ch != "\\" else want.replace("\\\\", "\\")
+                    self.assertIn(raw, e)  # the reason holds the raw text
+                    res = Result("evidence")
+                    res.fail("transcript.x", "; ".join(e))
+                    out = res.render(False)
+                    self.assertEqual(len(out.splitlines()), 1, out)
+                    self.assertIn(want, out)
+                    self.assertNotIn(want.replace("\\", "\\\\"), out)  # never escaped twice
 
     def test_pc1_message_uses_frozen_table(self):  # K2d, K2e
         self.assertFalse(print_table.is_printable(U_NEW))
         e = errs(good(test="t" + U_NEW + U_LOW), test="x")
         # both code points are unassigned in the frozen Unicode 13 table, so both are escaped, on both interpreters
-        self.assertEqual(e, ["test: expected x, got t\\U0001f6dd\\ua7c0"])
+        self.assertEqual(e, ["test: expected x, got t" + U_NEW + U_LOW])
+        self.assertEqual(rendered(e), "FAIL transcript.x: test: expected x, got t\\U0001f6dd\\ua7c0\n")
 
     def test_pc1_no_huge_int_format(self):  # K1e
         p = parsed_of()
@@ -1365,7 +1405,7 @@ class SourceRules(unittest.TestCase):
     def test_pc1_printable_is_frozen(self):  # K2e
         self.assertFalse(print_table.is_printable(U_NEW))
         e = errs(good(test="a" + U_NEW), test="b")
-        self.assertIn("\\U0001f6dd", e[0])
+        self.assertIn("\\U0001f6dd", rendered(e))
 
     def test_module_has_no_produces(self):
         self.assertFalse(hasattr(evidence, "PRODUCES"))
