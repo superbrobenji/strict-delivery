@@ -2302,8 +2302,6 @@ class RecordErrors(unittest.TestCase):
                                  ["open_decisions.%s: status %s, not open" % (D6, text)])
         no_status = store.Record(D6, {"id": D6}, "x/y.yml")
         self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [no_status]), ["open_decisions.%s: status None, not open" % D6])
-        not_a_dict = store.Record(D6, "not a mapping", "x/y.yml")  # a row the store never returns: read as no status
-        self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [not_a_dict]), ["open_decisions.%s: status None, not open" % D6])
         self.assertEqual(record_errors(H6(open_decisions=[D6]), [], [rec6(D6, -10 ** 599)]),
                          ["open_decisions.%s: status -1%s, not open" % (D6, "0" * 599)])
         for st in ([1], {"a": 1}, 10 ** 600, -10 ** 600, SubS("open"), SubS("answered"), SubI(1)):
@@ -2355,6 +2353,21 @@ class RecordErrors(unittest.TestCase):
             record_errors(H6(), (r for r in [good]), [])
         with self.assertRaisesRegex(ValueError, "findings must be"):  # both bad: the findings are checked first
             record_errors(H6(), None, None)
+
+    def test_record_errors_row_shape(self):  # F-20261121-cxdf: D-K-Q4, a row that is not an exact dict is refused on both sides
+        for bad in ("closed", "", None, [], ["status"], 3, SubD({"id": F6, "status": "closed"})):
+            for side in ("findings", "decisions"):
+                for in_handoff in (True, False):
+                    with self.subTest(row=repr(bad), side=side, in_handoff=in_handoff):
+                        r = store.Record(F6 if side == "findings" else D6, bad, "x/y.yml")
+                        h = H6(**({"findings_in_flight": [F6]} if side == "findings" else {"open_decisions": [D6]}) if in_handoff else {})
+                        args = ([r], []) if side == "findings" else ([], [r])
+                        with self.assertRaises(ValueError) as cm:
+                            record_errors(h, *args)
+                        self.assertEqual(str(cm.exception), "record_errors: the row of record %s in %s must be a dict" % (r.id, side))
+        r = store.Record(None, "x", "x/y.yml")  # an id that is not a string is not echoed
+        with self.assertRaisesRegex(ValueError, r"record \(id not a string\) in findings must be a dict"):
+            record_errors(H6(), [r], [])
 
     def test_record_errors_id_text_same_on_both(self):  # RE12 and V2a for the id
         for ch in ("\n", "\u0870", "\u00a7", "\U0001fae8", "a" * 4301):
@@ -2691,6 +2704,25 @@ class RecordsAt(GitIsolatedTestCase):
         self.commit()
         self.assertEqual([r.file for r in records_at(self.root, c, "HEAD", "decision")], ["x/d/%s.yml" % D6])
         self.assertEqual(self.read(), [])
+
+    def test_records_at_malformed_path_form(self):  # F-20261121-4sq9: a malformed directory is refused, as ls_tree_entries and store._records_at refuse it
+        for key, kind in (("decisions", "decision"), ("findings", "finding")):
+            d = self.cfg["paths"][key]
+            self.put(D6 + ".yml", directory=d)
+            self.commit()
+            for bad in (d + "/", "/" + d, "./" + d, d.replace("/", "//"), d + "/.", d + "/..", "../x", "..", ".", "/", "//", d + "//x", "a/./b", "a/../b"):
+                with self.subTest(kind=kind, path=bad):
+                    c = copy.deepcopy(self.cfg)
+                    c["paths"][key] = bad
+                    with self.assertRaises(GateError) as cm:
+                        records_at(self.root, c, "HEAD", kind)
+                    self.assertRegex(str(cm.exception), r"ls-tree: directory must (be a normalised repo-relative path|not hold a '\.\.' segment)")
+                    with self.assertRaises(GateError) as cm2:  # the existing readers refuse the same path with the same error
+                        gitinfo.ls_tree_entries(self.root, "HEAD", bad)
+                    self.assertEqual(str(cm.exception), str(cm2.exception))
+            c = copy.deepcopy(self.cfg)
+            c["paths"][key] = d
+            self.assertEqual([r.file for r in records_at(self.root, c, "HEAD", kind)], ["%s/%s.yml" % (d, D6)])
 
     def test_records_at_equals_store_load(self):  # RA18: the oracle is the working-tree reader on a clean tree
         for name in ("c.yml", "a.yml", "b.yml"):

@@ -660,7 +660,8 @@ def records_at(root: str, cfg: dict, ref: str, kind: str) -> list:
     directory (``cfg["paths"]``) at ``ref``, sorted by file name, read through git (``ls_tree_entries``, ``show``,
     ``yamlsub.parse``). A symlink, subfolder, gitlink or non-record name under the directory (other than the generated
     ``index.yml`` and ``in-force.md``) is a ``GateError`` ``<ref>:<path>: not a regular file named <id>.yml``; a file or
-    symlink on the directory's path at ``ref`` is a ``GateError``; an absent directory gives ``[]``; a file that does not
+    symlink on the directory's path at ``ref`` is a ``GateError``; a configured directory with a leading or trailing ``/``,
+    an empty, ``.`` or ``..`` segment is a ``GateError`` (as in ``gitinfo.ls_tree_entries``); an absent directory gives ``[]``; a file that does not
     parse is a ``GateError`` naming ``<ref>:<path>`` (decision D-K-Q12)."""
     if type(kind) is not str or kind not in _REGISTER_KEY:
         raise GateError("store kind must be 'decision' or 'finding'")
@@ -669,6 +670,7 @@ def records_at(root: str, cfg: dict, ref: str, kind: str) -> list:
     directory = paths.get(key) if type(paths) is dict else None
     if type(directory) is not str or directory == "":
         raise GateError("config lacks paths.%s" % key)
+    gitinfo._check_norm(directory, "ls-tree: directory")
     parts = directory.split("/")
     for i in range(len(parts)):
         rel = "/".join(parts[:i + 1])
@@ -693,6 +695,8 @@ def _index_records(records: object, what: str) -> dict:
         raise ValueError("record_errors: %s must be a list of store.Record" % what)
     out: dict = {}
     for r in records:
+        if type(r.row) is not dict:
+            raise ValueError("record_errors: the row of record %s in %s must be a dict" % (r.id if type(r.id) is str else "(id not a string)", what))
         if type(r.id) is str and r.id not in out:
             out[r.id] = r
     return out
@@ -708,7 +712,7 @@ def _status_text(v: object) -> str:
 
 def record_errors(handoff: dict, findings: list, decisions: list) -> list:
     """The disagreements between a handoff and the registers: for each id of ``findings_in_flight``, in the handoff's
-    order, ``findings_in_flight.<id>: no finding record`` or ``findings_in_flight.<id>: resolved (status <s>)``; then for
+    order (a ``Record`` whose ``row`` is not an exact ``dict`` is a ``ValueError`` naming its id), ``findings_in_flight.<id>: no finding record`` or ``findings_in_flight.<id>: resolved (status <s>)``; then for
     each id of ``open_decisions``, ``open_decisions.<id>: no decision record`` or ``open_decisions.<id>: status <s>, not
     open``. ``findings`` and ``decisions`` are lists of ``store.Record``; an absent handoff list is empty."""
     if type(handoff) is not dict:
@@ -733,7 +737,7 @@ def record_errors(handoff: dict, findings: list, decisions: list) -> list:
         if rec is None:
             errs.append("open_decisions.%s: no decision record" % id_)
             continue
-        status = rec.row.get("status") if type(rec.row) is dict else None
+        status = rec.row.get("status")
         if not (type(status) is str and status == "open"):
             errs.append("open_decisions.%s: status %s, not open" % (id_, _status_text(status)))
     return errs
