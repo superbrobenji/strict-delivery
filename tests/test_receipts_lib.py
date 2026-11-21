@@ -539,7 +539,7 @@ class Record(Base):
         self.put("a.txt", b"hello\n")
         row = record(self.root, self.cfg, SID, "a.txt")
         want = hashlib.sha1(b"blob 6\0hello\n").hexdigest()
-        self.assertEqual(want, git(self.root, "hash-object", "--no-filters", "a.txt"))
+        self.assertEqual(want, git(self.root, "hash-object", "--no-filters", "--", "a.txt"))
         self.assertEqual(row, {"path": self.real + "/a.txt", "sha": want})
         self.assertEqual(list(row), ["path", "sha"])
         self.assertEqual(load(self.root, self.cfg, SID), [row])
@@ -717,7 +717,7 @@ class Record(Base):
     def test_record_binary_file(self):  # RC22
         self.put("b", bytes(range(256)))
         self.assertEqual(record(self.root, self.cfg, SID, "b")["sha"],
-                         git(self.root, "hash-object", "--no-filters", "b"))
+                         git(self.root, "hash-object", "--no-filters", "--", "b"))
 
     def test_awkward_names_round_trip(self):  # RC23
         names = ["a: b#c 'd\".md", " lead.md", "trail ", "h#sh", "co: lon", "q'uote", "d\"q", "back\\slash", "per%cent",
@@ -761,6 +761,20 @@ class Record(Base):
                 self.nothing_created()
 
     test_nul_refused_before_filesystem = test_record_nul_and_surrogate_path  # VN4
+
+    def test_record_case_variants_keep_spelling(self):  # RC15
+        probe = os.path.join(self.tmp, "Probe.txt")
+        with open(probe, "wb") as fh:
+            fh.write(b"p")
+        if not os.path.exists(os.path.join(self.tmp, "pROBE.TXT")):
+            self.skipTest("the temp volume is case-sensitive: two spellings name two files there")
+        self.put("Case.txt", b"c")
+        r1 = record(self.root, self.cfg, SID, "Case.txt")
+        r2 = record(self.root, self.cfg, SID, "CASE.TXT")
+        self.assertEqual(r1["path"], self.real + "/Case.txt")
+        self.assertEqual(r2["path"], self.real + "/CASE.TXT")  # realpath keeps the spelling it is given
+        self.assertEqual(r1["sha"], r2["sha"])
+        self.assertEqual(load(self.root, self.cfg, SID), [r1, r2])
 
     def test_record_path_too_long(self):  # RC28
         with self.assertRaises(GateError):
@@ -810,13 +824,13 @@ class Record(Base):
     def test_receipts_are_git_ignored(self):  # RD10
         with open(REPO + "/.gitignore", "rb") as fh:
             self.put(".gitignore", fh.read())
-        git(self.root, "add", ".gitignore")
+        git(self.root, "add", "--", ".gitignore")
         git(self.root, "commit", "-q", "-m", "ignore")
         self.put("a.txt")
-        git(self.root, "add", "a.txt")
+        git(self.root, "add", "--", "a.txt")
         git(self.root, "commit", "-q", "-m", "a")
         record(self.root, self.cfg, SID, "a.txt")
-        git(self.root, "check-ignore", "-q", ".strict-delivery/receipts/x.yml")
+        git(self.root, "check-ignore", "-q", "--", ".strict-delivery/receipts/x.yml")
         self.assertEqual(git(self.root, "status", "--porcelain"), "")
 
     def test_same_file_twice_two_rows(self):  # RF23
@@ -1420,6 +1434,43 @@ class Load(Base):
         os.makedirs(self.rdir)
         os.symlink(valid, self.rf)
         self.assertRegex(self.msg(), "is a symlink; receipt files must be regular files; " + REMEDY)
+
+    def test_load_symlink_swapped_in_after_lstat(self):  # R1-1: O_NOFOLLOW on the open of load
+        valid = self.put("valid.yml", self.GOOD.encode(), base=self.other())
+        os.makedirs(self.rdir)
+        self.put_rf(b"")
+        real_lstat = os.lstat
+
+        def lstat(p, *a, **k):
+            st = real_lstat(p, *a, **k)
+            if p == self.rf and not stat.S_ISLNK(st.st_mode):
+                os.unlink(self.rf)
+                os.symlink(valid, self.rf)  # swapped in between the lstat and the open
+            return st
+        with mock.patch.object(receipts.os, "lstat", lstat):
+            self.assertRegex(self.msg(), "is a symlink; receipt files must be regular files; " + REMEDY)
+
+    def test_load_fifo_swapped_in_after_lstat_never_blocks(self):  # R1-1: O_NONBLOCK and the fstat check
+        os.makedirs(self.rdir)
+        self.put_rf(b"")
+        real_lstat = os.lstat
+
+        def lstat(p, *a, **k):
+            st = real_lstat(p, *a, **k)
+            if p == self.rf and stat.S_ISREG(st.st_mode):
+                os.unlink(self.rf)
+                os.mkfifo(self.rf)
+            return st
+        res = []
+
+        def go():
+            with mock.patch.object(receipts.os, "lstat", lstat):
+                res.append(self.msg())
+        t = threading.Thread(target=go, daemon=True)
+        t.start()
+        t.join(10)
+        self.assertFalse(t.is_alive())
+        self.assertRegex(res[0], "is not a regular file; receipt files must be regular files; " + REMEDY)
 
     def test_load_dangling_symlink(self):  # LD16
         os.makedirs(self.rdir)

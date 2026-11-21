@@ -10,6 +10,7 @@ to end in a newline (decision D-Q1 (a)), so a row cut by a crash is always refus
 """
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import os
@@ -154,6 +155,30 @@ def _write(fd: int, data: bytes, shown: str) -> None:
         raise GateError("%s: short write" % shown)
 
 
+def _read_nofollow(fpath: str, shown: str, fail) -> bytes:
+    """The bytes of the receipt file, opened ``O_NOFOLLOW | O_NONBLOCK`` and checked regular on the descriptor, so a
+    symlink or a FIFO swapped in after the ``lstat`` is refused as the ``lstat`` path refuses it (decision D-Q2)."""
+    try:
+        fd = os.open(fpath, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise fail("%s: is a symlink; receipt files must be regular files" % shown) from None
+        raise yamlsub.YamlError(0, "%s: cannot read file (%s)" % (shown, e.strerror or type(e).__name__)) from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise fail("%s: is not a regular file; receipt files must be regular files" % shown)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    except OSError as e:
+        raise yamlsub.YamlError(0, "%s: cannot read file (%s)" % (shown, e.strerror or type(e).__name__)) from None
+    finally:
+        os.close(fd)
+
+
 def load(root: str, cfg: dict, session: str) -> list:
     """The session's rows ``[{path, sha}, ...]`` in file order; ``[]`` when there is no file. A file that fails
     ``receipt/1``, holds a sha that is not 40 hex or lacks its final newline raises a GateError naming it."""
@@ -178,7 +203,7 @@ def load(root: str, cfg: dict, session: str) -> list:
         raise fail("%s: %s; receipt files must be regular files" % (
             shown, "is a symlink" if stat.S_ISLNK(st.st_mode) else "is not a regular file"))
     try:
-        data = yamlsub._read_regular_file(fpath, shown)
+        data = _read_nofollow(fpath, shown, fail)
         try:
             text = yamlsub._file_text(data)
         except UnicodeDecodeError:

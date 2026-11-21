@@ -270,6 +270,15 @@ class Add(Base):
             with self.assertRaises(RuntimeError):
                 self.add()
 
+    def test_receipt_add_closed_stdout_is_not_defended(self):  # CL26: the interpreter default, the row is recorded
+        self.put("a.txt", b"a")
+        out = io.StringIO()
+        out.close()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(ValueError):
+                receipt_cli.main(["add", "--session", SID, "--path", "a.txt", "--root", self.root])
+        self.assertEqual(self.rows(), HDR + "  - path: %s/a.txt\n    sha: %s\n" % (self.real, blob(b"a")))
+
     def test_receipt_add_unencodable_stdout(self):  # CL29
         n = "\U0001fae8.md"
         self.put(n, b"u")
