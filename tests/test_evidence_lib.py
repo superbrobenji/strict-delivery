@@ -242,6 +242,16 @@ class TranscriptLines(SchemaCase):
             with self.subTest(line):
                 self.assertEqual(len(self.tl(T(line))), 1)
 
+    def test_pc1_long_run_number(self):  # K1b: the number is one character, never converted from long text
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                for n in (4300, 4301, 641):
+                    with self.subTest(limit=limit, n=n):
+                        text = T("RUN %s fix exit=0 command=x" % ("1" * n))
+                        self.assertEqual(len(self.tl(text)), 1)
+                        with self.assertRaises(ValueError):
+                            parse_transcript(text)
+
     def test_run_phase_is_not_schema(self):  # TL7
         self.assertEqual(self.tl(T("RUN 1 mutant exit=1 command=x")), [])
 
