@@ -1,0 +1,35 @@
+kind: profile
+version: 1
+format: yaml
+files: []
+fields:
+  schema:
+    type: str
+  profile:
+    type: enum
+    values:
+      - light
+      - standard
+      - strict
+  defaults:
+    type: map
+    fields:
+      top_tier_roles:
+        type: list
+        required: false
+        items:
+          type: str
+      top_tier_fallback:
+        type: str
+        required: false
+  policy:
+    type: map
+    fields:
+      block:
+        type: map
+        required: false
+        fields:
+          max_tasks:
+            type: int
+            required: false
+            min: 1

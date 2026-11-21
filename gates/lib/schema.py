@@ -17,13 +17,18 @@ from gates.lib.result import GateError, _raw
 
 KNOWN_KINDS = ("config", "decision", "finding", "claim", "request", "streams", "context", "handoff", "ledger",
                "status", "sync-log", "merged-log", "breakdown", "overview", "in-force", "decision-index",
-               "finding-index", "mutation-transcript", "review-report", "receipt", "claude-block", "gitignore-block")
+               "finding-index", "mutation-transcript", "review-report", "receipt", "claude-block", "gitignore-block",
+               "profile", "init-answers")
+# Kinds whose data files are read by their own loader, not by ``check schema``: their ``files`` may be ``[]``.
+LOADER_ONLY_KINDS = ("profile", "init-answers")
 GENERATED_KINDS = ("decision-index", "finding-index", "in-force", "overview")  # OQ-17: skipped when absent
 # ``one_of`` (Task P2.1 part i, decision D-A1): a union of alternatives with pairwise distinct base types.
 TYPES = ("str", "text", "int", "bool", "enum", "list", "map", "any-map", "id", "sha", "glob", "cite", "sha-path",
          "one_of")
 ID_KINDS = ("decision", "finding", "claim", "request")
-FORMATS = ("yaml", "markdown", "front-matter")
+FORMATS = ("yaml", "markdown", "front-matter", "managed-block")
+COMMENT_STYLES = ("html", "hash")  # the ``comment`` key of a managed-block schema
+_FILE_NAME = re.compile(r"[A-Za-z0-9._-]+")  # a ``{file: <name>}`` item: explicit ASCII, matched with fullmatch
 SCHEMAS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schemas")
 
 _SPEC_KEYS = ("type", "required", "nullable", "values", "items", "fields", "id_kind", "min", "required_when",
@@ -61,6 +66,7 @@ class Schema:
         self.table = data.get("table")
         self.headings = data.get("headings")
         self.lines = data.get("lines")
+        self.comment = data.get("comment")  # managed-block schemas only: "html" or "hash"
         self.rules: dict = {}  # word -> (pattern text, compiled pattern); built by load_schema from ``lines``
 
 
@@ -205,16 +211,33 @@ def _glob_problem(glob: str) -> str:
     return bracket_problem(glob)
 
 
-def _check_files(path: str, files: object) -> None:
-    if type(files) is not list or not files:
+def _check_files(path: str, files: object, kind: str, fmt: str) -> None:
+    """The ``files`` list. ``[]`` is accepted for exactly the ``LOADER_ONLY_KINDS``. A ``{file: <name>}`` item belongs to
+    a managed-block schema, which takes no other item (decisions D-Q1, D-Q2)."""
+    if type(files) is not list or (not files and kind not in LOADER_ONLY_KINDS):
         raise _err(path, "files", "must be a non-empty list")
+    seen: set = set()
     for i, item in enumerate(files):
         where = "files.%d" % i
         if type(item) is not dict:
             raise _err(path, where, "must be a mapping")
+        if "file" in item:
+            if fmt != "managed-block":
+                raise _err(path, where + ".file", "a file item is only for a managed-block schema")
+            if set(item) != {"file"}:
+                raise _err(path, where, "a file item is exactly {file: <name>}")
+            name = item["file"]
+            if type(name) is not str or not _FILE_NAME.fullmatch(name) or name in (".", ".."):
+                raise _err(path, where + ".file", "must match [A-Za-z0-9._-]+ and not be . or ..")
+            if name in seen:
+                raise _err(path, where + ".file", "repeats the file of an earlier item")
+            seen.add(name)
+            continue
         for k in item:
             if k not in ("path", "dir", "glob", "exclude"):
                 raise _err(path, "%s.%s" % (where, k), "unknown key")
+        if fmt == "managed-block":
+            raise _err(path, where, "a managed-block schema takes only {file: <name>} items")
         if "path" in item:
             if set(item) != {"path"} or type(item["path"]) is not str or item["path"] == "":
                 raise _err(path, where, "a path item is exactly {path: <paths key>}")
@@ -376,15 +399,19 @@ def load_schema(path: str) -> Schema:
         raise _err(path, "version", "must be a positive integer")
     fmt = data.get("format")
     if type(fmt) is not str or fmt not in FORMATS:
-        raise _err(path, "format", "must be yaml, markdown or front-matter")
-    body = ("first_line", "table", "headings", "lines") if fmt == "markdown" else ("fields",)
+        raise _err(path, "format", "must be yaml, markdown, front-matter or managed-block")
+    body = {"markdown": ("first_line", "table", "headings", "lines"), "managed-block": ("comment",)}.get(fmt, ("fields",))
     for k in data:
         if k not in ("kind", "version", "format", "files") + body:
             raise _err(path, str(k), "unknown key for a %s schema" % fmt)
     for k in ("files", body[0]):
         if k not in data:
             raise _err(path, k, "required key is missing")
-    _check_files(path, data["files"])
+    _check_files(path, data["files"], data["kind"], fmt)
+    if fmt == "managed-block":
+        if type(data["comment"]) is not str or data["comment"] not in COMMENT_STYLES:
+            raise _err(path, "comment", "must be html or hash")
+        return Schema(path, data)
     if fmt != "markdown":
         _check_fields(path, "fields", data["fields"])
         s = data["fields"].get("schema")
@@ -664,6 +691,59 @@ def validate_front_matter(schema: Schema, text: object, cfg: dict) -> list:
     return validate(schema, value, cfg)
 
 
+_BLOCK_OPENER = {"html": "<!-- ", "hash": "# "}  # the comment opener of a marker line, per ``comment`` style
+_BLOCK_CLOSER = {"html": " -->", "hash": ""}
+# schema=<kind>/<version> (kind [a-z][a-z-]*, version 0 or at most 600 digits, no leading zero) then version=X.Y.Z
+_BEGIN_TAIL = r"strict-delivery:begin schema=([a-z][a-z-]*)/(0|[1-9][0-9]{0,599}) version=([0-9]+\.[0-9]+\.[0-9]+)"
+
+
+def validate_managed_block(schema: Schema, text: object) -> list:
+    """Errors of the managed block in ``text`` against the managed-block ``schema``; ``[]`` for a text with no
+    marker-like line (not yet a framework file) and for a well-formed block of the schema's kind and version. A
+    marker-like line starts, after leading spaces and tabs (and a U+FEFF on line 1), with the comment opener and
+    ``strict-delivery:begin`` or ``strict-delivery:end``; it must then equal the marker exactly, with no ``\\r`` and no
+    other whitespace. Lines split on ``"\\n"`` only. Only the first problem is returned (decision D-Q10), the structure
+    before the tag (D-Q12); the body between the markers is not checked (``doctor`` compares it with the render)."""
+    if not isinstance(schema, Schema) or schema.format != "managed-block" or schema.comment not in COMMENT_STYLES:
+        raise ValueError("validate_managed_block needs a managed-block Schema")
+    if type(text) is not str:
+        return ["block: text must be a string"]
+    opener, closer = _BLOCK_OPENER[schema.comment], _BLOCK_CLOSER[schema.comment]
+    begin_like, end_like = opener + "strict-delivery:begin", opener + "strict-delivery:end"
+    begin_ok = re.compile(re.escape(opener) + _BEGIN_TAIL + re.escape(closer))
+    end_exact = end_like + closer
+    begins: list = []  # (line number, match or None) of every begin-like line
+    ends: list = []  # (line number, is the exact end marker) of every end-like line
+    for n, line in enumerate(text.split("\n"), 1):
+        probe = line[1:] if n == 1 and line.startswith("\N{ZERO WIDTH NO-BREAK SPACE}") else line
+        probe = probe.lstrip(" \t")
+        if probe.startswith(begin_like):
+            begins.append((n, begin_ok.fullmatch(line)))
+        elif probe.startswith(end_like):
+            ends.append((n, line == end_exact))
+    if not begins and not ends:
+        return []
+    for n, m in begins:
+        if m is None:
+            return ["block: begin marker malformed: line %d" % n]
+    for n, exact in ends:
+        if not exact:
+            return ["block: end marker malformed: line %d" % n]
+    if len(begins) > 1:
+        return ["block: more than one begin marker"]
+    if not ends:
+        return ["block: no end marker"]
+    if not begins or ends[0][0] < begins[0][0]:
+        return ["block: end marker before begin marker: line %d" % ends[0][0]]
+    if len(ends) > 1:
+        return ["block: more than one end marker"]
+    got = "%s/%s" % (begins[0][1].group(1), begins[0][1].group(2))
+    expected = "%s/%d" % (schema.kind, schema.version)
+    if got != expected:
+        return ["schema: expected %s, got %s; run /strict-delivery:upgrade" % (expected, got)]
+    return []
+
+
 # ---------------------------------------------------------------- producers and files
 
 def produced_kinds() -> set:
@@ -704,6 +784,20 @@ def entries_of(schema: Schema, root: str, cfg: dict) -> list:
     gitinfo._require_toplevel(root)
     out: list = []
     for item in schema.files:
+        if "file" in item:  # a root file: lstat only, never opened (a FIFO would block), a symlink is refused
+            rel = item["file"]
+            try:
+                mode = os.lstat(os.path.join(root, rel)).st_mode
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                raise LayoutError(rel, "cannot read (%s)" % (e.strerror or type(e).__name__)) from None
+            if stat.S_ISLNK(mode):
+                raise LayoutError(rel, "is a symlink; a file item must be a regular file")
+            if not stat.S_ISREG(mode):
+                raise LayoutError(rel, "is not a regular file")
+            out.append((rel, False))
+            continue
         if "path" in item:
             rel = _paths_key(schema, item["path"], cfg)
             if os.path.lexists(os.path.join(root, *rel.split("/"))):
