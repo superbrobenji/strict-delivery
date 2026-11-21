@@ -887,6 +887,7 @@ class ProgramErrorsTest(ProgFx):
             with self.subTest(repr(name[:30])):
                 got = self.pe("program: " + name, "program_controller")
                 self.assertEqual(self.sfx(got), ["program"])
+                self.assertLess(len(got[0][1]), 300, got)                  # the quoted value is cut, whatever its length
 
     def test_program_line_only_in_brief(self):                     # BL9
         add_program(self.root)
@@ -1051,6 +1052,7 @@ class ProgramErrorsTest(ProgFx):
                         self.assertEqual(len(item), 2)
                         self.assertIn(item[0], ("program", "stream"))
                         self.assertTrue(item[1] and item[1].isascii() and re.fullmatch(r"[\x20-\x7e]+", item[1]), item)
+                        self.assertLess(len(item[1]), 600, item)               # a hostile 5000-char value is cut
 
     def test_program_line_unicode_version_free(self):              # V2, M12
         add_program(self.root)
