@@ -2657,5 +2657,732 @@ class P23dGitinfoTest(GitIsolatedTestCase):
         self.assertEqual(gitinfo.commit_paths(self.root, head), [".strict-delivery/config.yml"])
 
 
+
+# ---------------------------------------------------------------- Task P3.2: last_text and the Rq-5-4 functions
+# Rows LT, FP, DP, IG, UP of the P3.2 input-domain table. Every test runs twice: on a plain fixture repository and on
+# one whose git config sets color.ui=always, color.diff=always and core.abbrev=7 (rows LT14, FP7, DP13, IG13, UP10).
+
+class _Sub(str):
+    pass
+
+
+class P32Case(GitIsolatedTestCase):
+    COLOUR = False
+
+    def setUp(self):
+        super().setUp()
+        self.root = make_repo(self.work)
+        if self.COLOUR:
+            for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+                git(self.root, "config", k, v)
+
+    def put(self, rel, text="x\n", root=None):
+        path = os.path.join(root or self.root, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(text if type(text) is bytes else text.encode("utf-8"))
+
+    def rm(self, rel):
+        git(self.root, "rm", "-q", "-f", "--", rel)
+
+    def commit(self, msg="c"):
+        return commit_all(self.root, msg)
+
+    def sha(self, rev="HEAD"):
+        return git(self.root, "rev-parse", rev)
+
+    def clone_shallow(self):
+        dest = os.path.join(self.tmp, "shallow")
+        git(self.tmp, "clone", "-q", "--depth", "1", "file://" + self.root, dest)
+        return dest
+
+    def unborn(self):
+        dest = os.path.join(self.tmp, "unborn")
+        os.mkdir(dest)
+        git(dest, "init", "-q", "-b", "main")
+        return dest
+
+    def bad_types(self, fn, root_arg_first=True):
+        for bad in (None, 5, "", _Sub(self.root), b"x"):
+            with self.subTest(root=repr(bad)):
+                with self.assertRaises(GateError) as cm:
+                    fn(bad)
+                self.assertEqual(str(cm.exception), "root must be a string")
+
+
+class LastTextTests(P32Case):
+    def deleted_once(self):
+        self.put("d/L.md", "v1\n")
+        self.commit("c1")
+        self.rm("d/L.md")
+        return self.commit("c2")
+
+    def test_last_text_present(self):  # LT1
+        self.put("d/L.md", "v1\n")
+        self.commit()
+        calls, patch = spy_runs()
+        with patch:
+            self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v1\n")
+        self.assertFalse(any("log" in argv for argv, _ in calls))
+
+    def test_last_text_deleted_once(self):  # LT2
+        self.deleted_once()
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v1\n")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"),
+                         git(self.root, "show", self.sha() + "^:d/L.md") + "\n")  # git's own reading
+
+    def test_last_text_newest_deletion_wins(self):  # LT3
+        self.put("d/L.md", "v1\n")
+        self.commit("c1")
+        self.rm("d/L.md")
+        c2 = self.commit("c2")
+        self.put("d/L.md", "v2\n")
+        c3 = self.commit("c3")
+        self.rm("d/L.md")
+        self.commit("c4")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v2\n")
+        self.assertEqual(gitinfo.last_text(self.root, c3, "d/L.md"), "v2\n")
+        self.assertEqual(gitinfo.last_text(self.root, c2, "d/L.md"), "v1\n")
+
+    def test_last_text_never_existed(self):  # LT4
+        self.put("d/other.md")
+        self.commit()
+        self.assertIsNone(gitinfo.last_text(self.root, "HEAD", "d/L.md"))
+
+    def test_last_text_renamed_away(self):  # LT5
+        self.put("d/L.md", "old\n")
+        self.commit()
+        git(self.root, "mv", "d/L.md", "d/M.md")
+        self.commit("rename")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "old\n")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/M.md"), "old\n")
+
+    def test_last_text_odd_names(self):  # LT6
+        names = ["d/sp ace.md", "d/new\nline.md", "d/café.md", "d/tab\there.md", 'd/q"uote.md']
+        for i, n in enumerate(names):
+            self.put(n, "t%d\n" % i)
+        self.commit("add")
+        for n in names:
+            self.rm(n)
+        self.commit("del")
+        for i, n in enumerate(names):
+            with self.subTest(n):
+                self.assertEqual(gitinfo.last_text(self.root, "HEAD", n), "t%d\n" % i)
+
+    def test_last_text_pathspec_is_literal(self):  # LT7
+        self.put("d/L.md", "v1\n")
+        self.put("d/x", "keep\n")
+        self.commit()
+        self.rm("d/L.md")
+        self.commit()
+        for path in ("d/*.md", ":(top)d/L.md", ":!d/x", ":x"):
+            with self.subTest(path):
+                self.assertIsNone(gitinfo.last_text(self.root, "HEAD", path))
+
+    def test_last_text_path_forms(self):  # LT8
+        self.deleted_once()
+        for bad in ("", ".", "..", "/abs", "d/", "d//L.md", "d/../d/L.md", "a\0b"):
+            with self.subTest(bad):
+                with self.assertRaises(GateError):
+                    gitinfo.last_text(self.root, "HEAD", bad)
+        self.assertIsNone(gitinfo.last_text(self.root, "HEAD", "d"))  # a directory name is no regular file
+
+    def test_last_text_deletion_on_merged_side_branch(self):  # LT9
+        self.put("d/L.md", "v1\n")
+        self.commit()
+        git(self.root, "checkout", "-q", "-b", "side")
+        self.rm("d/L.md")
+        self.commit("side")
+        git(self.root, "checkout", "-q", "main")
+        self.put("other", "o\n")
+        self.commit("m2")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "merge", "side")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v1\n")
+
+    def test_last_text_evil_merge_limit(self):  # LT10, D-Q3: a deletion made only by a merge commit is not seen
+        self.put("d/L.md", "v1\n")
+        self.commit()
+        git(self.root, "checkout", "-q", "-b", "side")
+        self.put("s", "s\n")
+        self.commit("side")
+        git(self.root, "checkout", "-q", "main")
+        self.put("m", "m\n")
+        self.commit("m2")
+        git(self.root, "merge", "-q", "--no-ff", "--no-commit", "side")
+        self.rm("d/L.md")
+        git(self.root, "commit", "-q", "-m", "evil merge")
+        self.assertIsNone(gitinfo.last_text(self.root, "HEAD", "d/L.md"))  # stated limit: pinned as today's answer
+
+    def test_last_text_git_states(self):  # LT11
+        c2 = self.deleted_once()
+        with self.assertRaises(GateError):
+            gitinfo.last_text(self.unborn(), "HEAD", "d/L.md")
+        git(self.root, "checkout", "-q", "--detach", "HEAD")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v1\n")
+        git(self.root, "tag", "t1", c2)
+        for ref in ("t1", c2, "refs/heads/main"):
+            self.assertEqual(gitinfo.last_text(self.root, ref, "d/L.md"), "v1\n", ref)
+        with self.assertRaises(GateError):
+            gitinfo.last_text(self.root, "nosuchref", "d/L.md")
+        self.put("later", "l\n")
+        self.commit("later")
+        self.assertIsNone(gitinfo.last_text(self.clone_shallow(), "HEAD", "d/L.md"))  # stated limit: cut history
+
+    def test_last_text_argument_types(self):  # LT12
+        self.bad_types(lambda r: gitinfo.last_text(r, "HEAD", "x"))
+        for bad, msg in ((None, "ref must be a non-empty string"), (5, "ref must be a non-empty string"),
+                         ("", "ref must be a non-empty string"), ("-x", "ref must not start with '-'"),
+                         ("^x", "ref must not start with '^'"),
+                         ("a" * 41, "ref must not hold more than 40 hex digits in a row")):
+            with self.subTest(ref=repr(bad)):
+                with self.assertRaises(GateError) as cm:
+                    gitinfo.last_text(self.root, bad, "x")
+                self.assertEqual(str(cm.exception), msg)
+        for bad in (None, 5, b"x", _Sub("x")):
+            with self.subTest(path=repr(bad)):
+                if type(bad) is _Sub:
+                    continue  # a str subclass is a str: it is read as its text
+                with self.assertRaises(GateError) as cm:
+                    gitinfo.last_text(self.root, "HEAD", bad)
+                self.assertEqual(str(cm.exception), "path must be a string")
+
+    def test_last_text_decoding(self):  # LT13
+        self.put("bad.bin", INVALID_UTF8)
+        self.put("bom.txt", "﻿x\r\n")
+        self.put("empty.txt", "")
+        self.commit()
+        with self.assertRaises(GateError) as cm:
+            gitinfo.last_text(self.root, "HEAD", "bad.bin")
+        self.assertEqual(str(cm.exception), "bad.bin: not valid UTF-8")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "bom.txt"), "﻿x\r\n")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "empty.txt"), "")
+        for n in ("bad.bin", "bom.txt"):
+            self.rm(n)
+        self.commit("del")
+        with self.assertRaises(GateError) as cm:
+            gitinfo.last_text(self.root, "HEAD", "bad.bin")  # the deleted case reads through show as well
+        self.assertEqual(str(cm.exception), "bad.bin: not valid UTF-8")
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "bom.txt"), "﻿x\r\n")
+
+    def test_git_reads_ignore_colour_and_abbrev_config(self):  # LT14, FP7, DP13 (the plan test of P3.2)
+        self.deleted_once()
+        self.put("docs/a.md")
+        self.commit()
+        self.rm("docs/a.md")
+        self.commit()
+        plain = os.path.join(self.tmp, "plain")
+        git(self.tmp, "clone", "-q", self.root, plain)
+        for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.root, "config", k, v)
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), gitinfo.last_text(plain, "HEAD", "d/L.md"))
+        self.assertEqual(gitinfo.first_parent(self.root, "HEAD"), gitinfo.first_parent(plain, "HEAD"))
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs"), gitinfo.deleted_paths(plain, "HEAD", "docs"))
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs"), ["docs/a.md"])
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v1\n")
+
+    def test_last_text_call_shape(self):  # LT15
+        self.deleted_once()
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.last_text(self.root, "HEAD", "d/L.md")
+        argv, env = [(a, e) for a, e in calls if "log" in a][0]
+        self.assertEqual(argv[argv.index("log"):], ["log", "--no-color", "-1", "--diff-filter=D", "--format=%H",
+                                                    "--no-ext-diff", "--no-textconv", "HEAD", "--", "d/L.md"])
+        self.assertIn("--literal-pathspecs", argv)
+        self.assertIn("--no-replace-objects", argv)
+        self.assertEqual(env["LC_ALL"], "C")
+        index = os.path.join(self.tmp, "idx")
+        shutil.copyfile(os.path.join(self.root, ".git", "index"), index)
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": index}):
+            self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v1\n")  # the index is inherited
+
+    def test_last_text_ignores_replace_refs(self):  # LT16
+        self.put("d/L.md", "v1\n")
+        c1 = self.commit("c1")
+        self.rm("d/L.md")
+        c2 = self.commit("c2")
+        self.put("o")
+        self.commit("c3")
+        git(self.root, "replace", c2, c1)
+        self.assertEqual(gitinfo.last_text(self.root, "HEAD", "d/L.md"), "v1\n")
+
+
+class FirstParentTests(P32Case):
+    def history(self):
+        self.put("a")
+        c1 = self.commit("c1")
+        git(self.root, "checkout", "-q", "-b", "topic")
+        self.put("t")
+        b = self.commit("topic")
+        git(self.root, "checkout", "-q", "main")
+        self.put("m")
+        c2 = self.commit("c2")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "merge", "topic")
+        return c1, c2, b, self.sha()
+
+    def test_first_parent_linear(self):  # FP1
+        c0 = self.sha()
+        self.put("a")
+        c1 = self.commit()
+        self.put("b")
+        c2 = self.commit()
+        got = gitinfo.first_parent(self.root, "HEAD")
+        self.assertEqual(got, [c2, c1, c0])
+        self.assertTrue(all(len(x) == 40 for x in got))
+
+    def test_first_parent_skips_merged_commits(self):  # FP2
+        c1, c2, b, m = self.history()
+        c0 = git(self.root, "rev-parse", c1 + "^")
+        self.assertEqual(gitinfo.first_parent(self.root, "HEAD"), [m, c2, c1, c0])
+        self.assertEqual(git(self.root, "rev-list", "--first-parent", "HEAD").split("\n"), [m, c2, c1, c0])
+
+    def test_first_parent_ref_forms(self):  # FP3
+        c1, c2, b, m = self.history()
+        git(self.root, "tag", "tg", c2)
+        for ref in ("HEAD", "main", "tg", c2, "refs/heads/main", "HEAD~1"):
+            with self.subTest(ref):
+                self.assertEqual(gitinfo.first_parent(self.root, ref)[0], git(self.root, "rev-parse", ref))
+        for bad in ("nosuchref", "HEAD^{tree}", self.sha("HEAD^{tree}"), "", "-x", "^x", "a" * 80, None, 5, b"x"):
+            with self.subTest(bad=repr(bad)):
+                with self.assertRaises(GateError):
+                    gitinfo.first_parent(self.root, bad)
+
+    def test_first_parent_file_named_like_branch(self):  # FP4
+        self.put("main", "a file named like the branch\n")
+        c = self.commit()
+        self.assertEqual(gitinfo.first_parent(self.root, "main")[0], c)
+
+    def test_first_parent_git_states(self):  # FP5
+        c1, c2, b, m = self.history()
+        with self.assertRaises(GateError):
+            gitinfo.first_parent(self.unborn(), "HEAD")
+        git(self.root, "checkout", "-q", "--detach", c2)
+        self.assertEqual(gitinfo.first_parent(self.root, "HEAD")[0], c2)
+        git(self.root, "checkout", "-q", "main")
+        self.assertEqual(len(gitinfo.first_parent(self.clone_shallow(), "HEAD")), 1)
+
+    def test_first_parent_argument_types(self):  # FP6
+        self.bad_types(lambda r: gitinfo.first_parent(r, "HEAD"))
+        for bad in (None, 5, b"x", ""):
+            with self.assertRaises(GateError) as cm:
+                gitinfo.first_parent(self.root, bad)
+            self.assertEqual(str(cm.exception), "ref must be a non-empty string")
+
+    def test_first_parent_ignores_replace_refs(self):  # FP8
+        c1, c2, b, m = self.history()
+        want = gitinfo.first_parent(self.root, "HEAD")
+        git(self.root, "replace", c2, c1)
+        self.assertEqual(gitinfo.first_parent(self.root, "HEAD"), want)
+
+    def test_first_parent_single_call(self):  # FP9
+        for i in range(30):
+            self.put("f%d" % i)
+            self.commit()
+        calls, patch = spy_runs()
+        with patch:
+            got = gitinfo.first_parent(self.root, "HEAD")
+        self.assertEqual(len(got), 31)
+        rl = [a for a, _ in calls if "rev-list" in a]
+        self.assertEqual(len(rl), 1)
+        self.assertEqual(rl[0][rl[0].index("rev-list"):],
+                         ["rev-list", "--no-color", "--first-parent", "HEAD^{commit}", "--"])
+
+
+class DeletedPathsTests(P32Case):
+    def test_deleted_paths_simple(self):  # DP1
+        self.put("docs/p/a.md")
+        self.commit()
+        self.rm("docs/p/a.md")
+        self.commit()
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), ["docs/p/a.md"])
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/nothing"), [])
+
+    def test_deleted_paths_readded_is_not_listed(self):  # DP2
+        self.put("docs/p/b.md")
+        self.commit()
+        self.rm("docs/p/b.md")
+        self.commit()
+        self.put("docs/p/b.md", "again\n")
+        self.commit()
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), [])
+
+    def test_deleted_paths_deduplicated(self):  # DP3
+        for step in ("add", "del", "add", "del"):
+            if step == "add":
+                self.put("docs/p/b.md", step + "\n")
+                self.commit(step)
+            else:
+                self.rm("docs/p/b.md")
+                self.commit(step)
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), ["docs/p/b.md"])
+
+    def test_deleted_paths_sorted_code_point_order(self):  # DP4
+        names = ["docs/p/b.md", "docs/p/a.md", "docs/p/sub/c.md", "docs/p/d.txt", "docs/p-extra/f.md"]
+        for n in names:
+            self.put(n)
+        self.commit()
+        for n in names:
+            self.rm(n)
+        self.commit()
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"),
+                         ["docs/p/a.md", "docs/p/b.md", "docs/p/d.txt", "docs/p/sub/c.md"])
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs"),
+                         ["docs/p-extra/f.md", "docs/p/a.md", "docs/p/b.md", "docs/p/d.txt", "docs/p/sub/c.md"])
+
+    def test_deleted_paths_is_recursive(self):  # DP5
+        self.put("docs/p/sub/deep/c.md")
+        self.commit()
+        self.rm("docs/p/sub/deep/c.md")
+        self.commit()
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), ["docs/p/sub/deep/c.md"])
+
+    def test_deleted_paths_odd_names(self):  # DP6
+        names = ["docs/p/sp ace.md", "docs/p/new\nline.md", "docs/p/café.md", "docs/p/tab\there.md",
+                 'docs/p/q"uote.md']
+        for n in names:
+            self.put(n)
+        self.commit()
+        for n in names:
+            self.rm(n)
+        self.commit()
+        for quote in ("true", "false"):
+            git(self.root, "config", "core.quotePath", quote)
+            self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), sorted(names), quote)
+
+    def test_deleted_paths_directory_forms(self):  # DP7
+        self.put("docs/p/a.md")
+        self.put("docs/p.md")
+        self.commit()
+        self.rm("docs/p/a.md")
+        self.rm("docs/p.md")
+        self.commit()
+        for ok, want in (("docs", ["docs/p.md", "docs/p/a.md"]), ("docs/p", ["docs/p/a.md"]),
+                         ("docs/p.md", ["docs/p.md"]), ("docs/p*", []), (":(top)docs", [])):
+            with self.subTest(ok):
+                self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", ok), want)
+        for bad in ("", ".", "..", "a/../b", "/abs", "docs/", "a\0b"):
+            with self.subTest(bad):
+                with self.assertRaises(GateError):
+                    gitinfo.deleted_paths(self.root, "HEAD", bad)
+
+    def test_deleted_paths_rename_counts_as_deletion(self):  # DP8
+        self.put("docs/p/a.md", "content that is long enough to be a rename\n" * 5)
+        self.commit()
+        os.makedirs(os.path.join(self.root, "docs", "q"))
+        git(self.root, "mv", "docs/p/a.md", "docs/q/a.md")
+        self.commit("rename")
+        git(self.root, "config", "diff.renames", "copies")
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs"), ["docs/p/a.md"])
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.deleted_paths(self.root, "HEAD", "docs")
+        argv = [a for a, _ in calls if "log" in a][0]
+        self.assertEqual(argv[argv.index("log"):], ["log", "--no-color", "--diff-filter=D", "--name-only", "-z",
+                                                    "--format=", "--no-renames", "--no-ext-diff", "--no-textconv",
+                                                    "HEAD", "--", "docs"])
+
+    def test_deleted_paths_merged_side_branch(self):  # DP9
+        self.put("docs/p/a.md")
+        self.commit()
+        git(self.root, "checkout", "-q", "-b", "side")
+        self.rm("docs/p/a.md")
+        self.commit("side")
+        git(self.root, "checkout", "-q", "main")
+        self.put("other")
+        self.commit()
+        git(self.root, "merge", "-q", "--no-ff", "-m", "merge", "side")
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), ["docs/p/a.md"])
+
+    def test_deleted_paths_evil_merge_limit(self):  # DP9, D-Q3
+        self.put("docs/p/a.md")
+        self.commit()
+        git(self.root, "checkout", "-q", "-b", "side")
+        self.put("s")
+        self.commit("side")
+        git(self.root, "checkout", "-q", "main")
+        self.put("m")
+        self.commit()
+        git(self.root, "merge", "-q", "--no-ff", "--no-commit", "side")
+        self.rm("docs/p/a.md")
+        git(self.root, "commit", "-q", "-m", "evil merge")
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), [])  # stated limit, today's answer
+
+    def test_deleted_paths_shallow(self):  # DP10
+        self.put("docs/p/a.md")
+        self.commit()
+        self.rm("docs/p/a.md")
+        self.commit()
+        self.put("other")
+        self.commit()
+        self.assertEqual(gitinfo.deleted_paths(self.clone_shallow(), "HEAD", "docs/p"), [])
+
+    def test_deleted_paths_git_states(self):  # DP11
+        self.put("docs/p/a.md")
+        self.commit()
+        self.rm("docs/p/a.md")
+        c2 = self.commit()
+        for root, ref in ((self.unborn(), "HEAD"), (self.root, "nosuchref")):
+            with self.assertRaises(GateError):
+                gitinfo.deleted_paths(root, ref, "docs/p")
+        git(self.root, "checkout", "-q", "--detach", c2)
+        self.assertEqual(gitinfo.deleted_paths(self.root, "HEAD", "docs/p"), ["docs/p/a.md"])
+
+    def test_deleted_paths_argument_types(self):  # DP12
+        self.bad_types(lambda r: gitinfo.deleted_paths(r, "HEAD", "docs"))
+        for bad in (None, "", "-x"):
+            with self.assertRaises(GateError):
+                gitinfo.deleted_paths(self.root, bad, "docs")
+        for bad in (None, 5, b"docs"):
+            with self.assertRaises(GateError) as cm:
+                gitinfo.deleted_paths(self.root, "HEAD", bad)
+            self.assertEqual(str(cm.exception), "directory must be a string")
+
+    def test_deleted_paths_large(self):  # DP14
+        for i in range(60):
+            self.put("docs/p/f%02d.md" % i)
+        self.commit()
+        for i in range(60):
+            self.rm("docs/p/f%02d.md" % i)
+        self.commit()
+        calls, patch = spy_runs()
+        with patch:
+            got = gitinfo.deleted_paths(self.root, "HEAD", "docs/p")
+        self.assertEqual(got, ["docs/p/f%02d.md" % i for i in range(60)])
+        self.assertEqual(len([a for a, _ in calls if "log" in a]), 1)
+        self.assertEqual(len([a for a, _ in calls if "ls-tree" in a]), 1)
+
+
+class IsIgnoredTests(P32Case):
+    def ignore(self, *lines):
+        self.put(".gitignore", "\n".join(lines) + "\n")
+
+    def test_is_ignored_true(self):  # IG1
+        self.ignore("INDEX.md", "*.log")
+        self.assertIs(gitinfo.is_ignored(self.root, "INDEX.md"), True)
+        self.assertIs(gitinfo.is_ignored(self.root, "a.log"), True)
+
+    def test_is_ignored_false(self):  # IG2
+        self.ignore("*.log")
+        self.assertIs(gitinfo.is_ignored(self.root, "plain.txt"), False)
+
+    def test_is_ignored_negated_pattern(self):  # IG3
+        self.ignore("*.log", "!keep.log")
+        self.assertIs(gitinfo.is_ignored(self.root, "keep.log"), False)
+        self.assertIs(gitinfo.is_ignored(self.root, "other.log"), True)
+
+    def test_is_ignored_ignores_the_index(self):  # IG4
+        self.ignore("*.log")
+        self.put("t.log")
+        git(self.root, "add", "-f", "t.log")
+        self.assertIn("t.log", gitinfo.tracked_files(self.root))
+        self.assertIs(gitinfo.is_ignored(self.root, "t.log"), True)
+
+    def test_is_ignored_directory_pattern(self):  # IG5
+        self.ignore("build/")
+        self.put("build/o.txt")
+        self.assertIs(gitinfo.is_ignored(self.root, "build/o.txt"), True)
+        self.assertIs(gitinfo.is_ignored(self.root, "build"), True)  # the directory exists on disk
+
+    def test_is_ignored_path_forms(self):  # IG6
+        self.ignore("INDEX.md", "*.log", "/rooted.txt")
+        self.put("sub/rooted.txt")
+        self.assertIs(gitinfo.is_ignored(self.root, "sub/rooted.txt"), False)
+        self.assertIs(gitinfo.is_ignored(self.root, "rooted.txt"), True)
+        for bad in ("./INDEX.md", "a/../INDEX.md", ".", "", "/abs", "INDEX.md/"):
+            with self.subTest(bad):
+                with self.assertRaises(GateError):
+                    gitinfo.is_ignored(self.root, bad)
+        with self.assertRaises(GateError):
+            gitinfo.is_ignored(self.root, ":(top)INDEX.md")  # magic is refused: git would read it as magic
+        self.assertIs(gitinfo.is_ignored(self.root, "*.log"), True)  # a glob is one literal name; the pattern matches it
+        self.assertIs(gitinfo.is_ignored(self.root, "*.md"), False)  # and never expands to INDEX.md
+
+    def test_is_ignored_refuses_other_exit_codes(self):  # IG7
+        self.ignore("*.log")
+        for bad in ("../x", "..", "a\0b"):
+            with self.subTest(bad):
+                with self.assertRaises(GateError):
+                    gitinfo.is_ignored(self.root, bad)
+        self.assertIs(gitinfo.is_ignored(self.root, "-x"), False)  # after the -- it is a path
+
+    def test_is_ignored_odd_names(self):  # IG8
+        self.ignore("*.log")
+        for n in ("sp ace.log", "nl\nx.log", "café.log", "tab\t.log", 'q"uote.log'):
+            with self.subTest(n):
+                self.assertIs(gitinfo.is_ignored(self.root, n), True)
+
+    def test_is_ignored_symlinks(self):  # IG9
+        self.ignore("INDEX.md")
+        os.symlink("INDEX.md", os.path.join(self.root, "link.md"))
+        os.makedirs(os.path.join(self.root, "real"))
+        os.symlink("real", os.path.join(self.root, "linkdir"))
+        self.assertIs(gitinfo.is_ignored(self.root, "link.md"), False)
+        with self.assertRaises(GateError):
+            gitinfo.is_ignored(self.root, "linkdir/INDEX.md")
+
+    def test_is_ignored_sources(self):  # IG10
+        self.put("sub/.gitignore", "*\n!.gitignore\n")
+        self.assertIs(gitinfo.is_ignored(self.root, "sub/x.txt"), True)
+        self.put(".git/info/exclude", "excl.txt\n")
+        self.assertIs(gitinfo.is_ignored(self.root, "excl.txt"), True)
+        glob = os.path.join(self.tmp, "global-ignore")
+        with open(glob, "w") as fh:
+            fh.write("glob.txt\n")
+        self.assertIs(gitinfo.is_ignored(self.root, "glob.txt"), False)
+        git(self.root, "config", "core.excludesFile", glob)
+        self.assertIs(gitinfo.is_ignored(self.root, "glob.txt"), True)
+
+    def test_is_ignored_case_follows_core_ignorecase(self):  # IG11
+        self.ignore("INDEX.md")
+        git(self.root, "config", "core.ignorecase", "false")
+        self.assertIs(gitinfo.is_ignored(self.root, "INDEX.MD"), False)
+        git(self.root, "config", "core.ignorecase", "true")
+        self.assertIs(gitinfo.is_ignored(self.root, "INDEX.MD"), True)
+
+    def test_is_ignored_root_forms(self):  # IG12
+        self.ignore("*.x")
+        forms = root_forms(self.tmp, self.root)
+        check_root_forms(self, forms, {"is_ignored": lambda r: gitinfo.is_ignored(r, "a.x")})
+        self.assertIs(gitinfo.is_ignored(self.unborn(), "a.x"), False)
+        for bad in (None, "", _Sub(self.root)):
+            with self.assertRaises(GateError) as cm:
+                gitinfo.is_ignored(bad, "a.x")
+            self.assertEqual(str(cm.exception), "root must be a string")
+
+    def test_is_ignored_argument_types(self):  # IG14
+        for bad in (None, 5, b"x"):
+            with self.assertRaises(GateError) as cm:
+                gitinfo.is_ignored(self.root, bad)
+            self.assertEqual(str(cm.exception), "path must be a string")
+
+    def test_is_ignored_call_shape(self):  # IG13: no colour byte can exist, the call is quiet and literal
+        self.ignore("*.log")
+        calls, patch = spy_runs()
+        with patch:
+            gitinfo.is_ignored(self.root, "a.log")
+        argv = [a for a, _ in calls if "check-ignore" in a][0]
+        self.assertEqual(argv[argv.index("check-ignore"):], ["check-ignore", "-q", "--no-index", "--", "a.log"])
+        self.assertNotIn("--literal-pathspecs", argv)  # check-ignore refuses it (exit 128, measured)
+
+
+class UpstreamOfTests(P32Case):
+    def link(self):
+        remote = os.path.join(self.tmp, "remote.git")
+        git(self.tmp, "init", "-q", "--bare", remote)
+        git(self.root, "remote", "add", "origin", remote)
+        git(self.root, "push", "-q", "-u", "origin", "main")
+        return remote
+
+    def test_upstream_of_configured(self):  # UP1
+        self.link()
+        self.assertEqual(gitinfo.upstream_of(self.root, "main"), self.sha())
+        self.assertEqual(len(gitinfo.upstream_of(self.root, "main")), 40)  # core.abbrev does not shorten it
+        self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "main@{upstream}"), "origin/main")
+
+    def test_upstream_of_none(self):  # UP2
+        git(self.root, "branch", "nolink")
+        self.assertIsNone(gitinfo.upstream_of(self.root, "nolink"))
+
+    def test_upstream_of_ref_gone_is_none(self):  # UP3
+        self.link()
+        git(self.root, "update-ref", "-d", "refs/remotes/origin/main")
+        self.assertIsNone(gitinfo.upstream_of(self.root, "main"))
+
+    def test_upstream_of_local_upstream(self):  # UP4
+        git(self.root, "branch", "x")
+        git(self.root, "config", "branch.x.remote", ".")
+        git(self.root, "config", "branch.x.merge", "refs/heads/main")
+        self.assertEqual(gitinfo.upstream_of(self.root, "x"), self.sha())
+
+    def test_upstream_of_missing_branch(self):  # UP5
+        self.assertIsNone(gitinfo.upstream_of(self.root, "nonesuch"))
+
+    def test_upstream_of_branch_name_forms(self):  # UP6
+        for bad in ("", "-x", "^x", "main@{upstream}", "main@{1}", "a b", "refs/heads/main", "a\tb", "a\nb", "a\0b",
+                    "a:b", "a~1", "a..b", "x@y", "HEAD@{upstream}"):
+            with self.subTest(bad):
+                with self.assertRaises(GateError):
+                    gitinfo.upstream_of(self.root, bad)
+        self.assertIsNone(gitinfo.upstream_of(self.root, "HEAD"))  # one short name that git answers 1 for
+        self.assertIsNone(gitinfo.upstream_of(self.root, "a" * 300))
+
+    def test_upstream_of_git_states(self):  # UP7
+        self.link()
+        git(self.root, "checkout", "-q", "--detach", "HEAD")
+        self.assertEqual(gitinfo.upstream_of(self.root, "main"), self.sha())  # the branch's own tracking, not HEAD's
+        self.assertIsNone(gitinfo.upstream_of(self.unborn(), "main"))
+
+    def test_upstream_of_shallow(self):  # UP8
+        self.link()
+        shallow = self.clone_shallow()
+        self.assertEqual(gitinfo.upstream_of(shallow, "main"), self.sha())
+        self.assertEqual(git(shallow, "rev-parse", "--is-shallow-repository"), "true")
+
+    def test_upstream_of_argument_types(self):  # UP9
+        self.bad_types(lambda r: gitinfo.upstream_of(r, "main"))
+        for bad in (None, 5, b"main", ""):
+            with self.assertRaises(GateError) as cm:
+                gitinfo.upstream_of(self.root, bad)
+            self.assertEqual(str(cm.exception), "branch must be a non-empty string")
+
+    def test_upstream_of_inherits_index_env(self):  # UP11
+        self.link()
+        index = os.path.join(self.tmp, "idx")
+        shutil.copyfile(os.path.join(self.root, ".git", "index"), index)
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": index}):
+            self.assertEqual(gitinfo.upstream_of(self.root, "main"), self.sha())
+
+    def test_upstream_of_reads_local_refs_only(self):  # UP12
+        self.link()
+        git(self.root, "remote", "set-url", "origin", "http://127.0.0.1:9/never.git")
+        calls, patch = spy_runs()
+        with patch:
+            self.assertEqual(gitinfo.upstream_of(self.root, "main"), self.sha())
+        subcommands = {a[a.index("-C") + 2] for a, _ in calls}
+        self.assertEqual(subcommands, {"rev-parse"})
+        argv = [a for a, _ in calls if "--verify" in a][0]
+        self.assertEqual(argv[argv.index("rev-parse"):],
+                         ["rev-parse", "--verify", "--quiet", "--end-of-options", "main@{upstream}"])
+
+
+class LastTextColour(LastTextTests):
+    COLOUR = True
+
+
+class FirstParentColour(FirstParentTests):
+    COLOUR = True
+
+
+class DeletedPathsColour(DeletedPathsTests):
+    COLOUR = True
+
+
+class IsIgnoredColour(IsIgnoredTests):
+    COLOUR = True
+
+
+class UpstreamOfColour(UpstreamOfTests):
+    COLOUR = True
+
+
+class P32AstTests(unittest.TestCase):
+    def test_new_functions_make_no_int_call_and_no_exception_groups(self):  # V1, V3 for the gitinfo functions
+        import ast
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gates", "lib",
+                               "gitinfo.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        tree = ast.parse(src)
+        names = {"last_text", "first_parent", "deleted_paths", "is_ignored", "upstream_of"}
+        for fn in [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]:
+            for node in ast.walk(fn):
+                self.assertFalse(isinstance(node, ast.Call) and getattr(node.func, "id", "") == "int", fn.name)
+                self.assertFalse(isinstance(node, ast.Name) and node.id in ("ExceptionGroup", "BaseExceptionGroup"))
+
+    def test_docstrings_state_git_version(self):  # V4
+        for fn in (gitinfo.last_text, gitinfo.upstream_of):
+            self.assertIn("git", fn.__doc__)
+        self.assertIn("2.50.1", gitinfo.upstream_of.__doc__)
+
+
 if __name__ == "__main__":
     unittest.main()

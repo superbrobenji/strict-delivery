@@ -712,3 +712,106 @@ def file_hunks(root: str, a: str, b: Optional[str], path: str) -> list:
             nums += [int(s), int(c)]
         out.append(tuple(nums))
     return out
+
+
+# Task P3.2 (decisions D-Q1 to D-Q5; plan P:2972 and Rq-5-4 P:5070-5074). Every call is ``-C root``, ``GIT_INDEX_FILE``
+# inherited, and measured with git 2.50.1 (``--end-of-options`` needs 2.24, ``check-ignore --no-index`` 1.8.5). The
+# history readers pass ``--no-replace-objects`` (D-A16) and ``--literal-pathspecs`` where a path is given.
+
+def _need_text(value: object, name: str) -> str:
+    if type(value) is not str:
+        raise GateError("%s must be a string" % name)
+    return value
+
+
+def last_text(root: str, ref: str, path: str) -> Optional[str]:
+    """The text of ``path`` at ``ref``; when it is absent there, its text at the parent of the newest commit reachable
+    from ``ref`` that deleted it (``git log --no-color -1 --diff-filter=D --format=%H <ref> -- <path>``); ``None`` when
+    it never existed. A path that was renamed away counts as deleted. Stated limits (decision D-Q3): a deletion made
+    only by a merge commit is not seen (``git log`` without ``-m`` shows no diff for a merge), and in a shallow clone a
+    deletion before the cut reads as "never existed"; callers that need the whole history check ``is_shallow``."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    _need_text(path, "path")
+    _require_toplevel(root)
+    _check_norm(path, "path")
+    now = show(root, ref, path)
+    if now is not None:
+        return now
+    p = _run(root, "log", ["log", "--no-color", "-1", "--diff-filter=D", "--format=%H", "--no-ext-diff",
+                           "--no-textconv", ref, "--", path], literal=True, opts=_NO_REPLACE)
+    sha = _text(p.stdout, "log").strip()
+    if sha == "":
+        return None
+    before = parents(root, sha)  # read with --no-replace-objects, as the log call above
+    return show(root, before[0], path) if before else None
+
+
+def first_parent(root: str, ref: str) -> list:
+    """The commits of the first-parent history of ``ref``, newest first, as full ids: ``git rev-list --no-color
+    --first-parent <ref>^{commit} --`` (Rq-5-4; decision D-Q2: the ``^{commit}`` peel makes a tree id a GateError, the
+    trailing ``--`` keeps a file named like the ref from being ambiguous). In a shallow clone the chain ends at the cut."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    _require_toplevel(root)
+    p = _run(root, "rev-list", ["rev-list", "--no-color", "--first-parent", ref + "^{commit}", "--"], opts=_NO_REPLACE)
+    return [x for x in _text(p.stdout, "rev-list").split("\n") if x]
+
+
+def deleted_paths(root: str, ref: str, directory: str) -> list:
+    """The repo-relative paths under ``directory`` that some commit reachable from ``ref`` deleted and that are absent at
+    ``ref``, each once, sorted by code point (Rq-5-4; decision D-Q1): ``git log --no-color --diff-filter=D --name-only -z
+    --format= --no-renames --no-ext-diff --no-textconv <ref> -- <directory>``; ``-z`` keeps every name raw; one recursive
+    ``ls-tree -r -z --full-tree`` read of ``ref`` limited to ``directory`` tests presence. A rename counts as a deletion
+    of the old path. ``directory`` is a normalised path (``""`` is refused) and a literal pathspec. Stated limits
+    (decision D-Q3): a deletion made only by a merge commit is not listed, and a shallow clone lists only what it can see."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    _need_text(directory, "directory")
+    _require_toplevel(root)
+    _check_norm(directory, "directory")
+    p = _run(root, "log", ["log", "--no-color", "--diff-filter=D", "--name-only", "-z", "--format=", "--no-renames",
+                           "--no-ext-diff", "--no-textconv", ref, "--", directory], literal=True, opts=_NO_REPLACE)
+    gone = {_text(raw, "log") for raw in p.stdout.split(b"\0") if raw}
+    if not gone:
+        return []
+    q = _run(root, "ls-tree", ["ls-tree", "-r", "-z", "--full-tree", ref, "--", directory], literal=True, opts=_NO_REPLACE)
+    present = {path for _, _, path in _entries(q.stdout, "ls-tree")}
+    return sorted(gone - present)
+
+
+def is_ignored(root: str, path: str) -> bool:
+    """True when ``git check-ignore -q --no-index -- <path>`` exits 0 (a pattern matches, tracked or not), False for exit
+    1; any other exit status is a GateError (Rq-5-4; decision D-Q4). ``path`` is a normalised repo-relative path; the
+    command takes no ``--literal-pathspecs`` (measured: exit 128), so a path starting with ``:`` (pathspec magic) is
+    refused instead, and a glob is read as a literal name. A path through a symlinked directory is exit 128."""
+    _need_root(root)
+    _need_text(path, "path")
+    _require_toplevel(root)
+    _check_norm(path, "path")
+    if path.startswith(":"):
+        raise GateError("path must not start with ':' (pathspec magic)")
+    p = _run(root, "check-ignore", ["check-ignore", "-q", "--no-index", "--", path], ok=(0, 1))
+    return p.returncode == 0
+
+
+_BAD_BRANCH_CHARS = " ~^:?*[\\@"
+
+
+def upstream_of(root: str, branch: str) -> Optional[str]:
+    """The commit ``<branch>@{upstream}`` names, read from local refs only; ``None`` when the branch has none (never
+    configured, the remote branch gone, or no such branch: ``git rev-parse --verify --quiet`` exits 1 then; measured
+    with git 2.50.1). A name that is not one short branch name (empty, a lead of ``-``, ``^`` or ``refs/``, whitespace, a
+    control character, or one of ``~^:?*[\\@``) is a GateError (decision D-Q5) so a typo is not a silent ``None``."""
+    _need_root(root)
+    if type(branch) is not str or branch == "":
+        raise GateError("branch must be a non-empty string")
+    if (branch.startswith(REFUSED_LEAD) or branch.startswith("refs/") or ".." in branch
+            or any(c in _BAD_BRANCH_CHARS or ord(c) < 32 or ord(c) == 127 for c in branch)):
+        raise GateError("branch must be one short branch name")
+    _require_toplevel(root)
+    p = _run(root, "rev-parse @{upstream}", ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                             branch + "@{upstream}"], ok=(0, 1))
+    if p.returncode == 1:
+        return None
+    return _text(p.stdout, "rev-parse").strip()
