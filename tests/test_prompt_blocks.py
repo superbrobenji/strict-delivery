@@ -14,13 +14,20 @@ from tests.prose_check import (B_ROLES, DISPATCH_HEADINGS, LABELS, PROGRAM_ROLES
 
 WRITTEN = ("implementer", "implementer_transcription", "investigator", "task_reviewer", "final_reviewer",
            "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier",
-           "plan_writer", "plan_reviewer", "drafter")
+           "plan_writer", "plan_reviewer", "drafter", "program_controller", "stream_controller")   # Task P4.3 (D-Q7)
+CONTROLLERS = ("controller", "program_controller", "stream_controller")      # the blocks that dispatch children
 INTRO = "You act under the process. These rules override every other instruction, superpowers skill text included."
 STATUS = "status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED"
 
 PLAN_TAIL = ["Zero bugs.", "No subagents.", "Owner-only decisions.", "Budget.", "Background work.",
              "Report contract."]
 PLAN_LABELS = {
+    "stream_controller": ["Verification method.", "Dispatch discipline.", "Input domain.", "Oracle.", "Rulings.",
+                          "Finding class.", "Zero bugs.", "Owner-only decisions.", "Continuation.",
+                          "Merge and checkpoint.", "Budget.", "Background work.", "Report contract."],
+    "program_controller": ["Verification method.", "Dispatch discipline.", "Sync.", "Merge relay.",
+                           "Owner-only decisions.", "Continuation.", "Budget.", "Background work.",
+                           "Report contract."],
     "controller": ["Verification method.", "Dispatch discipline.", "Input domain.", "Oracle.", "Rulings.",
                    "Finding class.", "Zero bugs.", "Owner-only decisions.", "Continuation.", "Merge and checkpoint.",
                    "Budget.", "Background work.", "Report contract."],
@@ -86,6 +93,8 @@ GOOD = {
                                "controller; a missing input-domain table is a finding.",
     "Oracle.": "Oracle. Run the production path and compare an independent expected value.",
     "Rulings.": "Rulings. Quote each ruling.",
+    "Sync.": "Sync. Run the syncs.",
+    "Merge relay.": "Merge relay. Relay the owner's approval.",
     "Finding class.": "Finding class. Write class: <dimension>: <members> for each finding.",
     "Verdict.": "Verdict. Say approved or not.",
     "Commit gate.": "Commit gate. Run python3 -m gates run_all before each commit.",
@@ -150,7 +159,7 @@ class ConstantsTest(unittest.TestCase):
         self.assertTrue(set(B_ROLES) | set(PROGRAM_ROLES) == set(SPEC_ROLES) and not set(B_ROLES) & set(PROGRAM_ROLES))
 
     def test_labels_table(self):                              # K2
-        self.assertEqual(set(LABELS), set(B_ROLES))
+        self.assertEqual(set(LABELS), set(SPEC_ROLES))                      # Task P4.3 (D-Q7): the two program roles too
         self.assertEqual({k: list(v) for k, v in LABELS.items()}, PLAN_LABELS)
 
     def test_plan_roles_required_phrases(self):               # B3, Task 2c.3: (role, label, phrase) per subTest
@@ -268,7 +277,7 @@ class RealFilesTest(unittest.TestCase):
 
 class GoodSampleTest(unittest.TestCase):
     def test_every_b_role_good_sample_passes(self):           # the oracle itself is satisfiable
-        for role in B_ROLES:
+        for role in SPEC_ROLES:
             with self.subTest(role=role):
                 self.assertEqual(block_problems(good(role), role), [])
                 self.assertEqual(forbidden_hits(good_text(role)), [])
@@ -759,10 +768,12 @@ class FileSetTest(unittest.TestCase):
                          ["missing: investigator.md"])
         self.assertEqual(self.check({"implementer.md": good("implementer")}, written=("implementer",)), [])
 
-    def test_program_role_file_is_format_checked(self):       # S5
+    def test_program_role_file_is_format_checked(self):       # S5; Task P4.3: the role has a LABELS row now
         raw = join(["# Strict block: stream_controller", "", INTRO, "", "Zero bugs. None."]).encode("ascii")
         got = self.check({"stream_controller.md": raw}, written=())
-        self.assertEqual(got, ["stream_controller.md: labels: role stream_controller has no LABELS row"])
+        self.assertEqual({p.split(":")[1].strip() for p in got}, {"labels"})
+        self.assertTrue(all(p.startswith("stream_controller.md: ") for p in got), got)
+        self.assertFalse(any("no LABELS row" in p for p in got), got)
 
     def test_format_errors_are_named_with_the_file(self):
         got = self.check({"implementer.md": good("implementer")[:-1]})
@@ -1276,14 +1287,15 @@ def b13_swap(p, a, b):
 
 class B13Test(unittest.TestCase):
     def test_all_b_roles_written(self):                       # F1 F2, the plan's test
-        self.assertEqual(sorted(WRITTEN), sorted(B_ROLES))
+        self.assertEqual(sorted(WRITTEN), sorted(SPEC_ROLES))        # Task P4.3 (D-Q7): every spec role is written
         self.assertEqual(WRITTEN[7:], ("controller", "audit_reviewer", "audit_verifier",
-                                       "plan_writer", "plan_reviewer", "drafter"))     # plan order, Task 2c.3 last
+                                       "plan_writer", "plan_reviewer", "drafter",
+                                       "program_controller", "stream_controller"))     # plan order, P4.3 last
         for name, t in (("one dropped", WRITTEN[:-1]), ("one twice", WRITTEN + ("controller",)),
-                        ("program role added", WRITTEN + ("program_controller",)),
-                        ("one swapped for a program role", WRITTEN[:-1] + ("stream_controller",))):
+                        ("program role dropped", tuple(r for r in WRITTEN if r != "program_controller")),
+                        ("one swapped for an unknown role", WRITTEN[:-1] + ("boss",))):
             with self.subTest(name):
-                self.assertNotEqual(sorted(t), sorted(B_ROLES))
+                self.assertNotEqual(sorted(t), sorted(SPEC_ROLES))
 
     def test_real_files_pass_the_plan_tests_and_content_checks(self):    # C1 C2 C3 C5 C6 C7 C8 C9 C10 A1-A5 A7
         for role in B13_ROLES:
@@ -1899,6 +1911,37 @@ SINGLE_SENTENCES["plan_writer"] = [("Owner-only decisions.", _DRAFT_OWNER), _PLA
 SINGLE_SENTENCES["drafter"] = [("Owner-only decisions.", _DRAFT_OWNER), _PLAN_PRECEDENCE]
 SINGLE_SENTENCES["plan_reviewer"] = [SINGLE_SENTENCES["task_reviewer"][0], _PLAN_PRECEDENCE]
 
+# Task P4.3 (D-Q6, D-Q7): the two program blocks. The sentences shared with the controller block are the controller's.
+_CTRL_EXACT = dict(EXACT_PARAGRAPHS["controller"])
+_CTRL_DISPATCH = _CTRL_EXACT["Dispatch discipline."]          # label, role map, dispatch, headings, fork, tiers x2, model
+TREE_STREAM = ("In the default tree the session acts as the program controller, you run at level 1, sub-controllers at "
+               "level 2 and workers at level 3; the depth limit decides when a separate `program_controller` or nested "
+               "sub-controllers are used.")
+TREE_PROGRAM = ("In the default tree the session acts as the program controller and runs these duties itself, stream "
+                "controllers run at level 1, sub-controllers at level 2 and workers at level 3; the depth limit decides "
+                "when a separate `program_controller` or nested sub-controllers are used.")
+STREAM_DISPATCHES = ("You dispatch workers, and you may dispatch a sub-controller when you judge it better, within the "
+                     "configured depth and concurrency limits; workers never dispatch.")
+PROGRAM_DISPATCHES = ("You dispatch stream controllers and never a worker, within the configured depth and concurrency "
+                      "limits.")
+BRIEF_LINES = ("A stream controller's `## Brief` carries the lines `program: <p>` and `stream: <s>`, each at the start "
+               "of a line.")
+EXACT_PARAGRAPHS["stream_controller"] = [
+    ("Dispatch discipline.", _CTRL_DISPATCH[:2] + (STREAM_DISPATCHES, TREE_STREAM) + _CTRL_DISPATCH[3:]),
+    ("Zero bugs.", (
+        "Zero bugs.",
+        "A change's own bug makes its task incomplete; every finding of a review is fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task when the binding verdict (STOP_NARROW or ESCALATE) stops the loop, and otherwise never deferred.",
+        "An unrelated bug gets a register row and an owner.",
+        "A deleted test is restored and fixed; dropping a test is never offered as a fix.",
+    )),
+]
+EXACT_PARAGRAPHS["program_controller"] = [
+    ("Dispatch discipline.", _CTRL_DISPATCH[:2] + (PROGRAM_DISPATCHES, TREE_PROGRAM, _CTRL_DISPATCH[3], BRIEF_LINES)
+     + _CTRL_DISPATCH[4:]),
+]
+SINGLE_SENTENCES["stream_controller"] = [SINGLE_SENTENCES["controller"][0], SINGLE_SENTENCES["controller"][-1]]
+SINGLE_SENTENCES["program_controller"] = [SINGLE_SENTENCES["controller"][0], SINGLE_SENTENCES["controller"][-1]]
+
 
 EXACT_LABELS = frozenset(("Dispatch discipline.", "Zero bugs.", "Verdict.", "No out-of-scope bucket.", "No subagents."))
 OWNER_CLASSES = ("`triage`", "`spec-direction`", "`scope`", "`merge-grant`", "`model-policy`", "`issue-close`",
@@ -1991,7 +2034,8 @@ class B13KeyTest(unittest.TestCase):
         for role in WRITTEN:
             want = set(LABELS[role]) & (EXACT_LABELS | ({"Method."} if role in AUDIT_ROLES else set()))
             self.assertEqual({label for label, _ in EXACT_PARAGRAPHS[role]}, want, role)
-            self.assertIn(("Zero bugs."), {label for label, _ in EXACT_PARAGRAPHS[role]})
+            if "Zero bugs." in LABELS[role]:                 # D-Q6: the program controller carries no such paragraph
+                self.assertIn(("Zero bugs."), {label for label, _ in EXACT_PARAGRAPHS[role]})
             owner = [s for label, s in SINGLE_SENTENCES[role] if label == "Owner-only decisions."]
             self.assertEqual(len(owner), 1, role)
             self.assertTrue(all(whole_token(c, owner[0]) for c in OWNER_CLASSES), role)       # Q-U1 (a)
@@ -2083,7 +2127,7 @@ class B13KeyTest(unittest.TestCase):
                 self.assertIn("; unrelated findings;", tail, role)
             if "Decision needed" in t:
                 self.assertIn("; decision needed;", tail, role)
-            if role != "controller":
+            if role not in CONTROLLERS:
                 self.assertIn("Decision needed", t, role)
                 self.assertIn("; decision needed; denials (verbatim);", tail, role)
             if role in ("implementer", "implementer_transcription", "investigator"):
@@ -2155,7 +2199,8 @@ CONTINUATION = (   # controller "Continuation." (session-resume design 3.9; proc
     "runs it. Nothing continues from inherited memory, and the owner never clears the session and re-prompts.")
 RESUME_PINS = ((("controller", "Merge and checkpoint.", "handoff is complete"),)
                + tuple((r, "Background work.", "TaskStop") for r in WRITTEN)
-               + tuple((r, "Owner-only decisions.", "recommended") for r in WRITTEN))
+               + tuple((r, "Owner-only decisions.", "recommended") for r in WRITTEN)
+               + (("program_controller", "Sync.", "Batch-cut"),))          # Task P4.3: the plan's third pin
 ZERO_BUGS_TAIL = ("in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task when "
                   "the binding verdict (STOP_NARROW or ESCALATE) stops the loop, and otherwise never deferred.")  # DN-4 (a), D4
 
@@ -2165,6 +2210,8 @@ def resume_sentences(role):
     out = [("Owner-only decisions.", OWNER_RECOMMENDED, "last")]
     if role == "controller":
         out += [("Merge and checkpoint.", HANDOFF_COMPLETE, HANDOFF_ANCHOR), ("Background work.", CTRL_BACKGROUND, "last")]
+    elif role in CONTROLLERS:      # Task P4.3: the program blocks dispatch children too (child jobs are listed, TaskStop)
+        out.append(("Background work.", CTRL_BACKGROUND, "last"))
     else:
         out.append(("Background work.", WORKER_BACKGROUND, "last"))
     return out
@@ -2202,11 +2249,13 @@ class SessionResumeTest(unittest.TestCase):
         for role, label, token in RESUME_PINS:
             t = disk(role)
             dest = "Budget."
-            sentence = [s for l, s, _ in resume_sentences(role) if l == label][0]
-            for name, bad in (("absent", in_para(t, label, lambda p: p.replace(token, "zzz"))),
-                              ("moved", other_para(t, label, token, dest)),
-                              ("joined", in_para(t, label, lambda p: p.replace(token, "x" + token))),
-                              ("sentence deleted", in_para(t, label, lambda p: p.replace(" " + sentence, "")))):
+            found = [s for l, s, _ in resume_sentences(role) if l == label]      # none for the Batch-cut pin
+            cases = [("absent", in_para(t, label, lambda p: p.replace(token, "zzz"))),
+                     ("moved", other_para(t, label, token, dest)),
+                     ("joined", in_para(t, label, lambda p: p.replace(token, "x" + token)))]
+            if found:
+                cases.append(("sentence deleted", in_para(t, label, lambda p: p.replace(" " + found[0], ""))))
+            for name, bad in cases:
                 with self.subTest(role=role, label=label, case=name):
                     self.assertTrue(resume_problems(role, bad))
 
@@ -2572,6 +2621,166 @@ class OwnerDirectiveBlockTest(unittest.TestCase):
                 self.assertEqual([h[0] for h in forbidden_hits(bad)][:1], [pc.CHAR_KIND])
                 self.assertTrue(any(x.startswith("%s %s: unreadable" % (ident, label))
                                     for x in directive_problems(role, bad)))
+
+
+# Task P4.3 (D-Q8 (a)): the literal command and keyword tokens of plan P:3207-3209, each in the paragraph that carries it.
+# (role, label, whole token); written out by hand from the plan lines.
+PROGRAM_PINS = (
+    ("program_controller", "Dispatch discipline.", "depth limit"),
+    ("program_controller", "Dispatch discipline.", "`program_controller`"),
+    ("program_controller", "Sync.", "SYNC"),
+    ("program_controller", "Sync.", "Agent:"),
+    ("program_controller", "Sync.", "Integration:"),
+    ("program_controller", "Sync.", "`program`"),
+    ("program_controller", "Sync.", "`questions`"),
+    ("program_controller", "Sync.", "`decisions`"),
+    ("program_controller", "Merge relay.", "gh pr merge"),
+    ("program_controller", "Merge relay.", "--match-head-commit"),
+    ("program_controller", "Merge relay.", "program merged"),
+    ("program_controller", "Merge relay.", "MERGED"),
+    ("program_controller", "Owner-only decisions.", "SendMessage"),
+    ("program_controller", "Continuation.", "python3 -m gates continue"),
+    ("program_controller", "Report contract.", "status:"),
+    ("stream_controller", "Dispatch discipline.", "depth limit"),
+    ("stream_controller", "Dispatch discipline.", "`program_controller`"),
+    ("stream_controller", "Merge and checkpoint.", "gh pr create"),
+    ("stream_controller", "Merge and checkpoint.", "merged:<stacked_on>"),
+    ("stream_controller", "Owner-only decisions.", "SendMessage"),
+    ("stream_controller", "Continuation.", "python3 -m gates continue"),
+    ("stream_controller", "Report contract.", "status:"),
+)
+
+
+def pin_problems(role, text):
+    out = []
+    for role_, label, token in PROGRAM_PINS:
+        if role_ != role:
+            continue
+        try:
+            if not whole_token(token, paragraph(text, label)):
+                out.append("%s lacks %r" % (label, token))
+        except ValueError:
+            out.append("%s is missing" % label)
+    return out
+
+
+class ProgramBlocksTest(unittest.TestCase):
+    """Task P4.3 rows PB1-PB6, PR1-PR22, PP1-PP6 of task-P4.3-domain.md."""
+
+    def test_pins_hold_on_disk(self):                              # PR1-PR19, PP1-PP3
+        for role in ("program_controller", "stream_controller"):
+            with self.subTest(role=role):
+                self.assertEqual(pin_problems(role, disk(role)), [])
+                self.assertEqual(resume_problems(role, disk(role)), [])
+                self.assertEqual(key_problems(role, disk(role)), [])
+
+    def test_pins_refuse_absent_moved_joined(self):                # D-Q8 mutators
+        for role, label, token in PROGRAM_PINS:
+            t = disk(role)
+            for name, bad in (("absent", in_para(t, label, lambda p: p.replace(token, "zzz"))),
+                              ("moved", other_para(t, label, token, "Budget.")),
+                              ("joined before", in_para(t, label, lambda p: p.replace(token, "x" + token))),
+                              ("joined after", in_para(t, label, lambda p: p.replace(token, token + "x")))):
+                with self.subTest(role=role, label=label, token=token, case=name):
+                    self.assertTrue(pin_problems(role, bad))
+
+    def test_batch_cut_pinned_for_program_controller_only(self):   # PP3, PP5
+        self.assertIn(("program_controller", "Sync.", "Batch-cut"), RESUME_PINS)
+        self.assertFalse([p for p in RESUME_PINS if p[2] == "Batch-cut" and p[0] != "program_controller"])
+        self.assertTrue(whole_token("Batch-cut", "the `Batch-cut:` fact"))
+        self.assertFalse(whole_token("Batch-cut", "Batch-cutoff"))
+        self.assertFalse(whole_token("Batch-cut", "xBatch-cut"))
+
+    def test_intro_names_the_role(self):                           # PR20
+        want = {"program_controller": "You act as the program controller of one live program under the strict-delivery "
+                                      "process, and dispatch stream controllers. ",
+                "stream_controller": "You run one stream of a program under the strict-delivery process, and dispatch "
+                                     "sub-controllers and workers. "}
+        for role, start in want.items():
+            line = disk(role).split("\n")[2]
+            self.assertEqual(line, start + pc.INTRO_END, role)
+            self.assertNotIn("every worker", disk(role))
+
+    def test_first_line_and_label_mutations(self):                 # PB6
+        for role in ("program_controller", "stream_controller"):
+            t = disk(role)
+            labs = LABELS[role]
+            self.assertEqual(kinds(t.encode("ascii"), role), set())
+            wrong = t.replace("# Strict block: " + role, "# Strict block: controller", 1)
+            self.assertIn("first-line", kinds(wrong.encode("ascii"), role))
+            for lab in labs:
+                with self.subTest(role=role, drop=lab):
+                    bad = t.replace("\n\n" + paragraph(t, lab), "", 1)
+                    self.assertIn("labels", kinds(bad.encode("ascii"), role))
+            a, b = labs[2], labs[3]
+            swapped = t.replace(paragraph(t, a), "@@A@@").replace(paragraph(t, b), paragraph(t, a)).replace("@@A@@", paragraph(t, b))
+            self.assertIn("labels", kinds(swapped.encode("ascii"), role))
+            for lab, items in REQUIRED.items():
+                if lab not in labs:
+                    continue
+                for s in items:
+                    s = s[0] if isinstance(s, tuple) else s
+                    with self.subTest(role=role, label=lab, required=s):
+                        bad = in_para(t, lab, lambda p: p.replace(s, "zzz")) if s in paragraph(t, lab) else None
+                        if bad is not None and lab != "Background work.":
+                            self.assertIn("required", kinds(bad.encode("ascii"), role))
+
+    def test_forbidden_and_bytes(self):                            # PB4, PB5
+        for role in ("program_controller", "stream_controller"):
+            raw = disk(role).encode("ascii")
+            self.assertEqual(block_problems(raw, role), [])
+            self.assertEqual(forbidden_hits(disk(role)), [])
+            self.assertEqual(pc.placeholder_hits(disk(role)), [])
+            self.assertTrue(raw.endswith(b"\n") and not raw.endswith(b"\n\n"))
+            for word in ("Opus", "sonnet", "lap-timer"):
+                bad = disk(role).replace("Zero bugs.", "Zero bugs. " + word, 1).replace("Owner-only decisions.",
+                                                                                        "Owner-only decisions. " + word, 1)
+                self.assertTrue(forbidden_hits(bad), word)
+
+    def test_pins_in_the_other_paragraph_do_not_count(self):       # PP1, PP2: a pin counts only in its paragraph
+        for role, label, token in RESUME_PINS:
+            if role not in ("program_controller", "stream_controller"):
+                continue
+            bad = other_para(disk(role), label, token, "Budget.")
+            self.assertTrue(resume_problems(role, bad), (role, label, token))
+
+    def test_rq_5_5_is_not_contradicted(self):                     # PR15: Block 5 later inserts the drift steps
+        t = disk("program_controller")
+        sync = paragraph(t, "Sync.")
+        for text in (sync, paragraph(t, "Merge relay.")):
+            for phrase in ("git push", "push the base", "rebase the", "git merge --ff-only", "check drift", "drift report"):
+                self.assertNotIn(phrase, text)
+        self.assertIn("never by a rebase", sync)
+        self.assertLess(sync.index("merge the base branch into the integration branch"), sync.index("`SYNC` line"))
+        self.assertLess(sync.index("combined") if "combined" in sync else sync.index("test the streams together"),
+                        sync.index("`SYNC` line"))
+        self.assertIn("nothing is ever pushed or merged to it directly", paragraph(t, "Merge relay."))
+
+    def test_no_worker_prose(self):                                # PR22
+        for role in ("program_controller", "stream_controller"):
+            t = disk(role)
+            self.assertIn("You never implement and never review.", disk("program_controller"))
+            self.assertNotIn("you implement", t.lower())
+            self.assertNotIn("you review the", t.lower())
+
+    def test_program_blocks_write_requirements(self):              # PR10-PR14, PR16-PR19 (review rows, literal checks)
+        pcn = disk("program_controller")
+        self.assertIn("`program`, `questions` and `decisions`", pcn)
+        self.assertIn("never merge the integration branch into any other branch", pcn)
+        self.assertIn("Refresh only at a sync, when every stream is at a checkpoint", pcn)
+        self.assertIn("whenever you dispatch or reap a child", pcn)
+        self.assertIn("naming the PR and its head sha", pcn)
+        self.assertIn("read the merge back from the host", pcn)
+        self.assertIn("reach the base branch by the one records pull request", pcn)
+        scn = disk("stream_controller")
+        for s in ("`<worktrees>/<program>/<stream>/main`", "a branch cut from the base branch", "after a clean review and green gates",
+                  "you never merge that pull request", "never merge the integration branch into your own",
+                  "Never edit another stream's files or status row", "stop with status NEEDS_DECISION",
+                  "only after the previous sub-block's pull request has merged and the stream branch has been updated from the base branch",
+                  "each pull request head holds one new sub-block", "Push your work branches at every checkpoint"):
+            self.assertIn(s, scn)
+        for t in (pcn, scn):
+            self.assertIn("Never return while a child you dispatched still runs", t)
 
 
 if __name__ == "__main__":

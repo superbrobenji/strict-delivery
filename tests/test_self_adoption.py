@@ -477,6 +477,15 @@ class WorkflowTest(unittest.TestCase):
     def test_no_exception_group_in_workflow(self):  # K3
         self.assertNotIn("Exception" + "Group", self.text)
 
+    def test_repo_subagent_limits(self):  # P4.3 LM1-LM3, D-Q9 (a); owner answer 2026-11-01, file committed at 1e5bdc1
+        import json
+        with open(os.path.join(REPO, ".claude", "settings.json"), encoding="utf-8") as fh:
+            got = json.load(fh)
+        self.assertEqual(got, {"env": {"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "5",
+                                       "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "30"}})
+        for v in got["env"].values():
+            self.assertIs(type(v), str)
+
 
 if __name__ == "__main__":
     unittest.main()
