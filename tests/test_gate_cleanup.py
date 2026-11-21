@@ -184,15 +184,42 @@ class ArgvTests(Gx):
         self.assertEqual(self.g("--program", NAME, "--decision", "DEC-20261031-zzzz")[1],
                          "FAIL cleanup.merge: decision DEC-20261031-zzzz has no record\n")
 
+    def test_git_missing_has_no_init_hint(self):  # AV14: no repository hint can help when git itself is not found
+        from gates.lib.result import GitNotFound
+        with mock.patch.object(gitinfo, "toplevel", side_effect=GitNotFound("git is not on PATH")):
+            self.assertEqual(self.g("--plan", "p"), (1, "FAIL cleanup.input: git is not on PATH\n"))
+        with mock.patch.object(gitinfo, "toplevel", side_effect=gitinfo.GateError("not a git repository")):
+            self.assertEqual(self.g("--plan", "p"), (1, "FAIL cleanup.input: not a git repository; run /strict-delivery:init\n"))
+
+    def test_decision_id_uses_cfg_prefix(self):  # AV11 with ids.decision set: the configured prefix is the rule, not DEC
+        write_record(self.root, ".strict-delivery/config.yml", dict(minimal_config(), merge={"mode": "controller"},
+                                                                    ids={"decision": "ZZ"}))
+        self.assertEqual(self.g("--program", NAME, "--decision", "ZZ-20261031-zzzz")[1],
+                         "FAIL cleanup.merge: decision ZZ-20261031-zzzz has no record\n")
+        self.assertTrue(self.g("--program", NAME, "--decision", "DEC-20261031-zzzz")[1].startswith("FAIL cleanup.input: --decision: "))
+
     def test_repeated_and_unknown_flags(self):  # AV12
         for argv in (["--root", self.root, "--root", self.root, "--plan", "a"], ["--plan", "a", "--plan", "b"],
-                     ["--bogus"], ["-h"], ["--help"], ["--plan", "a", "--bogus"]):
+                     ["--bogus"], ["-h"], ["--help"], ["--plan", "a", "--bogus"],
+                     ["--program", "20261101-x", "--program", "20261101-y", "--decision", "DEC-20261031-k3f9"],
+                     ["--program", "20261101-x", "--decision", "DEC-20261031-k3f9", "--decision", "DEC-20261031-m4n5"],
+                     ["--p", "a"],    # AV12 (amended 2026-11-22): --p matches --plan and --program: ambiguous, refused
+                     ["--x", "a"]):   # AV12: not a prefix of any flag
             with self.subTest(argv=argv):
                 code, out = self.run_in_process(argv if "--root" in argv else argv + ["--root", self.root])
                 self.assertEqual(code, 1)
                 self.assertTrue(out.startswith("FAIL cleanup.input:"), out)
         for accepted in (["--plan=a"], ["--pl", "a"]):  # an abbreviation is the shared parser's own behaviour (E8)
             self.assertEqual(self.g(*accepted), (1, "FAIL cleanup.merge: plan a has no final merge on the base branch\n"))
+
+    def test_ambiguous_abbreviation_refused(self):  # AV12 (amended): --p is a prefix of --plan and --program
+        for argv in (["--p", "a"], ["--p=a"]):
+            with self.subTest(argv=argv):
+                code, out = self.g(*argv)
+                self.assertEqual(code, 1)
+                self.assertTrue(out.startswith("FAIL cleanup.input:"), out)
+                self.assertEqual(out.count("\n"), 1, out)
+        self.assertEqual(self.g("--pla", "a"), self.g("--plan", "a"))   # a unique prefix is --plan
 
     def test_json_flag_position(self):  # AV13, OUT9
         code, out = self.g("--json", "--plan", "p")
@@ -596,7 +623,7 @@ class OwnerTests(Gx):
         for st in ("planned", "in-progress", "fixed-unpinned", "pinned", "deferred", "open"):   # OW6
             mk(st, hit=True)
         for bad in ([], None, "p", {"kind": 5, "plan": "p"}, {"kind": "plan", "plan": 5}, {"kind": "plan", "plan": None},
-                    {"kind": "plan"}):                        # OW7
+                    {"kind": "plan", "plan": ["p"]}, {"kind": "plan"}):   # OW7
             mk(owner=bad)
         n[0] += 1
         i = fid("abcdefghijkmnpqrstuvwxyz23456789"[n[0]])     # a status that is missing
@@ -775,6 +802,14 @@ class DecisionTests(Gx):
         code, out = self.g("--plan", "p")
         self.assertEqual(code, 1)
         self.assertTrue(out.startswith("FAIL cleanup.input:") and "fork" in out, out)
+
+    def test_one_off_superseded_by_a_fork_not_judged(self):  # OP2, LD6: a one-off is skipped before current() can see a fork
+        s = self.scen(extra={SPEC: "cites %s\n" % did("a")})
+        self.cleanup_branch(s)
+        self.decision(did("a"), "answered", "one-off")
+        self.decision(did("b"), "answered", "lasting", supersedes=did("a"), landed_in=[PLAYBOOK])
+        self.decision(did("c"), "answered", "lasting", supersedes=did("a"), landed_in=[PLAYBOOK])
+        self.assertEqual(self.g("--plan", "p"), (0, CLEAN))
 
     def test_landed_uses_one_tracked_set(self):  # LD9
         s = self.scen(extra={SPEC: "cites %s %s\n" % (did("a"), did("b"))})
