@@ -1,0 +1,16 @@
+kind: mutation-transcript
+version: 1
+format: markdown
+files:
+  - dir: plan_state
+    glob: "*/mutations/*"
+first_line: "<!-- schema: mutation-transcript/1 -->"
+lines:
+  - word: FINDING
+    pattern: "FINDING [A-Z]+-[0-9]{8}-[2-9a-km-np-z]{4}"
+  - word: TEST
+    pattern: "TEST .+"
+  - word: MUTANT
+    pattern: "MUTANT .+"
+  - word: RUN
+    pattern: "RUN [123] (?:fix|mutant) exit=(?:0|-?[1-9][0-9]{0,2}) command=.+"

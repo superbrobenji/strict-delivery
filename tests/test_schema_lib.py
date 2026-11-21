@@ -163,8 +163,9 @@ class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
         self.assertEqual(sorted(got), ["breakdown", "claim", "config", "decision", "decision-index", "finding", "finding-index",
-                                       "handoff", "in-force", "ledger", "merged-log", "overview", "request", "status",
-                                       "streams", "sync-log"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds
+                                       "handoff", "in-force", "ledger", "merged-log", "mutation-transcript", "overview",
+                                       "request", "review-report", "status", "streams",
+                                       "sync-log"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds; 6E.1: the two evidence kinds
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
 
     def test_K6_fixture_dir_and_bad_file_raises_naming_it(self):
@@ -1050,8 +1051,9 @@ class FrontMatterSchema(Dirs):
 
     def test_old_schemas_unchanged(self):  # FS7
         listed = sorted(os.listdir(schema.SCHEMAS_DIR))
-        later = ["breakdown.yml", "handoff.yml", "ledger.yml", "merged-log.yml", "request.yml", "status.yml", "streams.yml",
-                 "sync-log.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas
+        later = ["breakdown.yml", "handoff.yml", "ledger.yml", "merged-log.yml", "mutation-transcript.yml", "request.yml",
+                 "review-report.yml", "status.yml", "streams.yml",
+                 "sync-log.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas; Task 6E.1 the two evidence ones
         self.assertEqual(listed, sorted([k + ".yml" for k, _ in EXPECTED_FILES] + later))
         got = [name for name in listed if name not in later]  # the old vocabulary's files only
         loaded = [load_schema(os.path.join(schema.SCHEMAS_DIR, name)) for name in got]
