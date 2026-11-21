@@ -16,7 +16,7 @@ import subprocess
 from typing import Optional
 
 from gates.lib import ids, schema
-from gates.lib.result import GateError, safe_text
+from gates.lib.result import GateError
 
 _BAD_ID_CHARS = re.compile("[\n\r\x00\ud800-\udfff]")  # a one-line record and an exec cannot carry these (D-1-Q4)
 _BAD_EXEC_CHARS = re.compile("[\x00\ud800-\udfff]")  # NUL and a lone surrogate make subprocess raise, not return
@@ -147,7 +147,8 @@ def transcript_errors(parsed: dict, finding_id: str, test_id: str, command: str,
     """Every way ``parsed`` fails to pin ``finding_id`` / ``test_id`` / ``command`` (spec 13a): one each of FINDING, TEST
     and MUTANT; the finding and test equal the arguments (no strip, no case fold), the finding id valid for
     ``cfg['ids']['finding']``; three RUN lines numbered 1, 2, 3 with phases fix, mutant, fix, each with exactly
-    ``command``; runs 1 and 3 exit 0; run 2 exits non-zero and neither 126 nor 127 (controller ruling 6E)."""
+    ``command``; runs 1 and 3 exit 0; run 2 exits non-zero and neither 126 nor 127 (controller ruling 6E). A reason holds the
+    finding id, TEST text and command raw: ``Result.render`` is the one place that escapes it (plan Task 1C)."""
     _check_parsed(parsed)
     for name, v in (("finding_id", finding_id), ("test_id", test_id), ("command", command)):
         if type(v) is not str:
@@ -161,12 +162,12 @@ def transcript_errors(parsed: dict, finding_id: str, test_id: str, command: str,
     if len(parsed["finding"]) == 1:
         got = parsed["finding"][0]
         if got != finding_id:
-            errors.append("finding: expected %s, got %s" % (safe_text(finding_id), safe_text(got)))
+            errors.append("finding: expected %s, got %s" % (finding_id, got))
         problem = ids.id_problem(got, cfg["ids"]["finding"])
         if problem:
             errors.append("finding: " + problem)
     if len(parsed["test"]) == 1 and parsed["test"][0] != test_id:
-        errors.append("test: expected %s, got %s" % (safe_text(test_id), safe_text(parsed["test"][0])))
+        errors.append("test: expected %s, got %s" % (test_id, parsed["test"][0]))
     runs = parsed["runs"]
     if len(runs) != 3:
         errors.append("RUN: expected exactly three lines, got %s" % len(runs))
@@ -176,7 +177,7 @@ def transcript_errors(parsed: dict, finding_id: str, test_id: str, command: str,
         errors.append("RUN phases: expected fix, mutant, fix in file order, got %s" % ", ".join(r["phase"] for r in runs))
     for i, r in enumerate(runs):
         if r["command"] != command:
-            errors.append("RUN %s: command: expected %s, got %s" % (i + 1, safe_text(command), safe_text(r["command"])))
+            errors.append("RUN %s: command: expected %s, got %s" % (i + 1, command, r["command"]))
         code = r["exit"]
         if i in (0, 2) and code != 0:
             errors.append("RUN %s: exit %s: a run on the fixed code must exit 0" % (i + 1, code))

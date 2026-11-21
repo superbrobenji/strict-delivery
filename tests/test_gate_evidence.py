@@ -1066,6 +1066,7 @@ class Package(Base):
         for name, (test, cmd) in (("a", a), ("b", b)):
             self.put("%s/p/%s.md" % (REV, name), RP(F, info.transcript, test, cmd))
         sha = commit_all(self.work, "reports")
+        self.sha, self.info = sha, info
         row = os.path.join(self.work, FIND, F + ".yml")
         with open(row, encoding="utf-8") as fh:
             text = fh.read()
@@ -1088,6 +1089,36 @@ class Package(Base):
         # both wrong: the first report's command
         out = self.reports(("z", D + "y"), ("w", D + "x"))
         self.assertIn("expected %s," % (D + "y"), line(out, "transcript." + F))
+
+    def test_package_reason_names_every_problem(self):
+        """Rows: G12 G13 G15 G16 (F-20261121-whj8: the package reason holds every differing field of a report and the
+        problem of every candidate report, in order, each exactly once; mutants E1 (first problem only) and E2 (first
+        differing field only))."""
+        # one report, the test and the transcript both differ: both fields are named, in that order
+        info, out, code = self.case(rtext=lambda t: RP(F, "%s:%s/%s.md" % (t[:7], TDIR, F), test="z"))
+        self.assertEqual(line(out, "package." + F),
+                         "FAIL evidence.package.%s: review report %s:%s: test: expected t, got z; transcript: expected %s, "
+                         "got %s:%s/%s.md" % (F, info.rsha, info.rpath, info.transcript, info.tsha[:7], TDIR, F))
+        # one report, the test differs and so does the command: the command is not compared once a field differs, so the
+        # reason names the field only (a fail-closed order, not a verdict about the command)
+        info, out, code = self.case(cmd=D + "x", pkg={"command": D, "test": "z"}, pin_test="t")
+        self.assertEqual(line(out, "package." + F),
+                         "FAIL evidence.package.%s: review report %s:%s: test: expected t, got z" % (F, info.rsha, info.rpath))
+        # two reports, each failing: the reasons of both, in the order the evidence lists them
+        out = self.reports(("z", D), ("w", D))
+        self.assertEqual(line(out, "package." + F),
+                         "FAIL evidence.package.%s: review report %s:%s/p/a.md: test: expected t, got z; review report "
+                         "%s:%s/p/b.md: test: expected t, got w" % (F, self.sha, REV, self.sha, REV))
+        # two reports, a field problem and a command problem
+        out = self.reports(("z", D), ("t", D + "x"))
+        self.assertEqual(line(out, "package." + F),
+                         "FAIL evidence.package.%s: review report %s:%s/p/a.md: test: expected t, got z; review report "
+                         "%s:%s/p/b.md: command: %sx differs from the transcript's RUN 1, 2, 3" % (F, self.sha, REV, self.sha, REV, D))
+        # two reports, a command problem and a field problem
+        out = self.reports(("t", D + "x"), ("z", D))
+        self.assertEqual(line(out, "package." + F),
+                         "FAIL evidence.package.%s: review report %s:%s/p/a.md: command: %sx differs from the transcript's "
+                         "RUN 1, 2, 3; review report %s:%s/p/b.md: test: expected t, got z" % (F, self.sha, REV, D, self.sha, REV))
 
     def test_package_two_reports(self):
         """Rows: G16 (Q13 (a): pass if at least one report matches in full)."""
@@ -1243,13 +1274,26 @@ class Transcript(Base):
             info, out, code = self.case(runs=runs)
             self.assertTrue(bad(out, "transcript." + F))
 
-    def test_transcript_reason_backslash_escaped_twice(self):
-        """Rows: T8 V2 (pins PC3 item 6: evidence.transcript_errors escapes a backslash of the transcript's TEST text
-        once and the rendered line escapes the reason again, so one backslash prints as four)."""
-        info, out, code = self.case(ttext=T(F, "a\\b"))
-        ln = line(out, "transcript." + F)
-        self.assertTrue(ln.startswith("FAIL"), out)
-        self.assertIn("test: expected t, got a" + "\\" * 4 + "b", ln)
+    def test_reasons_escaped_once(self):
+        """Rows: T8 G12 G13 V2 (F-20261121-7gp8, F-20261121-j2wv: Result.render's one safe_text pass is the only
+        escaping, plan Task 1C; a character of the transcript's TEST text or RUN command, or of the report's PIN-TEST or
+        PIN-COMMAND, prints escaped once on the transcript and on the package line; a backslash prints as two)."""
+        for name, ch, esc in (("backslash", "\\", "\\\\"), ("control", "\x01", "\\x01"), ("escape", "\x1b", "\\x1b"),
+                              ("delete", "\x7f", "\\x7f"), ("non-printable", UEXC, "\\u0870")):
+            with self.subTest(name):
+                info, out, code = self.case(ttext=T(F, "t" + ch))  # the transcript's TEST text differs from the pin's
+                want = "test: expected t, got t" + esc
+                self.assertIn(want, line(out, "transcript." + F))
+                info, out, code = self.case(pkg={"test": "t" + ch})  # the report's PIN-TEST differs from the pin's
+                self.assertIn(want, line(out, "package." + F))
+                info, out, code = self.case(runs=GOOD_RUNS, cmd=D + ch, pkg={"command": D})  # the runs' command differs
+                for n in (1, 2, 3):
+                    self.assertIn("RUN %d: command: expected %s, got %s" % (n, D, D + esc), line(out, "transcript." + F))
+                info, out, code = self.case(pkg={"command": D + ch})  # the report's command differs from the runs'
+                self.assertIn("command: %s differs from the transcript's RUN 1, 2, 3" % (D + esc), line(out, "package." + F))
+                self.assertIn("RUN 1: command: expected %s, got %s" % (D + esc, D), line(out, "transcript." + F))
+                if ch == "\\":
+                    self.assertNotIn("\\" * 3, out)  # never four where one is meant; two is the escape
 
     def test_transcript_without_package_command(self):
         """Rows: T10 (Q17 (a): FAIL naming that no package command exists)."""
