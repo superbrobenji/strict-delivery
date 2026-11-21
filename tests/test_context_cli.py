@@ -293,6 +293,84 @@ class Handoff(Base):
         self.assertEqual(self.run_cli("plan", "--handoff", "dir")[0], 1)  # a directory is `missing`, as for the default
 
 
+class HandoffFileStates(Base):
+    """R1-1 (F-20261121-uwsk): every state of the handoff file, for `--handoff` and for the default, through
+    `context_cli.main` and a subprocess. A symlink (the final component) is exit 2 naming it, never followed; a
+    directory, a FIFO and an absent file are the `missing ... -- handoff of plan` line (exit 1); a regular file is
+    read (the invariants of the replaced code)."""
+
+    def setUp(self):
+        super().setUp()
+        self.ctx()
+        self.outside = os.path.join(self.tmp, "out")
+        os.makedirs(self.outside)
+        with open(os.path.join(self.outside, "h.md"), "wb") as fh:
+            fh.write(b"not a handoff\n")
+        self.put("real/h.md", (HANDOFF % "").encode())
+
+    def states(self):
+        return [("symlink to a file inside the tree", lambda p: os.symlink("real/h.md", p), 2, "symbolic link"),
+                ("symlink to a file outside the tree", lambda p: os.symlink(os.path.join(self.outside, "h.md"), p), 2,
+                 "symbolic link"),
+                ("dangling symlink", lambda p: os.symlink("gone.md", p), 2, "symbolic link"),
+                ("directory", lambda p: os.mkdir(p), 1, None),
+                ("fifo", lambda p: os.mkfifo(p), 1, None),
+                ("absent", lambda p: None, 1, None)]
+
+    def check(self, how, argv_extra, rel):
+        p = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        for name, build, want_code, want_word in self.states():
+            build(p)
+            with self.subTest(name=name):
+                got = how(*argv_extra)
+                self.assertEqual(got[0], want_code, got)
+                if want_word:
+                    self.assertEqual(got[1], "")
+                    self.assertIn(want_word, got[2])
+                    self.assertIn(p, got[2])
+                    self.assertEqual(got[2].count("\n"), 1)
+                else:
+                    self.assertEqual(got[1], "missing %s -- handoff of plan\n" % self.abs(rel))
+            if os.path.islink(p) or os.path.isfile(p):
+                os.unlink(p)
+            elif os.path.isdir(p):
+                os.rmdir(p)
+            else:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+    def test_explicit_handoff_states_in_process(self):  # C19 symlink value, PD15
+        self.check(lambda *a: self.run_cli("plan", *a), ("--handoff", "lnk.md"), "lnk.md")
+
+    def test_explicit_handoff_states_subprocess(self):
+        self.check(lambda *a: self.sub("plan", *a, "--root", self.root), ("--handoff", "lnk.md"), "lnk.md")
+
+    def test_default_handoff_states_in_process(self):
+        self.check(lambda *a: self.run_cli("plan", *a), ("--plan", "p"), PLAN_PATH)
+
+    def test_default_handoff_states_subprocess(self):
+        self.check(lambda *a: self.sub("plan", *a, "--root", self.root), ("--plan", "p"), PLAN_PATH)
+
+    def test_symlinked_directory_component_outside_refused(self):
+        os.symlink(self.outside, os.path.join(self.root, "odir"))
+        code, out, err = self.run_cli("plan", "--handoff", "odir/h.md")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("outside this repository's tree", err)
+        self.assertEqual(self.sub("plan", "--handoff", "odir/h.md", "--root", self.root)[0], 2)
+
+    def test_symlinked_directory_component_inside_read(self):  # invariant: an in-tree directory link is read
+        os.symlink("real", os.path.join(self.root, "rdir"))
+        self.assertEqual(self.run_cli("plan", "--handoff", "rdir/h.md"), (0, "", ""))
+
+    def test_regular_handoff_still_read(self):  # invariants: a regular handoff is parsed; a failing handoff/1 is exit 2
+        self.assertEqual(self.run_cli("plan", "--handoff", "real/h.md"), (0, "", ""))
+        self.put("real/bad.md", b"---\nschema: handoff/1\n---\n")
+        self.assertEqual(self.run_cli("plan", "--handoff", "real/bad.md")[0], 2)
+
+
 class Arguments(Base):
     def setUp(self):
         super().setUp()

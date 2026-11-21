@@ -48,13 +48,23 @@ def _lines(root: str, cfg: dict, ctx: dict, kind: str, ns, vals: dict) -> tuple:
     """``(lines, code)``: every output line and the exit code, built before anything is printed."""
     top = os.path.realpath(gitinfo.toplevel(root))
     extras: list = []
-    handoff = None  # (absolute path, kind or None)
+    handoff = None
+    hrel = None
     if ns.handoff is not None:
-        handoff = context.absolute(root, _handoff_arg(ns.handoff))
+        hrel = _handoff_arg(ns.handoff)
     elif kind in context.HANDOFFS:
-        rel = context.resolve(context.HANDOFFS[kind], vals, cfg)
-        if rel is not None:
-            handoff = context.absolute(root, rel)
+        hrel = context.resolve(context.HANDOFFS[kind], vals, cfg)
+    if hrel is not None:
+        joined = os.path.join(top, hrel)
+        try:
+            link = stat.S_ISLNK(os.lstat(joined).st_mode)  # the path as given, before any realpath (R1-1, PD15)
+        except (OSError, ValueError):
+            link = False
+        if link:
+            raise GateError("%s: the handoff is a symbolic link; it is read as a regular file only" % joined)
+        handoff = context.absolute(root, hrel)
+        if not handoff.startswith(top.rstrip("/") + "/"):
+            raise GateError("%s: the handoff is outside this repository's tree" % handoff)
     handoff_missing = None
     if handoff is not None:
         try:
