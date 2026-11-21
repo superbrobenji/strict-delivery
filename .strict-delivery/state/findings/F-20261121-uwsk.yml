@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-uwsk
+status: open
+source: "5a.1 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/5a1-review-1.md R1-1"
+severity: MEDIUM
+class: "file states of --handoff C19: a symlinked --handoff is followed (context.absolute realpaths before the CLI lstat), so the PD15 refusal of a symlink never fires; members: symlink to a file inside the tree, symlink outside the tree, dangling symlink (final path component)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 569826c1aae2c76187563286fa7655178944d634
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: handoff file state (symlink)
