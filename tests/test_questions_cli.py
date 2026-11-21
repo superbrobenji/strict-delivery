@@ -702,12 +702,12 @@ class QuestionFields(Fx):
         self.assertEqual(out[0], "pending a-plan:q0 a: Q 0?")
         self.assertEqual((len(out), out[-1]), (1000, "pending a-plan:q999 a: Q 999?"))
 
-    def test_many_questions_ask_run(self):  # HQ11: 200 pending questions through ask, one by one (1000 takes over 9 minutes: the register is re-read per question, decision of the controller 2026-11-21)
-        self.hand("a", [Q("q%d" % i) for i in range(200)])
+    def test_many_questions_ask_run(self):  # HQ11: 40 pending questions through ask, one by one (the register is re-read per question, so cost is quadratic: 200 took 223 s on 3.9 and 326 s on 3.13, hence 40; decision P4.1 D-Q7, controller under owner delegation 2026-11-09, F-20261121-dt8k)
+        self.hand("a", [Q("q%d" % i) for i in range(40)])
         code, out, err = self.ask()
-        self.assertEqual((code, err, len(out.splitlines())), (0, "", 200))
-        self.assertEqual([l.split()[1] for l in out.splitlines()], ["a-plan:q%d" % i for i in range(200)])
-        self.assertEqual(len(self.recs()), 200)
+        self.assertEqual((code, err, len(out.splitlines())), (0, "", 40))
+        self.assertEqual([l.split()[1] for l in out.splitlines()], ["a-plan:q%d" % i for i in range(40)])
+        self.assertEqual(len(self.recs()), 40)
 
     def test_questions_wrong_type(self):  # HQ12
         for v in ('"x"', "{a: 1}", "null"):
