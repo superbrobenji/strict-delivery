@@ -8,7 +8,7 @@ import stat
 import sys
 
 from gates.lib import config, decisions, gitinfo, ids, schema
-from gates.lib.result import GateError, Result, _Once, gate_args, repo_root, run_gate
+from gates.lib.result import GateError, Result, _exact, _Once, gate_args, repo_root, run_gate
 from gates.lib.store import Store, base_errors, store_errors
 
 PRODUCES: tuple = ()
@@ -108,6 +108,78 @@ def _category(res: Result, name: str, pairs: list) -> None:
         res.passed("decisions." + name)
 
 
+_NEED_CLASS = "profile-override"
+
+
+def _plain(x: object) -> str:
+    """``x`` as an exact ``str`` the way ``safe_text`` makes one (a ``str`` subclass by its characters, any other value
+    through ``str``), with no escaping: ``Result.render`` escapes each reason once (spec design.md:642)."""
+    return _exact(x) if issubclass(type(x), str) else _exact(str(x))
+
+
+def _override_entries(cfg: dict) -> list:
+    """``(key, decision id)`` per ``cfg["overrides"]`` entry in file order, ``[]`` when the config has none.
+    ``config.load`` refuses every malformed shape (Task 4a.2); a caller that bypasses it gets a ``GateError`` naming
+    the entry (decision D3), never a ``TypeError``."""
+    if "overrides" not in cfg:
+        return []
+    overrides = cfg["overrides"]
+    if type(overrides) is not dict:
+        raise GateError("overrides: must be a mapping")
+    out: list = []
+    for key, entry in overrides.items():
+        name = "overrides." + _plain(key)
+        if type(key) is not str:
+            raise GateError(name + ": key must be a string")
+        if type(entry) is not dict:
+            raise GateError(name + ": must be a mapping")
+        if "decision" not in entry:
+            raise GateError(name + ".decision: required key is missing")
+        if type(entry["decision"]) is not str:
+            raise GateError(name + ".decision: must be a string")
+        out.append((key, entry["decision"]))
+    return out
+
+
+def _override_problem(records: list, by_id: dict, in_force: set, gone: set, dec: str) -> str:
+    """The one reason ``dec`` cannot authorise a profile override, the first that holds in the plan's order (decision
+    D-Q2 (a)); ``""`` when it can. Ids and the class are compared by exact equality (D7)."""
+    rec = by_id.get(dec)
+    if rec is None:
+        return "%s is missing" % dec
+    row = decisions._row(rec)
+    status = row.get("status")
+    exact = type(status) is str  # a str subclass's methods never run (Q-1C0FIN2-R1 (a)): it matches no status
+    if exact and status == "open":
+        return "%s is open" % dec
+    if exact and status == "withdrawn":
+        return "%s is withdrawn" % dec
+    if dec in gone:
+        try:
+            return "%s is superseded by %s" % (dec, decisions.current(records, dec))
+        except GateError as e:  # a fork: the library's own text names the id and both superseders (D-Q3 (a))
+            return str(e)
+    cls = row.get("class")
+    if type(cls) is not str or cls != _NEED_CLASS:
+        return "%s has class %s; a profile override needs class %s" % (dec, _plain(cls), _NEED_CLASS)
+    if not exact or id(rec) not in in_force:  # the library's in_force may have run a subclass's method: fail closed
+        return "%s is not in force" % dec
+    return ""
+
+
+def _override_lines(res: Result, records: list, cfg: dict) -> None:
+    entries = _override_entries(cfg)
+    by_id = decisions._by_id(records)
+    in_force = {id(r) for r in decisions.in_force(records)}
+    gone = decisions.superseded_ids(records)
+    for key, dec in entries:
+        problem = _override_problem(records, by_id, in_force, gone, dec)
+        if problem:
+            res.fail("decisions.override." + key, problem)
+        else:
+            res.passed("decisions.override." + key)
+
+
 def check(args: list) -> Result:
     ns = _args(args)
     root = _root(ns.root)
@@ -131,6 +203,7 @@ def check(args: list) -> Result:
         res.fail("decisions.scan-glob.%d" % i, "config decisions.scan.%d: %s" % (i, problem))
     if not bad:
         _scan(res, root, _scanned(tracked, cfg), open_ids)
+    _override_lines(res, records, cfg)
     return res
 
 
