@@ -134,25 +134,29 @@ def _validate(data: object, cfg: dict) -> dict:
     if type(data.get("program_live")) is not bool:
         raise _bad("program_live must be true or false")
     for k in (cfg.get("limits") or {}).get("max_children", {}):
+        if type(k) is not str:
+            raise _bad("limits.max_children: a key must be a role id string")
         if k not in known and k != "session":
             raise _bad("limits.max_children.%s names no role" % k)
     budgets = cfg.get("budgets", {})
     if type(budgets) is not dict:
         raise _bad("budgets must be a mapping")
     for k, entry in budgets.items():
-        if type(k) is not str or k not in known:
+        if type(k) is not str:
+            raise _bad("budgets: a key must be a role id string")
+        if k not in known:
             raise _bad("budgets.%s names no role" % k)
         if type(entry) is not dict:
             raise _bad("budgets.%s must be a mapping" % k)
         for f, v in entry.items():
-            if f not in ("tokens", "minutes"):
+            if type(f) is not str or f not in ("tokens", "minutes"):
                 raise _bad("budgets.%s: unknown key '%s'" % (k, f))
             _cap(v, "budgets.%s.%s" % (k, f))
     dsec = cfg.get("dispatch", {})
     if type(dsec) is not dict:
         raise _bad("dispatch must be a mapping")
     for f, v in dsec.items():
-        if f != "max_prompt_chars":
+        if type(f) is not str or f != "max_prompt_chars":
             raise _bad("dispatch: unknown key '%s'" % (f,))
         _cap(v, "dispatch.max_prompt_chars")
     tr = cfg.get("top_tier_roles", dispatch.DEFAULT_TOP_TIER_ROLES)

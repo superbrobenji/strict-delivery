@@ -1701,18 +1701,50 @@ class InputShapeTest(ProjectCase):
             return self.run_gate(self.proj())
 
     def test_new_input_failures_are_one_line(self):                # LN6, BU20, SZ9, RO10
-        shapes = [("budgets", {"implementer": {"tokens": v}}) for v in (0, -1, True, "5", 2.5, None, [5], 10 ** 600)]
-        shapes += [("budgets", v) for v in (None, 5, [], {"implementer": 5}, {"implementer": {"other": 1}})]
-        shapes += [("dispatch", v) for v in (None, 5, [], {"other": 1}, {"max_prompt_chars": 0},
-                                             {"max_prompt_chars": True}, {"max_prompt_chars": "5"},
-                                             {"max_prompt_chars": 2.5}, {"max_prompt_chars": 10 ** 600})]
-        shapes += [("roles", v) for v in (None, 5, True, "x", [], {1: {}}, {"X": {}}, {"a b": {}}, {"x\n": {}})]
-        for key, val in shapes:
+        cap = "must be an integer of at least 1 and of at most 600 digits"
+        shapes = [("budgets", {"implementer": {"tokens": v}}, "budgets.implementer.tokens: " + cap)
+                  for v in (0, -1, True, "5", 2.5, None, [5], 10 ** 600)]
+        shapes += [("budgets", {"implementer": {"minutes": 0}}, "budgets.implementer.minutes: " + cap)]
+        shapes += [("budgets", v, "budgets must be a mapping") for v in (None, 5, [], "x", True)]
+        shapes += [("budgets", {"implementer": v}, "budgets.implementer must be a mapping")
+                   for v in (5, None, [], "x", True)]
+        shapes += [("budgets", {"implementer": {"other": 1}}, "budgets.implementer: unknown key 'other'"),
+                   ("budgets", {"nosuch": {"tokens": 5}}, "budgets.nosuch names no role")]
+        shapes += [("dispatch", v, "dispatch must be a mapping") for v in (None, 5, [], "x", True)]
+        shapes += [("dispatch", {"other": 1}, "dispatch: unknown key 'other'")]
+        shapes += [("dispatch", {"max_prompt_chars": v}, "dispatch.max_prompt_chars: " + cap)
+                   for v in (0, True, "5", 2.5, 10 ** 600)]
+        shapes += [("roles", v, "roles must be a mapping") for v in (None, 5, True, "x", [])]
+        shapes += [("roles", {1: {}}, "roles: '1' is not a role id [a-z][a-z0-9_]*"),
+                   ("roles", {"X": {}}, "roles: 'X' is not a role id [a-z][a-z0-9_]*"),
+                   ("roles", {"a b": {}}, "roles: 'a b' is not a role id [a-z][a-z0-9_]*"),
+                   ("roles", {"x\n": {}}, "roles: 'x\\n' is not a role id [a-z][a-z0-9_]*")]
+        for key, val, reason in shapes:
             with self.subTest(key, val=repr(val)[:30]):
-                out, code = self.injected(**{key: val})
-                self.assertEqual(code, 1)
-                self.assertEqual(len(out.splitlines()), 1, out)
-                self.assertTrue(out.startswith("FAIL dispatch.input: "), out)
+                self.assertEqual(self.injected(**{key: val}), ("FAIL dispatch.input: input: %s\n" % reason, 1))
+
+    def test_non_str_keys_are_named_refusals(self):                # F2 (review 1): BU20 "a non-str key", MC, SZ9
+        class S(str):
+            pass
+        keys = [("a", "b"), ("a",), None, 1, True, S("implementer")]
+        for k in keys:
+            with self.subTest("budgets", key=repr(k)):
+                self.assertEqual(self.injected(budgets={k: {"tokens": 5}}),
+                                 ("FAIL dispatch.input: input: budgets: a key must be a role id string\n", 1))
+            with self.subTest("max_children", key=repr(k)):
+                self.assertEqual(self.injected(limits={"max_children": {k: 1}}),
+                                 ("FAIL dispatch.input: input: limits.max_children: a key must be a role id string\n", 1))
+        with self.subTest("budgets field, a str subclass of an allowed name"):
+            self.assertEqual(self.injected(budgets={"implementer": {S("tokens"): 5}}),
+                             ("FAIL dispatch.input: input: budgets.implementer: unknown key 'tokens'\n", 1))
+        for k, shown in ((("a", "b"), "('a', 'b')"), (("a",), "('a',)"), (None, "None"), (1, "1"), (True, "True"),
+                         (S("max_prompt_chars"), "max_prompt_chars")):
+            with self.subTest("dispatch", key=repr(k)):
+                self.assertEqual(self.injected(dispatch={k: 5}),
+                                 ("FAIL dispatch.input: input: dispatch: unknown key '%s'\n" % shown, 1))
+            with self.subTest("budgets field", key=repr(k)):
+                self.assertEqual(self.injected(budgets={"implementer": {k: 5}}),
+                                 ("FAIL dispatch.input: input: budgets.implementer: unknown key '%s'\n" % shown, 1))
 
     def test_budget_empty_entry_is_no_cap(self):                   # BU8: an empty entry reaches only by injection
         base = config.load(self.root)

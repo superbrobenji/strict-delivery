@@ -85,7 +85,7 @@ def _roles_map(cfg: object) -> dict:
         raise ValueError("roles must be a mapping")
     for k in roles:
         if type(k) is not str or not _ROLE_ID.fullmatch(k):
-            raise ValueError("roles: '%s' is not a role id [a-z][a-z0-9_]*" % safe_text(str(k)))
+            raise ValueError("roles: '%s' is not a role id [a-z][a-z0-9_]*" % str(k))
     return roles
 
 
