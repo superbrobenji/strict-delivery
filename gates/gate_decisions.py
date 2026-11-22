@@ -149,9 +149,10 @@ def _override_problem(records: list, by_id: dict, in_force: set, gone: set, dec:
         return "%s is missing" % dec
     row = decisions._row(rec)
     status = row.get("status")
-    if status == "open":
+    exact = type(status) is str  # a str subclass's methods never run (Q-1C0FIN2-R1 (a)): it matches no status
+    if exact and status == "open":
         return "%s is open" % dec
-    if status == "withdrawn":
+    if exact and status == "withdrawn":
         return "%s is withdrawn" % dec
     if dec in gone:
         try:
@@ -159,9 +160,9 @@ def _override_problem(records: list, by_id: dict, in_force: set, gone: set, dec:
         except GateError as e:  # a fork: the library's own text names the id and both superseders (D-Q3 (a))
             return str(e)
     cls = row.get("class")
-    if cls != _NEED_CLASS:
+    if type(cls) is not str or cls != _NEED_CLASS:
         return "%s has class %s; a profile override needs class %s" % (dec, _plain(cls), _NEED_CLASS)
-    if id(rec) not in in_force:
+    if not exact or id(rec) not in in_force:  # the library's in_force may have run a subclass's method: fail closed
         return "%s is not in force" % dec
     return ""
 

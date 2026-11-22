@@ -1166,6 +1166,40 @@ class OverrideClassTests(OverrideBase):
             out = self.ovl()
         self.assertEqual(out, [fail("%s has class scope%s" % (A, NEED))])
 
+    def test_override_compares_run_no_subclass_method(self):  # CLS7, DST11, R1-1, Q-1C0FIN2-R1 (a)
+        calls = []
+
+        class S(str):  # lies in both directions: equal to every str, never unequal
+            def __eq__(self, other):
+                calls.append(sys._getframe(1).f_code.co_filename)
+                return True
+
+            def __ne__(self, other):
+                calls.append(sys._getframe(1).f_code.co_filename)
+                return False
+
+            __hash__ = str.__hash__
+        real = gate_decisions.decisions._row
+
+        def inject(field, value):
+            def row_with(rec):
+                return dict(real(rec), **{field: value})
+            return row_with
+        # the library's own in_force (not this task) may run a method; none may run from gates/gate_decisions.py
+        for name, field, value, why in (
+                ("class-scope-lies-equal", "class", S("scope"), "%s has class scope%s" % (A, NEED)),
+                ("class-po-subclass", "class", S(PO), "%s has class %s%s" % (A, PO, NEED)),
+                ("status-open-subclass", "status", S("open"), A + " is not in force"),
+                ("status-withdrawn-subclass", "status", S("withdrawn"), A + " is not in force"),
+                ("status-answered-subclass", "status", S("answered"), A + " is not in force")):
+            with self.subTest(name):
+                del calls[:]
+                self.ov([good(A)], [(K, A)])
+                with mock.patch.object(gate_decisions.decisions, "_row", inject(field, value)):
+                    out = self.ovl()
+                self.assertEqual(out, [fail(why)])
+                self.assertEqual([c for c in calls if c.endswith("gate_decisions.py")], [])
+
     def test_override_project_class_fails(self):  # CLS4
         self.ov([lasting(A, **{"class": "team-x"})], [(K, A)], owner=(PO, "team-x"))
         self.assertEqual(self.ovl(), [fail("%s has class team-x%s" % (A, NEED))])
