@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-q5rk
+status: open
+source: "4b.2 task review 3: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4b2-review-3.md R3-1"
+severity: LOW
+class: "a str-subclass key has a method run by message formatting (R2-1 class, fifth site); members: gates/lib/dispatch.py:88 '% str(k)' runs a roles key's __str__ in the input phase; LOW_PLATEAU: registered for the follow-up task proposed as 4b.2-followup"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d54f4d761ed3d771c888f2842979728eff0ea1f1
+    by: stream-config-hooks
+review_round: 3
+caused_by_change: true
+dimension: a str subclass's methods never run (D3 exact type)

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-n9im
+status: open
+source: "4b.2 task review 2: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4b2-review-2.md F3"
+severity: LOW
+class: "a str-subclass key of dispatch or of a budgets.<role> entry has a method run by message formatting; members: gate_dispatch.py _validate unknown-key branches for dispatch and budgets fields"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: b77bde82748995d9989f0fa84d74f7c0a026ef02
+    by: stream-config-hooks
+review_round: 2
+caused_by_change: true
+dimension: a str subclass's methods never run (D3 exact type)
