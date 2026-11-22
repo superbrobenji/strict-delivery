@@ -41,7 +41,7 @@ DEFAULTS: dict = {
     "drift": {"estimate_factor_pct": 150},
     "decision_classes": {
         "owner_only": ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
-                       "rule-override", "program-create", "stream-ownership",
+                       "rule-override", "profile-override", "program-create", "stream-ownership",
                        "stream-merge", "request-dispute", "program-close"],
     },
     # No DEFAULTS entry for ``limits`` or ``escape_cost``: both are absent by default (Q-H2, Q-B6plan-3 (a)).
@@ -60,6 +60,7 @@ _REQUIRED = ("schema", "framework_version", "profile")
 _PROFILES = profiles.PROFILES
 # An override of a limit: the two caps, or one role's child cap (the role grammar of the ``roles`` ids, decision D13).
 _LIMITS_KEY = re.compile(r"limits\.(max_depth|max_concurrent|max_children\.[a-z][a-z0-9_]*)")
+_ROLE_ID = re.compile(r"[a-z][a-z0-9_]*")  # explicit ASCII classes and fullmatch: no str.isidentifier, no "$" newline
 _OPEN_MAPS = ("models.tiers",)  # mappings that keep keys the defaults do not name
 
 
@@ -144,6 +145,67 @@ def _validate_limits(limits: object) -> None:
             _int_min(limits[k], "limits." + k, 1)
 
 
+def _role_keys(m: dict, key: str) -> None:
+    """The keys of ``m`` are role ids of the grammar ``[a-z][a-z0-9_]*`` (exact ``str``; shape only, no role list)."""
+    for k in m:
+        if type(k) is not str or not _ROLE_ID.fullmatch(k):
+            raise _bad(key, "keys must be role ids of [a-z][a-z0-9_]*")
+
+
+def _entry_keys(entry: dict, full: str, allowed: tuple) -> None:
+    for f in entry:
+        if type(f) is not str or f not in allowed:
+            raise _unknown("%s.%s" % (full, result.safe_text(f)))
+
+
+def _validate_prompt(v: object, key: str) -> None:
+    if type(v) is not str:
+        _check_path(key, None)
+    _check_path(key, v)
+    if not v.endswith(".md") or "\\" in v or " " in v or v.rsplit("/", 1)[-1] == ".md":
+        raise _bad(key, "must be a normalised repo-relative path ending in .md")
+
+
+def _validate_roles(roles: object) -> None:
+    if type(roles) is not dict:
+        raise _bad("roles", "must be a mapping")
+    _role_keys(roles, "roles")
+    for rid, entry in roles.items():
+        full = "roles." + rid
+        if type(entry) is not dict:
+            raise _bad(full, "must be a mapping")
+        _entry_keys(entry, full, ("prompt", "min_tier"))
+        for f in ("prompt", "min_tier"):
+            if f not in entry:
+                raise _bad(full + "." + f, "required key is missing")
+            if f == "prompt":
+                _validate_prompt(entry[f], full + ".prompt")
+            elif type(entry[f]) is not str or entry[f] not in ("tier1", "tier2", "tier3", "tier4"):
+                raise _bad(full + ".min_tier", "must be one of tier1, tier2, tier3, tier4")
+
+
+def _validate_budgets(budgets: object) -> None:
+    if type(budgets) is not dict:
+        raise _bad("budgets", "must be a mapping")
+    _role_keys(budgets, "budgets")
+    for rid, entry in budgets.items():
+        full = "budgets." + rid
+        if type(entry) is not dict:
+            raise _bad(full, "must be a mapping")
+        _entry_keys(entry, full, ("tokens", "minutes"))
+        for f in ("tokens", "minutes"):
+            if f in entry:
+                _int_min(entry[f], full + "." + f, 1)
+
+
+def _validate_int_map(m: object, key: str, leaf: str) -> None:
+    if type(m) is not dict:
+        raise _bad(key, "must be a mapping")
+    _entry_keys(m, key, (leaf,))
+    if leaf in m:
+        _int_min(m[leaf], "%s.%s" % (key, leaf), 1)
+
+
 def _validate_escape_cost(ec: object) -> None:
     sev = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
     if type(ec) is not dict:
@@ -208,6 +270,14 @@ def _validate(cfg: dict) -> None:
         raise _bad("reviews.small.tier", "must be one of tier1, tier2, tier3, tier4")
     for k in ("max_lines", "max_bytes"):
         _int_min(cfg["context"][k], "context." + k, 1)
+    # Task 4a.3, after the merge (so a preset or an applied override is what is checked); order: D5.
+    if "roles" in cfg:
+        _validate_roles(cfg["roles"])
+    if "budgets" in cfg:
+        _validate_budgets(cfg["budgets"])
+    for k, leaf in (("block", "max_tasks"), ("rulings", "max_per_block"), ("dispatch", "max_prompt_chars")):
+        if k in cfg:
+            _validate_int_map(cfg[k], k, leaf)
 
 
 def _refuse_file_policy_keys(data: dict, keys: frozenset, profile: str) -> None:

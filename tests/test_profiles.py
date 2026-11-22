@@ -754,7 +754,7 @@ class MergeTest(MergeCase):
         before = copy.deepcopy(config.DEFAULTS)
         for p in profiles.PROFILES:
             self.load({"profile": p})
-            self.load({"profile": p, "block": {"other": 1}} if p == "light" else {"profile": p})
+            self.load({"profile": p, "block": {"max_tasks": 4}} if p == "light" else {"profile": p})  # 4a.3: typed
         self.assertEqual(config.DEFAULTS, before)
 
     def test_repo_top_tier_roles_equals_profile_default(self):  # M16
@@ -790,21 +790,21 @@ class MergeTest(MergeCase):
     def test_empty_block_in_file_accepted(self):  # M25
         self.assertEqual(self.load_data({"block": {}})["block"], {"max_tasks": 3})
 
-    def test_block_other_subkey_untouched(self):  # M26, M34
-        self.assertEqual(self.load({"block": {"other": 1}})["block"], {"other": 1, "max_tasks": 3})
+    def test_block_other_subkey_refused(self):  # M26, M34; Task 4a.3 (ST9): the typed reader refuses it
+        self.refused({"block": {"other": 1}}, ".strict-delivery/config.yml: unknown key 'block.other'")
 
-    def test_policy_merges_into_block_mapping(self):  # M34
-        self.assertEqual(self.load({"profile": "standard", "block": {"other": 1}})["block"],
-                         {"other": 1, "max_tasks": 5})
+    def test_policy_into_block_mapping_refused(self):  # M34; Task 4a.3 (ST9): the typed reader refuses it
+        self.refused({"profile": "standard", "block": {"other": 1}},
+                     ".strict-delivery/config.yml: unknown key 'block.other'")
 
     def test_block_non_mapping_refused_when_preset(self):  # M27
         for p in ("strict", "standard"):
             for v in ([1, 2], 5, "x", None, True):
                 with self.subTest(p=p, v=v):
                     self.refused({"profile": p, "block": v}, ".strict-delivery/config.yml: block: must be a mapping")
-        for v in ([1, 2], 5, "x", None, True):
+        for v in ([1, 2], 5, "x", None, True):  # Task 4a.3 (ST9, BL3): the same text under light
             with self.subTest(light=v):
-                self.assertEqual(self.load({"profile": "light", "block": v})["block"], v)
+                self.refused({"profile": "light", "block": v}, ".strict-delivery/config.yml: block: must be a mapping")
 
     def test_dotted_top_level_key_unknown(self):  # M28
         self.write_raw("block.max_tasks: 4\n")
@@ -814,7 +814,7 @@ class MergeTest(MergeCase):
 
     def test_policy_key_case_variants(self):  # M29
         self.refused({"Block": {"max_tasks": 4}}, "unknown key 'Block'")
-        self.assertEqual(self.load({"block": {"Max_tasks": 4}})["block"], {"Max_tasks": 4, "max_tasks": 3})
+        self.refused({"block": {"Max_tasks": 4}}, ".strict-delivery/config.yml: unknown key 'block.Max_tasks'")  # 4a.3
 
     def test_policy_refusal_precedes_schema_tag(self):  # M30
         msg = self.refused({"schema": "config/1", "block": {"max_tasks": 4}}, "preset by profile strict")
@@ -825,8 +825,10 @@ class MergeTest(MergeCase):
         self.assertEqual(self.load(ovr("block.max_tasks", 4))["block"]["max_tasks"], 4)
         self.assertEqual(self.load(dict(ovr("block.max_tasks", 9), profile="standard"))["block"]["max_tasks"], 9)
 
-    def test_block_check_is_4a3s(self):  # M41
-        self.assertEqual(self.load()["block"], {"max_tasks": 3})  # 4a.2 adds no other check of block
+    def test_block_check_is_4a3s(self):  # M41; Task 4a.3 (ST9): the typed block reader now exists
+        self.assertEqual(self.load()["block"], {"max_tasks": 3})
+        self.refused({"profile": "light", "block": {"max_tasks": 0}},
+                     ".strict-delivery/config.yml: block.max_tasks: must be an integer of at least 1")
 
     def test_bad_ids_prefix_with_overrides_is_gateerror(self):  # M42
         self.refused(dict(ovr("block.max_tasks", 4), ids={"decision": 5}), "ids.decision: must be a prefix of capital "
