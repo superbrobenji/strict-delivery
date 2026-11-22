@@ -44,6 +44,13 @@ LABELS = {
     "controller": ("Verification method.", "Dispatch discipline.", "Input domain.", "Oracle.", "Rulings.",
                    "Finding class.", "Zero bugs.", "Owner-only decisions.", "Continuation.", "Merge and checkpoint.",
                    "Budget.", "Background work.", "Report contract."),
+    # Task P4.3 (D-Q6): the stream controller carries the controller's labels; the program controller a smaller set
+    "stream_controller": ("Verification method.", "Dispatch discipline.", "Input domain.", "Oracle.", "Rulings.",
+                          "Finding class.", "Zero bugs.", "Owner-only decisions.", "Continuation.",
+                          "Merge and checkpoint.", "Budget.", "Background work.", "Report contract."),
+    "program_controller": ("Verification method.", "Dispatch discipline.", "Sync.", "Merge relay.",
+                           "Owner-only decisions.", "Continuation.", "Budget.", "Background work.",
+                           "Report contract."),
     "implementer": ("Verification method.", "Build.", "Input domain.", "Unstated behaviour.", "Commit gate.") + _TAIL,
     "implementer_transcription": ("Verification method.", "Transcription.", "Commit gate.") + _TAIL,
     "task_reviewer": ("Verification method.", "Method.", "Input domain.", "No out-of-scope bucket.",
