@@ -1,0 +1,5 @@
+schema: profile/1
+profile: light
+defaults:
+  top_tier_roles: [final_verifier, exception_reviewer]
+policy:
