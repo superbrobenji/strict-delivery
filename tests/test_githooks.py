@@ -13,6 +13,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1770,6 +1771,8 @@ FSMON_HOOKS = (  # row FM2: what the hook answers; the first reports no change, 
     ("exits non-zero", "exit 3\n", 0o755), ("garbage", "printf 'garbage'\n", 0o755),
     ("not executable", "printf 'tok\\0'\n", 0o644))
 FSMON_OFF = ["git", "-c", "core.fsmonitor=false"]  # D-18: before -C and the subcommand, on every index-reading call
+DAEMON_CMD = "fsmonitor-" + "-daemon"  # the built-in daemon's subcommand; the guard below bans its invocation
+DAEMON_IPC = DAEMON_CMD + ".ipc"
 FSMON_SOURCES = ("repository config", "global config", "git -c", "GIT_CONFIG_COUNT")  # row FM1
 
 
@@ -2043,15 +2046,12 @@ class UnstagedPathsTest(Repos):
             env, hidden = fsmon_hidden(self.tmp, d)
             self.assertTrue(hidden)
             self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
-        with self.subTest("core.fsmonitor=true: the built-in daemon, stopped at the end"):  # FM1 (measured)
+        with self.subTest("the built-in daemon is never started (core.fsmonitor set to true)"):  # FM1 (measured)
             d = self.fresh(["a.txt", "b.txt"])
             git(d, "config", "core.fsmonitor", "true")
-            try:
-                git(d, "status", "--porcelain", check=False)
-                write_file(d, "a.txt", "hidden change\n")
-                self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
-            finally:
-                git(d, "fsmonitor--daemon", "stop", check=False)  # never leaves a daemon running
+            write_file(d, "a.txt", "hidden change\n")  # no plain git call after the setting: only the gates' own
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+            self.assertFalse(os.path.exists(os.path.join(d, ".git", DAEMON_IPC)))
 
     def test_unstaged_paths_argv(self):  # the call's exact argument list (P:1718, P:33)
         d = self.fresh()
@@ -2363,6 +2363,130 @@ class HooksDirTest(Repos):
         d = self.fresh()
         check_root_forms(self, root_forms(self.tmp, d), {"hooks_dir": gitinfo.hooks_dir})
 
+
+# ---- guard: no test starts git's built-in file-system monitor daemon (owner direction 2026-11-22; two suite hangs).
+# A line-based scan of the whole of every tests/*.py. Only the sample literals in FSMON_SAMPLES below are skipped, by
+# name. Limit: a value that reaches the config through a variable or a split string (``value = "tr" + "ue"``) cannot
+# be seen by a text scan; the one allow-listed subtest is therefore also bounded to a few calls after the setting.
+_KEY = r"core\.fsmonitor"
+_TRUTHY = r"(?:true|yes|on|1)\b"
+_SET_TRUE = re.compile(_KEY + r"(?:\s*=\s*|[\"']\s*,\s*[\"'])" + _TRUTHY, re.I)  # -c k=v, GIT_CONFIG_PARAMETERS, config call
+_FILE_TRUE = re.compile(r"fsmonitor\s*=\s*" + _TRUTHY, re.I)  # a config file body (key, equals sign, true value)
+_ENV_VALUE = re.compile(r"GIT_CONFIG_VALUE_\w+[\"']?\s*[:,=]\s*[\"']?" + _TRUTHY, re.I)  # the GIT_CONFIG_KEY_n/VALUE_n pair
+_ENV_KEY = re.compile(r"GIT_CONFIG_KEY_\w+[\"']?\s*[:,=]\s*[\"']" + _KEY, re.I)
+_AFTER_CALL = re.compile(r"\bgit\(|\bsubprocess\.|\bgit_run\(|\brun_proc\(|\bgitinfo\.(?!unstaged_paths\b)\w+")
+_SUBTEST = re.compile(r"\s*with self\.subTest\([\"']([^\"']*)[\"']")
+FSMON_TRUE_ALLOWED = ("test_githooks.py", "test_unstaged_paths_ignore_fsmonitor",
+                      "the built-in daemon is never started (core.fsmonitor set to true)")  # the one allow-listed subtest block
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _enclosing(lines, i, pattern):
+    """The first match of ``pattern`` on a line before line ``i`` that is indented less than line ``i``."""
+    want = _indent(lines[i])
+    for back in range(i - 1, -1, -1):
+        m = re.match(pattern, lines[back])
+        if m and lines[back].strip() and _indent(lines[back]) < want:
+            return m
+    return None
+
+
+def scan_fsmonitor_daemon(name, text):
+    """``(line, why)`` for every line of the test file ``name`` (base name) with ``text`` that could start the daemon."""
+    lines = text.split("\n")
+    found = []
+    skip = False
+    for i, line in enumerate(lines):
+        if line.startswith("FSMON_SAMPLES = ("):  # this guard's own sample literals, up to the closing line
+            skip = True
+        if skip:
+            skip = line != ")"
+            continue
+        if line.startswith(("DAEMON_CMD =", "DAEMON_IPC =")):
+            continue
+        if (DAEMON_CMD in line or "DAEMON_CMD" in line) and DAEMON_IPC not in line and "DAEMON_IPC" not in line:
+            found.append((i + 1, "invokes the built-in daemon command"))  # even a status probe: it can hang
+        env_value = _ENV_VALUE.search(line) and any(
+            _ENV_KEY.search(lines[k]) for k in range(max(0, i - 4), min(len(lines), i + 5)))
+        if not (_SET_TRUE.search(line) or _FILE_TRUE.search(line) or env_value):
+            continue
+        func = _enclosing(lines, i, r"\s*def (\w+)")
+        sub = _enclosing(lines, i, _SUBTEST.pattern)
+        if (name, func and func.group(1), sub and sub.group(1)) != FSMON_TRUE_ALLOWED:
+            found.append((i + 1, "sets core.fsmonitor to a true value outside the allow-listed subtest"))
+            continue
+        for j in range(i + 1, len(lines)):
+            rest = lines[j]
+            if rest.strip() and _indent(rest) < _indent(line):
+                break
+            if _AFTER_CALL.search(rest) and '"config"' not in rest:
+                found.append((j + 1, "git call after the true setting other than gitinfo.unstaged_paths"))
+    return sorted(set(found))
+
+
+class FsmonitorDaemonGuardTest(unittest.TestCase):
+    def test_no_test_file_starts_the_daemon(self):
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        bad = []
+        names = sorted(n for n in os.listdir(tests_dir) if n.endswith(".py"))
+        self.assertIn("test_githooks.py", names)
+        for n in names:
+            with open(os.path.join(tests_dir, n), encoding="utf-8") as fh:
+                bad += ["tests/%s:%d: %s" % (n, line, why) for line, why in scan_fsmonitor_daemon(n, fh.read())]
+        self.assertEqual(bad, [])
+
+    def test_scanner_flags_each_pattern(self):  # the guard kills: each banned shape is found, each allowed one is not
+        for label, name, text, want in FSMON_SAMPLES:
+            with self.subTest(label):
+                got = [line for line, _ in scan_fsmonitor_daemon(name, text)]
+                self.assertEqual(got, want)
+
+
+_OK = FSMON_TRUE_ALLOWED
+_BLOCK = ("    def %s(self):\n        with self.subTest(\"%s\"):\n            git(d, \"config\", \"%s\", \"%s\")\n"
+          % (_OK[1], _OK[2], "core." + "fsmonitor", "tr" + "ue"))
+FSMON_SAMPLES = (
+    # label, file name, text, the lines the scanner must flag
+    ("daemon command, git()", "x.py", 'git(d, "fsmonitor--daemon", "stop")', [1]),
+    ("daemon command, argv", "x.py", 'run(["git", "fsmonitor--daemon", "run"])', [1]),
+    ("daemon .ipc file name only", "x.py", "path = '.git/' + DAEMON_IPC", []),
+    ("config call, lowercase true", "x.py", 'def test_a():\n    git(d, "config", "core.fsmonitor", "true")', [2]),
+    ("-c key=true", "x.py", 'argv = ["git", "-c", "core.fsmonitor=true", "status"]', [1]),
+    ("GIT_CONFIG_PARAMETERS", "x.py", "env = {'GIT_CONFIG_PARAMETERS': \"'core.fsmonitor=true'\"}", [1]),
+    ("mixed-case key", "x.py", 'git(d, "config", "core.fsMonitor", "true")', [1]),
+    ("value yes", "x.py", "x = 'core.fsmonitor=yes'", [1]),
+    ("value on", "x.py", "x = 'core.fsmonitor=on'", [1]),
+    ("value 1", "x.py", "x = 'core.fsmonitor=1'", [1]),
+    ("value TRUE", "x.py", "x = 'core.fsmonitor=TRUE'", [1]),
+    ("config file body", "x.py", 'fh.write("[core]\\n\\tfsmonitor = true\\n")', [1]),
+    ("config file body, On", "x.py", 'fh.write("fsmonitor=On")', [1]),
+    ("GIT_CONFIG_KEY/VALUE one line", "x.py",
+     'env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "true"}', [1]),
+    ("GIT_CONFIG_KEY/VALUE two lines", "x.py",
+     'env = {"GIT_CONFIG_KEY_0": "core.fsMonitor",\n       "GIT_CONFIG_VALUE_0": "yes"}', [2]),
+    ("GIT_CONFIG_KEY/VALUE, KEY other", "x.py", 'env = {"GIT_CONFIG_KEY_0": "color.ui", "GIT_CONFIG_VALUE_0": "true"}', []),
+    ("GIT_CONFIG_VALUE with a hook", "x.py",
+     'env = {"GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": hook}', []),
+    ("false value", "x.py", 'git(d, "config", "core.fsmonitor", "false")', []),
+    ("hook variable", "x.py", 'git(d, "config", "core.fsmonitor", hook)', []),
+    ("hook path value", "x.py", "x = 'core.fsmonitor=/tmp/hook'", []),
+    ("true in another test function", _OK[0], "    def other(self):\n        with self.subTest(\"%s\"):\n            git(d, \"config\", \"core.fsmonitor\", \"true\")" % _OK[2], [3]),
+    ("true in another subtest of the allowed test", _OK[0], "    def %s(self):\n        with self.subTest(\"other\"):\n            git(d, \"config\", \"core.fsmonitor\", \"true\")" % _OK[1], [3]),
+    ("true in the allowed subtest", _OK[0], _BLOCK, []),
+    ("allowed subtest + unstaged_paths", _OK[0], _BLOCK + "            self.assertEqual(gitinfo.unstaged_paths(d), [])\n", []),
+    ("allowed subtest + git status", _OK[0], _BLOCK + '            git(d, "status", "--porcelain")\n', [4]),
+    ("allowed subtest + git diff", _OK[0], _BLOCK + '            git(d, "diff", check=False)\n', [4]),
+    ("allowed subtest + subprocess git", _OK[0], _BLOCK + '            subprocess.run(["git", "status"])\n', [4]),
+    ("allowed subtest + subprocess FSMON_OFF", _OK[0], _BLOCK + "            subprocess.run(FSMON_OFF + [\"-C\", d, \"status\"])\n", [4]),
+    ("allowed subtest + run_proc", _OK[0], _BLOCK + '            self.run_proc(["git", "status"])\n', [4]),
+    ("allowed subtest + other gitinfo call", _OK[0], _BLOCK + "            gitinfo.dirty_paths(d)\n", [4]),
+    ("allowed subtest + daemon command", _OK[0], _BLOCK + "            run(FSMON_OFF + [DAEMON_CMD, 'status'])\n", [4]),
+    ("git call after the subtest block", _OK[0], _BLOCK + '        with self.subTest("next"):\n            git(d, "status")\n', []),
+    ("env shape in the allowed subtest block", _OK[0], _BLOCK + '            env = {"GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "1"}\n', []),
+)
 
 
 if __name__ == "__main__":
