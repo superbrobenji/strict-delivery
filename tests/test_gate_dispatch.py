@@ -1012,6 +1012,7 @@ class StepFiveTest(GitIsolatedTestCase):
             git(self.work, "config", key, val)
         shutil.copytree(os.path.join(REPO, "gates"), os.path.join(self.work, "gates"),
                         ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(os.path.join(REPO, "profiles"), os.path.join(self.work, "profiles"))  # Task 4a.2: config.load reads profiles/<p>.yml
         shutil.copytree(os.path.join(REPO, "skills", "strict-delivery", "prompts"),
                         os.path.join(self.work, "skills", "strict-delivery", "prompts"))
         commit_all(self.work, "plan")
