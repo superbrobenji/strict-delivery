@@ -392,10 +392,14 @@ class Args(Base):
         self.assertEqual(self.go(kind="stream-docs-block"), ("PASS context.reads\n", 0))  # {stream} = docs
 
     def test_unknown_role_fails_input(self):  # AR13 PD11 M34
-        for r in ("nobody", "Task_Reviewer", "TASK_REVIEWER", "", " drafter", "drafter\n", "x" * 4301):
+        # R1-4: the value is escaped once, by Result.render (spec section 13); the rendered forms are written by hand
+        # from the safe_text rules: a backslash doubles, a newline is a backslash and n, NUL is backslash x00.
+        for r, shown in (("nobody", "nobody"), ("Task_Reviewer", "Task_Reviewer"), ("TASK_REVIEWER", "TASK_REVIEWER"),
+                         ("", ""), (" drafter", " drafter"), ("drafter\n", "drafter\\n"), ("x" * 4301, "x" * 4301),
+                         ("a\\b", "a\\\\b"), ("a\0b", "a\\x00b"), ("a\x1bb", "a\\x1bb"), ("a\tb", "a\\tb")):
             with self.subTest(role=r[:10]):
-                self.one_input(self.args("--role", r), safe_text("--role: unknown role %s; the roles are %s"
-                                                                 % (safe_text(r), ", ".join(ROLES))))
+                self.one_input(self.args("--role", r),
+                               "--role: unknown role %s; the roles are %s" % (shown, ", ".join(ROLES)))
 
     def test_each_role_selects_its_list(self):  # AR14
         self.ctx(roles={"drafter": [E("docs/x.md")]})
@@ -439,6 +443,18 @@ class Args(Base):
                 self.assertEqual(code, 1)
                 self.assertEqual(out.count("\n"), 1)
                 self.assertTrue(out.startswith(ROOT_USAGE) and out.endswith("; run /strict-delivery:init\n"), out)
+
+    def test_git_missing_has_no_init_hint(self):  # AR18 R1-1; spec section 13, Q-1a2r-6
+        plain = os.path.join(self.tmp, "plain")
+        os.mkdir(plain)
+        nogit = {"PATH": os.path.join(self.tmp, "no-such-dir")}
+        argv = ["--session", S, "--kind", "plan", "--root", self.fx]
+        self.assertEqual(self.sub(argv, env=nogit), ("FAIL context.input: git not found on PATH; install git\n", 1))
+        # contrast: git present and the root is not a repository -> the init hint
+        out, code = self.sub(["--session", S, "--kind", "plan", "--root", plain])
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith(ROOT_USAGE) and out.endswith("; run /strict-delivery:init\n"), out)
+        self.assertNotIn("git not found", out)
 
     def test_root_forms(self):  # AR19
         self.read_a()
@@ -759,6 +775,38 @@ class Inputs(Base):
                          (ROOT_USAGE + "%s/h.md: the handoff is outside this repository's tree\n" % outdir, 1))
         self.assertEqual(self.go("--handoff", "docs/h.md")[1], 1)  # docs/x.md not read; the handoff itself is fine
         self.assertNotIn("context.input", self.go("--handoff", "docs/h.md")[0])
+
+    def test_handoff_in_sibling_with_common_name_prefix_is_outside(self):  # IN13 PD7 R1-2
+        """``<tmp>/work-evil`` beside ``<tmp>/work``: the name has the tree's name as a prefix, and is outside it."""
+        evil = os.path.join(self.tmp, "work-evil")
+        os.makedirs(evil + "/sub")
+        for rel in ("h.md", "sub/h.md"):
+            with open(os.path.join(evil, rel), "w") as fh:
+                fh.write(HANDOFF % "required_reads:\n  - path: docs/x.md\n    why: w\n")
+        os.symlink(evil, self.fx + "/outlink")  # a symlinked directory inside the tree
+        os.makedirs(self.fx + "/docs/deep")
+        os.symlink(evil + "/sub", self.fx + "/docs/deep/lnk")  # a nested one
+        os.makedirs(self.fx + "/.strict-delivery/state/plans")
+        os.symlink(evil, self.fx + "/.strict-delivery/state/plans/p")  # the default handoff's directory
+        outside = "FAIL context.input: %s: the handoff is outside this repository's tree\n"
+        self.assertEqual(self.go("--handoff", "outlink/h.md"), (outside % (evil + "/h.md"), 1))
+        self.assertEqual(self.go("--handoff", "outlink/sub/h.md"), (outside % (evil + "/sub/h.md"), 1))
+        self.assertEqual(self.go("--handoff", "docs/deep/lnk/h.md"), (outside % (evil + "/sub/h.md"), 1))
+        with open(evil + "/handoff.md", "w") as fh:
+            fh.write(HANDOFF % "")
+        self.assertEqual(self.go("--plan", "p"), (outside % (evil + "/handoff.md"), 1))
+        # contrast: the same layout inside the tree is accepted (docs/x.md is unread: a read line, not an input line)
+        self.put("in/h.md", (HANDOFF % "required_reads:\n  - path: docs/x.md\n    why: w\n").encode())
+        self.assertEqual(self.go("--handoff", "in/h.md"), (self.fail_a(), 1))
+
+    def test_handoff_path_grammar_one_value_per_form(self):  # IN13 PD7 R1-3
+        rule = ROOT_USAGE + "--handoff: must be a normalised repo-relative path without placeholders\n"
+        for name, v in (("lone open brace", "a{b.md"), ("lone close brace", "a}b.md"), ("NUL", "a\0b.md"),
+                        ("dot-dot component", "x/../y.md"), ("dot-dot first", "../x.md"), ("leading slash", "/abs.md"),
+                        ("non-normalised", "docs//h.md"), ("dot component", "docs/./h.md"), ("dot", "."),
+                        ("empty", ""), ("trailing slash", "docs/")):
+            with self.subTest(form=name):
+                self.assertEqual(self.go("--handoff", v), (rule, 1))
 
     def test_handoff_resolved_against_root(self):  # IN14 M25
         self.put("docs/h.md", (HANDOFF % "required_reads:\n  - path: docs/x.md\n    why: w\n").encode())

@@ -99,7 +99,7 @@ def check(args: list) -> Result:
     except ValueError as e:
         raise GateError(str(e)) from None
     if ns.role is not None and ns.role not in dispatch.ROLES:
-        raise GateError("--role: unknown role %s; the roles are %s" % (safe_text(ns.role), ", ".join(dispatch.ROLES)))
+        raise GateError("--role: unknown role %s; the roles are %s" % (ns.role, ", ".join(dispatch.ROLES)))
     root = _root(ns)
     cfg = config.load(root)
     ctx = context.load(root, cfg)
