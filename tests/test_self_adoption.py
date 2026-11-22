@@ -20,7 +20,7 @@ import unittest
 from gates import __main__ as gates_main
 from gates.lib import config, migrations, yamlsub
 from gates.tools import githooks
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo
+from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = ".strict-delivery/config.yml"
@@ -362,6 +362,8 @@ def step_order(text):
             kinds.append("unittest")
         elif st.get("run", "") == "python -m gates index":
             kinds.append("index")
+        elif st.get("name") == "Create the local base branch":
+            kinds.append("base")
         elif st.get("run", "").startswith("python -m gates run_all"):
             kinds.append("run_all")
         else:
@@ -386,7 +388,8 @@ def job_text(text, name):
     return "" if out is None else "\n".join(out) + "\n"
 
 
-# the matrix job as Task 2b.3 wrote it (the table's WF10): "The existing run_all job is unchanged"
+# the matrix job as Task 2b.3 wrote it plus the base branch step before run_all (FR-P3-1, plan :3038: a cleanup pull
+# request must pass CI, and the register gate needs a local base branch); the table's WF10 pins it byte for byte
 GATES_JOB = (
     "  gates:\n"
     "    runs-on: ${{ matrix.os }}\n"
@@ -404,6 +407,13 @@ GATES_JOB = (
     "          python-version: ${{ matrix.python-version }}\n"
     "      - run: python -m unittest discover -s tests -t . -v\n"
     "      - run: python -m gates index\n"
+    "      - name: Create the local base branch\n"
+    "        if: github.event_name == 'pull_request'\n"
+    "        env:\n"
+    "          BASE_REF: ${{ github.base_ref }}\n"
+    "        run: |\n"
+    "          git rev-parse --verify --quiet \"refs/heads/$BASE_REF\" > /dev/null || git branch \"$BASE_REF\" "
+    "\"origin/$BASE_REF\"\n"
     "      - run: python -m gates run_all --base origin/${{ github.event_name == 'pull_request' && github.base_ref || "
     "github.event.repository.default_branch }}\n")
 
@@ -462,9 +472,9 @@ class WorkflowTest(unittest.TestCase):
                          ["${{ matrix.python-version }}"])
 
     def test_workflow_runs_suite_index_run_all_in_order(self):  # W6, W11 (scoped to the matrix job, edited on purpose)
-        self.assertEqual(step_order(self.gates), ["checkout", "setup-python", "unittest", "index", "run_all"])
+        self.assertEqual(step_order(self.gates), ["checkout", "setup-python", "unittest", "index", "base", "run_all"])
         self.assertEqual([st["run"] for st in steps(self.gates) if "run" in st],
-                         [SUITE, "python -m gates index", RUN_ALL])
+                         [SUITE, "python -m gates index", "|", RUN_ALL])
 
     def test_workflow_full_history(self):  # W7 (scoped to the matrix job, edited on purpose)
         self.assertEqual(steps(self.gates)[0]["fetch-depth"], "0")
@@ -603,7 +613,8 @@ class WorkflowTest(unittest.TestCase):
 
     def test_pr_job_only_on_pull_request(self):  # WF8: github.head_ref is empty on a push, and --branch "" is refused
         self.assertIn("    if: github.event_name == 'pull_request'", code_lines(self.pr()))
-        self.assertEqual(sum("if:" in ln for ln in code_lines(self.text)), 1)
+        self.assertEqual(sum("if:" in ln for ln in code_lines(self.text)), 2)
+        self.assertEqual(code_lines(self.gates).count("        if: github.event_name == 'pull_request'"), 1)  # FR-P3-1
 
     def test_pr_job_runner(self):  # WF13 and the table's D-Q6: ubuntu-24.04, one Python 3.13, nothing else
         self.assertIn("    runs-on: ubuntu-24.04", code_lines(self.pr()))
@@ -611,7 +622,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn("matrix", self.pr())
         self.assertEqual(top_block(self.text, "permissions"), ["  contents: read"])
 
-    def test_gates_job_unchanged(self):  # WF10: the run_all job is byte for byte what Task 2b.3 wrote
+    def test_gates_job_unchanged(self):  # WF10: the run_all job is byte for byte Task 2b.3's plus the base branch step (FR-P3-1)
         self.assertEqual(self.gates, GATES_JOB)
         self.assertEqual(self.text.count("  gates:\n"), 1)
 
@@ -784,6 +795,74 @@ class CleanupStepTest(GitIsolatedTestCase):
         self.assertEqual(self.run_step(self.base, dst, BASE_REF="20261101-x/integration")[0], 0)
         self.assertEqual(self.run_step(self.base, dst, BASE_REF="20261101-x/integration"), (0, ""))
         self.assertEqual(self.run_step(self.base, dst, BASE_REF="nosuch")[0], 128)
+
+
+class MatrixJobBaseBranchTest(GitIsolatedTestCase):
+    """FR-P3-1 (F-20261122-w4im, plan :3038): the matrix job runs ``run_all``, whose register gate reads a deleted resolved
+    finding through ``cleanup.final_merge``, which needs a local ``refs/heads/<base>``; a pull_request checkout has none."""
+
+    BASE = "Create the local base branch"
+
+    @classmethod
+    def setUpClass(cls):
+        job = job_text(read_text(os.path.join(REPO, WORKFLOW)), "gates")
+        cls.script = PullRequestJobTest.step_script(job, cls.BASE)
+
+    def ci_clone(self):
+        """A clone as the matrix job sees a cleanup pull request: bare remote, detached at the cleanup head, no local branch."""
+        from tests import test_gate_register as gr
+        cfg = {**minimal_config(), "merge": {"mode": "controller"}}
+        src = make_repo(self.work, cfg)
+        write_record(src, gr.fpath(gr.F), gr.frow(gr.F, "closed"))
+        os.makedirs(os.path.join(src, "src"))
+        with open(os.path.join(src, "src", "x.py"), "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+        commit_all(src, "fixture")
+        git(src, "checkout", "-q", "-b", "t")
+        plan = os.path.join(src, ".strict-delivery", "state", "plans", "p")
+        os.makedirs(plan)
+        with open(os.path.join(plan, "work.md"), "w", encoding="utf-8") as fh:
+            fh.write("w\n")
+        head = commit_all(src, "work")
+        git(src, "checkout", "-q", "main")
+        git(src, "merge", "-q", "--no-ff", "-m", "merge", "t")
+        merge = git(src, "rev-parse", "HEAD")
+        with open(os.path.join(plan, "ledger.md"), "w", encoding="utf-8") as fh:
+            fh.write("<!-- schema: ledger/1 -->\nMERGED pr=12 head=%s merge=%s merged_by=u at=2026-11-02T06:23:42Z final=yes "
+                     "approval=chat pr=12 head=%s words=approve PR 12\n" % (head, merge, head))
+        commit_all(src, "ledger")
+        git(src, "checkout", "-q", "-b", "cleanup/p")
+        git(src, "rm", "-q", gr.fpath(gr.F))
+        commit_all(src, "cleanup")
+        git(src, "checkout", "-q", "main")
+        remote = os.path.join(self.tmp, "remote.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(src, "push", "-q", remote, "--all")
+        dst = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", remote, dst)
+        git(dst, "checkout", "-q", "--detach", "origin/cleanup/p")
+        git(dst, "branch", "-q", "-D", "main")
+        self.assertEqual(git(dst, "for-each-ref", "--format=%(refname:short)", "refs/heads"), "")
+        return dst, gr.F
+
+    def register(self, root):
+        env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "register", "--root", root, "--base", "origin/main"],
+                           cwd=root, env=dict(env, PYTHONPATH=REPO), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+        return p.returncode, p.stdout.decode("utf-8"), p.stderr.decode("utf-8")
+
+    def test_cleanup_register_needs_the_matrix_base_step(self):  # FR-P3-1
+        root, fid = self.ci_clone()
+        code, out, err = self.register(root)
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("FAIL register.base.deleted.%s" % fid, out)
+        p = subprocess.run(["sh", "-c", self.script], cwd=root, env=dict(os.environ, BASE_REF="main"),
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        code, out, err = self.register(root)
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertNotIn("register.base.deleted", out)
 
 
 if __name__ == "__main__":
