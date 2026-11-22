@@ -13,6 +13,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1770,6 +1771,8 @@ FSMON_HOOKS = (  # row FM2: what the hook answers; the first reports no change, 
     ("exits non-zero", "exit 3\n", 0o755), ("garbage", "printf 'garbage'\n", 0o755),
     ("not executable", "printf 'tok\\0'\n", 0o644))
 FSMON_OFF = ["git", "-c", "core.fsmonitor=false"]  # D-18: before -C and the subcommand, on every index-reading call
+DAEMON_CMD = "fsmonitor-" + "-daemon"  # the built-in daemon's subcommand; the guard below bans its invocation
+DAEMON_IPC = DAEMON_CMD + ".ipc"
 FSMON_SOURCES = ("repository config", "global config", "git -c", "GIT_CONFIG_COUNT")  # row FM1
 
 
@@ -2043,15 +2046,12 @@ class UnstagedPathsTest(Repos):
             env, hidden = fsmon_hidden(self.tmp, d)
             self.assertTrue(hidden)
             self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
-        with self.subTest("core.fsmonitor=true: the built-in daemon, stopped at the end"):  # FM1 (measured)
+        with self.subTest("core.fsmonitor=true: the built-in daemon is never started"):  # FM1 (measured)
             d = self.fresh(["a.txt", "b.txt"])
             git(d, "config", "core.fsmonitor", "true")
-            try:
-                git(d, "status", "--porcelain", check=False)
-                write_file(d, "a.txt", "hidden change\n")
-                self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
-            finally:
-                git(d, "fsmonitor--daemon", "stop", check=False)  # never leaves a daemon running
+            write_file(d, "a.txt", "hidden change\n")  # no plain git call after the setting: only the gates' own
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+            self.assertFalse(os.path.exists(os.path.join(d, ".git", DAEMON_IPC)))
 
     def test_unstaged_paths_argv(self):  # the call's exact argument list (P:1718, P:33)
         d = self.fresh()
@@ -2363,6 +2363,73 @@ class HooksDirTest(Repos):
         d = self.fresh()
         check_root_forms(self, root_forms(self.tmp, d), {"hooks_dir": gitinfo.hooks_dir})
 
+
+# ---- guard: no test starts git's built-in file-system monitor daemon (owner direction 2026-11-22; two suite hangs).
+# A line-based scan of every tests/*.py. The words are built from parts so that this file's own lines do not match.
+GUARD_START = "# ---- " + "guard: no test starts"
+_SET_TRUE = re.compile(r"core\.fsmonitor(\s*=\s*|[\"']\s*,\s*[\"'])true\b")
+_GIT_CALL = re.compile(r"\bgit\(")
+FSMON_TRUE_ALLOWED = ("test_githooks.py", "test_unstaged_paths_ignore_fsmonitor")  # the one allow-listed test
+
+
+def scan_fsmonitor_daemon(name, text):
+    """``(line, why)`` for every line of the test file ``name`` (base name) with ``text`` that could start the daemon."""
+    lines = text.split("\n")
+    found = []
+    for i, line in enumerate(lines):
+        if line.startswith(GUARD_START):  # this guard's own samples (and nothing after it) are not scanned
+            break
+        if line.startswith(("DAEMON_CMD =", "DAEMON_IPC =")):
+            continue
+        if (DAEMON_CMD in line or "DAEMON_CMD" in line) and DAEMON_IPC not in line and "DAEMON_IPC" not in line:
+            found.append((i + 1, "invokes the built-in daemon command"))  # even a status probe: it can hang
+        if _SET_TRUE.search(line):
+            test = ""
+            for back in range(i, -1, -1):
+                m = re.match(r"\s*def (\w+)", lines[back])
+                if m:
+                    test = m.group(1)
+                    break
+            if (name, test) != FSMON_TRUE_ALLOWED:
+                found.append((i + 1, "sets core.fsmonitor to true outside the allow-listed test"))
+                continue
+            indent = len(line) - len(line.lstrip())
+            for j in range(i + 1, len(lines)):
+                rest = lines[j]
+                if rest.strip() and len(rest) - len(rest.lstrip()) < indent:
+                    break
+                if _GIT_CALL.search(rest) and '"config"' not in rest and "core.fsmonitor=false" not in rest:
+                    found.append((j + 1, "index-reading git call after core.fsmonitor=true without -c core.fsmonitor=false"))
+    return sorted(set(found))
+
+
+class FsmonitorDaemonGuardTest(unittest.TestCase):
+    def test_no_test_file_starts_the_daemon(self):
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        bad = []
+        names = sorted(n for n in os.listdir(tests_dir) if n.endswith(".py"))
+        self.assertIn("test_githooks.py", names)
+        for n in names:
+            with open(os.path.join(tests_dir, n), encoding="utf-8") as fh:
+                bad += ["tests/%s:%d: %s" % (n, line, why) for line, why in scan_fsmonitor_daemon(n, fh.read())]
+        self.assertEqual(bad, [])
+
+    def test_scanner_flags_each_pattern(self):  # the guard kills: each banned shape is found, each allowed one is not
+        allowed = FSMON_TRUE_ALLOWED
+        set_true = 'git(d, "config", "core.fsmonitor", "true")'
+        self.assertEqual(scan_fsmonitor_daemon("x.py", 'git(d, "%s", "stop")' % DAEMON_CMD)[0][0], 1)
+        self.assertEqual(scan_fsmonitor_daemon("x.py", 'run(["git", "%s", "run"])' % DAEMON_CMD)[0][0], 1)
+        self.assertEqual(scan_fsmonitor_daemon("x.py", "    def test_a(self):\n        " + set_true)[0][0], 2)
+        self.assertEqual(scan_fsmonitor_daemon("x.py", "def test_a():\n    x = 'core.fsmonitor=true'")[0][0], 2)
+        self.assertEqual(scan_fsmonitor_daemon(allowed[0], "def other():\n    " + set_true)[0][0], 2)
+        base = "def %s(self):\n    with s:\n        %s\n" % (allowed[1], set_true)
+        self.assertEqual(scan_fsmonitor_daemon(allowed[0], base), [])
+        self.assertEqual(scan_fsmonitor_daemon(allowed[0], base + '        git(d, "status", "--porcelain")\n')[0][0], 4)
+        self.assertEqual(scan_fsmonitor_daemon(allowed[0], base + '        git(d, "diff", check=False)\n')[0][0], 4)
+        self.assertEqual(scan_fsmonitor_daemon(allowed[0], base + '    git(d, "status")\n'), [])  # a later block
+        self.assertEqual(scan_fsmonitor_daemon(allowed[0], base + "        p = run(FSMON_OFF + [DAEMON_CMD, 'status'])\n")[0][0], 4)
+        self.assertEqual(scan_fsmonitor_daemon("x.py", "path = '.git/' + DAEMON_IPC"), [])
+        self.assertEqual(scan_fsmonitor_daemon("x.py", 'git(d, "config", "core.fsmonitor", hook)'), [])
 
 
 if __name__ == "__main__":
