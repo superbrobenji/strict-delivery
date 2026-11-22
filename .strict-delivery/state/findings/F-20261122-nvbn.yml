@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-nvbn
+status: open
+source: "3b.1 task review 5: .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-hooks4-report.md F5-3"
+severity: LOW
+class: "timing kill margin; members: tests/test_shellscan.py:784-809, mutant F6-quadratic-slice killed in 3 of 4 runs on 3.9.6 (ratios 8.52, 8.45, 7.98, 8.15 against bound 8)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c02510869b179eee1d9756fd0502901abc6ed38e
+    by: stream-config-hooks
+review_round: 5
+caused_by_change: true
+dimension: length, linear (CH6) kill margin
