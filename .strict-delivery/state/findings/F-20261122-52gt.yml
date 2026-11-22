@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-52gt
+status: open
+source: "5a.3 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/5a3-review-1.md R1-3"
+severity: LOW
+class: "handoff path grammar (gate_context.py:61): one test value per refused form; members: lone {, lone }, NUL, .., leading /, non-normalised, ., empty"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 760b9865b726be9c45742d7d94e1cad536a52e5f
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: "inputs: --handoff forms (IN13)"

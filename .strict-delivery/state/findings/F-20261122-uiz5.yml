@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-uiz5
+status: open
+source: "5a.3 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/5a3-review-1.md R1-2"
+severity: MEDIUM
+class: "handoff containment: prefix compare at gate_context.py:83 untested at the boundary; members: a sibling directory sharing the tree's name as a prefix (work-evil), reached through a symlink or a .. form"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 760b9865b726be9c45742d7d94e1cad536a52e5f
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: "inputs: --handoff path forms (IN13, PD7)"
