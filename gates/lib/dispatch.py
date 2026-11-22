@@ -226,7 +226,7 @@ def _project_prompt(role: str, cfg: dict) -> str:
     normalised repository-relative path ending ``.md``, no backslash, space, control character or ``..``."""
     entry = _roles_map(cfg).get(role) if type(role) is str else None
     if type(entry) is not dict:
-        raise ValueError("%s is no framework role and no project role" % safe_text(str(role)))
+        raise ValueError("%s is no framework role and no project role" % (role if type(role) is str else type(role).__name__))
     pr = entry.get("prompt")
     parts = pr.split("/") if type(pr) is str else []
     if (type(pr) is not str or not pr.endswith(".md") or pr.startswith("/") or "\\" in pr or " " in pr
@@ -340,7 +340,7 @@ def min_tier_of(role: str, cfg: dict) -> int:
         return min_tier(role, cfg)
     entry = _roles_map(cfg).get(role)
     if type(entry) is not dict:
-        raise ValueError("%s is no framework role and no project role" % safe_text(role))
+        raise ValueError("%s is no framework role and no project role" % role)
     tier = entry.get("min_tier")
     if type(tier) is not str or tier not in TIER_NAMES:
         raise ValueError("roles.%s.min_tier must be one of %s" % (role, ", ".join(TIER_NAMES)))

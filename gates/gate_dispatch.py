@@ -149,15 +149,19 @@ def _validate(data: object, cfg: dict) -> dict:
         if type(entry) is not dict:
             raise _bad("budgets.%s must be a mapping" % k)
         for f, v in entry.items():
-            if type(f) is not str or f not in ("tokens", "minutes"):
+            if type(f) is not str:
+                raise _bad("budgets.%s: a field name must be a string" % k)
+            if f not in ("tokens", "minutes"):
                 raise _bad("budgets.%s: unknown key '%s'" % (k, f))
             _cap(v, "budgets.%s.%s" % (k, f))
     dsec = cfg.get("dispatch", {})
     if type(dsec) is not dict:
         raise _bad("dispatch must be a mapping")
     for f, v in dsec.items():
-        if type(f) is not str or f != "max_prompt_chars":
-            raise _bad("dispatch: unknown key '%s'" % (f,))
+        if type(f) is not str:
+            raise _bad("dispatch: a key must be a string")
+        if f != "max_prompt_chars":
+            raise _bad("dispatch: unknown key '%s'" % f)
         _cap(v, "dispatch.max_prompt_chars")
     tr = cfg.get("top_tier_roles", dispatch.DEFAULT_TOP_TIER_ROLES)
     if type(tr) not in (list, tuple) or any(type(x) is not str or x == "" for x in tr):

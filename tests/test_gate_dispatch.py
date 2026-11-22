@@ -1734,17 +1734,49 @@ class InputShapeTest(ProjectCase):
             with self.subTest("max_children", key=repr(k)):
                 self.assertEqual(self.injected(limits={"max_children": {k: 1}}),
                                  ("FAIL dispatch.input: input: limits.max_children: a key must be a role id string\n", 1))
-        with self.subTest("budgets field, a str subclass of an allowed name"):
-            self.assertEqual(self.injected(budgets={"implementer": {S("tokens"): 5}}),
-                             ("FAIL dispatch.input: input: budgets.implementer: unknown key 'tokens'\n", 1))
-        for k, shown in ((("a", "b"), "('a', 'b')"), (("a",), "('a',)"), (None, "None"), (1, "1"), (True, "True"),
-                         (S("max_prompt_chars"), "max_prompt_chars")):
+        for k in (("a", "b"), ("a",), None, 1, True, S("max_prompt_chars"), S("tokens")):
             with self.subTest("dispatch", key=repr(k)):
                 self.assertEqual(self.injected(dispatch={k: 5}),
-                                 ("FAIL dispatch.input: input: dispatch: unknown key '%s'\n" % shown, 1))
+                                 ("FAIL dispatch.input: input: dispatch: a key must be a string\n", 1))
             with self.subTest("budgets field", key=repr(k)):
                 self.assertEqual(self.injected(budgets={"implementer": {k: 5}}),
-                                 ("FAIL dispatch.input: input: budgets.implementer: unknown key '%s'\n" % shown, 1))
+                                 ("FAIL dispatch.input: input: budgets.implementer: a field name must be a string\n", 1))
+
+    def test_hostile_str_subclass_key_runs_no_method(self):        # R2-1 (review 2 F3): D3 exact type, no key method runs
+        calls = []
+
+        def spy(name):
+            def m(self, *a):
+                calls.append(name)
+                return getattr(str, name)(self, *a)
+            return m
+
+        class H(str):
+            __str__, __repr__, __format__ = spy("__str__"), spy("__repr__"), spy("__format__")
+            __eq__, __ne__, __hash__, __len__ = spy("__eq__"), spy("__ne__"), spy("__hash__"), spy("__len__")
+        for name, make, line in (
+                ("dispatch", lambda k: {"dispatch": {k: 5}}, "dispatch: a key must be a string"),
+                ("budgets field", lambda k: {"budgets": {"implementer": {k: 5}}},
+                 "budgets.implementer: a field name must be a string"),
+                ("budgets key", lambda k: {"budgets": {k: {"tokens": 5}}}, "budgets: a key must be a role id string"),
+                ("max_children", lambda k: {"limits": {"max_children": {k: 1}}},
+                 "limits.max_children: a key must be a role id string")):
+            for text in ("max_prompt_chars", "tokens", "implementer"):
+                with self.subTest(name, text=text):
+                    extra = make(H(text))
+                    del calls[:]
+                    got = self.injected(**extra)
+                    self.assertEqual((got, calls), (("FAIL dispatch.input: input: %s\n" % line, 1), []))
+
+    def test_library_role_text_is_raw(self):                       # R2-2 (review 2 U-1): D2 raw text, one escape at render
+        # unreachable through the gate (the role is validated first), so the library messages are tested directly
+        for role in ("x\n", "x\x00", "x\\n"):
+            with self.subTest(role=role):
+                want = "%s is no framework role and no project role" % role
+                with self.assertRaises(ValueError) as e:
+                    dispatch.min_tier_of(role, {})
+                self.assertEqual(str(e.exception), want)
+                self.assertEqual(dispatch.project_block_errors("b", role, {}, "/nonexistent"), [want])
 
     def test_budget_empty_entry_is_no_cap(self):                   # BU8: an empty entry reaches only by injection
         base = config.load(self.root)
