@@ -695,6 +695,21 @@ class Config2Test(ConfigCase):
         self.unknown({"merge": {"mode": "host", "by": "me"}}, "merge.by")
         self.assertEqual(self.with_data({"merge": {}})["merge"], {"mode": "host"})
 
+    def test_config_merge_mode_off_enum_text(self):  # CF8: Controller, a trailing space, NUL, non-ASCII
+        for bad in ("Controller", "controller ", "host\u0000", "contrôller", "ࡰ", "Ⱟ"):
+            with self.subTest(bad=bad):
+                self.bad({"merge": {"mode": bad}}, "merge.mode", "must be one of host, controller")
+
+    def test_config_merge_duplicate_keys(self):  # CF9
+        self.refused_raw("merge:\n  mode: host\nmerge:\n  mode: host\n", "duplicate key 'merge' (line 6)")
+        self.refused_raw("merge:\n  mode: host\n  mode: controller\n", "duplicate key 'mode' (line 6)")
+
+    def test_config_merge_mode_digit_text(self):  # CF10: same verdict on both interpreters (P-3)
+        for digits, want in ((1000, "merge.mode: must be one of host, controller"), (1001, "integer too large (line 5)"),
+                             (4300, "integer too large (line 5)"), (4301, "integer too large (line 5)")):
+            with self.subTest(digits=digits):  # the interpreter's default limit: 3.9 has none, 3.13 has 4300
+                self.refused_raw("merge:\n  mode: %s\n" % ("9" * digits), want)
+
     # ---- escape_cost
     def test_escape_cost_optional_and_checked(self):  # E1-E7
         sev = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
@@ -798,6 +813,17 @@ class Config2Test(ConfigCase):
         self.assertEqual(cfg["reviews"]["small"]["exclude"], REPO_EXCLUDE)
         self.assertEqual(len(REPO_EXCLUDE), 14)
         self.assertEqual(cfg["schema"], TAG)
+
+    def test_this_repo_merge_mode(self):  # RC1, owner Q-M1
+        self.assertEqual(config.load(REPO)["merge"]["mode"], "controller")
+
+    def test_this_repo_merge_raw(self):  # RC2: the file itself, not the defaults
+        raw = yamlsub.load(os.path.join(REPO, ".strict-delivery", "config.yml"), ".strict-delivery/config.yml")
+        self.assertEqual(raw["merge"], {"mode": "controller"})
+
+    def test_this_repo_agent_may_merge(self):  # RC3
+        from gates.lib import merge
+        self.assertIs(merge.agent_may_merge(config.load(REPO)), True)
 
     # ---- version rows
     def test_new_int_keys_digit_limits(self):  # I6, K1 (G1-G4 class): 600 digits accepted, 601 or more refused

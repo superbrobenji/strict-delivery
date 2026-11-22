@@ -4,6 +4,7 @@ import sys
 from typing import Callable, Dict, List
 
 GATES: Dict[str, str] = {"checkpoint": "gates.gate_checkpoint", "cites": "gates.gate_cites", "claims": "gates.gate_claims",
+                         "cleanup": "gates.gate_cleanup",
                          "decisions": "gates.gate_decisions",
                          "dispatch": "gates.gate_dispatch",
                          "register": "gates.gate_register",
