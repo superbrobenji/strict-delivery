@@ -5,10 +5,13 @@
 ``live_total``) and ``program_live`` (bool). The caller supplies the counts; the gate cannot count for itself, so the
 cap and concurrency lines are only as exact as the caller's count (F-B2p2-10).
 
-An input failure (file, JSON, fields, config, environment, ``limits.max_children`` keys) prints the one line
+An input failure (file, JSON, fields, config, environment, ``limits.max_children`` and ``budgets`` keys, the shapes of
+``budgets`` and ``dispatch``) prints the one line
 ``FAIL dispatch.input: <reason>`` and nothing else. After input passes every line is printed, in order; a line whose
 input an earlier failure removed prints ``FAIL dispatch.<x>: not checked: dispatch.<y> failed`` (Decision D12).
-Prompt blocks are read from ``--prompts``, default beside the installed ``gates`` package, never under ``--root``
+Project roles (``roles`` in the config, Task 4b.2) are workers with their own prompt file read from the working tree;
+``dispatch.budget`` and ``dispatch.size`` follow ``dispatch.block`` (``budgets.<role>``, ``dispatch.max_prompt_chars``).
+Framework prompt blocks are read from ``--prompts``, default beside the installed ``gates`` package, never under ``--root``
 (spec section 3). Not run by ``run_all`` (Q-B2plan-19 (a))."""
 from __future__ import annotations
 
@@ -88,6 +91,21 @@ def _count(v: object, what: str) -> int:
     return v
 
 
+def _cap(v: object, what: str) -> int:
+    if type(v) is not int or v < 1 or v >= 10 ** dispatch.MAX_DIGITS:
+        raise _bad("%s: must be an integer of at least 1 and of at most %d digits" % (what, dispatch.MAX_DIGITS))
+    return v
+
+
+def _known_roles(cfg: dict) -> tuple:
+    """Every role id the input phase accepts: the framework roles and every project id, collision or not (a collision is
+    the ``dispatch.role`` line's failure, never ``dispatch.input``)."""
+    try:
+        return dispatch.ROLES + tuple(i for i in dispatch.project_ids(cfg) if i not in dispatch.ROLES)
+    except ValueError as e:
+        raise _bad(str(e)) from None
+
+
 def _validate(data: object, cfg: dict) -> dict:
     if type(data) is not dict:
         raise _bad("the top level must be a JSON object")
@@ -108,16 +126,35 @@ def _validate(data: object, cfg: dict) -> dict:
     for k in _DISPATCHER_KEYS:
         if k not in d:
             raise _bad("dispatcher.%s is required" % k)
-    if type(d["id"]) is not str or (d["id"] != "session" and d["id"] not in dispatch.ROLES):
+    known = _known_roles(cfg)
+    if type(d["id"]) is not str or (d["id"] != "session" and d["id"] not in known):
         raise _bad("dispatcher.id must be 'session' or a role id")
     for k in _DISPATCHER_KEYS[1:]:
         _count(d[k], "dispatcher." + k)
     if type(data.get("program_live")) is not bool:
         raise _bad("program_live must be true or false")
-    known = dispatch.ROLES + ("session",)
     for k in (cfg.get("limits") or {}).get("max_children", {}):
-        if k not in known:
+        if k not in known and k != "session":
             raise _bad("limits.max_children.%s names no role" % k)
+    budgets = cfg.get("budgets", {})
+    if type(budgets) is not dict:
+        raise _bad("budgets must be a mapping")
+    for k, entry in budgets.items():
+        if type(k) is not str or k not in known:
+            raise _bad("budgets.%s names no role" % k)
+        if type(entry) is not dict:
+            raise _bad("budgets.%s must be a mapping" % k)
+        for f, v in entry.items():
+            if f not in ("tokens", "minutes"):
+                raise _bad("budgets.%s: unknown key '%s'" % (k, f))
+            _cap(v, "budgets.%s.%s" % (k, f))
+    dsec = cfg.get("dispatch", {})
+    if type(dsec) is not dict:
+        raise _bad("dispatch must be a mapping")
+    for f, v in dsec.items():
+        if f != "max_prompt_chars":
+            raise _bad("dispatch: unknown key '%s'" % (f,))
+        _cap(v, "dispatch.max_prompt_chars")
     tr = cfg.get("top_tier_roles", dispatch.DEFAULT_TOP_TIER_ROLES)
     if type(tr) not in (list, tuple) or any(type(x) is not str or x == "" for x in tr):
         raise _bad("config top_tier_roles must be a list of non-empty strings")
@@ -182,6 +219,22 @@ def _not_checked(res: Result, name: str, dep: str) -> None:
     res.fail(name, "not checked: %s failed" % dep)
 
 
+def _budget_line(res: Result, prompt: str, role, cfg: dict) -> None:
+    nums = dispatch.budget_numbers(prompt)
+    if role is None:
+        return _not_checked(res, "dispatch.budget", "dispatch.role")
+    if nums is None:
+        return _not_checked(res, "dispatch.budget", "dispatch.grammar")
+    caps = (cfg.get("budgets") or {}).get(role) or {}
+    problems = []
+    for name, text in zip(("tokens", "minutes"), nums):
+        cap = caps.get(name)
+        if cap is not None and dispatch.over_cap(text, cap):
+            shown = text if len(text) <= dispatch.MAX_DIGITS else "(a number of %d digits)" % len(text)
+            problems.append("%s %s exceeds the cap %d" % (name, shown, cap))
+    _line(res, "dispatch.budget", problems)
+
+
 def check(args: list) -> Result:
     ns = _args(args)
     if ns.input is None:
@@ -206,11 +259,19 @@ def check(args: list) -> Result:
     _line(res, "dispatch.grammar", gerrors)
 
     role = None
-    if "Role" not in sections:
+    collision = None
+    try:
+        all_roles = dispatch.roles_of(cfg)
+    except dispatch.RoleCollision as e:
+        collision = str(e)
+        all_roles = dispatch.ROLES
+    if collision is not None:
+        res.fail("dispatch.role", collision)
+    elif "Role" not in sections:
         _not_checked(res, "dispatch.role", "dispatch.grammar")
     else:
         try:
-            role = dispatch.role_of(sections["Role"])
+            role = dispatch.role_of(sections["Role"], all_roles)
             res.passed("dispatch.role")
         except ValueError as e:
             res.fail("dispatch.role", str(e))
@@ -220,11 +281,11 @@ def check(args: list) -> Result:
             _not_checked(res, "dispatch." + name, "dispatch.role")
     else:
         did = disp["id"]
-        if did in dispatch.ROLES and did not in dispatch.CONTROLLER_ROLES:
+        if did != "session" and did not in dispatch.CONTROLLER_ROLES:
             res.fail("dispatch.dispatcher", "%s is a worker role, and a worker dispatches no agent" % did)
-        elif did not in dispatch.DISPATCHERS[live][role]:
+        elif did not in dispatch.dispatchers_for(live, role):
             res.fail("dispatch.dispatcher", "%s may not dispatch %s (program_live %s; allowed: %s)"
-                     % (did, role, "true" if live else "false", ", ".join(dispatch.DISPATCHERS[live][role]) or "none"))
+                     % (did, role, "true" if live else "false", ", ".join(dispatch.dispatchers_for(live, role)) or "none"))
         else:
             res.passed("dispatch.dispatcher")
         perrors = dispatch.program_errors(sections, role, root, cfg, live)    # a GateError of git is dispatch.input
@@ -265,7 +326,7 @@ def check(args: list) -> Result:
     else:
         try:
             tier = dispatch.tier_of(model, cfg)
-            need = dispatch.min_tier(role, cfg)
+            need = dispatch.min_tier_of(role, cfg)
         except ValueError as e:
             res.fail("dispatch.tier", str(e))
             tier = None
@@ -296,7 +357,15 @@ def check(args: list) -> Result:
     if role is None or "Strict block" not in sections:
         _not_checked(res, "dispatch.block", "dispatch.role" if role is None else "dispatch.grammar")
     else:
-        _line(res, "dispatch.block", dispatch.block_errors(sections["Strict block"], role, prompts))
+        _line(res, "dispatch.block", dispatch.block_errors(sections["Strict block"], role, prompts)
+              if role in dispatch.ROLES else
+              dispatch.project_block_errors(sections["Strict block"], role, cfg, root))
+
+    _budget_line(res, data["prompt"], role, cfg)
+    cap = (cfg.get("dispatch") or {}).get("max_prompt_chars")
+    n = len(data["prompt"])
+    _line(res, "dispatch.size", [] if cap is None or n <= cap else
+          ["the prompt holds %d characters, more than dispatch.max_prompt_chars %d" % (n, cap)])
 
     _claim_lines(res, sections.get("Claims", ""), root, cfg)
     records = store.Store(root, "decision", cfg).load()

@@ -24,7 +24,7 @@ ENV_D, ENV_C = "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "CLAUDE_CODE_MAX_CONCURRE
 ALL_PASS = ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar", "PASS dispatch.role",
             "PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream", "PASS dispatch.depth", "PASS dispatch.concurrency", "PASS dispatch.children",
             "PASS dispatch.model", "PASS dispatch.tier", "PASS dispatch.top-tier", "PASS dispatch.block",
-            "PASS dispatch.claims", "PASS dispatch.decisions"]
+            "PASS dispatch.budget", "PASS dispatch.size", "PASS dispatch.claims", "PASS dispatch.decisions"]
 MODELS = {1: "haiku", 2: "sonnet", 3: "opus", 4: "fable"}
 CTAG = "claim/%d" % migrations.current_version("claim")
 FTAG = "finding/%d" % migrations.current_version("finding")
@@ -382,7 +382,8 @@ class ModelTierTest(GateCase):
                                            "FAIL dispatch.tier: top_tier_fallback '%s' names a tier that is unset or "
                                            "not tier1-tier4" % shown,
                                            "FAIL dispatch.top-tier: not checked: dispatch.tier failed",
-                                           "PASS dispatch.block", "PASS dispatch.claims", "PASS dispatch.decisions"])
+                                           "PASS dispatch.block", "PASS dispatch.budget", "PASS dispatch.size",
+                                           "PASS dispatch.claims", "PASS dispatch.decisions"])
             for role in dispatch.ROLES:                              # every other role: unaffected, whole run passes
                 if dispatch.MIN_TIERS[role] < 4 and role not in ("program_controller", "stream_controller"):
                     with self.subTest(fallback=repr(bad), role=role):
@@ -670,7 +671,7 @@ class VersionTest(GateCase):
                     out, code = self.run_gate(self.write_input(raw.encode()))
                     outs.append(out)
                     self.assertEqual(code, 1)
-                    self.assertEqual(len(out.splitlines()), 16, out)
+                    self.assertEqual(len(out.splitlines()), 18, out)
                     self.assertIn(want_depth, out.splitlines())
         self.assertEqual(len(set(outs)), 1)                          # the same bytes under every limit setting
         os.environ.pop(ENV_D)
@@ -722,15 +723,15 @@ class VersionTest(GateCase):
                               "PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream", "FAIL dispatch.depth: dispatcher depth %s + 1 + 0 "
                               "level(s) below implementer exceeds max_depth 3" % ("9" * 600), "PASS dispatch.concurrency",
                               "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
-                              "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
-                              "PASS dispatch.decisions"],
+                              "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.budget",
+                              "PASS dispatch.size", "PASS dispatch.claims", "PASS dispatch.decisions"],
                     "live_children": ALL_PASS,
                     "live_total": ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar",
                                    "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream", "PASS dispatch.depth",
                                    "FAIL dispatch.concurrency: %s running + 1 exceeds max_concurrent 20" % ("9" * 600),
                                    "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
-                                   "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
-                                   "PASS dispatch.decisions"]}[field])
+                                   "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.budget",
+                                   "PASS dispatch.size", "PASS dispatch.claims", "PASS dispatch.decisions"]}[field])
                 self.assertEqual(code, 0 if field == "live_children" else 1)
         for name, text in ((ENV_D, "depth"), (ENV_C, "concurrency")):
             for n in (601, 700, 4300, 4301, 5000):
@@ -1067,6 +1068,652 @@ class StepFiveTest(GitIsolatedTestCase):
         out, code = self.gate()
         self.assertEqual(code, 1)
         self.assertTrue(any(ln.startswith("FAIL dispatch.program: ") for ln in out), out)
+
+
+# ---------------------------------------------------------------- Task 4b.2: project roles, budget caps, prompt size cap
+# Rows RO, MC, DR, MT, PP, BU, SZ, LN, CF, V of task-4b.2-domain.md; every expected line is written out by hand.
+
+FRAMEWORK_IDS = ["program_controller", "stream_controller", "controller", "implementer", "implementer_transcription",
+                 "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer", "audit_reviewer",
+                 "audit_verifier", "investigator", "plan_writer", "plan_reviewer", "drafter"]
+TIERS4 = {"tiers": {"tier1": "haiku", "tier2": "sonnet", "tier3": "opus", "tier4": "fable"}}
+BUDGET_HEAD = "## Budget: tokens=1000 minutes=10"
+BLOCK_ERR = "FAIL dispatch.block: ## Strict block is not the block p.md byte for byte (blank line, the file, blank line)"
+
+
+def with_budget(text, tokens, minutes):
+    assert BUDGET_HEAD in text
+    return text.replace(BUDGET_HEAD, "## Budget: tokens=%s minutes=%s" % (tokens, minutes), 1)
+
+
+class ProjectCase(GateCase):
+    """``doc_writer`` (prompt ``p.md``, min_tier tier2) in the config and its prompt file in the working tree."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_prompt("p.md", block("doc_writer"))
+        self.set_roles()
+
+    def write_prompt(self, rel, text):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(text if isinstance(text, bytes) else text.encode("utf-8"))
+        return path
+
+    def set_roles(self, roles=None, **extra):
+        roles = {"doc_writer": {"prompt": "p.md", "min_tier": "tier2"}} if roles is None else roles
+        self.set_config(roles=roles, **extra)
+
+    def proj(self, role="doc_writer", model="sonnet", body=None, **over):
+        d = {"prompt": prompt(role, model=model, body=body), "model": model, "dispatcher": dict(SESSION),
+             "program_live": False}
+        d.update(over)
+        return d
+
+    def run_json(self, data):
+        argv = ["check", "dispatch", "--json", "--root", self.root, "--input", self.write_input(data),
+                "--prompts", self.prompts]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            gates_main.main(argv)
+        return json.loads(buf.getvalue())
+
+
+class RolesTest(ProjectCase):
+    def test_project_role_dispatch_passes(self):                    # DR2, PP3, LN1
+        out, code = self.lines(self.proj())
+        self.assertEqual((out, code), (ALL_PASS, 0))
+
+    def test_project_role_collision_fails(self):                    # RO4, CF3, Q2
+        for rid in FRAMEWORK_IDS:
+            with self.subTest(rid):
+                self.set_roles({rid: {"prompt": "p.md", "min_tier": "tier2"}})
+                out, code = self.lines(self.base())
+                self.assertEqual(code, 1)
+                self.assertIn("FAIL dispatch.role: %s: a project role may not reuse a framework role id" % rid, out)
+                self.assertIn("FAIL dispatch.dispatcher: not checked: dispatch.role failed", out)
+                self.assertIn("FAIL dispatch.block: not checked: dispatch.role failed", out)
+                self.assertIn("FAIL dispatch.budget: not checked: dispatch.role failed", out)
+                self.assertNotIn("FAIL dispatch.input", "\n".join(out))
+
+    def test_two_collisions_name_first_sorted(self):                # RO5, RO6
+        e = {"prompt": "p.md", "min_tier": "tier2"}
+        self.set_roles({"plan_writer": e, "doc_writer": e, "drafter": e})
+        out, _ = self.lines(self.base())
+        self.assertEqual(self.only(self.base(), "role"),
+                         "FAIL dispatch.role: drafter: a project role may not reuse a framework role id")
+
+    def test_project_role_named_session(self):                      # RO8, Q3
+        self.set_roles({"session": {"prompt": "p.md", "min_tier": "tier2"}})
+        self.assertEqual(self.only(self.base(), "role"),
+                         "FAIL dispatch.role: session: a project role may not reuse the dispatcher id session")
+
+    def test_collision_with_max_children_key(self):                 # MC9, BU21
+        e = {"prompt": "p.md", "min_tier": "tier2"}
+        self.set_roles({"plan_writer": e}, limits={"max_children": {"plan_writer": 2}},
+                       budgets={"plan_writer": {"tokens": 5}})
+        out, _ = self.run_gate(self.base())
+        self.assertTrue(out.startswith("PASS dispatch.input\n"), out)
+        self.assertIn("FAIL dispatch.role: plan_writer: a project role may not reuse a framework role id", out)
+
+    def test_project_role_cannot_dispatch(self):                    # DR6, Q-H4, MC10
+        both = {"doc_writer": {"prompt": "p.md", "min_tier": "tier2"}, "doc_two": {"prompt": "p.md", "min_tier": "tier2"}}
+        self.set_roles(both)
+        for child in ("implementer", "controller", "doc_two"):
+            for live in (True, False):
+                with self.subTest(child, live=live):
+                    d = self.proj(child) if child == "doc_two" else self.base(child)
+                    d["dispatcher"] = dict(SESSION, id="doc_writer")
+                    d["program_live"] = live
+                    out, _ = self.lines(d)
+                    self.assertIn("FAIL dispatch.dispatcher: doc_writer is a worker role, and a worker dispatches no "
+                                  "agent", out)
+                    self.assertNotIn("FAIL dispatch.input", "\n".join(out))
+
+    def test_project_role_takes_worker_row(self):                   # DR3, DR4, DR5
+        passing = {(False, "session"), (False, "controller"), (True, "stream_controller"), (True, "controller")}
+        for live in (True, False):
+            for did in FRAMEWORK_IDS + ["session"]:
+                with self.subTest(live=live, dispatcher=did):
+                    got = self.only(self.proj(dispatcher=dict(SESSION, id=did), program_live=live), "dispatcher")
+                    self.assertEqual(got.startswith("PASS"), (live, did) in passing, got)
+        got = self.only(self.proj(program_live=True), "dispatcher")
+        self.assertEqual(got, "FAIL dispatch.dispatcher: session may not dispatch doc_writer (program_live true; "
+                              "allowed: stream_controller, controller)")
+
+    def test_unknown_dispatcher_id_fails_input(self):               # DR7
+        for did in ("boss", "implementor", "Doc_writer"):
+            with self.subTest(did):
+                out, code = self.run_gate(self.proj(dispatcher=dict(SESSION, id=did)))
+                self.assertEqual((out.startswith("FAIL dispatch.input"), code), (True, 1))
+
+    def test_project_role_depth_as_worker(self):                    # DR8
+        c = dict(SESSION, id="controller")
+        self.assertEqual(self.only(self.proj(dispatcher=dict(c, depth=2)), "depth"), "PASS dispatch.depth")
+        self.assertEqual(self.only(self.proj(dispatcher=dict(c, depth=3)), "depth"),
+                         "FAIL dispatch.depth: dispatcher depth 3 + 1 + 0 level(s) below doc_writer exceeds max_depth 3")
+
+    def test_role_exact(self):                                      # DR9
+        for text in ("doc_writer ", " doc_writer", "Doc_writer", "doc_writer extra"):
+            with self.subTest(text):
+                d = self.proj()
+                d["prompt"] = d["prompt"].replace("## Role\ndoc_writer\n", "## Role\n%s\n" % text, 1)
+                self.assertTrue(self.only(d, "role").startswith("FAIL dispatch.role: the first non-empty line"))
+        d = self.proj()
+        d["prompt"] = d["prompt"].replace("## Role\ndoc_writer\n", "## Role\ndoc_writer\nthen text\n", 1)
+        self.assertEqual(self.only(d, "role"), "PASS dispatch.role")
+
+    def test_no_roles_project_role_id_in_role_fails(self):          # DR1
+        self.set_config()
+        self.assertEqual(self.only(self.proj(), "role"), "FAIL dispatch.role: the first non-empty line of ## Role "
+                                                         "must be exactly one role id, not 'doc_writer'")
+
+    def test_constants_unchanged_after_project_dispatch(self):      # DR11, RO14
+        before = (dispatch.ROLES, dispatch.CONTROLLER_ROLES, dict(dispatch.MIN_TIERS),
+                  {k: dict(v) for k, v in dispatch.DISPATCHERS.items()})
+        self.lines(self.proj())
+        self.assertEqual(before, (dispatch.ROLES, dispatch.CONTROLLER_ROLES, dispatch.MIN_TIERS, dispatch.DISPATCHERS))
+        self.assertNotIn("doc_writer", dispatch.DISPATCHERS[True])
+
+    def test_small_line_ignored_for_project_role(self):             # DR12
+        d = self.proj()
+        d["prompt"] = d["prompt"].replace("## Brief\nb\n", "## Brief\n%s\n" % (LINE % ("a" * 7, "b" * 7)), 1)
+        out, code = self.lines(d)
+        self.assertEqual((out, code), (ALL_PASS, 0))
+
+    def test_project_role_top_tier(self):                           # DR13, MT6
+        self.set_roles(models=TIERS4, roles={"doc_writer": {"prompt": "p.md", "min_tier": "tier4"}})
+        d = self.proj(model="fable")
+        self.assertEqual(self.only(d, "top-tier"), "FAIL dispatch.top-tier: tier4 is only for top_tier_roles, not "
+                                                   "doc_writer")
+        self.assertEqual(self.only(d, "tier"), "PASS dispatch.tier")
+        self.set_roles(models=TIERS4, roles={"doc_writer": {"prompt": "p.md", "min_tier": "tier4"}},
+                       top_tier_roles=["doc_writer"])
+        self.assertEqual(self.only(d, "top-tier"), "PASS dispatch.top-tier")
+
+    def test_project_role_min_tier_below_equal_above(self):         # MT4
+        self.set_roles(models=TIERS4)
+        self.assertEqual(self.only(self.proj(model="haiku"), "tier"),
+                         "FAIL dispatch.tier: tier1 is below the minimum tier2 of doc_writer")
+        self.assertEqual(self.only(self.proj(model="sonnet"), "tier"), "PASS dispatch.tier")
+        self.assertEqual(self.only(self.proj(model="opus"), "tier"), "PASS dispatch.tier")
+
+    def test_project_role_tier4_unset_never_passes(self):           # MT5
+        self.set_roles({"doc_writer": {"prompt": "p.md", "min_tier": "tier4"}}, top_tier_roles=["doc_writer"])
+        self.assertEqual(self.only(self.proj(model="opus"), "tier"),
+                         "FAIL dispatch.tier: tier3 is below the minimum tier4 of doc_writer")
+
+    def test_project_role_program_line_only_mismatch(self):         # DR15
+        d = self.proj(dispatcher=dict(SESSION, id="controller"), program_live=True)
+        out, _ = self.lines(d)
+        self.assertIn("FAIL dispatch.program: program_live is true in the input, but false in git (0 live program(s))", out)
+        self.assertIn("PASS dispatch.stream", out)
+
+    def test_project_role_dispatcher_cap_line_independent(self):    # MC12
+        self.set_roles(limits={"max_children": {"doc_writer": 1}})
+        d = self.proj(dispatcher=dict(SESSION, id="doc_writer", live_children=1))
+        out, _ = self.lines(d)
+        self.assertIn("FAIL dispatch.dispatcher: doc_writer is a worker role, and a worker dispatches no agent", out)
+        self.assertIn("FAIL dispatch.children: 1 running children + 1 exceeds limits.max_children.doc_writer 1", out)
+
+
+class MaxChildrenKeyTest(ProjectCase):
+    def test_project_role_is_a_max_children_key(self):             # MC3, MC4
+        self.set_roles(limits={"max_children": {"doc_writer": 2}})
+        out, _ = self.run_gate(self.proj())
+        self.assertNotIn("FAIL dispatch.input", out)
+        self.set_roles(limits={"max_children": {"implementor": 2}})
+        out, code = self.run_gate(self.proj())
+        self.assertEqual((out, code), ("FAIL dispatch.input: input: limits.max_children.implementor names no role\n", 1))
+
+    def test_max_children_key_without_role_fails_input(self):      # MC5
+        self.set_config(limits={"max_children": {"doc_writer": 2}})
+        self.assertEqual(self.run_gate(self.proj()),
+                         ("FAIL dispatch.input: input: limits.max_children.doc_writer names no role\n", 1))
+
+    def test_max_children_key_variants_same_on_both(self):         # MC6, V2
+        for key, shown in (("Doc_writer", "Doc_writer"), ("doc_writer ", "doc_writer "), ("Ꟁ", "\\ua7c0"),
+                           ("\U0001fae8", "\\U0001fae8"), ("﻿doc", "\\ufeffdoc")):
+            with self.subTest(repr(key)):
+                self.set_roles(limits={"max_children": {key: 1}})
+                self.assertEqual(self.run_gate(self.proj()),
+                                 ("FAIL dispatch.input: input: limits.max_children.%s names no role\n" % shown, 1))
+
+    def test_max_children_first_bad_key_named(self):               # MC7
+        self.set_roles(limits={"max_children": {"doc_writer": 1, "implementor": 1, "zzz": 1}})
+        self.assertEqual(self.run_gate(self.proj()),
+                         ("FAIL dispatch.input: input: limits.max_children.implementor names no role\n", 1))
+
+    def test_override_max_children_project_key(self):              # MC11 (the override is applied into cfg["limits"])
+        base = config.load(self.root)
+        cfg = dict(base, limits=dict(base.get("limits", {}), max_children={"doc_writer": 2}))
+        with mock.patch.object(config, "load", return_value=cfg):
+            self.assertNotIn("FAIL dispatch.input", self.run_gate(self.proj())[0])
+        cfg = dict(cfg, roles={})
+        with mock.patch.object(config, "load", return_value=cfg):
+            self.assertEqual(self.run_gate(self.proj()),
+                             ("FAIL dispatch.input: input: limits.max_children.doc_writer names no role\n", 1))
+
+    def test_max_children_builtin_keys(self):                      # MC1, MC2
+        for key in FRAMEWORK_IDS + ["session"]:
+            with self.subTest(key):
+                self.set_config(limits={"max_children": {key: 2}})
+                self.assertNotIn("FAIL dispatch.input", self.run_gate(self.base())[0])
+
+
+class ProjectPromptTest(ProjectCase):
+    def blk(self, text):
+        return self.proj(body=text)
+
+    def test_prompt_path_not_from_prompts_dir(self):                # PP23
+        with open(os.path.join(self.prompts, "doc_writer.md"), "w", encoding="utf-8", newline="") as f:
+            f.write(block("doc_writer"))
+        os.remove(os.path.join(self.root, "p.md"))
+        self.assertEqual(self.only(self.proj(), "block"),
+                         "FAIL dispatch.block: strict block file p.md cannot be read (No such file or directory)")
+
+    def test_project_prompt_missing_fails_block(self):              # PP5, PP14
+        for rel in ("p.md", "nodir/p.md"):
+            with self.subTest(rel):
+                self.set_roles({"doc_writer": {"prompt": rel, "min_tier": "tier2"}} )
+                if rel == "p.md":
+                    os.remove(os.path.join(self.root, "p.md"))
+                self.assertEqual(self.only(self.proj(), "block"),
+                                 "FAIL dispatch.block: strict block file %s cannot be read (No such file or directory)"
+                                 % rel)
+
+    def test_project_block_byte_variants(self):                     # PP4, PP25
+        good = block("doc_writer")
+        for name, body in (("one char", good.replace("body", "bodx")), ("trailing space", good + " "),
+                           ("crlf", good.replace("\n", "\r\n")), ("bom", "﻿" + good),
+                           ("framework block", block("implementer")), ("extra newline", good + "\n"),
+                           ("empty", "")):
+            with self.subTest(name):
+                self.assertEqual(self.only(self.blk(body), "block"), BLOCK_ERR)
+        self.write_prompt("p.md", "")
+        self.assertEqual(self.only(self.blk(""), "block"), "PASS dispatch.block")
+        self.write_prompt("p.md", good.rstrip("\n"))
+        self.assertEqual(self.only(self.blk(good), "block"), BLOCK_ERR)
+        self.write_prompt("p.md", good.replace("\n", "\r\n"))
+        self.assertEqual(self.only(self.blk(good.replace("\n", "\r\n")), "block"), "PASS dispatch.block")
+        self.assertEqual(self.only(self.blk(good), "block"), BLOCK_ERR)
+
+    def test_project_prompt_symlink_fails_block(self):             # PP6-PP9
+        os.rename(os.path.join(self.root, "p.md"), os.path.join(self.root, "real.md"))
+        outside = os.path.join(self.tmp, "x.md")
+        with open(outside, "w", encoding="utf-8", newline="") as f:
+            f.write(block("doc_writer"))
+        p = os.path.join(self.root, "p.md")
+        for name, target in (("inside", "real.md"), ("outside", outside), ("dangling", "nothing.md"), ("loop", "p.md")):
+            with self.subTest(name):
+                os.symlink(target, p)
+                try:
+                    self.assertEqual(self.only(self.proj(), "block"),
+                                     "FAIL dispatch.block: strict block file p.md is a symlink, never followed")
+                finally:
+                    os.unlink(p)
+
+    def test_project_prompt_directory_fails_block(self):           # PP10
+        os.remove(os.path.join(self.root, "p.md"))
+        os.mkdir(os.path.join(self.root, "p.md"))
+        self.assertEqual(self.only(self.proj(), "block"),
+                         "FAIL dispatch.block: strict block file p.md is not a regular file")
+
+    def test_project_prompt_fifo_fails_block_without_hanging(self):  # PP11, V4
+        os.remove(os.path.join(self.root, "p.md"))
+        os.mkfifo(os.path.join(self.root, "p.md"))
+        path = self.write_input(self.proj())
+        env = dict(os.environ, PYTHONPATH=REPO)
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "dispatch", "--root", self.root, "--input", path,
+                            "--prompts", self.prompts], cwd=REPO, env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=30)
+        self.assertIn("FAIL dispatch.block: strict block file p.md is not a regular file",
+                      p.stdout.decode("utf-8").splitlines())
+
+    def test_project_prompt_socket_fails_block(self):              # PP12
+        import socket
+        os.remove(os.path.join(self.root, "p.md"))
+        s = socket.socket(socket.AF_UNIX)
+        self.addCleanup(s.close)
+        try:
+            s.bind(os.path.join(self.root, "p.md"))
+        except OSError as e:
+            self.skipTest("cannot bind a socket here: %s" % e)
+        self.assertEqual(self.only(self.proj(), "block"),
+                         "FAIL dispatch.block: strict block file p.md is not a regular file")
+
+    def test_project_prompt_parent_component_refused(self):        # PP13, PP14
+        os.mkdir(os.path.join(self.root, "realdir"))
+        self.write_prompt("realdir/doc.md", block("doc_writer"))
+        os.symlink("realdir", os.path.join(self.root, "playbooks"))
+        self.set_roles({"doc_writer": {"prompt": "playbooks/doc.md", "min_tier": "tier2"}})
+        self.assertEqual(self.only(self.proj(), "block"), "FAIL dispatch.block: strict block file playbooks/doc.md: "
+                                                          "the component 'playbooks' is a symlink or not a directory")
+        self.set_roles({"doc_writer": {"prompt": "p.md/b.md", "min_tier": "tier2"}})
+        self.assertEqual(self.only(self.proj(), "block"), "FAIL dispatch.block: strict block file p.md/b.md: "
+                                                          "the component 'p.md' is a symlink or not a directory")
+
+    def test_project_prompt_unreadable(self):                      # PP15
+        path = os.path.join(self.root, "p.md")
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o644)
+        try:
+            open(path, "rb").close()
+        except OSError:
+            pass
+        else:
+            self.skipTest("the process reads a mode 0 file")
+        self.assertEqual(self.only(self.proj(), "block"),
+                         "FAIL dispatch.block: strict block file p.md cannot be read (Permission denied)")
+
+    def test_project_prompt_not_utf8(self):                        # PP16
+        self.write_prompt("p.md", b"\xff\xfe")
+        self.assertEqual(self.only(self.proj(), "block"), "FAIL dispatch.block: strict block file p.md is not valid UTF-8")
+
+    def test_project_prompt_huge_file_not_read(self):              # PP17
+        path = self.write_prompt("p.md", b"")
+        os.truncate(path, 2 * 1024 ** 3)
+        with mock.patch.object(os, "fdopen", side_effect=AssertionError("read")):
+            self.assertEqual(self.only(self.proj(), "block"), BLOCK_ERR)
+
+    def test_project_prompt_swap_to_symlink_refused(self):         # PP18, V4
+        os.rename(os.path.join(self.root, "p.md"), os.path.join(self.root, "real.md"))
+        os.symlink("real.md", os.path.join(self.root, "p.md"))
+        real = os.lstat
+        regular = os.lstat(os.path.join(self.root, "real.md"))
+
+        def lie(path, *a, **k):
+            return regular if os.path.basename(path) == "p.md" else real(path, *a, **k)
+        with mock.patch.object(os, "lstat", side_effect=lie):
+            got = self.only(self.proj(), "block")
+        self.assertTrue(got.startswith("FAIL dispatch.block: strict block file p.md cannot be read ("), got)
+
+    def test_project_prompt_read_from_working_tree(self):          # PP19
+        self.write_prompt("p.md", block("doc_writer") + "edited")
+        self.assertEqual(self.only(self.proj(), "block"), BLOCK_ERR)
+        self.write_prompt("p.md", "other")
+        self.assertEqual(self.only(self.blk("other"), "block"), "PASS dispatch.block")
+        git(self.root, "checkout", "--", "p.md")
+        self.assertEqual(self.only(self.proj(), "block"), "PASS dispatch.block")
+
+    def test_project_prompt_root_through_symlink(self):            # PP20
+        link = os.path.join(self.tmp, "rootlink")
+        os.symlink(self.root, link)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            gates_main.main(["check", "dispatch", "--root", link, "--input", self.write_input(self.proj()),
+                             "--prompts", self.prompts])
+        self.assertIn("PASS dispatch.block", buf.getvalue().splitlines())
+
+    def test_project_prompt_name_read_as_given(self):              # PP26
+        self.write_prompt("é.md", block("doc_writer"))
+        self.set_roles({"doc_writer": {"prompt": "é.md", "min_tier": "tier2"}})
+        self.assertEqual(self.only(self.proj(), "block"), "PASS dispatch.block")
+
+    def test_project_prompt_name_too_long(self):                   # PP27
+        self.set_roles({"doc_writer": {"prompt": "a" * 300 + ".md", "min_tier": "tier2"}})
+        self.assertEqual(self.only(self.proj(), "block"), "FAIL dispatch.block: strict block file %s.md cannot be read "
+                                                          "(File name too long)" % ("a" * 300))
+
+    def test_two_project_roles_one_prompt_file(self):              # PP24
+        e = {"prompt": "p.md", "min_tier": "tier2"}
+        self.set_roles({"a": e, "b": e})
+        for r in ("a", "b"):
+            self.assertEqual(self.only(self.proj(r, body=block("doc_writer")), "block"), "PASS dispatch.block")
+
+    def test_prompt_path_refused_values_fail_block(self):          # PP21 through the gate (injected cfg)
+        base = config.load(self.root)
+        for bad in ("../p.md", "/etc/passwd", "a//b.md", "./p.md", "p.txt", "p.md "):
+            with self.subTest(bad):
+                cfg = dict(base, roles={"doc_writer": {"prompt": bad, "min_tier": "tier2"}})
+                with mock.patch.object(config, "load", return_value=cfg):
+                    got = self.only(self.proj(), "block")
+                self.assertEqual(got, "FAIL dispatch.block: roles.doc_writer.prompt is not a normalised "
+                                      "repository-relative .md path")
+
+
+class BudgetTest(ProjectCase):
+    def caps(self, role="implementer", **c):
+        self.set_roles(budgets={role: c})
+
+    def test_budget_cap_exceeded(self):                            # BU3
+        self.caps(tokens=50000)
+        for n, want in ((49999, "PASS dispatch.budget"), (50000, "PASS dispatch.budget"),
+                        (50001, "FAIL dispatch.budget: tokens 50001 exceeds the cap 50000")):
+            with self.subTest(n):
+                d = self.base()
+                d["prompt"] = with_budget(d["prompt"], n, 10)
+                self.assertEqual(self.only(d, "budget"), want)
+
+    def test_budget_minutes_boundary(self):                        # BU4
+        self.caps(minutes=30)
+        for n, want in ((29, "PASS dispatch.budget"), (30, "PASS dispatch.budget"),
+                        (31, "FAIL dispatch.budget: minutes 31 exceeds the cap 30")):
+            with self.subTest(n):
+                d = self.base()
+                d["prompt"] = with_budget(d["prompt"], 5, n)
+                self.assertEqual(self.only(d, "budget"), want)
+
+    def test_budget_both_exceed_one_line(self):                    # BU5, BU6, BU7
+        self.caps(tokens=50000, minutes=30)
+        for t, m, want in ((60000, 40, "FAIL dispatch.budget: tokens 60000 exceeds the cap 50000; minutes 40 exceeds "
+                                       "the cap 30"),
+                           (60000, 30, "FAIL dispatch.budget: tokens 60000 exceeds the cap 50000"),
+                           (50000, 40, "FAIL dispatch.budget: minutes 40 exceeds the cap 30")):
+            d = self.base()
+            d["prompt"] = with_budget(d["prompt"], t, m)
+            self.assertEqual(self.only(d, "budget"), want)
+        self.caps(tokens=5)
+        d = self.base()
+        d["prompt"] = with_budget(d["prompt"], 5, "9" * 500)
+        self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")
+
+    def test_budget_cap_absent_and_other_role(self):               # BU1, BU2, BU10
+        d = self.base()
+        d["prompt"] = with_budget(d["prompt"], 99999999, 99999999)
+        self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")
+        self.caps("controller", tokens=1, minutes=1)
+        self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")
+        self.caps("controller", tokens=1)
+        d["dispatcher"] = dict(SESSION, id="controller")
+        self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")
+
+    def test_budget_project_role_cap(self):                        # BU9
+        self.caps("doc_writer", tokens=5)
+        d = self.proj()
+        self.assertEqual(self.only(d, "budget"), "FAIL dispatch.budget: tokens 1000 exceeds the cap 5")
+
+    def test_budget_key_naming_no_role(self):                      # BU19, Q5
+        for key in ("nosuch", "session"):
+            with self.subTest(key):
+                self.caps(key, tokens=5)
+                self.assertEqual(self.run_gate(self.base()),
+                                 ("FAIL dispatch.input: input: budgets.%s names no role\n" % key, 1))
+        self.caps("doc_writer", tokens=5)
+        self.assertNotIn("FAIL dispatch.input", self.run_gate(self.base())[0])
+        self.set_config(budgets={"doc_writer": {"tokens": 5}})
+        self.assertEqual(self.run_gate(self.base()), ("FAIL dispatch.input: input: budgets.doc_writer names no role\n", 1))
+
+    def test_budget_line_not_checked(self):                        # BU11-BU13
+        self.caps(tokens=5)
+        d = self.base()
+        d["prompt"] = d["prompt"].replace(BUDGET_HEAD, "## Budget: tokens=0 minutes=10")
+        self.assertEqual(self.only(d, "budget"), "FAIL dispatch.budget: not checked: dispatch.grammar failed")
+        d = self.base()
+        d["prompt"] = d["prompt"].replace("## Role\nimplementer", "## Role\nnobody")
+        self.assertEqual(self.only(d, "budget"), "FAIL dispatch.budget: not checked: dispatch.role failed")
+
+    def test_budget_numbers_come_from_the_heading(self):           # BU14, BU12 duplicate
+        self.caps(tokens=50000)
+        d = self.base(prompt=prompt("implementer", brief="tokens=99999999 minutes=99999999 and Budget: tokens=99999999"))
+        self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")
+        d = self.base()
+        d["prompt"] = d["prompt"].replace("## Model\n", BUDGET_HEAD.replace("1000", "99999") + "\n\n## Model\n", 1)
+        self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")           # judges the first heading
+
+    def test_budget_huge_numbers_same_on_both(self):               # BU15-BU18, V1
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                self.caps(tokens=5)
+                for digits, want in ((599, "tokens %s exceeds the cap 5" % ("9" * 599)),
+                                     (600, "tokens %s exceeds the cap 5" % ("9" * 600)),
+                                     (601, "tokens (a number of 601 digits) exceeds the cap 5"),
+                                     (4300, "tokens (a number of 4300 digits) exceeds the cap 5"),
+                                     (4301, "tokens (a number of 4301 digits) exceeds the cap 5")):
+                    with self.subTest(limit=lim, digits=digits):
+                        d = self.base()
+                        d["prompt"] = with_budget(d["prompt"], "9" * digits, 10)
+                        self.assertEqual(self.only(d, "budget"), "FAIL dispatch.budget: " + want)
+                with self.subTest(limit=lim, case="no cap"):
+                    self.set_roles()
+                    d = self.base()
+                    d["prompt"] = with_budget(d["prompt"], "9" * 4301, 10)
+                    self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")
+                with self.subTest(limit=lim, case="cap of 600 digits"):
+                    self.caps(tokens=int("9" * 600))
+                    d = self.base()
+                    d["prompt"] = with_budget(d["prompt"], "9" * 600, 10)
+                    self.assertEqual(self.only(d, "budget"), "PASS dispatch.budget")
+
+    def test_budget_json_line(self):                               # BU22
+        self.caps(tokens=50000)
+        d = self.base()
+        d["prompt"] = with_budget(d["prompt"], 50001, 10)
+        got = self.run_json(d)
+        self.assertFalse(got["ok"])
+        self.assertIn({"status": "FAIL", "id": "dispatch.budget", "reason": "tokens 50001 exceeds the cap 50000"},
+                      got["lines"])
+
+    def test_budget_and_size_exit_codes_and_order(self):           # LN3-LN5
+        self.set_roles(budgets={"implementer": {"tokens": 5}}, dispatch={"max_prompt_chars": 5})
+        out, code = self.lines(self.base())
+        ids = [ln.split(":")[0] for ln in out]
+        self.assertEqual(ids[13:17], ["PASS dispatch.block", "FAIL dispatch.budget", "FAIL dispatch.size",
+                                      "PASS dispatch.claims"])
+        self.assertEqual(code, 1)
+        self.set_roles(budgets={"implementer": {"tokens": 5000}}, dispatch={"max_prompt_chars": 100000})
+        self.assertEqual(self.lines(self.base()), (ALL_PASS, 0))
+
+
+class SizeTest(ProjectCase):
+    def sized(self, role, total, unit="x"):
+        """A prompt of exactly ``total`` characters whose Brief holds ``unit`` copies and then ``x`` padding."""
+        d = self.base(role) if role in dispatch.ROLES else self.proj(role)
+        empty = len(prompt(role, brief="", model=d["model"]))
+        pad = unit * 50
+        pad += "x" * (total - empty - len(pad))
+        d["prompt"] = prompt(role, brief=pad, model=d["model"])
+        self.assertEqual(len(d["prompt"]), total)
+        return d
+
+    def test_prompt_size_boundary(self):                           # SZ2, SZ11
+        self.set_config(dispatch={"max_prompt_chars": 5000})
+        for n, want in ((4999, "PASS dispatch.size"), (5000, "PASS dispatch.size"),
+                        (5001, "FAIL dispatch.size: the prompt holds 5001 characters, more than "
+                               "dispatch.max_prompt_chars 5000")):
+            with self.subTest(n):
+                self.assertEqual(self.only(self.sized("implementer", n), "size"), want)
+
+    def test_prompt_size_counts_characters(self):                  # SZ3
+        self.set_config(dispatch={"max_prompt_chars": 5000})
+        for name, unit in (("e-acute", "é"), ("emoji", "\U0001f600"), ("combining", "é"),
+                           ("surrogate", "\ud800"), ("crlf", "\r\n"), ("bom", "﻿"), ("nul", "\x00"), ("ff", "\f")):
+            for n, want in ((5000, "PASS dispatch.size"), (5001, "FAIL dispatch.size: the prompt holds 5001 characters, "
+                                                                  "more than dispatch.max_prompt_chars 5000")):
+                with self.subTest(name, n=n):
+                    self.assertEqual(self.only(self.sized("implementer", n, unit), "size"), want)
+
+    def test_prompt_size_whole_prompt(self):                       # SZ4
+        self.set_config(dispatch={"max_prompt_chars": 100})
+        d = self.base()
+        n = len(d["prompt"])
+        self.assertEqual(self.only(d, "size"), "FAIL dispatch.size: the prompt holds %d characters, more than "
+                                               "dispatch.max_prompt_chars 100" % n)
+        self.set_config(dispatch={"max_prompt_chars": n})
+        self.assertEqual(self.only(d, "size"), "PASS dispatch.size")
+        self.assertEqual(self.only(dict(d, prompt=d["prompt"].replace("\n", "\r\n")), "size")[:9], "FAIL disp")
+
+    def test_size_cap_one_huge_and_every_role(self):               # SZ5, SZ6, SZ8
+        self.set_roles(dispatch={"max_prompt_chars": 1})
+        for d in (self.base(), self.base("controller"), self.proj()):
+            self.assertTrue(self.only(d, "size").startswith("FAIL dispatch.size: the prompt holds "), d)
+        out, _ = self.lines(self.base(prompt=""))
+        self.assertIn("PASS dispatch.size", out)
+        self.assertTrue(any(ln.startswith("FAIL dispatch.grammar") for ln in out))
+        self.set_roles(dispatch={"max_prompt_chars": int("9" * 599)})
+        self.assertEqual(self.only(self.base(), "size"), "PASS dispatch.size")
+
+    def test_size_independent_of_grammar(self):                    # SZ7
+        self.set_config(dispatch={"max_prompt_chars": 5})
+        out, _ = self.lines(self.base(prompt="x" * 10))
+        self.assertIn("FAIL dispatch.size: the prompt holds 10 characters, more than dispatch.max_prompt_chars 5", out)
+        self.assertTrue(any(ln.startswith("FAIL dispatch.grammar") for ln in out))
+
+    def test_size_absent_and_long(self):                           # SZ1, SZ10
+        d = self.base()
+        d["prompt"] = prompt("implementer", brief="x" * 5000000)
+        self.assertEqual(self.only(d, "size"), "PASS dispatch.size")
+
+    def test_size_json_line(self):                                 # SZ12
+        self.set_config(dispatch={"max_prompt_chars": 5})
+        n = len(self.base()["prompt"])
+        got = self.run_json(self.base())
+        self.assertIn({"status": "FAIL", "id": "dispatch.size",
+                       "reason": "the prompt holds %d characters, more than dispatch.max_prompt_chars 5" % n},
+                      got["lines"])
+
+
+class InputShapeTest(ProjectCase):
+    def injected(self, **extra):
+        cfg = dict(config.load(self.root), **extra)
+        with mock.patch.object(config, "load", return_value=cfg):
+            return self.run_gate(self.proj())
+
+    def test_new_input_failures_are_one_line(self):                # LN6, BU20, SZ9, RO10
+        shapes = [("budgets", {"implementer": {"tokens": v}}) for v in (0, -1, True, "5", 2.5, None, [5], 10 ** 600)]
+        shapes += [("budgets", v) for v in (None, 5, [], {"implementer": 5}, {"implementer": {"other": 1}})]
+        shapes += [("dispatch", v) for v in (None, 5, [], {"other": 1}, {"max_prompt_chars": 0},
+                                             {"max_prompt_chars": True}, {"max_prompt_chars": "5"},
+                                             {"max_prompt_chars": 2.5}, {"max_prompt_chars": 10 ** 600})]
+        shapes += [("roles", v) for v in (None, 5, True, "x", [], {1: {}}, {"X": {}}, {"a b": {}}, {"x\n": {}})]
+        for key, val in shapes:
+            with self.subTest(key, val=repr(val)[:30]):
+                out, code = self.injected(**{key: val})
+                self.assertEqual(code, 1)
+                self.assertEqual(len(out.splitlines()), 1, out)
+                self.assertTrue(out.startswith("FAIL dispatch.input: "), out)
+
+    def test_bad_config_values_are_one_input_line(self):           # CF15
+        for key, val in (("roles", 5), ("roles", {"x": {"prompt": "../p.md", "min_tier": "tier2"}}),
+                         ("budgets", {"controller": {"tokens": 0}}), ("dispatch", {"max_prompt_chars": 0})):
+            with self.subTest(key):
+                self.set_config(**{key: val})
+                out, code = self.run_gate(self.base())
+                self.assertEqual(code, 1)
+                self.assertEqual(len(out.splitlines()), 1)
+                self.assertTrue(out.startswith("FAIL dispatch.input: .strict-delivery/config.yml: "), out)
+
+    def test_no_roles_no_budgets_no_dispatch_output_unchanged(self):  # CF1, LN2
+        self.set_config()
+        self.assertEqual(self.lines(self.base()), (ALL_PASS, 0))
+
+    def test_long_role_id_and_path(self):                          # CF5
+        rid = "r" * 5000
+        self.write_prompt("q.md", block(rid))
+        self.set_roles({rid: {"prompt": "q.md", "min_tier": "tier2"}})
+        self.assertEqual(self.lines(self.proj(rid, body=block(rid))), (ALL_PASS, 0))
+
+    def test_exception_groups_not_swallowed(self):                 # V3
+        if not hasattr(builtins, "BaseExceptionGroup"):
+            self.skipTest("BaseExceptionGroup is absent on this interpreter")
+        with mock.patch.object(config, "load", side_effect=builtins.ExceptionGroup("x", [ValueError()])):
+            out, code = self.run_gate(self.proj())
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith("FAIL dispatch.input: ExceptionGroup"), out)
+        with mock.patch.object(config, "load", side_effect=builtins.BaseExceptionGroup("x", [KeyboardInterrupt()])):
+            with self.assertRaises(builtins.BaseExceptionGroup):
+                self.run_gate(self.proj())
 
 
 if __name__ == "__main__":
