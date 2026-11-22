@@ -1,4 +1,4 @@
-"""Task 5a.1: ``gates/tools/context_cli.py`` (plan 5109-5193; domain table 5a.1 with its binding controller
+"""Task 5a.1: ``gates/tools/context_cli.py`` (plan 5111-5195; domain table 5a.1 with its binding controller
 decisions D-Q1 (a) (a path ``gitinfo.blob_ids`` cannot take is exit 2), D-Q3, D-Q4, D-Q5). Expected values are written
 by hand: blob ids from git's own rule (``sha1("blob <n>\\0" + bytes)``; the autocrlf literal is measured with git)."""
 import contextlib

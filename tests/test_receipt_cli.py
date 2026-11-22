@@ -1,4 +1,4 @@
-"""Task 5a.2: ``gates/tools/receipt_cli.py`` (plan 5211, 5243; domain table 5a.2 with its binding decisions: D-Q3 (no
+"""Task 5a.2: ``gates/tools/receipt_cli.py`` (plan 5213, 5245; domain table 5a.2 with its binding decisions: D-Q3 (no
 subcommand is exit 2), PD7 (a refusal is exit 1, a usage error exit 2), PD13 (stdout is ``yamlsub.emit(row)``), PD14).
 Expected values are written by hand."""
 import contextlib

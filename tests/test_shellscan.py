@@ -99,7 +99,7 @@ class SeparatorTest(ScanCase):
             ('echo "a ;; b"', P(("echo", "a ;; b"))),
         ])
 
-    def test_every_separator_inside_both_quote_kinds(self):  # S10, F3b-2: plan :3598 "each unquoted and inside single and double quotes"
+    def test_every_separator_inside_both_quote_kinds(self):  # S10, F3b-2: plan :3600 "each unquoted and inside single and double quotes"
         # the separator stays in the word, kind by kind; a trailing newline and CRLF are separators too
         seps = [("&&", "a && b"), ("||", "a || b"), ("|", "a | b"), ("|&", "a |& b"), ("&", "a & b"), (";;", "a ;; b"),
                 (";", "a ; b"), ("newline", "a\nb"), ("trailing newline", "a\n"), ("CRLF", "a\r\nb")]
@@ -108,7 +108,7 @@ class SeparatorTest(ScanCase):
                 with self.subTest(sep=name, quote=q):
                     self.check("echo %s%s%s" % (q, word, q), P(("echo", word)))
         for q in ("'", '"'):
-            with self.subTest(sep="plan :3684 git commit -m", quote=q):
+            with self.subTest(sep="plan :3686 git commit -m", quote=q):
                 self.check("git commit -m %sa && b%s" % (q, q), P(("git", "commit", "-m", "a && b")))
 
     def test_first_construct_is_reason(self):  # S11 and the section 1 precedence (invariant: first construct wins)

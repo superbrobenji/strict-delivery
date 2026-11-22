@@ -1,4 +1,4 @@
-"""Task 5a.1: ``gates/schemas/context.yml`` and ``gates/lib/context.py`` (plan 5109-5193; domain table 5a.1 with its
+"""Task 5a.1: ``gates/schemas/context.yml`` and ``gates/lib/context.py`` (plan 5111-5195; domain table 5a.1 with its
 binding controller decisions). Expected values are written by hand from the plan and the table."""
 import copy
 import os
@@ -474,7 +474,7 @@ class Required(unittest.TestCase):
         required(ctx, "plan", "task_reviewer", {"plan": "x"}, extras)
         self.assertEqual((ctx, extras), before)
 
-    def test_this_repository_context_resolves_for_plan(self):  # R19, RP3 (plan 5176-5177)
+    def test_this_repository_context_resolves_for_plan(self):  # R19, RP3 (plan 5178-5179)
         row = load(REPO, config.load(REPO))
         self.assertTrue(all(r is not None for _, r in required(row, "plan", None, {"plan": PLAN})))
 
@@ -1058,9 +1058,12 @@ class RepositoryFile(unittest.TestCase):
         for r in self.row["roles"]:
             self.assertIn(r, dispatch.ROLES)
 
-    def test_repository_context_entries_resolve(self):  # RP6 (plan 5147: "every entry resolves for `plan` with --plan")
-        # Resolution only: the per-effort files (handoff.md, ledger.md) and the generated in-force.md need not exist
-        # here (the plan's cleanup step deletes the per-effort files; FR-4).
+    def test_repository_context_entries_resolve_and_exist(self):  # RP6 (plan :5149: "every entry resolves for `plan`")
+        # Every entry resolves, and every resolved path exists, except the per-effort files (the plan's cleanup step
+        # deletes them, plan :21) and the generated in-force.md: the exempt set is the per-effort directory
+        # <paths.plan_state>/<plan>/ and <paths.decisions>/in-force.md, never a list of the current entries (FR-4, R2-1).
+        per_effort = self.cfg["paths"]["plan_state"] + "/" + PLAN + "/"
+        generated = self.cfg["paths"]["decisions"] + "/in-force.md"
         vals = {"plan": PLAN}
         got = required(self.row, "plan", "task_reviewer", {**vals, "brief": "CLAUDE.md"}, cfg=self.cfg)
         self.assertTrue(got)
@@ -1071,6 +1074,8 @@ class RepositoryFile(unittest.TestCase):
                 self.assertEqual(os.path.normpath(r), r)
                 self.assertNotIn("..", r.split("/"))
                 self.assertFalse("{" in r or "}" in r, r)
+                if not (r.startswith(per_effort) or r == generated):
+                    self.assertTrue(os.path.isfile(os.path.join(REPO, r)), r)
 
     def test_repository_context_why_single_line(self):  # RP9
         entries = list(self.row["every"]) + [e for v in self.row["kinds"].values() for e in v] \

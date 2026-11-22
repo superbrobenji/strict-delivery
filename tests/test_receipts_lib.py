@@ -1,4 +1,4 @@
-"""Task 5a.2: ``gates/schemas/receipt.yml`` and ``gates/lib/receipts.py`` (plan 5194-5243; domain table 5a.2 with its
+"""Task 5a.2: ``gates/schemas/receipt.yml`` and ``gates/lib/receipts.py`` (plan 5196-5245; domain table 5a.2 with its
 binding controller decisions D-Q1 (a) (``load`` also needs 40-hex shas and a final newline), D-Q2 (a)
 (``O_NOFOLLOW | O_NONBLOCK`` and a regular-file check), PD1-PD14). Expected values are written by hand: blob ids from
 git's own rule ``sha1("blob <n>\\0" + bytes)`` (and compared with ``git hash-object --no-filters``), the golden

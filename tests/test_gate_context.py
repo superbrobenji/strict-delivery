@@ -1,4 +1,4 @@
-"""Task 5a.3: ``gates/gate_context.py`` and ``context.enforced`` (plan 5245-5309; domain table 5a.3 with its binding
+"""Task 5a.3: ``gates/gate_context.py`` and ``context.enforced`` (plan 5247-5311; domain table 5a.3 with its binding
 controller decisions D-Q1 (b) (``enforced`` raises ``ValueError`` outside the three profiles), D-Q2 (a) (only
 ``PASS context.reads``), PD1-PD11). Expected values are written by hand: shas by git's blob rule, lines from the plan.
 A comment ``# XX1`` names the domain-table row a test covers."""
