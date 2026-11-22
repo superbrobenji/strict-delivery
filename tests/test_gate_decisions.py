@@ -1152,6 +1152,20 @@ class OverrideClassTests(OverrideBase):
         self.assertEqual(self.one([lasting(A, **{"class": "merge-grant"})]),
                          [fail("%s has class merge-grant%s" % (A, NEED))])
 
+    def test_override_class_str_subclass_method_not_run(self):  # CLS7, Q-1C0FIN2-R1 (a): no method of a subclass runs
+        class S(str):
+            def __str__(self):
+                return "HACKED"
+        real = gate_decisions.decisions._row
+
+        def row_with_subclass(rec):
+            r = real(rec)
+            return dict(r, **{"class": S("scope")}) if r.get("class") == "scope" else r
+        self.ov([lasting(A, **{"class": "scope"})], [(K, A)])
+        with mock.patch.object(gate_decisions.decisions, "_row", row_with_subclass):
+            out = self.ovl()
+        self.assertEqual(out, [fail("%s has class scope%s" % (A, NEED))])
+
     def test_override_project_class_fails(self):  # CLS4
         self.ov([lasting(A, **{"class": "team-x"})], [(K, A)], owner=(PO, "team-x"))
         self.assertEqual(self.ovl(), [fail("%s has class team-x%s" % (A, NEED))])
