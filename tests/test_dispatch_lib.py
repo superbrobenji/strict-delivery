@@ -3,6 +3,7 @@ table task-2c.3-domain.md). Every expected value is written out here by hand fro
 back from ``dispatch``. The git rows run on real fixture repositories (``GitIsolatedTestCase``)."""
 import os
 import unittest
+from unittest import mock
 
 from gates.lib import dispatch, gitinfo, migrations
 from gates.lib.dispatch import (CONTROLLER_ROLES, DISPATCHERS, HEADINGS, LEVELS_BELOW, MIN_TIERS, ROLES, SMALL_ROLES,
@@ -1294,6 +1295,30 @@ class MinTierOfTest(unittest.TestCase):
     def test_project_entry_never_lowers_framework_tier(self):       # MT10
         cfg = dict(CFG4, roles={"plan_writer": {"prompt": "p.md", "min_tier": "tier1"}})
         self.assertEqual(dispatch.min_tier_of("plan_writer", cfg), 3)
+
+    def test_min_tier_reads_one_digit_only(self):                   # MT11, V1
+        seen = []
+
+        def spy(text, *a):
+            seen.append(text)
+            return int(text, *a)
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for name, want in (("tier1", 1), ("tier2", 2), ("tier3", 3), ("tier4", 4)):
+                    with self.subTest(limit=lim, name=name):
+                        cfg = dict(CFG4, roles={"x": {"prompt": "p.md", "min_tier": name}})
+                        with mock.patch.object(dispatch, "int", spy, create=True):
+                            del seen[:]
+                            got = dispatch.min_tier_of("x", cfg)
+                        self.assertEqual((got, type(got), seen), (want, int, [name[4]]))
+                for bad in ("tier" + "9" * 5000, "tier٢", "tier2" + "0" * 5000):
+                    with self.subTest(limit=lim, bad=bad[:12]):
+                        cfg = dict(CFG4, roles={"x": {"prompt": "p.md", "min_tier": bad}})
+                        with mock.patch.object(dispatch, "int", spy, create=True):
+                            del seen[:]
+                            with self.assertRaises(ValueError):
+                                dispatch.min_tier_of("x", cfg)
+                        self.assertEqual(seen, [])
 
 
 class PromptPathTest(unittest.TestCase):

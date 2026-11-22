@@ -1244,6 +1244,17 @@ class RolesTest(ProjectCase):
         self.set_roles({"doc_writer": {"prompt": "p.md", "min_tier": "tier4"}}, top_tier_roles=["doc_writer"])
         self.assertEqual(self.only(self.proj(model="opus"), "tier"),
                          "FAIL dispatch.tier: tier3 is below the minimum tier4 of doc_writer")
+        # Decision (controller, 2026-11-22), MT5 amended: dispatch.top-tier is PASS whenever the tier is known (3 != 4),
+        # even after dispatch.tier failed, as for a framework role (plan :4414 "the order of every existing line is
+        # unchanged").
+        self.assertEqual(self.only(self.proj(model="opus"), "top-tier"), "PASS dispatch.top-tier")
+
+    def test_project_role_model_and_fork_as_framework(self):        # DR14, DR16
+        d = self.proj()
+        del d["model"]
+        self.assertEqual(self.only(d, "model"), "FAIL dispatch.model: the dispatch call passes no model")
+        self.assertEqual(self.only(d, "tier"), "FAIL dispatch.tier: not checked: dispatch.model failed")
+        self.assertEqual(self.only(self.proj(subagent_type="fork"), "fork"), "FAIL dispatch.fork: subagent_type is fork")
 
     def test_project_role_program_line_only_mismatch(self):         # DR15
         d = self.proj(dispatcher=dict(SESSION, id="controller"), program_live=True)
@@ -1286,15 +1297,33 @@ class MaxChildrenKeyTest(ProjectCase):
         self.assertEqual(self.run_gate(self.proj()),
                          ("FAIL dispatch.input: input: limits.max_children.implementor names no role\n", 1))
 
-    def test_override_max_children_project_key(self):              # MC11 (the override is applied into cfg["limits"])
+    def test_override_max_children_project_key(self):              # MC11, CF12: the real override route
+        dec = "DEC-20261111-abcd"
+        write_record(self.root, ".strict-delivery/state/decisions/%s.yml" % dec,
+                     {"id": dec, "status": "answered", "class": "profile-override", "effect": "lasting",
+                      "question": "q", "answer": "a", "topics": [], "applies_to": []})
+        ovr = {"limits.max_children.doc_writer": {"value": 2, "decision": dec}}
+        self.set_roles(overrides=ovr)                               # with the roles entry: the override reaches the gate
+        self.assertEqual(config.load(self.root)["limits"]["max_children"], {"doc_writer": 2})
+        self.assertEqual(self.lines(self.proj()), (ALL_PASS, 0))
+        self.set_config(overrides=ovr)                              # without it: the key names no role
+        self.assertEqual(self.run_gate(self.proj()),
+                         ("FAIL dispatch.input: input: limits.max_children.doc_writer names no role\n", 1))
+
+    def test_max_children_key_nul_newline_empty_injected(self):    # MC6, MC8, MC13: shapes the YAML writer cannot carry
         base = config.load(self.root)
-        cfg = dict(base, limits=dict(base.get("limits", {}), max_children={"doc_writer": 2}))
+        for key, shown in (("doc\x00writer", "doc\\x00writer"), ("doc_writer\n", "doc_writer\\n"),
+                           ("\ndoc_writer", "\\ndoc_writer"), ("doc_writer\x00", "doc_writer\\x00")):
+            with self.subTest(repr(key)):
+                cfg = dict(base, limits={"max_children": {key: 1}})
+                with mock.patch.object(config, "load", return_value=cfg):
+                    self.assertEqual(self.run_gate(self.proj()),
+                                     ("FAIL dispatch.input: input: limits.max_children.%s names no role\n" % shown, 1))
+        with mock.patch.object(config, "load", return_value=dict(base, limits={"max_children": {}})):
+            self.assertEqual(self.lines(self.proj()), (ALL_PASS, 0))        # MC8
+        cfg = dict(base, limits={"max_children": {"doc_writer": 1}})          # MC13: a worker's cap is accepted, never read
         with mock.patch.object(config, "load", return_value=cfg):
-            self.assertNotIn("FAIL dispatch.input", self.run_gate(self.proj())[0])
-        cfg = dict(cfg, roles={})
-        with mock.patch.object(config, "load", return_value=cfg):
-            self.assertEqual(self.run_gate(self.proj()),
-                             ("FAIL dispatch.input: input: limits.max_children.doc_writer names no role\n", 1))
+            self.assertEqual(self.lines(self.proj()), (ALL_PASS, 0))
 
     def test_max_children_builtin_keys(self):                      # MC1, MC2
         for key in FRAMEWORK_IDS + ["session"]:
@@ -1684,6 +1713,14 @@ class InputShapeTest(ProjectCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(len(out.splitlines()), 1, out)
                 self.assertTrue(out.startswith("FAIL dispatch.input: "), out)
+
+    def test_budget_empty_entry_is_no_cap(self):                   # BU8: an empty entry reaches only by injection
+        base = config.load(self.root)
+        for budgets in ({"implementer": {}}, {"doc_writer": {}}, {}):
+            with self.subTest(repr(budgets)):
+                with mock.patch.object(config, "load", return_value=dict(base, budgets=budgets)):
+                    self.assertEqual(self.lines(self.base()), (ALL_PASS, 0))
+                    self.assertEqual(self.lines(self.proj()), (ALL_PASS, 0))
 
     def test_bad_config_values_are_one_input_line(self):           # CF15
         for key, val in (("roles", 5), ("roles", {"x": {"prompt": "../p.md", "min_tier": "tier2"}}),
