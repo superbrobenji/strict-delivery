@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-vhs6
+status: open
+source: "5a.2 task review 2: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/5a2-review-2.md U-1"
+severity: LOW
+class: "receipts directory components: lstat-checked by _walk, then used by path, so a component swapped to a symlink in between is followed (present on d651b86 and 689c4d3, introduced by 1558dc1); members: each component of paths.receipts below root, through record and load"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 689c4d37ee7ddc6adaa753c2608ffaf4f408f007
+    by: stream-config-hooks
+review_round: 2
+caused_by_change: false
+dimension: receipts directory state (component swapped after lstat)

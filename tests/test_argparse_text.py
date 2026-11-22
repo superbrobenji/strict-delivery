@@ -900,7 +900,7 @@ class TestParserSites(unittest.TestCase):
                         if k.arg in ("type", "choices"):
                             keywords.append((os.path.relpath(path, REPO).replace(os.sep, "/"), k.arg))
         self.assertEqual(sorted(found), [
-            ("gates/gate_checkpoint.py", "gate_args"), ("gates/gate_cites.py", "gate_args"), ("gates/gate_claims.py", "gate_args"),
+            ("gates/gate_checkpoint.py", "gate_args"), ("gates/gate_cites.py", "gate_args"), ("gates/gate_claims.py", "gate_args"), ("gates/gate_context.py", "gate_args"),
             ("gates/gate_decisions.py", "gate_args"),
             ("gates/gate_dispatch.py", "gate_args"),  # Task 2c.3 (after F1): `--root`, `--prompts`, `--input`
             ("gates/gate_register.py", "gate_args"),
@@ -918,7 +918,9 @@ class TestParserSites(unittest.TestCase):
             ("gates/tools/decisions_cli.py", "gate_args"), ("gates/tools/findings_cli.py", "_GateParser"),
             ("gates/tools/findings_cli.py", "add_parser"), ("gates/tools/findings_cli.py", "add_parser"),
             ("gates/tools/findings_cli.py", "add_subparsers"), ("gates/tools/index.py", "gate_args"),
-            ("gates/tools/program_cli.py", "_GateParser")])  # P2.2: one parser per subcommand, built by _parser
+            ("gates/tools/program_cli.py", "_GateParser"),
+            ("gates/tools/receipt_cli.py", "_GateParser"), ("gates/tools/receipt_cli.py", "add_parser"),
+            ("gates/tools/receipt_cli.py", "add_subparsers")])  # P2.2: one parser per subcommand, built by _parser
         self.assertEqual(keywords, [])
 
 
