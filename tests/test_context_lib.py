@@ -474,7 +474,7 @@ class Required(unittest.TestCase):
         required(ctx, "plan", "task_reviewer", {"plan": "x"}, extras)
         self.assertEqual((ctx, extras), before)
 
-    def test_this_repository_context_resolves_for_plan(self):  # R19, RP3 (plan 5178-5179)
+    def test_this_repository_context_resolves_for_plan(self):  # R19, RP3 (plan 5180-5181)
         row = load(REPO, config.load(REPO))
         self.assertTrue(all(r is not None for _, r in required(row, "plan", None, {"plan": PLAN})))
 
