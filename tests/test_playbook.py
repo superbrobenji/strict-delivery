@@ -2310,7 +2310,7 @@ class CharWhitelistTest(unittest.TestCase):                          # X-a..X-h,
         rels = sorted("%s/%s" % (pc.PROMPTS_DIR, n) for n in os.listdir(pc.prompts_dir()))
         rels += sorted("playbook/" + n for n in os.listdir(os.path.join(pc.REPO_ROOT, "playbook")))
         rels.append("skills/strict-delivery/SKILL.md")
-        self.assertEqual(len(rels), 20)     # Task 2c.3: the three plan-role and drafter prompt blocks
+        self.assertEqual(len(rels), 22)     # Task 2c.3: the three plan-role and drafter prompt blocks; Task P4.3: the two program blocks
         for rel in rels:
             with self.subTest(rel=rel):
                 t = read(rel)
