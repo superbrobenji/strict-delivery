@@ -21,7 +21,8 @@ from gates import gate_context, gate_schema, producers, run_all
 from gates.lib import config, context, dispatch, receipts, schema
 from gates.lib.result import GateError, ParseEntryRefused, run_gate, safe_text
 from gates.tools import context_cli
-from tests.helpers import GitIsolatedTestCase, INT_LIMITS, commit_all, git, int_limit, make_repo, minimal_config, write_record
+from tests.helpers import (GitIsolatedTestCase, INT_LIMITS, commit_all, git, int_limit, make_repo, minimal_config, within,
+                           write_record)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 S = "3f2b8c1e-9d4a-4b7e-8f10-2a6c5d9e0b13"
@@ -633,10 +634,12 @@ class Inputs(Base):
                         os.chmod(path, 0o600) if not os.path.islink(path) else None
                         os.remove(path)
                 make()
-                out, code = self.go()
+                out, code = within(self.go)  # the fifo case: a hang fails by name (FR-1)
                 self.assertEqual(code, 1)
                 self.assertTrue(out.startswith(ROOT_USAGE + ".strict-delivery/context.yml"), out)
                 self.assertEqual(out.count("\n"), 1)
+                if name in ("dir", "fifo"):
+                    self.assertIn("not a regular file", out)
         for name, data in (("bom", b"\xef\xbb\xbf" + valid.encode()), ("crlf", valid.replace("\n", "\r\n").encode())):
             with self.subTest(case=name):
                 os.remove(path)
@@ -699,7 +702,7 @@ class Inputs(Base):
         os.mkdir(self.fx + "/hd")
         self.one_input(self.args("--handoff", "hd"), self.real + "/hd: not a regular file")
         os.mkfifo(self.fx + "/hf")
-        self.one_input(self.args("--handoff", "hf"), self.real + "/hf: not a regular file")
+        within(lambda: self.one_input(self.args("--handoff", "hf"), self.real + "/hf: not a regular file"))  # FR-1
         os.symlink(self.fx + "/docs/x.md", self.fx + "/hl.md")
         self.one_input(self.args("--handoff", "hl.md"), prefix=self.real + "/hl.md: the handoff is a symbolic link")
         self.put("bad1.md", b"---\nschema: handoff/1\n---\n")
@@ -996,7 +999,7 @@ class Receipts(Base):
         out = self.one_input(self.args(), prefix=".strict-delivery/receipts/%s.yml: is not a regular file" % S)
         os.rmdir(f)
         os.mkfifo(f)
-        self.one_input(self.args(), prefix=".strict-delivery/receipts/%s.yml: is not a regular file" % S)
+        within(lambda: self.one_input(self.args(), prefix=".strict-delivery/receipts/%s.yml: is not a regular file" % S))  # FR-1
         os.remove(f)
         if os.geteuid() != 0:
             with open(f, "w") as fh:

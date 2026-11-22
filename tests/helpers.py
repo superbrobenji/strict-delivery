@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from typing import Optional
 from unittest import mock
@@ -18,6 +19,33 @@ _IDENTITY = {
     "GIT_COMMITTER_EMAIL": "committer@example.invalid",
     "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000",
 }
+
+
+def watched(fn, secs=10):
+    """``("ok", value)`` or ``("err", exception)`` of ``fn()`` run in a daemon thread; a call that has not returned
+    after ``secs`` seconds (a blocked open of a FIFO) raises AssertionError, so the test fails by name, never by a hang."""
+    res = []
+
+    def go():
+        try:
+            res.append(("ok", fn()))
+        except BaseException as e:  # noqa: BLE001 - handed to the test
+            res.append(("err", e))
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    t.join(secs)
+    if t.is_alive():
+        raise AssertionError("the call did not return within %d s (a FIFO was opened by name?)" % secs)
+    return res[0]
+
+
+def within(fn, secs=10):
+    """``fn()`` run under ``watched``: its value is returned and its exception re-raised, so the call reads as a plain
+    call (inside ``assertRaises``); a hang raises AssertionError."""
+    kind, val = watched(fn, secs)
+    if kind == "err":
+        raise val
+    return val
 
 
 # The two texts a library function raises for a root that is not a top level (measured 2026-11-02).

@@ -12,7 +12,7 @@ from unittest import mock
 
 from gates.lib import yamlsub
 from gates.tools import receipt_cli
-from tests.helpers import GitIsolatedTestCase, make_repo
+from tests.helpers import GitIsolatedTestCase, make_repo, within
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SID = "3f2b8c1e-9d4a-4b7e-8f10-2a6c5d9e0b13"
@@ -145,7 +145,7 @@ class Add(Base):
             cases.append("u")
         for p in cases:
             with self.subTest(p=p):
-                code, out, err = self.add(path=p)
+                code, out, err = within(lambda: self.add(path=p))  # "f" is a FIFO: a hang fails by name (FR-1)
                 self.assertEqual((code, out), (1, ""))
                 self.assertTrue(err.startswith("receipt add: ") and err.count("\n") == 1, err)
         self.assertFalse(os.path.lexists(self.rdir))

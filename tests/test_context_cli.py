@@ -11,7 +11,7 @@ import sys
 import unittest
 
 from gates.tools import context_cli
-from tests.helpers import GitIsolatedTestCase, git, make_repo, write_record
+from tests.helpers import GitIsolatedTestCase, git, make_repo, within, write_record
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLAN_PATH = ".strict-delivery/state/plans/p/handoff.md"
@@ -67,7 +67,7 @@ class Base(GitIsolatedTestCase):
         e = dict(os.environ, PYTHONPATH=REPO, PYTHONDONTWRITEBYTECODE="1", LC_ALL="C")
         e.update(env or {})
         p = subprocess.run([sys.executable, "-m", "gates.tools.context_cli"] + list(argv), cwd=cwd or self.tmp, env=e,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         return p.returncode, p.stdout.decode("utf-8"), p.stderr.decode("utf-8")
 
     def abs(self, rel):
@@ -168,7 +168,7 @@ class Output(Base):
         os.symlink("gone", os.path.join(self.root, "dangling"))
         os.mkfifo(os.path.join(self.root, "fifo"))
         self.ctx(every=[E("none.md"), E("d"), E("dangling"), E("fifo")])
-        code, out, _ = self.run_cli("plan")
+        code, out, _ = within(lambda: self.run_cli("plan"))  # a hang fails by name (FR-1)
         self.assertEqual(code, 1)
         self.assertEqual(out.splitlines(), ["missing %s -- w %s" % (self.abs(a), w)
                                             for a, w in (("none.md", "none.md"), ("d", "d"), ("gone", "dangling"),
@@ -323,7 +323,7 @@ class HandoffFileStates(Base):
         for name, build, want_code, want_word in self.states():
             build(p)
             with self.subTest(name=name):
-                got = how(*argv_extra)
+                got = within(lambda: how(*argv_extra))  # a FIFO that is opened by name fails by name, not by a hang (FR-1)
                 self.assertEqual(got[0], want_code, got)
                 if want_word:
                     self.assertEqual(got[1], "")
@@ -522,7 +522,7 @@ class Process(Base):
         self.put("a.md", b"x\n")
         self.ctx(every=[E("a.md")])
         p = subprocess.run([sys.executable, "-m", "gates", "context", "plan", "--root", self.root], cwd=REPO,
-                           env=dict(os.environ, PYTHONPATH=REPO, LC_ALL="C"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                           env=dict(os.environ, PYTHONPATH=REPO, LC_ALL="C"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         self.assertEqual((p.returncode, p.stdout.decode()), self.sub("plan", "--root", self.root)[:2])
 
     def test_context_cli_declares_no_kind(self):  # C42

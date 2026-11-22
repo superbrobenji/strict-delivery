@@ -12,7 +12,7 @@ from gates.lib import config, context, dispatch, gitinfo, schema
 from gates.lib.context import (HANDOFFS, KINDS, PLACEHOLDERS, absolute, context_errors, handoff_reads, kind_of, load,
                                required, split, values_for)
 from gates.lib.result import GateError
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
+from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, within, write_record
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CFG = copy.deepcopy(config.DEFAULTS)
@@ -237,6 +237,16 @@ class ContextErrors(unittest.TestCase):
                 got = errs([E(p)])
                 self.assertEqual(len(got), 1)
                 self.assertIn("unmatched brace", got[0])
+
+    def test_unmatched_brace_open_inside_open(self):  # PH4, FR-2: an open brace inside an open placeholder
+        for p, sentence in (("{a{b}", "path '{a{b}' has an unmatched brace"),
+                            ("x{y{plan}", "path 'x{y{plan}' has an unmatched brace"),
+                            ("{a{b}/c", "path '{a{b}/c' has an unmatched brace")):
+            with self.subTest(p=p):
+                got = errs([E(p)])
+                self.assertEqual(len(got), 1)
+                self.assertIn(sentence, got[0])
+                self.assertNotIn("unknown placeholder", got[0])
 
     def test_two_placeholders(self):  # PH5
         for p in ("{paths.plans}/{plan}.md", "{plan}{plan}", "{paths.plans}{paths.specs}"):
@@ -522,8 +532,9 @@ class Handoffs(GitIsolatedTestCase):
         self.assertIn("not a regular file", str(cm.exception))
         os.unlink(self.h)
         os.mkfifo(self.h)
-        with self.assertRaises(GateError):
-            handoff_reads(self.h, self.cfg)
+        with self.assertRaises(GateError) as cm:
+            within(lambda: handoff_reads(self.h, self.cfg))  # a hang fails by name (FR-1), never by a timeout
+        self.assertEqual(str(cm.exception), "%s: not a regular file" % self.h)
 
     def test_handoff_reads_failing_front_matter(self):  # H7
         for text in ("no front matter\n", "---\nschema: handoff/1\n", "---\nschema: handoff/1\nextra: 1\n---\n",
@@ -671,8 +682,9 @@ class Split(TempDirCase):
         with self.assertRaises(GateError):
             split(os.path.join(self.dir, "d"), None, self.LIM)
         os.mkfifo(os.path.join(self.dir, "q"))
-        with self.assertRaises(GateError):
-            split(os.path.join(self.dir, "q"), None, self.LIM)
+        with self.assertRaises(GateError) as cm:
+            within(lambda: split(os.path.join(self.dir, "q"), None, self.LIM))  # a hang fails by name (FR-1)
+        self.assertEqual(str(cm.exception), "%s: not a regular file" % os.path.join(self.dir, "q"))
 
     def test_split_minimum_limits(self):  # SP22
         self.assertEqual(split(self.f(b"a\nb\nc\n"), "1-end", self.lim(1, 100)), [(1, 1), (2, 2), (3, 3)])
@@ -916,7 +928,9 @@ class Load(GitIsolatedTestCase):
 
     def test_load_fifo(self):  # L6
         os.mkfifo(self.path)
-        self.assertIn("not a regular file", self.err())
+        with self.assertRaises(GateError) as cm:
+            within(lambda: load(self.root, self.cfg))  # a hang fails by name (FR-1)
+        self.assertIn("not a regular file", str(cm.exception))
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads everything")
     def test_load_unreadable(self):  # L7
@@ -1042,12 +1056,19 @@ class RepositoryFile(unittest.TestCase):
         for r in self.row["roles"]:
             self.assertIn(r, dispatch.ROLES)
 
-    def test_repository_context_files_exist(self):  # RP6 (in-force.md is generated and git-ignored: not required here)
+    def test_repository_context_entries_resolve(self):  # RP6 (plan 5147: "every entry resolves for `plan` with --plan")
+        # Resolution only: the per-effort files (handoff.md, ledger.md) and the generated in-force.md need not exist
+        # here (the plan's cleanup step deletes the per-effort files; FR-4).
         vals = {"plan": PLAN}
-        for e, r in required(self.row, "plan", "task_reviewer", {**vals, "brief": "CLAUDE.md"}, cfg=self.cfg):
-            if r.endswith("in-force.md"):
-                continue
-            self.assertTrue(os.path.isfile(os.path.join(REPO, r)), r)
+        got = required(self.row, "plan", "task_reviewer", {**vals, "brief": "CLAUDE.md"}, cfg=self.cfg)
+        self.assertTrue(got)
+        for e, r in got:
+            with self.subTest(path=e["path"]):
+                self.assertIsInstance(r, str)
+                self.assertFalse(os.path.isabs(r), r)
+                self.assertEqual(os.path.normpath(r), r)
+                self.assertNotIn("..", r.split("/"))
+                self.assertFalse("{" in r or "}" in r, r)
 
     def test_repository_context_why_single_line(self):  # RP9
         entries = list(self.row["every"]) + [e for v in self.row["kinds"].values() for e in v] \

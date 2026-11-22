@@ -19,7 +19,7 @@ from unittest import mock
 from gates.lib import config, receipts, schema, yamlsub
 from gates.lib.receipts import content_sha, load, record, session_problem
 from gates.lib.result import GateError
-from tests.helpers import GitIsolatedTestCase, INT_LIMITS, git, make_repo
+from tests.helpers import GitIsolatedTestCase, INT_LIMITS, git, make_repo, watched
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SID = "3f2b8c1e-9d4a-4b7e-8f10-2a6c5d9e0b13"
@@ -73,24 +73,6 @@ def open_hook(name, action, *, after=False, nth=1, directory=None):
         return real_close(fd)
     with mock.patch.object(receipts.os, "open", op), mock.patch.object(receipts.os, "close", cl):
         yield st
-
-
-def watched(fn, secs=10):
-    """``("ok", value)`` or ``("err", exception)`` of ``fn()`` run in a daemon thread; a call that has not returned
-    after ``secs`` seconds (a blocked open of a FIFO) raises AssertionError."""
-    res = []
-
-    def go():
-        try:
-            res.append(("ok", fn()))
-        except BaseException as e:  # noqa: BLE001 - handed to the test
-            res.append(("err", e))
-    t = threading.Thread(target=go, daemon=True)
-    t.start()
-    t.join(secs)
-    if t.is_alive():
-        raise AssertionError("the call did not return within %d s (a FIFO was opened by name?)" % secs)
-    return res[0]
 
 
 def bind_socket(at):
