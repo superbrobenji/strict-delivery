@@ -1,0 +1,18 @@
+kind: ledger
+version: 1
+format: markdown
+files:
+  - dir: plan_state
+    glob: "*/ledger.md"
+first_line: "<!-- schema: ledger/1 -->"
+lines:
+  - word: CHECKPOINT
+    pattern: "CHECKPOINT [!-~]+ [!-~]+ head=[0-9a-f]{7,40} tests=(?:0|[1-9][0-9]{0,599})/(?:0|[1-9][0-9]{0,599}) gates=(?:PASS|n/a) next=[!-~]+"
+  - word: Ruling
+    pattern: "Ruling: (?![ -~\\xa7]* -- [ -~\\xa7]* -- [ -~\\xa7]* -- [ -~\\xa7]* -- )[!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])? -- [!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])? -- [!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])? -- [!-~\\xa7](?:[ -~\\xa7]*[!-~\\xa7])?"
+  - word: Request
+    pattern: "Request: [A-Za-z0-9]+-[0-9]{8}-[A-Za-z0-9]{4} from=[a-z0-9][a-z0-9-]* to=[a-z0-9][a-z0-9-]* files=[!-~]+ need=[ -~]+ status=(?:open|done|disputed)(?: sha=[0-9a-f]{7,40})?"
+  - word: UPDATE
+    pattern: "UPDATE [!-~]+ from=[!-~]+@[0-9a-f]{7,40} head=[0-9a-f]{7,40} tests=(?:0|[1-9][0-9]{0,599})/(?:0|[1-9][0-9]{0,599}) gates=(?:PASS|n/a)"
+  - word: MERGED
+    pattern: "MERGED pr=[1-9][0-9]{0,599} head=[0-9a-f]{40} merge=[0-9a-f]{40} merged_by=[!-~]+ at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z final=(?:yes|no)(?: stream=[a-z0-9][a-z0-9-]* block=[0-9A-Za-z]+)? approval=(?:host|chat pr=[1-9][0-9]{0,599} head=[0-9a-f]{40} words= *[!-~][ -~]*)"

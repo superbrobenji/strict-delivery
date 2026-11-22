@@ -7,19 +7,20 @@ import stat
 import unittest
 from unittest import mock
 
-from gates.lib import config
+from gates.lib import config, migrations, yamlsub
 from gates.lib.result import GateError, Result, gate_args, run_gate
 from gates.lib.yamlsub import emit
-from tests.helpers import E128, TOP, GitIsolatedTestCase, check_root_forms, make_repo, minimal_config, root_forms
+from tests.helpers import (E128, INT_LIMITS, TOP, GitIsolatedTestCase, check_root_forms, int_limit, make_repo,
+                           minimal_config, root_forms)
 
 MISSING = ".strict-delivery/config.yml: missing; run /strict-delivery:init"
 
 # Written independently of config.DEFAULTS (from the brief), so the loader is compared with a second copy.
 OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
-              "finding-class", "rule-override", "program-create", "stream-ownership", "stream-merge",
+              "rule-override", "program-create", "stream-ownership", "stream-merge",
               "request-dispute", "program-close"]
 EXPECTED = {
-    "schema": "config/1",
+    "schema": minimal_config()["schema"],  # the tag of minimal_config() is tested by test_minimal_config_is_current
     "framework_version": "0.0.0",
     "profile": "strict",
     "paths": {
@@ -44,7 +45,14 @@ EXPECTED = {
     "models": {"tiers": {"tier1": "haiku", "tier2": "sonnet", "tier3": "opus"}},
     "drift": {"estimate_factor_pct": 150},
     "decision_classes": {"owner_only": OWNER_ONLY},
+    # Written by hand from the plan (Task 2c.2 Produces, owner answers Q-PP-14, Q-COST-1, Q-RD-8, Q-RD-10, Q-RD-11).
+    "merge": {"mode": "host"},
+    "reviews": {"small": {"max_lines": 150, "max_files": 4,
+                          "exclude": [".strict-delivery/**", ".github/workflows/**", ".claude/**", "CLAUDE.md"],
+                          "tier": "tier2"}},
+    "context": {"max_lines": 2000, "max_bytes": 100000},
 }
+TAG = minimal_config()["schema"]
 
 
 def expected(**changes):
@@ -219,7 +227,7 @@ class YamlContentTest(ConfigCase):
     def test_yaml_error_names_file_and_line(self):  # C2
         msg = self.refused_text("a: [1\n", ".strict-delivery/config.yml", "line 1")
         self.assertNotIn(self.root, msg)
-        msg = self.refused_text("schema: config/1\nframework_version: '0'\n\tprofile: strict\n",
+        msg = self.refused_text("schema: %s\nframework_version: '0'\n\tprofile: strict\n" % TAG,
                                 ".strict-delivery/config.yml", "line 3")
 
     def test_bom_and_crlf_are_read(self):
@@ -252,12 +260,36 @@ class RequiredKeysTest(ConfigCase):
                 self.refused({}, key, drop=(key,))
         self.assertEqual(self.with_extra({}), EXPECTED)
 
-    def test_schema_values(self):  # C5
-        for value in ("config/2", "decision/1", "config/1 ", "Config/1", 1, None, True, ["config/1"],
-                      {"a": 1}):
+    def test_bad_schema_tags_refused(self):  # C5, T3: the hint exactly when a str config/<n>, n without a leading 0
+        hint = "; run /strict-delivery:upgrade"
+        # (value, hint expected). config/0 and config/01 do not match gate_schema's tag rule (schema._TAG), so no hint
+        # (divergence from D2's regex text, which admits config/0, disclosed in the report).
+        cases = [("config/1", True), ("config/3", True), ("config/10", True), ("config/0", False),
+                 ("config/01", False), ("decision/2", False), (TAG + " ", False), ("Config/2", False),
+                 (1, False), (None, False), (True, False), ([TAG], False), ({"a": 1}, False), ("", False)]
+        for value, want_hint in cases:
             with self.subTest(value=value):
-                self.refused({"schema": value}, "schema")
-        self.assertEqual(self.with_extra({"schema": "config/1"}), EXPECTED)
+                msg = self.refused({"schema": value}, ".strict-delivery/config.yml: schema: must be '%s'" % TAG)
+                self.assertEqual(msg.endswith(hint), want_hint, msg)
+                self.assertEqual(msg, ".strict-delivery/config.yml: schema: must be '%s'%s"
+                                 % (TAG, hint if want_hint else ""))
+        self.assertEqual(self.with_extra({"schema": TAG}), EXPECTED)
+
+    def test_config_1_refused_with_upgrade_hint(self):  # T2: old-version refusal test, the old tag is its subject
+        with self.assertRaises(GateError) as e:
+            self.with_extra({"schema": "config/1"})
+        self.assertEqual(str(e.exception),
+                         ".strict-delivery/config.yml: schema: must be 'config/2'; run /strict-delivery:upgrade")
+
+    def test_config_tag_matches_schema_version(self):  # T4, D4: config.py cannot import schema at load
+        self.assertEqual(TAG, "config/%d" % migrations.current_version("config"))
+        self.assertEqual(config.CONFIG_TAG, TAG)
+
+    def test_config_schema_is_version_2(self):  # S1
+        self.assertEqual(migrations.current_version("config"), 2)
+
+    def test_minimal_config_is_current(self):  # H1: the tag of minimal_config() is this test's subject
+        self.assertEqual(minimal_config()["schema"], "config/2")
 
     def test_framework_version(self):  # C6
         for ok in ("0.0.0", "abc", "1.2.3-rc1"):
@@ -433,8 +465,8 @@ class ScalarKeysTest(ConfigCase):
         for bad in (0, -5, True, False, "1.5", 1.5 if False else "150", None, [150], {"a": 1}):
             with self.subTest(bad=bad):
                 self.refused({"drift": {"estimate_factor_pct": bad}}, "drift.estimate_factor_pct")
-        self.put_bytes(b"schema: config/1\nframework_version: '0'\nprofile: strict\n"
-                       b"drift:\n  estimate_factor_pct: 1.5\n")
+        self.put_bytes(("schema: %s\nframework_version: '0'\nprofile: strict\n" % TAG).encode("ascii")
+                       + b"drift:\n  estimate_factor_pct: 1.5\n")
         with self.assertRaises(GateError) as e:
             config.load(self.root)
         self.assertIn("drift.estimate_factor_pct", str(e.exception))
@@ -514,6 +546,362 @@ class RootGuardTest(ConfigCase):
                 with self.assertRaises(GateError) as e:
                     config.load(root)
                 self.assertEqual(str(e.exception), want)
+
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ALL_KEYS_19 = ("schema", "framework_version", "profile", "commands", "paths", "ids", "models", "roles",
+               "top_tier_roles", "top_tier_fallback", "decision_classes", "block", "rulings", "dispatch",
+               "budgets", "drift", "overrides", "base_branch", "decisions")
+DEFAULT_EXCLUDE = [".strict-delivery/**", ".github/workflows/**", ".claude/**", "CLAUDE.md"]
+# This repository's list: the four defaults and L:406's categories (plan P:2001), written by hand.
+REPO_EXCLUDE = [".strict-delivery/**", ".github/workflows/**", ".claude/**", "CLAUDE.md", "gates/lib/**",
+                "gates/schemas/**", "gates/gate_schema.py", "gates/hook.py", "gates/hooks/**", "hooks/**",
+                "gates/gate_dispatch.py", "gates/__main__.py", "gates/producers.py", "gates/run_all.py"]
+NOT_INT_AT_LEAST_1 = (0, -1, True, False, "2", "2.5", None, [2], {"a": 1})
+
+
+class Config2Test(ConfigCase):
+    """Task 2c.2: limits, merge, escape_cost, reviews and context (rows L, M, E, R, C, D, V)."""
+
+    def raw(self, body):
+        """Load a config file made of the minimal config plus the raw text ``body`` (for values emit cannot write)."""
+        self.put_bytes(emit(minimal_config()).encode("utf-8") + body.encode("utf-8"))
+        return config.load(self.root)
+
+    def refused_raw(self, body, *needles):
+        with self.assertRaises(GateError) as e:
+            self.raw(body)
+        for n in needles:
+            self.assertIn(n, str(e.exception))
+        return str(e.exception)
+
+    def with_data(self, extra):
+        """``config.load`` of the minimal config plus ``extra`` with the parsed document injected: the YAML subset
+        cannot write an empty mapping (``emit`` refuses it; ``{}`` is a flow mapping, refused), so the rows that
+        hold ``{}`` reach the validator only this way."""
+        data = dict(minimal_config(), **extra)
+        with mock.patch.object(yamlsub, "load", return_value=data):
+            return config.load(self.root)
+
+    def unknown(self, extra, dotted):
+        msg = self.refused(extra, "unknown key '%s'" % dotted)
+        self.assertEqual(msg, ".strict-delivery/config.yml: unknown key '%s'" % dotted)
+
+    def bad(self, extra, dotted, reason=None):
+        msg = self.refused(extra, ".strict-delivery/config.yml: %s: " % dotted)
+        if reason is not None:
+            self.assertEqual(msg, ".strict-delivery/config.yml: %s: %s" % (dotted, reason))
+
+    # ---- D rows
+    def test_config_keys_gain_new_keys(self):  # D2
+        self.assertEqual(set(config.CONFIG_KEYS), set(ALL_KEYS_19) | {"limits", "merge", "escape_cost", "reviews",
+                                                                      "context"})
+        self.assertEqual(len(config.CONFIG_KEYS), 24)
+
+    def test_unknown_top_level_near_misses(self):  # D3
+        for key in ("limit", "review", "escape-cost", "Merge"):
+            with self.subTest(key=key):
+                self.refused({key: 1}, "unknown key '%s'" % key)
+
+    def test_defaults_not_mutated_by_new_keys(self):  # D1
+        before = copy.deepcopy(config.DEFAULTS)
+        self.with_extra({"reviews": {"small": {"exclude": ["x/**"], "max_lines": 9}}, "merge": {"mode": "controller"},
+                         "context": {"max_lines": 5}})
+        self.assertEqual(config.DEFAULTS, before)
+        self.put(minimal_config())
+        cfg = config.load(self.root)
+        self.assertEqual(cfg["reviews"], EXPECTED["reviews"])
+        self.assertEqual(cfg["merge"], {"mode": "host"})
+        cfg["reviews"]["small"]["exclude"].append("mutated")
+        cfg["context"]["max_lines"] = 1
+        self.assertEqual(config.DEFAULTS, before)
+        self.assertEqual(config.DEFAULTS["reviews"]["small"]["exclude"], DEFAULT_EXCLUDE)
+        self.assertEqual(config.DEFAULTS["merge"], {"mode": "host"})
+        self.assertEqual(config.DEFAULTS["context"], {"max_lines": 2000, "max_bytes": 100000})
+        self.assertNotIn("limits", config.DEFAULTS)
+        self.assertNotIn("escape_cost", config.DEFAULTS)
+
+    # ---- limits
+    def test_no_limits_by_default(self):  # L1, Q-H2
+        cfg = config.load(self.root)
+        self.assertNotIn("limits", cfg)
+        self.assertEqual(cfg.get("limits", {}), {})
+
+    def test_limits_accepted_and_checked(self):  # L2, L3, L4, L6
+        cfg = self.with_extra({"limits": {"max_children": {"stream_controller": 4}}})
+        self.assertEqual(cfg["limits"]["max_children"]["stream_controller"], 4)
+        self.assertEqual(cfg["limits"], {"max_children": {"stream_controller": 4}})
+        self.assertEqual(self.with_data({"limits": {}})["limits"], {})  # L2: {} only through injection
+        self.assertEqual(self.with_extra({"limits": {"max_children": {"stream_controller": 4}, "max_depth": 3,
+                                                     "max_concurrent": 20}})["limits"],
+                         {"max_children": {"stream_controller": 4}, "max_depth": 3, "max_concurrent": 20})
+        for value in (3, [1], "x", None, True):
+            with self.subTest(value=value):
+                self.bad({"limits": value}, "limits", "must be a mapping")
+        self.unknown({"limits": {"max_kids": 2}}, "limits.max_kids")
+
+    def test_max_children_shape_only(self):  # L5, L7-L11, L14
+        """Q-2c2-1 (a): only the shape is checked here. yamlsub gives only ``str`` mapping keys (measured: its
+        mapping parser builds keys from scalar text; ``git grep -n 'dict\\[' gates/lib/yamlsub.py`` shows no int key
+        path), so no non-str-key path is written."""
+        mc = lambda v: {"limits": {"max_children": v}}  # noqa: E731
+        for value in (3, ["a"], "x", None, True):
+            with self.subTest(value=value):
+                self.bad(mc(value), "limits.max_children", "must be a mapping")
+        self.assertEqual(self.with_extra(mc({"implementor": 2}))["limits"]["max_children"], {"implementor": 2})
+        self.assertEqual(self.with_extra(mc({"session": 1}))["limits"]["max_children"], {"session": 1})
+        self.assertEqual(self.with_data(mc({}))["limits"], {"max_children": {}})
+        self.bad(mc({"": 2}), "limits.max_children", "keys must be non-empty strings")
+        for bad in NOT_INT_AT_LEAST_1:
+            with self.subTest(bad=bad):
+                self.bad(mc({"stream_controller": bad}), "limits.max_children.stream_controller",
+                         "must be an integer of at least 1")
+        self.assertEqual(self.with_extra(mc({"a": 1, "b": 2}))["limits"]["max_children"], {"a": 1, "b": 2})
+        big = "9" * 600                                  # the 600-digit cap (I6); 601 or more is refused, tested above
+        self.assertEqual(self.raw("limits:\n  max_children:\n    a: %s\n" % big)["limits"]["max_children"],
+                         {"a": int(big)})
+
+    def test_limits_depth_concurrent_checked(self):  # L12, L13
+        for key in ("max_depth", "max_concurrent"):
+            self.assertNotIn(key, self.with_data({"limits": {}})["limits"])
+            for ok in (1, 5):
+                with self.subTest(key=key, ok=ok):
+                    self.assertEqual(self.with_extra({"limits": {key: ok}})["limits"], {key: ok})
+            big = "9" * 600                              # the 600-digit cap (I6); 601 or more is refused, tested above
+            self.assertEqual(self.raw("limits:\n  %s: %s\n" % (key, big))["limits"], {key: int(big)})
+            for bad in NOT_INT_AT_LEAST_1:
+                with self.subTest(key=key, bad=bad):
+                    self.bad({"limits": {key: bad}}, "limits." + key, "must be an integer of at least 1")
+
+    # ---- merge
+    def test_merge_mode_default_and_checked(self):  # M1-M6
+        self.assertEqual(config.load(self.root)["merge"]["mode"], "host")
+        for mode in ("controller", "host"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.with_extra({"merge": {"mode": mode}})["merge"], {"mode": mode})
+        for bad in ("auto", "Host", "", 1, True, None, ["host"]):
+            with self.subTest(bad=bad):
+                self.bad({"merge": {"mode": bad}}, "merge.mode", "must be one of host, controller")
+        for value in ("host", ["mode"], 1, None, True):
+            with self.subTest(value=value):
+                self.bad({"merge": value}, "merge", "must be a mapping")
+        self.unknown({"merge": {"mode": "host", "by": "me"}}, "merge.by")
+        self.assertEqual(self.with_data({"merge": {}})["merge"], {"mode": "host"})
+
+    def test_config_merge_mode_off_enum_text(self):  # CF8: Controller, a trailing space, NUL, non-ASCII
+        for bad in ("Controller", "controller ", "host\u0000", "contrôller", "ࡰ", "Ⱟ"):
+            with self.subTest(bad=bad):
+                self.bad({"merge": {"mode": bad}}, "merge.mode", "must be one of host, controller")
+
+    def test_config_merge_duplicate_keys(self):  # CF9
+        self.refused_raw("merge:\n  mode: host\nmerge:\n  mode: host\n", "duplicate key 'merge' (line 6)")
+        self.refused_raw("merge:\n  mode: host\n  mode: controller\n", "duplicate key 'mode' (line 6)")
+
+    def test_config_merge_mode_digit_text(self):  # CF10: same verdict on both interpreters (P-3)
+        for digits, want in ((1000, "merge.mode: must be one of host, controller"), (1001, "integer too large (line 5)"),
+                             (4300, "integer too large (line 5)"), (4301, "integer too large (line 5)")):
+            with self.subTest(digits=digits):  # the interpreter's default limit: 3.9 has none, 3.13 has 4300
+                self.refused_raw("merge:\n  mode: %s\n" % ("9" * digits), want)
+
+    # ---- escape_cost
+    def test_escape_cost_optional_and_checked(self):  # E1-E7
+        sev = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+        self.assertNotIn("escape_cost", config.load(self.root))
+        for given in ({"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
+                      {"CRITICAL": 8, "HIGH": 4, "MEDIUM": 2, "LOW": 1}):
+            with self.subTest(given=given):
+                self.assertEqual(self.with_extra({"escape_cost": given})["escape_cost"], given)
+        full = {"CRITICAL": 8, "HIGH": 4, "MEDIUM": 2, "LOW": 1}
+        for left_out in sev:
+            with self.subTest(left_out=left_out):
+                self.bad({"escape_cost": {k: v for k, v in full.items() if k != left_out}},
+                         "escape_cost." + left_out, "required key is missing")
+        self.unknown({"escape_cost": dict(full, INFO=1)}, "escape_cost.INFO")
+        self.unknown({"escape_cost": dict(full, critical=1)}, "escape_cost.critical")
+        for s in sev:
+            for bad in (-1, True, False, "2", None, [1]):
+                with self.subTest(sev=s, bad=bad):
+                    self.bad({"escape_cost": dict(full, **{s: bad})}, "escape_cost." + s,
+                             "must be an integer of at least 0")
+        for value in (3, ["a"], "x", None):
+            with self.subTest(value=value):
+                self.bad({"escape_cost": value}, "escape_cost", "must be a mapping")
+        with self.assertRaises(GateError) as e:
+            self.with_data({"escape_cost": {}})
+        self.assertEqual(str(e.exception), ".strict-delivery/config.yml: escape_cost.CRITICAL: required key is missing")
+
+    # ---- reviews
+    def test_reviews_small_defaults_and_checked(self):  # R1-R5, R12, R13
+        cfg = config.load(self.root)
+        self.assertEqual(cfg["reviews"], {"small": {
+            "max_lines": 150, "max_files": 4, "exclude": [".strict-delivery/**", ".github/workflows/**", ".claude/**",
+                                                         "CLAUDE.md"], "tier": "tier2"}})
+        got = self.with_extra({"reviews": {"small": {"max_lines": 10}}})["reviews"]["small"]
+        self.assertEqual(got, {"max_lines": 10, "max_files": 4, "exclude": DEFAULT_EXCLUDE, "tier": "tier2"})
+        for extra in ({"reviews": {}}, {"reviews": {"small": {}}}):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.with_data(extra)["reviews"], EXPECTED["reviews"])
+        self.assertEqual(self.with_extra({"reviews": {"small": {"max_files": 1}}})["reviews"]["small"]["max_files"], 1)
+        for key in ("max_lines", "max_files"):
+            for bad in (0, -1, True, False, "4", "1.5", None):
+                with self.subTest(key=key, bad=bad):
+                    self.bad({"reviews": {"small": {key: bad}}}, "reviews.small." + key,
+                             "must be an integer of at least 1")
+        self.unknown({"reviews": {"extra": 1}}, "reviews.extra")
+        self.unknown({"reviews": {"small": {"extra": 1}}}, "reviews.small.extra")
+        for value in (1, ["a"], "x", None):
+            with self.subTest(value=value):
+                self.bad({"reviews": value}, "reviews", "must be a mapping")
+        for value in (1, ["a"], "x", None):
+            with self.subTest(small=value):
+                self.bad({"reviews": {"small": value}}, "reviews.small", "must be a mapping")
+
+    def test_reviews_small_exclude_checked(self):  # R6-R9
+        ex = lambda v: {"reviews": {"small": {"exclude": v}}}  # noqa: E731
+        for value in ("x", 3, {"a": "b"}, None):
+            with self.subTest(value=value):
+                self.bad(ex(value), "reviews.small.exclude")
+        for item in ("", 3, None, "../x", "a/../x", "/x", ".", "./x", "a//b", "a\x07b", "[z-a]", "a/.", "x/"):
+            with self.subTest(item=item):
+                self.bad(ex([item]), "reviews.small.exclude")
+        self.assertEqual(self.with_extra(ex([]))["reviews"]["small"]["exclude"], [])
+        self.assertEqual(self.with_extra(ex(["docs/**"]))["reviews"]["small"]["exclude"], ["docs/**"])
+        self.assertEqual(self.with_extra(ex(["a/*.py", "[ab]c", "CLAUDE.md"]))["reviews"]["small"]["exclude"],
+                         ["a/*.py", "[ab]c", "CLAUDE.md"])
+
+    def test_reviews_small_tier_checked(self):  # R10, R11
+        for tier in ("tier1", "tier2", "tier3", "tier4"):
+            with self.subTest(tier=tier):
+                self.assertEqual(self.with_extra({"reviews": {"small": {"tier": tier}}})["reviews"]["small"]["tier"],
+                                 tier)
+        for bad in ("tier5", "tier0", 2, "Tier2", "", True, None):
+            with self.subTest(bad=bad):
+                self.bad({"reviews": {"small": {"tier": bad}}}, "reviews.small.tier",
+                         "must be one of tier1, tier2, tier3, tier4")
+
+    # ---- context
+    def test_context_split_keys_checked(self):  # C1-C6
+        self.assertEqual(config.load(self.root)["context"], {"max_lines": 2000, "max_bytes": 100000})
+        self.assertEqual(self.with_extra({"context": {"max_lines": 50}})["context"],
+                         {"max_lines": 50, "max_bytes": 100000})
+        self.assertEqual(self.with_extra({"context": {"max_bytes": 7}})["context"],
+                         {"max_lines": 2000, "max_bytes": 7})
+        for key in ("max_lines", "max_bytes"):
+            for bad in (0, -1, True, False, "9", None):
+                with self.subTest(key=key, bad=bad):
+                    self.bad({"context": {key: bad}}, "context." + key, "must be an integer of at least 1")
+        self.unknown({"context": {"extra": 1}}, "context.extra")
+        for value in (1, ["a"], "x"):
+            with self.subTest(value=value):
+                self.bad({"context": value}, "context", "must be a mapping")
+        cfg = self.with_extra({"paths": {"context": "x/c.yml"}, "context": {"max_lines": 3}})
+        self.assertEqual((cfg["paths"]["context"], cfg["context"]["max_lines"]), ("x/c.yml", 3))
+        # paths.context alone leaves the top-level context at its defaults
+        self.assertEqual(self.with_extra({"paths": {"context": "x/c.yml"}})["context"],
+                         {"max_lines": 2000, "max_bytes": 100000})
+
+    # ---- this repository
+    def test_repo_config_excludes(self):  # G5: this repository's reviews.small.exclude, plan P:2001
+        cfg = config.load(REPO)
+        self.assertEqual(cfg["reviews"]["small"]["exclude"], REPO_EXCLUDE)
+        self.assertEqual(len(REPO_EXCLUDE), 14)
+        self.assertEqual(cfg["schema"], TAG)
+
+    def test_this_repo_merge_mode(self):  # RC1, owner Q-M1
+        self.assertEqual(config.load(REPO)["merge"]["mode"], "controller")
+
+    def test_this_repo_merge_raw(self):  # RC2: the file itself, not the defaults
+        raw = yamlsub.load(os.path.join(REPO, ".strict-delivery", "config.yml"), ".strict-delivery/config.yml")
+        self.assertEqual(raw["merge"], {"mode": "controller"})
+
+    def test_this_repo_agent_may_merge(self):  # RC3
+        from gates.lib import merge
+        self.assertIs(merge.agent_may_merge(config.load(REPO)), True)
+
+    # ---- version rows
+    def test_new_int_keys_digit_limits(self):  # I6, K1 (G1-G4 class): 600 digits accepted, 601 or more refused
+        """One cap of 600 digits on every integer key config/2 reads, whatever PYTHONINTMAXSTRDIGITS is. Texts of 601
+        to 1000 digits reach the key check when the interpreter converts them and name the key; under the limit 640
+        yamlsub's own conversion refuses texts of 641 or more digits first, and texts of 1001 or more digits are always
+        refused there (yamlsub.MAX_INT_CHARS): a GateError either way, never the interpreter's own message."""
+        cases = (("limits.max_depth", "limits:\n  max_depth: %s\n", lambda c: c["limits"]["max_depth"]),
+                 ("limits.max_concurrent", "limits:\n  max_concurrent: %s\n", lambda c: c["limits"]["max_concurrent"]),
+                 ("limits.max_children.controller", "limits:\n  max_children:\n    controller: %s\n",
+                  lambda c: c["limits"]["max_children"]["controller"]),
+                 ("escape_cost.LOW", "escape_cost:\n  CRITICAL: 1\n  HIGH: 1\n  MEDIUM: 1\n  LOW: %s\n",
+                  lambda c: c["escape_cost"]["LOW"]),
+                 ("escape_cost.CRITICAL", "escape_cost:\n  CRITICAL: %s\n  HIGH: 1\n  MEDIUM: 1\n  LOW: 1\n",
+                  lambda c: c["escape_cost"]["CRITICAL"]),
+                 ("reviews.small.max_lines", "reviews:\n  small:\n    max_lines: %s\n",
+                  lambda c: c["reviews"]["small"]["max_lines"]),
+                 ("reviews.small.max_files", "reviews:\n  small:\n    max_files: %s\n",
+                  lambda c: c["reviews"]["small"]["max_files"]),
+                 ("context.max_lines", "context:\n  max_lines: %s\n", lambda c: c["context"]["max_lines"]),
+                 ("context.max_bytes", "context:\n  max_bytes: %s\n", lambda c: c["context"]["max_bytes"]))
+        too_large = r"\A\.strict-delivery/config\.yml: integer too large \(line [0-9]+\)\Z"
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for key, template, get in cases:
+                    for digits in (600, 601, 1000, 1001, 4300, 4301):
+                        with self.subTest(limit=lim, key=key, digits=digits):
+                            body = template % ("7" * digits)
+                            if digits == 600:
+                                self.assertEqual(get(self.raw(body)), int("7" * digits))
+                            elif digits > 1000 or (lim == 640 and digits > 640):
+                                self.assertRegex(self.refused_raw(body), too_large)
+                            else:
+                                self.assertEqual(self.refused_raw(body),
+                                                 ".strict-delivery/config.yml: %s: must be an integer of at most 600 "
+                                                 "digits" % key)
+
+    def test_new_int_keys_non_ascii_digits(self):  # K2: no isdigit/isdecimal decides; U+1FAE8 is So on 3.13, Cn on 3.9
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for text in ("٥", "５", "\U0001FAE8", "5٥"):
+                    with self.subTest(limit=lim, text=text):
+                        self.assertEqual(self.refused_raw("limits:\n  max_depth: %s\n" % text),
+                                         ".strict-delivery/config.yml: limits.max_depth: must be an integer of at "
+                                         "least 1")
+
+    def test_new_int_keys_digit_cap_no_conversion(self):  # I6: the cap reads the number without str() or int() of text
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for key, data in (("limits.max_depth", {"limits": {"max_depth": 10 ** 600}}),
+                                  ("escape_cost.HIGH", {"escape_cost": {"CRITICAL": 1, "HIGH": 10 ** 700,
+                                                                        "MEDIUM": 1, "LOW": 1}})):
+                    with self.subTest(limit=lim, key=key):
+                        with self.assertRaises(GateError) as e:
+                            self.with_data(data)
+                        self.assertEqual(str(e.exception), ".strict-delivery/config.yml: %s: must be an integer of at "
+                                         "most 600 digits" % key)
+                with self.subTest(limit=lim, key="largest accepted"):
+                    self.assertEqual(self.with_data({"limits": {"max_depth": 10 ** 600 - 1}})["limits"]["max_depth"],
+                                     10 ** 600 - 1)
+
+    def test_new_keys_unicode_version_independent(self):  # V2, PC1 skeleton row
+        """Measured on 3.9 (Unicode 13) and 3.13: yamlsub accepts a key holding U+0870 (assigned in Unicode 14) and
+        one holding U+1FAE8 (assigned in 15), written plain, quoted or as a ``\\u`` escape, with the same verdict on
+        both interpreters. The table row expected U+0870 refused; the measured verdict is accepted (reported)."""
+        astral = "\U0001FAE8"
+        cfg = self.raw('limits:\n  max_children:\n    "%s": 2\n' % astral)
+        self.assertEqual(cfg["limits"]["max_children"], {astral: 2})
+        for text in ('"a\\u0870"', "a\u0870", '"a\u0870"'):
+            with self.subTest(text=text):
+                cfg = self.raw("limits:\n  max_children:\n    %s: 2\n" % text)
+                self.assertEqual(cfg["limits"]["max_children"], {"a\u0870": 2})
+
+    def test_exception_groups_propagate(self):  # V3, PC1 skeleton row
+        import builtins
+        beg = getattr(builtins, "BaseExceptionGroup", None)
+        eg = getattr(builtins, "ExceptionGroup", None)
+        if beg is None:
+            self.skipTest("BaseExceptionGroup is absent on this interpreter (3.9)")
+        for exc in (beg("x", [KeyboardInterrupt()]), eg("x", [ValueError()])):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch.object(yamlsub, "load", side_effect=exc):
+                    with self.assertRaises(beg) as cm:
+                        config.load(self.root)
+                self.assertIs(cm.exception, exc)
 
 
 if __name__ == "__main__":

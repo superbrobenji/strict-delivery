@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-guat
+status: open
+source: "PR-2c1 final review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g4/final-review-1.md FR-2"
+severity: LOW
+class: "cite path state: a cite of a claim file (the file add/verify rewrites, any path under paths.claims) is accepted and can never be fresh; gates/tools/claims_cli.py:117-139"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 2c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 311554fb63abe9be94ced284d1c1d1cb283d9f69
+    by: stream-a9
+review_round: 3
+caused_by_change: true
+dimension: cite path state

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-2j6r
+status: open
+source: "P2.1 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g6/P2.1-review-1.md R1-1"
+severity: LOW
+class: "git-call rule: gitinfo.rev_list (gates/lib/gitinfo.py:553) has no trailing -- after the revisions, so a tracked file named like the range (x..y) makes git rev-list exit 128 (Global Constraints :33)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P2.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 0d12bf3e3ef40e4b4657bac12e548d51358003a2
+    by: stream-a11
+review_round: 1
+caused_by_change: true
+dimension: gitinfo git-call rule

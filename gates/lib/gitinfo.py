@@ -27,6 +27,11 @@ LONG_HEX = re.compile(r"[0-9a-fA-F]{41,}")  # longer than a sha-1: git would mat
 
 CLEARED_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+# D-18 (owner Q-G1-4 (a)): the hooks' index-reading calls run with core.fsmonitor off, so git stats every tracked file
+# and never trusts an fsmonitor-valid bit that hides a work-tree change (a hook or daemon that reports no change).
+# ``_run`` puts these options before ``-C root`` and the subcommand; they override every config source, including
+# ``git -c`` and GIT_CONFIG_COUNT (measured with git 2.50.1).
+FSMONITOR_OFF = ["-c", "core.fsmonitor=false"]
 REFUSED_LEAD = ("-", "^")  # an option, or an exclusion marker that names no object (F-1a-ver-2)
 
 
@@ -46,12 +51,15 @@ def _argv(root: str, args: List[str], literal: bool, opts: Optional[List[str]]) 
 
 def _run(root: str, name: str, args: List[str], ok: Optional[tuple] = (0,),
          literal: bool = False, opts: Optional[List[str]] = None,
-         index: Optional[str] = None) -> "subprocess.CompletedProcess":
+         index: Optional[str] = None, extra_env: Optional[dict] = None) -> "subprocess.CompletedProcess":
     """Run ``git [opts] -C root <args>``; with ``ok`` a tuple, any other exit status is a GateError naming
-    ``name``. ``index`` sets ``GIT_INDEX_FILE`` for this call only (``blob_ids``'s temporary copy)."""
+    ``name``. ``index`` sets ``GIT_INDEX_FILE`` for this call only (``blob_ids``'s temporary copy);
+    ``extra_env`` adds names to this call's environment only (``dirty_paths``: ``GIT_OPTIONAL_LOCKS``)."""
     env = _env()
     if index is not None:
         env["GIT_INDEX_FILE"] = index
+    if extra_env:
+        env.update(extra_env)
     argv = _argv(root, args, literal, opts)
     try:
         p = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, check=False,
@@ -216,6 +224,16 @@ def merge_base(root: str, a: str, b: str) -> str:
     return _text(p.stdout, "merge-base").strip()
 
 
+def is_ancestor(root: str, a: str, b: str) -> bool:
+    """True iff commit ``a`` is an ancestor of (or the same commit as) ``b``: ``git merge-base --is-ancestor``.
+    Exit 1 is False; any other failure (an unknown object, a bad root) is a GateError (owner Q-PLP-5 (a))."""
+    _check_rev(a)
+    _check_rev(b)
+    _require_toplevel(root)
+    p = _run(root, "merge-base --is-ancestor", ["merge-base", "--is-ancestor", a, b], ok=(0, 1))
+    return p.returncode == 0
+
+
 def _stage_entries(stdout: bytes, what: str) -> list:
     """Parse ``ls-files -z --stage`` output into (mode, object id, stage, path). ``-z`` ends each entry with NUL
     and quotes nothing, so a tab or newline in a path stays part of the path: the head before the first tab holds
@@ -351,3 +369,449 @@ def user_email(root: str) -> Optional[str]:
     p = _run(root, "config user.email", ["config", "user.email"], ok=(0, 1))
     value = _text(p.stdout, "config").strip()
     return value or None
+
+
+def unstaged_paths(root: str) -> list:
+    """The tracked paths whose work-tree content differs from the index git is using (``GIT_INDEX_FILE`` inherited;
+    a relative value resolves against ``root``, because the call runs with ``-C root``): git's own ``diff`` rule, so a
+    stat-only change is not listed, and a deleted file, an intent-to-add file and a changed submodule are (task 2b.2;
+    owner Q-RC-1 (a): colour, external diff and text conversion are switched off; ruling R-G1-1:
+    ``--ignore-submodules=none``, so ``diff.ignoreSubmodules`` and ``submodule.<name>.ignore`` cannot hide a changed
+    submodule, and a submodule holding only untracked files is listed too)."""
+    _require_toplevel(root)
+    p = _run(root, "diff --name-only", ["diff", "--no-color", "--name-only", "-z", "--no-ext-diff", "--no-textconv",
+                                        "--ignore-submodules=none"], opts=FSMONITOR_OFF)
+    return [_text(raw, "diff --name-only") for raw in p.stdout.split(b"\0") if raw]
+
+
+def flagged_paths(root: str) -> list:
+    """The tracked paths flagged assume-unchanged (a lowercase ASCII tag in ``git ls-files -v``) or skip-worktree
+    (tag ``S``), in git's order: the rule of spec C-29 (``git ls-files -v | grep '^[a-zS]'``), so ``git diff`` cannot
+    show a change to them (task 2b.2, owner Q-G1-3 (a), D-14; ``GIT_INDEX_FILE`` inherited as in ``unstaged_paths``).
+    An entry that is not ``<ASCII letter> <space> <path>`` is a GateError: the hook fails closed."""
+    _require_toplevel(root)
+    p = _run(root, "ls-files -v", ["ls-files", "-v", "-z"], opts=FSMONITOR_OFF)
+    data = p.stdout
+    if data and not data.endswith(b"\0"):
+        raise GateError("git ls-files -v: unexpected entry %r" % data.rsplit(b"\0", 1)[-1])
+    out = []
+    for raw in (data.split(b"\0")[:-1] if data else []):
+        if len(raw) < 3 or raw[1:2] != b" " or not (b"a" <= raw[:1] <= b"z" or b"A" <= raw[:1] <= b"Z"):
+            raise GateError("git ls-files -v: unexpected entry %r" % raw)
+        path = _text(raw[2:], "ls-files -v")
+        if raw[:1] == b"S" or raw[:1].islower():
+            out.append(path)
+    return out
+
+
+def hooks_dir(root: str) -> str:
+    """The absolute directory git runs hooks from (``rev-parse --git-path hooks``: the common git directory's
+    ``hooks`` for a linked worktree, ``core.hooksPath`` when set), a relative answer taken from ``root``."""
+    _require_toplevel(root)
+    p = _run(root, "rev-parse --git-path hooks", ["rev-parse", "--git-path", "hooks"])
+    path = _text(p.stdout, "rev-parse --git-path hooks")
+    if path.endswith("\n"):
+        path = path[:-1]  # git's one line terminator; every other byte (spaces, more newlines) is the path's own
+    return os.path.abspath(os.path.join(root, path))
+
+
+def _need_root(root: object) -> None:
+    """Decision D-Q14 (Task P1.3): the functions of this task take a ``str`` root, never ``""``, ``bytes`` or a subclass."""
+    if type(root) is not str or root == "":
+        raise GateError("root must be a string")
+
+
+_HEADS = "refs/heads/"
+
+
+def current_branch(root: str) -> Optional[str]:
+    """The branch HEAD is on, or ``None`` when HEAD is detached (Task P1.3, decision D-Q6): ``git symbolic-ref --quiet
+    HEAD`` with ``refs/heads/`` stripped, not the ``--short`` form, which prints ``heads/<b>`` when a tag ``<b>``
+    exists. An unborn branch gives its name. A target outside ``refs/heads/`` is a GateError (fail closed)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "symbolic-ref", ["symbolic-ref", "--quiet", "HEAD"], ok=(0, 1))
+    if p.returncode == 1:
+        return None
+    ref = _text(p.stdout, "symbolic-ref")
+    if ref.endswith("\n"):
+        ref = ref[:-1]  # git's one line terminator
+    if not ref.startswith(_HEADS) or len(ref) == len(_HEADS):
+        raise GateError("git symbolic-ref: HEAD does not name a branch under refs/heads/")
+    return ref[len(_HEADS):]
+
+
+def dirty_paths(root: str) -> list:
+    """The paths of the work tree at ``root`` that ``git status`` reports (staged, unstaged, untracked, unmerged, a
+    changed submodule), in git's order, each once (Task P1.3; decisions D-Q7, D-Q8). ``--porcelain=v1 -z`` quotes
+    nothing; ``--no-renames`` makes every entry one path (the text after the three bytes ``XY ``; minimum git 2.18);
+    ``--ignore-submodules=none`` as ``unstaged_paths``; ``--untracked-files=all`` and ``--ignored=no`` override the
+    user's ``status.showUntrackedFiles``; ``GIT_OPTIONAL_LOCKS=0`` keeps this call from rewriting ``.git/index``;
+    ``core.fsmonitor`` is off as in the hooks' calls. ``GIT_INDEX_FILE`` is inherited. A linked worktree's paths are
+    never listed: git answers for the work tree of ``root``."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "status --porcelain", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=no",
+                                          "--no-renames", "--ignore-submodules=none"],
+             opts=FSMONITOR_OFF, extra_env={"GIT_OPTIONAL_LOCKS": "0"})
+    out = []
+    for raw in p.stdout.split(b"\0"):
+        if not raw:
+            continue
+        if len(raw) < 4 or raw[2:3] != b" ":
+            raise GateError("git status --porcelain: unexpected entry %r" % raw)
+        out.append(_text(raw[3:], "status --porcelain"))
+    return out
+
+
+def upstream_sha(root: str) -> Optional[str]:
+    """The commit ``@{upstream}`` names, ``None`` when the branch has none (never configured, the remote branch gone,
+    a detached HEAD, measured with git 2.50.1): ``git rev-parse --verify --quiet`` exits 1 then (Task P1.3). Read from local
+    refs only."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "rev-parse @{upstream}", ["rev-parse", "--verify", "--quiet", "--end-of-options", "@{upstream}"],
+             ok=(0, 1))
+    if p.returncode == 1:
+        return None
+    return _text(p.stdout, "rev-parse").strip()
+
+
+def remotes(root: str) -> list:
+    """The names ``git remote`` lists, in git's order; any listed name counts (Task P1.3, decision D-Q12)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "remote", ["remote"])
+    return [n for n in _text(p.stdout, "remote").split("\n") if n]
+
+
+# Task P2.1 part i (decisions D-A13, D-A13b, D-A14, D-A15, D-A16, D-A23, D-A25). The three history readers pass the
+# global option ``--no-replace-objects`` (D-A16: a ``refs/replace`` ref must not change the answer of a merge-policy
+# check); the existing calls above are unchanged.
+_NO_REPLACE = ["--no-replace-objects"]
+
+
+def local_branches(root: str) -> list:
+    """Every ``refs/heads/`` branch name, sorted (Task P2.1; decisions D-A13, D-A23): ``git for-each-ref --no-color
+    --format=%(refname) refs/heads`` with ``refs/heads/`` stripped, not the ``%(refname:short)`` form, which prints
+    ``heads/<b>`` when a tag ``<b>`` exists. A name that is not valid UTF-8 is a GateError."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "for-each-ref", ["for-each-ref", "--no-color", "--format=%(refname)", "refs/heads"])
+    names = []
+    for line in _text(p.stdout, "for-each-ref").split("\n"):
+        if not line:
+            continue
+        if not line.startswith(_HEADS):
+            raise GateError("git for-each-ref: unexpected ref %r" % line)
+        names.append(line[len(_HEADS):])
+    return sorted(names)
+
+
+def _need_revision(value: object, name: str) -> str:
+    """``value`` is a non-empty ``str`` (a subclass is refused) and passes ``_check_rev``; GateError otherwise."""
+    if type(value) is not str or value == "":
+        raise GateError("%s must be a non-empty string" % name)
+    _check_rev(value)
+    return value
+
+
+def changed_paths(root: str, a: str, b: Optional[str]) -> list:
+    """The paths that differ between ``a`` and ``b`` (``None``: the working tree), in git's order, both sides of a
+    rename listed (Task P2.1; decisions D-A14, D-A16): ``git diff --no-color --name-only -z --no-renames --no-ext-diff
+    --no-textconv a [b] --``. The trailing ``--`` keeps a revision from being read as a path; ``GIT_OPTIONAL_LOCKS=0``
+    and ``core.fsmonitor`` off are set as in ``dirty_paths`` (D-A14). Measured with git 2.50.1: a call against the
+    work tree (``b`` ``None``) still refreshes the stat data of ``.git/index``, never what it records. Untracked
+    files are never listed."""
+    _need_root(root)
+    _need_revision(a, "a")
+    if b is not None:
+        if type(b) is not str or b == "":
+            raise GateError("b must be None or a non-empty string")
+        _check_rev(b)
+    _require_toplevel(root)
+    args = ["diff", "--no-color", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", a]
+    if b is not None:
+        args.append(b)
+    p = _run(root, "diff --name-only", args + ["--"], opts=_NO_REPLACE + FSMONITOR_OFF,
+             extra_env={"GIT_OPTIONAL_LOCKS": "0"})
+    return [_text(raw, "diff --name-only") for raw in p.stdout.split(b"\0") if raw]
+
+
+def rev_list(root: str, a: str, b: str, first_parent: bool = False) -> list:
+    """The commits of ``a..b``, oldest first (parents before children): ``git rev-list --topo-order --reverse
+    [--first-parent] a..b --`` (Task P2.1; decisions D-A13b, D-A16). ``--reverse`` alone orders unrelated commits by
+    date, which a skewed clock turns into a child before its parent; ``--first-parent`` lists only the first-parent
+    line. ``a`` equal to ``b``, or ``b`` an ancestor of ``a``, gives ``[]``."""
+    _need_root(root)
+    _need_revision(a, "a")
+    _need_revision(b, "b")
+    if type(first_parent) is not bool:
+        raise GateError("first_parent must be a bool")
+    _require_toplevel(root)
+    args = ["rev-list", "--topo-order", "--reverse"] + (["--first-parent"] if first_parent else [])
+    p = _run(root, "rev-list", args + ["%s..%s" % (a, b), "--"], opts=_NO_REPLACE)
+    return [x for x in _text(p.stdout, "rev-list").split("\n") if x]
+
+
+def ls_tree_entries(root: str, ref: str, directory: str) -> list:
+    """Every entry directly under ``directory`` at ``ref`` as ``(mode, type, path)`` (Task P2.1 review 1, finding
+    F-20261118-bc74, decision D-A9): ``git ls-tree -z --full-tree ref -- directory/``. ``mode`` is git's six digits
+    (``100644``, ``100755``, ``120000`` a symlink, ``160000`` a gitlink, ``040000`` a tree), ``type`` is ``blob``,
+    ``tree`` or ``commit``, ``path`` is repo-relative. ``ls_tree`` lists only the regular files and hides the
+    rest; this lists them all, so a caller can refuse a stray entry. A ``directory`` that is no folder at ``ref``
+    (missing, a file, a symlink) gives ``[]``; ``""`` is the repository root."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    if type(directory) is not str:
+        raise GateError("directory must be a string")
+    _require_toplevel(root)
+    _check_norm(directory, "ls-tree: directory", allow_empty=True)
+    args = ["ls-tree", "-z", "--full-tree", ref] + (["--", directory + "/"] if directory else [])
+    p = _run(root, "ls-tree", args, literal=True, opts=_NO_REPLACE)
+    out = []
+    for raw in p.stdout.split(b"\0"):
+        if not raw:
+            continue
+        head, _, path = raw.partition(b"\t")
+        fields = head.split(b" ")
+        if len(fields) != 3:
+            raise GateError("git ls-tree gave an entry that cannot be read")
+        out.append((fields[0].decode("ascii"), fields[1].decode("ascii"), _text(path, "ls-tree")))
+    return out
+
+
+def parents(root: str, sha: str) -> list:
+    """The parents of commit ``sha``, first parent first, as full ids; ``[]`` for a root commit (Task P2.1; decisions
+    D-A15, D-A16): ``git rev-list --parents -n 1 --end-of-options <sha>^{commit}``. The ``^{commit}`` peel makes a
+    tree or blob id a GateError, where an unpeeled call prints nothing and reads as no commit. The tip of a shallow
+    clone reads as a root commit (git cuts its parents), so a caller that needs two parents fails closed."""
+    _need_root(root)
+    if type(sha) is not str:
+        raise GateError("sha must be a string")
+    _need_revision(sha, "sha")
+    _require_toplevel(root)
+    p = _run(root, "rev-list --parents", ["rev-list", "--parents", "-n", "1", "--end-of-options", sha + "^{commit}"],
+             opts=_NO_REPLACE)
+    ids = _text(p.stdout, "rev-list --parents").split()
+    if not ids:
+        raise GateError("git rev-list --parents gave no commit")
+    return ids[1:]
+
+
+def main_worktree(root: str) -> str:
+    """The absolute path of the main worktree: the parent of ``git rev-parse --path-format=absolute
+    --git-common-dir`` (Task P2.1; decision D-A25). ``--path-format`` needs git 2.31. The common directory must be
+    named ``.git``: a clone made with ``--separate-git-dir``, a bare repository's worktree and a submodule have no
+    main worktree beside it, and are a GateError (fail closed)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "rev-parse --git-common-dir", ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    common = _text(p.stdout, "rev-parse --git-common-dir")
+    if common.endswith("\n"):
+        common = common[:-1]
+    if not os.path.isabs(common) or posixpath.basename(common) != ".git":
+        raise GateError("git rev-parse --git-common-dir: no main worktree (the common git directory is not a "
+                        "directory named .git)")
+    return posixpath.dirname(common)
+
+
+# Task P2.3 (decisions D-Q1, D-Q2, D-Q5, D-Q13; plan P:2827-2828). Every call is ``-C root``, ``GIT_INDEX_FILE`` inherited.
+_EMPTY = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: a root commit is diffed against it
+
+
+def commit_paths(root: str, sha: str) -> list:
+    """The paths commit ``sha`` changes against its first parent, both sides of a rename (``changed_paths``' flags: ``git
+    diff --no-color --name-only -z --no-renames --no-ext-diff --no-textconv``); a root commit lists every path (it is
+    diffed against the empty tree; ``git diff <sha>^`` exits 128 for it). A merge lists its first-parent diff. ``sha`` is
+    a ``str`` that is a commit (a tree or blob id, an unknown id, ``""`` and a lead of ``-`` or ``^`` are a GateError)."""
+    _need_root(root)
+    if type(sha) is not str:
+        raise GateError("sha must be a string")
+    ps = parents(root, sha)
+    return changed_paths(root, ps[0] if ps else _EMPTY, sha)
+
+
+def merge_head(root: str) -> Optional[str]:
+    """The 40-hex commit of the merge in progress, or ``None`` (decision D-Q2 (a)): the file ``git rev-parse --path-format=
+    absolute --git-path MERGE_HEAD`` names (per worktree), not ``rev-parse MERGE_HEAD``, which also answers for a branch or
+    tag called ``MERGE_HEAD``. An octopus (two or more lines), an empty file, anything but one line of 40 lowercase hex
+    digits, and an id that is no commit are a GateError (a merge cannot be told away by corrupting its marker)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "rev-parse --git-path", ["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"])
+    path = _text(p.stdout, "rev-parse --git-path").rstrip("\n")
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise GateError("MERGE_HEAD: cannot read (%s)" % (e.strerror or type(e).__name__)) from None
+    text = _text(data, "MERGE_HEAD")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if len(lines) > 1:
+        raise GateError("MERGE_HEAD: an octopus merge is in progress (%d heads); merge one stream at a time" % len(lines))
+    if len(lines) != 1 or len(lines[0]) != 40 or any(c not in "0123456789abcdef" for c in lines[0]):
+        raise GateError("MERGE_HEAD: not one 40-digit lowercase hex id")
+    if not commit_exists(root, lines[0]):
+        raise GateError("MERGE_HEAD: %s is no commit" % lines[0])
+    return lines[0]
+
+
+def staged_paths(root: str) -> list:
+    """The paths the index differs from HEAD in (what a commit would take; decision D-Q13 (c)), both sides of a rename:
+    ``git diff --cached --no-color --name-only -z --no-renames --no-ext-diff --no-textconv --``. An unborn HEAD lists the
+    whole index. ``GIT_OPTIONAL_LOCKS=0`` and ``core.fsmonitor`` off as in ``changed_paths``."""
+    _need_root(root)
+    _require_toplevel(root)
+    args = ["diff", "--cached", "--no-color", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--"]
+    p = _run(root, "diff --cached", args, opts=_NO_REPLACE + FSMONITOR_OFF, extra_env={"GIT_OPTIONAL_LOCKS": "0"})
+    return [_text(raw, "diff --cached") for raw in p.stdout.split(b"\0") if raw]
+
+
+def is_shallow(root: str) -> bool:
+    """True in a shallow clone (``git rev-parse --is-shallow-repository``; decision D-Q5)."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "rev-parse --is-shallow-repository", ["rev-parse", "--is-shallow-repository"])
+    out = _text(p.stdout, "rev-parse --is-shallow-repository").strip()
+    if out not in ("true", "false"):
+        raise GateError("git rev-parse --is-shallow-repository gave %r" % out[:20])
+    return out == "true"
+
+
+def file_hunks(root: str, a: str, b: Optional[str], path: str) -> list:
+    """The hunks of ``path`` between ``a`` and ``b`` (``None``: the work tree) as ``(old_start, old_count, new_start,
+    new_count)``: ``git diff --no-color --no-ext-diff --no-textconv --no-renames -U0 a [b] -- path`` (plan P:2837 (ii)).
+    A count that is absent in the ``@@`` header is 1; ``-U0`` and ``--no-ext-diff --no-textconv`` give the same hunks
+    whatever the repository's diff configuration says."""
+    _need_root(root)
+    _need_revision(a, "a")
+    if b is not None:
+        _need_revision(b, "b")
+    _check_norm(path, "diff: path")
+    _require_toplevel(root)
+    args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U0", a] + ([b] if b else []) + ["--", path]
+    p = _run(root, "diff -U0", args, opts=_NO_REPLACE + FSMONITOR_OFF, literal=True, extra_env={"GIT_OPTIONAL_LOCKS": "0"})
+    out = []
+    for line in _text(p.stdout, "diff -U0").split("\n"):
+        if not line.startswith("@@ -"):
+            continue
+        head = line[4:].split(" @@")[0].split(" +")
+        if len(head) != 2:
+            raise GateError("git diff gave a hunk header that cannot be read")
+        nums = []
+        for part in head:
+            s, _, c = part.partition(",")
+            c = c if c != "" else "1"
+            if not s or not c or any(ch not in "0123456789" for ch in s + c) or len(s) > 9 or len(c) > 9:
+                raise GateError("git diff gave a hunk header that cannot be read")
+            nums += [int(s), int(c)]
+        out.append(tuple(nums))
+    return out
+
+
+# Task P3.2 (decisions D-Q1 to D-Q5; plan P:2972 and Rq-5-4 P:5070-5074). Every call is ``-C root``, ``GIT_INDEX_FILE``
+# inherited, and measured with git 2.50.1 (``--end-of-options`` needs 2.24, ``check-ignore --no-index`` 1.8.5). The
+# history readers pass ``--no-replace-objects`` (D-A16) and ``--literal-pathspecs`` where a path is given.
+
+def _need_text(value: object, name: str) -> str:
+    if type(value) is not str:
+        raise GateError("%s must be a string" % name)
+    return value
+
+
+def last_text(root: str, ref: str, path: str) -> Optional[str]:
+    """The text of ``path`` at ``ref``; when it is absent there, its text at the parent of the newest commit reachable
+    from ``ref`` that deleted it (``git log --no-color -1 --diff-filter=D --format=%H <ref> -- <path>``); ``None`` when
+    it never existed. A path that was renamed away counts as deleted. Stated limits (decision D-Q3): a deletion made
+    only by a merge commit is not seen (``git log`` without ``-m`` shows no diff for a merge), and in a shallow clone a
+    deletion before the cut reads as "never existed"; callers that need the whole history check ``is_shallow``."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    _need_text(path, "path")
+    _require_toplevel(root)
+    _check_norm(path, "path")
+    now = show(root, ref, path)
+    if now is not None:
+        return now
+    p = _run(root, "log", ["log", "--no-color", "-1", "--diff-filter=D", "--format=%H", "--no-ext-diff",
+                           "--no-textconv", ref, "--", path], literal=True, opts=_NO_REPLACE)
+    sha = _text(p.stdout, "log").strip()
+    if sha == "":
+        return None
+    before = parents(root, sha)  # read with --no-replace-objects, as the log call above
+    return show(root, before[0], path) if before else None
+
+
+def first_parent(root: str, ref: str) -> list:
+    """The commits of the first-parent history of ``ref``, newest first, as full ids: ``git rev-list --no-color
+    --first-parent <ref>^{commit} --`` (Rq-5-4; decision D-Q2: the ``^{commit}`` peel makes a tree id a GateError, the
+    trailing ``--`` keeps a file named like the ref from being ambiguous). In a shallow clone the chain ends at the cut."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    _require_toplevel(root)
+    p = _run(root, "rev-list", ["rev-list", "--no-color", "--first-parent", ref + "^{commit}", "--"], opts=_NO_REPLACE)
+    return [x for x in _text(p.stdout, "rev-list").split("\n") if x]
+
+
+def deleted_paths(root: str, ref: str, directory: str) -> list:
+    """The repo-relative paths under ``directory`` that some commit reachable from ``ref`` deleted and that are absent at
+    ``ref``, each once, sorted by code point (Rq-5-4; decision D-Q1): ``git log --no-color --diff-filter=D --name-only -z
+    --format= --no-renames --no-ext-diff --no-textconv <ref> -- <directory>``; ``-z`` keeps every name raw; one recursive
+    ``ls-tree -r -z --full-tree`` read of ``ref`` limited to ``directory`` tests presence. A rename counts as a deletion
+    of the old path. ``directory`` is a normalised path (``""`` is refused) and a literal pathspec. Stated limits
+    (decision D-Q3): a deletion made only by a merge commit is not listed, and a shallow clone lists only what it can see."""
+    _need_root(root)
+    _need_revision(ref, "ref")
+    _need_text(directory, "directory")
+    _require_toplevel(root)
+    _check_norm(directory, "directory")
+    p = _run(root, "log", ["log", "--no-color", "--diff-filter=D", "--name-only", "-z", "--format=", "--no-renames",
+                           "--no-ext-diff", "--no-textconv", ref, "--", directory], literal=True, opts=_NO_REPLACE)
+    gone = {_text(raw, "log") for raw in p.stdout.split(b"\0") if raw}
+    if not gone:
+        return []
+    q = _run(root, "ls-tree", ["ls-tree", "-r", "-z", "--full-tree", ref, "--", directory], literal=True, opts=_NO_REPLACE)
+    present = {path for _, _, path in _entries(q.stdout, "ls-tree")}
+    return sorted(gone - present)
+
+
+def is_ignored(root: str, path: str) -> bool:
+    """True when ``git check-ignore -q --no-index -- <path>`` exits 0 (a pattern matches, tracked or not), False for exit
+    1; any other exit status is a GateError (Rq-5-4; decision D-Q4). ``path`` is a normalised repo-relative path; the
+    command takes no ``--literal-pathspecs`` (measured: exit 128), so a path starting with ``:`` (pathspec magic) is
+    refused instead, and a glob is read as a literal name. A path through a symlinked directory is exit 128."""
+    _need_root(root)
+    _need_text(path, "path")
+    _require_toplevel(root)
+    _check_norm(path, "path")
+    if path.startswith(":"):
+        raise GateError("path must not start with ':' (pathspec magic)")
+    p = _run(root, "check-ignore", ["check-ignore", "-q", "--no-index", "--", path], ok=(0, 1))
+    return p.returncode == 0
+
+
+_BAD_BRANCH_CHARS = " ~^:?*[\\@"
+
+
+def upstream_of(root: str, branch: str) -> Optional[str]:
+    """The commit ``<branch>@{upstream}`` names, read from local refs only; ``None`` when the branch has none (never
+    configured, the remote branch gone, or no such branch: ``git rev-parse --verify --quiet`` exits 1 then; measured
+    with git 2.50.1). A name that is not one short branch name (empty, a lead of ``-``, ``^`` or ``refs/``, whitespace, a
+    control character, or one of ``~^:?*[\\@``) is a GateError (decision D-Q5) so a typo is not a silent ``None``."""
+    _need_root(root)
+    if type(branch) is not str or branch == "":
+        raise GateError("branch must be a non-empty string")
+    if (branch.startswith(REFUSED_LEAD) or branch.startswith("refs/") or ".." in branch
+            or any(c in _BAD_BRANCH_CHARS or ord(c) < 32 or ord(c) == 127 for c in branch)):
+        raise GateError("branch must be one short branch name")
+    _require_toplevel(root)
+    p = _run(root, "rev-parse @{upstream}", ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                             branch + "@{upstream}"], ok=(0, 1))
+    if p.returncode == 1:
+        return None
+    return _text(p.stdout, "rev-parse").strip()

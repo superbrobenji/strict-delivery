@@ -9,17 +9,20 @@ Each framework role has a prompt block, a minimum tier, a budget cap, whether it
 | controller | skills/strict-delivery/prompts/controller.md | tier3 | yes | open, planned, in-progress, deferred, closed |
 | implementer | skills/strict-delivery/prompts/implementer.md | tier2 | yes | fixed-unpinned, pinned |
 | implementer_transcription | skills/strict-delivery/prompts/implementer_transcription.md | tier1 | yes | fixed-unpinned, pinned |
-| task_reviewer | skills/strict-delivery/prompts/task_reviewer.md | tier3 | yes | open |
+| task_reviewer | skills/strict-delivery/prompts/task_reviewer.md | tier2 | yes | open |
 | final_reviewer | skills/strict-delivery/prompts/final_reviewer.md | tier3 | yes | open |
 | final_verifier | skills/strict-delivery/prompts/final_verifier.md | tier4 | yes | open |
 | exception_reviewer | skills/strict-delivery/prompts/exception_reviewer.md | tier4 | yes | none |
 | audit_reviewer | skills/strict-delivery/prompts/audit_reviewer.md | tier3 | yes | open |
 | audit_verifier | skills/strict-delivery/prompts/audit_verifier.md | tier3 | yes | open |
 | investigator | skills/strict-delivery/prompts/investigator.md | tier3 | yes | none |
+| plan_writer | skills/strict-delivery/prompts/plan_writer.md | tier3 | yes | none |
+| plan_reviewer | skills/strict-delivery/prompts/plan_reviewer.md | tier3 | yes | open |
+| drafter | skills/strict-delivery/prompts/drafter.md | tier2 | yes | none |
 
 ## Model tiers
 
-A role runs at its minimum tier or above, and a dispatch names a tier, never a model: config `models.tiers` maps each tier to the model the project uses. The top tier, `tier4`, is allowed only for the roles in `top_tier_roles`, by default `final_verifier` and `exception_reviewer`. `tier4` has no default model; while it is unset, the `top_tier_roles` run at the tier `top_tier_fallback` names, default `tier3`. A small re-review that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, "Small re-review").
+A role runs at its minimum tier or above. A dispatch chooses a tier, and config `models.tiers` maps each tier to the model the project uses: the dispatch's `## Model` names that model, and every other line of a brief or report names tiers, never a model. The top tier, `tier4`, is allowed only for the roles in `top_tier_roles`, by default `final_verifier` and `exception_reviewer`. `tier4` has no default model; while it is unset, the `top_tier_roles` run at the tier `top_tier_fallback` names, default `tier3`. A small re-review that the dispatch check admits may run below the reviewer's minimum tier (`playbook/review.md`, "Small re-review").
 
 ## Budget cap
 

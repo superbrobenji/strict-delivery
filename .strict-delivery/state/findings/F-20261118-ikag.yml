@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-ikag
+status: open
+source: "P1.3 table drafter: .superpowers/sdd/2026-10-31-strict-delivery-framework/task-P1.3-domain.md Q24 and MG3/MG4, ruled change-caused by the stream a10 controller"
+severity: LOW
+class: "ledger keyword-line characters: the Ruling pattern refuses U+00A7, the only non-ASCII character on this repository's keyword lines, while plan :2599 keeps their text; gates/schemas/ledger.yml Ruling pattern"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P1.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 510b1a153b477fc1e52ef6f01d4206b12bccfb27
+    by: stream-a10
+review_round: 3
+caused_by_change: true
+dimension: ledger Ruling line characters

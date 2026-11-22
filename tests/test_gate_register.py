@@ -252,7 +252,7 @@ class ArgvTests(Base):  # A1-A4
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gates_main.main(["check"]), 2)
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                                         "gates: cites, claims, decisions, register, schema\n")
+                                         "gates: checkpoint, cites, claims, cleanup, decisions, dispatch, register, schema, streams\n")
         self.assertEqual(gates_main.GATES["register"], "gates.gate_register")
 
     def test_a2_config_invalid(self):  # A2
@@ -458,15 +458,17 @@ class BaseTests(Base):  # C3-C7
         self.assertIn(DELETED % (F, fpath(F), "main"), self.run_()[0])
 
     def test_deleted_resolved_finding_needs_grant(self):  # C4, OQ-5, Q-1b3-1, plan test
+        # P3.2 changed this test on purpose (Q-15 (a)): no grant decision decides a deletion any more, so every case
+        # that a grant once allowed now fails too; only a final merge allows it (the tests below).
         cases = (("no grant", [], frow(F, "closed"), True),
-                 ("answered grant for resolved_by", [grant(G)], frow(F, "closed"), False),
-                 ("merged row with grant", [grant(G)], frow(F, "merged"), False),
+                 ("answered grant for resolved_by", [grant(G)], frow(F, "closed"), True),
+                 ("merged row with grant", [grant(G)], frow(F, "merged"), True),
                  ("grant for another plan", [grant(G, plan="other")], frow(F, "closed"), True),
                  ("grant open", [grant(G, "open")], frow(F, "closed"), True),
                  ("grant withdrawn", [grant(G, "withdrawn")], frow(F, "closed"), True),
                  ("grant answered but invalid", [grant(G, answer=...)], frow(F, "closed"), True),
                  ("not a grant", [drow(G, plan="p")], frow(F, "closed"), True),
-                 ("superseded grant", [grant(G), drow(G2, supersedes=G)], frow(F, "closed"), False),
+                 ("superseded grant", [grant(G), drow(G2, supersedes=G)], frow(F, "closed"), True),
                  ("resolved_by missing", [grant(G)], frow(F, "closed", resolved_by=...), True))
         for name, decs, finding, fails in cases:
             with self.subTest(name):
@@ -481,13 +483,86 @@ class BaseTests(Base):  # C3-C7
                     self.assertIn("PASS register.base\n", out)
 
     def test_c5_grant_only_in_working_tree_counts(self):  # C5
+        # P3.2 changed this test on purpose (Q-15 (a)): a grant in the working tree no longer allows a deletion.
         root = self.build([frow(F, "closed")], files=SRC)
         self.other_branch()
         write_record(root, "%s/%s.yml" % (DEC, G), grant(G))  # untracked, working tree only
         git(root, "rm", "-q", fpath(F))
+        out, code = self.run_()
+        self.assertIn(DELETED % (F, fpath(F), "main"), out)
+        self.assertEqual(code, 1)
+
+    def final_build(self, finding, final="yes", squash=False):
+        """main holds the finding and, when ``final`` is not None, a ledger whose line for pull request 12 of plan p says
+        ``final=<final>`` (a real merge, or a squash); the finding file is then deleted from the index."""
+        cfg = {**minimal_config(), "merge": {"mode": "controller"}}
+        root = self.build([finding], files=SRC, cfg=cfg)
+        git(root, "checkout", "-q", "-b", "t")
+        self.put(".strict-delivery/state/plans/p/work.md", "w\n")
+        head = commit_all(root, "work")
+        git(root, "checkout", "-q", "main")
+        if squash:
+            git(root, "merge", "-q", "--squash", "t")
+            git(root, "commit", "-q", "-m", "squash")
+        else:
+            git(root, "merge", "-q", "--no-ff", "-m", "merge", "t")
+        merge = git(root, "rev-parse", "HEAD")
+        if final is not None:
+            self.put(".strict-delivery/state/plans/p/ledger.md",
+                     "<!-- schema: ledger/1 -->\nMERGED pr=12 head=%s merge=%s merged_by=u at=2026-11-02T06:23:42Z final=%s "
+                     "approval=chat pr=12 head=%s words=approve PR 12\n" % (head, merge, final, head))
+            commit_all(root, "ledger")
+        git(root, "rm", "-q", fpath(finding["id"]))
+        return root
+
+    def test_resolved_finding_deletion_needs_final_merge(self):  # GR1, plan test
+        for name, kw in (("non-final lines only", {"final": "no"}), ("no ledger", {"final": None}),
+                         ("final line, squash merge", {"squash": True})):
+            with self.subTest(name):
+                self.fresh(name)
+                root = self.final_build(frow(F, "closed"), **kw)
+                out, code = self.run_("--base", "HEAD")
+                self.assertIn("FAIL register.base.deleted." + F, out)
+                self.assertIn(DELETED % (F, fpath(F), "HEAD"), out)
+                self.assertEqual(code, 1)
+
+    def test_resolved_finding_deletion_with_final_merge_passes(self):  # GR2, GR3
+        for status in ("closed", "merged"):
+            self.fresh(status)
+            root = self.final_build(frow(F, status))
+            for base in ("HEAD", "main"):
+                with self.subTest(status + " " + base):
+                    out, _ = self.run_("--base", base)
+                    self.assertNotIn("register.base.deleted." + F, out)
+                    self.assertIn("PASS register.base\n", out)
+        self.fresh("default base")
+        root = self.final_build(frow(F, "closed"))
+        commit_all(root, "delete on main")
+        git(root, "checkout", "-q", "-b", "cleanup/p", "HEAD~1")  # the default base is the merge base with main
+        git(root, "rm", "-q", "-f", "--", fpath(F))
         out, _ = self.run_()
         self.assertNotIn("register.base.deleted." + F, out)
-        self.assertIn("PASS register.base\n", out)
+
+    def test_gate_register_hostile_resolved_by(self):  # GR5, D-Q9: the deleted line shows, never register.input
+        for bad in ("a b", "..", "P", "a/b"):
+            with self.subTest(bad):
+                self.fresh("h" + str(abs(hash(bad))))
+                root = self.final_build(frow(F, "closed", resolved_by=bad))
+                out, code = self.run_("--base", "HEAD")
+                self.assertNotIn("register.input", out)
+                self.assertIn("FAIL register.base.deleted." + F, out)
+
+    def test_gr_cli_matches_in_process(self):  # GR6: python3 -m gates check register through sys.executable
+        for final in ("no", "yes"):
+            self.fresh("cli" + final)
+            root = self.final_build(frow(F, "closed"), final=final)
+            want, code = self.run_("--base", "HEAD")
+            p = subprocess.run([sys.executable, "-m", "gates", "check", "register", "--root", root, "--base", "HEAD"],
+                               cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               env={k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")})
+            self.assertEqual(p.stdout.decode("utf-8"), want, p.stderr.decode("utf-8"))
+            self.assertEqual(p.returncode, code)
+            self.assertEqual(("FAIL register.base.deleted." + F) in want, final == "no")
 
     def test_edited_resolved_finding_fails_immutable(self):  # C6, plan test
         root = self.build([frow(F, "closed")], files=SRC)

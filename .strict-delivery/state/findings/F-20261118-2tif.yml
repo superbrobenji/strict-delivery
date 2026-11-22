@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261118-2tif
+status: open
+source: "P1.2 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g5/P1.2-review-1.md unrelated (b), ruled change-caused by the controller"
+severity: LOW
+class: "required_reads path accepts a backslash while worktrees path refuses it (D-Q11: backslash refused); gates/lib/checkpoints.py required_reads path rule"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P1.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: ee5d508b079d88671f1379b6a6a294b3580fb225
+    by: stream-a9
+review_round: 1
+caused_by_change: true
+dimension: required_reads path characters

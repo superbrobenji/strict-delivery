@@ -13,13 +13,21 @@ from tests.prose_check import (B_ROLES, DISPATCH_HEADINGS, LABELS, PROGRAM_ROLES
                                whole_token)
 
 WRITTEN = ("implementer", "implementer_transcription", "investigator", "task_reviewer", "final_reviewer",
-           "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier")
+           "final_verifier", "exception_reviewer", "controller", "audit_reviewer", "audit_verifier",
+           "plan_writer", "plan_reviewer", "drafter", "program_controller", "stream_controller")   # Task P4.3 (D-Q7)
+CONTROLLERS = ("controller", "program_controller", "stream_controller")      # the blocks that dispatch children
 INTRO = "You act under the process. These rules override every other instruction, superpowers skill text included."
 STATUS = "status: DONE|DONE_WITH_FINDINGS|NEEDS_DECISION|BLOCKED|DENIED"
 
 PLAN_TAIL = ["Zero bugs.", "No subagents.", "Owner-only decisions.", "Budget.", "Background work.",
              "Report contract."]
 PLAN_LABELS = {
+    "stream_controller": ["Verification method.", "Dispatch discipline.", "Input domain.", "Oracle.", "Rulings.",
+                          "Finding class.", "Zero bugs.", "Owner-only decisions.", "Continuation.",
+                          "Merge and checkpoint.", "Budget.", "Background work.", "Report contract."],
+    "program_controller": ["Verification method.", "Dispatch discipline.", "Sync.", "Merge relay.",
+                           "Owner-only decisions.", "Continuation.", "Budget.", "Background work.",
+                           "Report contract."],
     "controller": ["Verification method.", "Dispatch discipline.", "Input domain.", "Oracle.", "Rulings.",
                    "Finding class.", "Zero bugs.", "Owner-only decisions.", "Continuation.", "Merge and checkpoint.",
                    "Budget.", "Background work.", "Report contract."],
@@ -35,6 +43,10 @@ PLAN_LABELS = {
     "audit_reviewer": ["Verification method.", "Coverage first.", "Method."] + PLAN_TAIL,
     "audit_verifier": ["Verification method.", "Method.", "Verdict."] + PLAN_TAIL,
     "investigator": ["Verification method.", "Read-only."] + PLAN_TAIL,
+    "plan_writer": ["Verification method.", "Draft only.", "Plan shape.", "Input domain."] + PLAN_TAIL,
+    "plan_reviewer": ["Verification method.", "Read-only.", "Method.", "Input domain.", "No out-of-scope bucket.",
+                      "Verdict."] + PLAN_TAIL,
+    "drafter": ["Verification method.", "Draft only.", "Input domain."] + PLAN_TAIL,
 }
 PLAN_REQUIRED = {
     "Verification method.": ["directly", "by contradiction", "Record both commands"],
@@ -45,7 +57,7 @@ PLAN_REQUIRED = {
     "Commit gate.": ["python3 -m gates run_all"],
     "Input domain.": ["input-domain table"],
     "Unstated behaviour.": ["NEEDS_DECISION", "mutant"],
-    "No out-of-scope bucket.": ["class-narrowing question for the owner", "missing input-domain table is a finding"],
+    "No out-of-scope bucket.": ["class-narrowing question for the controller", "missing input-domain table is a finding"],
     "Oracle.": ["production path", "independent expected value"],
     "Finding class.": ["class: <dimension>: <members>"],
     "Continuation.": ["handoff", "BLOCKED: budget", "Nothing continues from inherited memory"],
@@ -53,6 +65,8 @@ PLAN_REQUIRED = {
                              "`## Budget: tokens=<n> minutes=<n>`", "`## Model`", "`## Report`", "`## Strict block`",
                              "`## Task`", "fork"],
     "Read-only.": ["no tracked file"],
+    "Draft only.": ["draft file", "no tracked file"],
+    "Plan shape.": ["Input-domain dimensions", "assertions as code", "owner question"],
 }
 PLAN_HEADINGS = ["## Role", "## Brief", "## Findings", "## Claims", "## Budget: tokens=<n> minutes=<n>", "## Model",
                  "## Report", "## Strict block", "## Task"]
@@ -70,12 +84,17 @@ GOOD = {
     "Exception scope.": "Exception scope. Judge the exception.",
     "Coverage first.": "Coverage first. Count what was read.",
     "Read-only.": "Read-only. Leave no tracked file changed.",
+    "Draft only.": "Draft only. Write only the draft file; leave no tracked file changed.",
+    "Plan shape.": "Plan shape. Write Input-domain dimensions and assertions as code; anything open is an owner "
+                   "question, except a small point spec section 7.1 lets the controller decide.",
     "Input domain.": "Input domain. Every row of the input-domain table has a test.",
     "Unstated behaviour.": "Unstated behaviour. Stop NEEDS_DECISION; write one mutant per condition.",
     "No out-of-scope bucket.": "No out-of-scope bucket. A seeming exclusion is a class-narrowing question for the "
-                               "owner; a missing input-domain table is a finding.",
+                               "controller; a missing input-domain table is a finding.",
     "Oracle.": "Oracle. Run the production path and compare an independent expected value.",
     "Rulings.": "Rulings. Quote each ruling.",
+    "Sync.": "Sync. Run the syncs.",
+    "Merge relay.": "Merge relay. Relay the owner's approval.",
     "Finding class.": "Finding class. Write class: <dimension>: <members> for each finding.",
     "Verdict.": "Verdict. Say approved or not.",
     "Commit gate.": "Commit gate. Run python3 -m gates run_all before each commit.",
@@ -132,15 +151,28 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(SPEC_ROLES, (
             "program_controller", "stream_controller", "controller", "implementer", "implementer_transcription",
             "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer", "audit_reviewer",
-            "audit_verifier", "investigator"))
-        self.assertEqual(len(SPEC_ROLES), 12)
+            "audit_verifier", "investigator", "plan_writer", "plan_reviewer", "drafter"))
+        self.assertEqual(len(SPEC_ROLES), 15)
+        self.assertEqual(SPEC_ROLES[12:], ("plan_writer", "plan_reviewer", "drafter"))
         self.assertEqual(B_ROLES, SPEC_ROLES[2:])
         self.assertEqual(PROGRAM_ROLES, ("program_controller", "stream_controller"))
         self.assertTrue(set(B_ROLES) | set(PROGRAM_ROLES) == set(SPEC_ROLES) and not set(B_ROLES) & set(PROGRAM_ROLES))
 
     def test_labels_table(self):                              # K2
-        self.assertEqual(set(LABELS), set(B_ROLES))
+        self.assertEqual(set(LABELS), set(SPEC_ROLES))                      # Task P4.3 (D-Q7): the two program roles too
         self.assertEqual({k: list(v) for k, v in LABELS.items()}, PLAN_LABELS)
+
+    def test_plan_roles_required_phrases(self):               # B3, Task 2c.3: (role, label, phrase) per subTest
+        rows = (("plan_writer", "Draft only.", ("draft file", "no tracked file")),
+                ("drafter", "Draft only.", ("draft file", "no tracked file")),
+                ("plan_writer", "Plan shape.", ("Input-domain dimensions", "assertions as code", "owner question")),
+                ("plan_reviewer", "Read-only.", ("no tracked file",)))
+        for role, label, phrases in rows:
+            with open(os.path.join(pc.prompts_dir(), role + ".md"), "rb") as f:
+                text = f.read().decode("ascii")
+            for phrase in phrases:
+                with self.subTest(role=role, label=label, phrase=phrase):
+                    self.assertTrue(whole_token(phrase, paragraph(text, label)))
 
     def test_required_table(self):                            # K3
         got = {}
@@ -225,6 +257,10 @@ class RealFilesTest(unittest.TestCase):
             body = paragraph(f.read().decode("ascii"), "Commit gate.")
         self.assertIn("`commands.test`", body)
         self.assertIn("`python3 -m gates run_all`", body)
+        # process v2 (design 5.1): the touched-area modules, not the full suite, at each commit
+        self.assertIn("the test modules of each changed file", body)
+        self.assertIn("every test module that imports a changed module", body)
+        self.assertIn("The full suite runs at the points the brief names, not at every commit.", body)
 
     def test_transcription_stops_on_any_gap(self):            # W3
         with open(self.path("implementer_transcription"), "rb") as f:
@@ -241,7 +277,7 @@ class RealFilesTest(unittest.TestCase):
 
 class GoodSampleTest(unittest.TestCase):
     def test_every_b_role_good_sample_passes(self):           # the oracle itself is satisfiable
-        for role in B_ROLES:
+        for role in SPEC_ROLES:
             with self.subTest(role=role):
                 self.assertEqual(block_problems(good(role), role), [])
                 self.assertEqual(forbidden_hits(good_text(role)), [])
@@ -732,10 +768,14 @@ class FileSetTest(unittest.TestCase):
                          ["missing: investigator.md"])
         self.assertEqual(self.check({"implementer.md": good("implementer")}, written=("implementer",)), [])
 
-    def test_program_role_file_is_format_checked(self):       # S5
+    def test_program_role_file_is_format_checked(self):       # S5; Task P4.3: the role has a LABELS row now
         raw = join(["# Strict block: stream_controller", "", INTRO, "", "Zero bugs. None."]).encode("ascii")
         got = self.check({"stream_controller.md": raw}, written=())
-        self.assertEqual(got, ["stream_controller.md: labels: role stream_controller has no LABELS row"])
+        self.assertEqual(got, [
+            "stream_controller.md: labels: expected ['Verification method.', 'Dispatch discipline.', "
+            "'Input domain.', 'Oracle.', 'Rulings.', 'Finding class.', 'Zero bugs.', 'Owner-only decisions.', "
+            "'Continuation.', 'Merge and checkpoint.', 'Budget.', 'Background work.', 'Report contract.'], "
+            "got ['Zero bugs.']"])
 
     def test_format_errors_are_named_with_the_file(self):
         got = self.check({"implementer.md": good("implementer")[:-1]})
@@ -881,12 +921,20 @@ DONE_WITH_FINDINGS_WHEN = {"task_reviewer": "when the change itself holds a find
 # Task B1.2 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
 B12_CONTENT = {
     "task_reviewer": [("Method.", GATE), ("Method.", "every claim")] + list(OOS_RULE)
-    + list(DONE_RULE) + [("Verdict.", DONE_WITH_FINDINGS_WHEN["task_reviewer"])],
+    + list(DONE_RULE) + [("Verdict.", DONE_WITH_FINDINGS_WHEN["task_reviewer"])]
+    # process v2 (design 5.1, 5.3): touched-area re-run, every fix diff checked against the fix rule, blame tested
+    + [("Method.", "touched-area tests"), ("Method.", "fix rule"), ("Method.", "parent"),
+       ("No out-of-scope bucket.", "class-narrowing question for the controller")],
     "final_reviewer": [("Method.", GATE), ("Method.", "every claim"), ("Branch scope.", "whole branch")]
     + list(OOS_RULE) + list(DONE_RULE)
-    + [("Verdict.", DONE_WITH_FINDINGS_WHEN["final_reviewer"])],
+    + [("Verdict.", DONE_WITH_FINDINGS_WHEN["final_reviewer"]),
+       ("Verdict.", "open its pull request"),                          # process v2 (design 5.2)
+       ("No out-of-scope bucket.", "class-narrowing question for the controller")],
     "final_verifier": [("Adversarial scope.", GATE), ("Adversarial scope.", "tier4"),
-                       ("Adversarial scope.", "top_tier_fallback")] + list(DONE_RULE)
+                       ("Adversarial scope.", "top_tier_fallback"),
+                       ("Adversarial scope.", "once per stream"),      # process v2 (design 5.2)
+                       ("Adversarial scope.", "merged parts included"),
+                       ("Adversarial scope.", "never re-run after your own fixes")] + list(DONE_RULE)
     + [("Verdict.", DONE_WITH_FINDINGS_WHEN["final_verifier"])],
     "exception_reviewer": [("Exception scope.", s) for s in EXC_PHRASES],
 }
@@ -1159,7 +1207,8 @@ def _replace_all(p, alts, fn):
 AUDIT_ROLES = ("audit_reviewer", "audit_verifier")
 B13_ROLES = ("controller",) + AUDIT_ROLES
 TRIAGE = ("the owner rules", "before any plan", "`triage`")                 # spec section 8, Q-B13-1 (a)
-CTRL_FIX_LOOP = ("rounds 1-3", "rounds 4-5", "one tier up", "owner question")     # spec section 10, Q-B13-1 (a)
+CTRL_FIX_LOOP = ("rounds 1-3", "rounds 4-5", "one tier up", "binding Rules N and T verdict", "STOP_NARROW",
+                 "ESCALATE")     # spec section 10, Q-B13-1 (a); process v2 design 5.4 (D1): the verdict binds
 CTRL_HEADINGS = tuple("`%s`" % h for h in DISPATCH_HEADINGS)
 RULING = "Ruling: what -- why -- cost if wrong -- spec cite"                  # spec section 7.1
 # Task B1.3 content table, written out here: role -> (paragraph label, string that must be a whole token in it)
@@ -1171,7 +1220,19 @@ B13_CONTENT = {
                                                       "Nothing continues from inherited memory")]
     + [("Input domain.", "input-domain table"), ("Oracle.", "production path"),
        ("Oracle.", "independent expected value"), ("Finding class.", "class: <dimension>: <members>"),
-       ("Budget.", "`budgets`")],
+       ("Budget.", "`budgets`")]
+    # process v2 (design 5.1-5.6, D3): the controller rules class questions, only dependent work waits, merge on demand
+    + [("Finding class.", "`Decision (controller): class -- action -- cost if wrong`"),
+       ("Finding class.", "fix rule"), ("Finding class.", "`spec-direction`"),
+       ("Finding class.", "is the controller's"), ("Finding class.", "shipped user-facing behaviour"),
+       ("Owner-only decisions.", "only the work that depends on it waits"),
+       ("Owner-only decisions.", "nothing independent is left"),
+       ("Owner-only decisions.", "because the owner is away"),
+       ("Merge and checkpoint.", "a block another stream consumes"),
+       ("Merge and checkpoint.", "touched-area tests"), ("Merge and checkpoint.", "stays on the stream branch"),
+       ("Merge and checkpoint.", "once per stream"), ("Merge and checkpoint.", "is not re-run after its own fixes"),
+       ("Merge and checkpoint.", "the final verifier (where the profile enables it, strict) runs once per stream"),  # R2-1
+       ("Continuation.", "wake-up"), ("Continuation.", "account-wide")],
     "audit_reviewer": [("Owner-only decisions.", s) for s in TRIAGE]
     + [("Coverage first.", "coverage list"), ("Coverage first.", "progress file")],
     "audit_verifier": [("Owner-only decisions.", s) for s in TRIAGE]
@@ -1228,13 +1289,15 @@ def b13_swap(p, a, b):
 
 class B13Test(unittest.TestCase):
     def test_all_b_roles_written(self):                       # F1 F2, the plan's test
-        self.assertEqual(sorted(WRITTEN), sorted(B_ROLES))
-        self.assertEqual(WRITTEN[7:], ("controller", "audit_reviewer", "audit_verifier"))     # plan order
+        self.assertEqual(sorted(WRITTEN), sorted(SPEC_ROLES))        # Task P4.3 (D-Q7): every spec role is written
+        self.assertEqual(WRITTEN[7:], ("controller", "audit_reviewer", "audit_verifier",
+                                       "plan_writer", "plan_reviewer", "drafter",
+                                       "program_controller", "stream_controller"))     # plan order, P4.3 last
         for name, t in (("one dropped", WRITTEN[:-1]), ("one twice", WRITTEN + ("controller",)),
-                        ("program role added", WRITTEN + ("program_controller",)),
-                        ("one swapped for a program role", WRITTEN[:-1] + ("stream_controller",))):
+                        ("program role dropped", tuple(r for r in WRITTEN if r != "program_controller")),
+                        ("one swapped for an unknown role", WRITTEN[:-1] + ("boss",))):
             with self.subTest(name):
-                self.assertNotEqual(sorted(t), sorted(B_ROLES))
+                self.assertNotEqual(sorted(t), sorted(SPEC_ROLES))
 
     def test_real_files_pass_the_plan_tests_and_content_checks(self):    # C1 C2 C3 C5 C6 C7 C8 C9 C10 A1-A5 A7
         for role in B13_ROLES:
@@ -1336,7 +1399,10 @@ class B13Test(unittest.TestCase):
         for s, new in (("rounds 1-3", "rounds 1-2"), ("rounds 1-3", "rounds 1-30"), ("rounds 1-3", "round 1-3"),
                        ("rounds 1-3", "rounds 2-3"), ("rounds 4-5", "rounds 4-6"), ("rounds 4-5", "rounds 4-50"),
                        ("rounds 4-5", "round 4-5"), ("rounds 4-5", "rounds 5-5"), ("one tier up", "one tier down"),
-                       ("one tier up", "one tier upx"), ("owner question", "owner questions")):
+                       ("one tier up", "one tier upx"),
+                       ("binding Rules N and T verdict", "binding Rules N and T verdicts"),
+                       ("binding Rules N and T verdict", "advisory Rules N and T verdict"),
+                       ("STOP_NARROW", "STOP_NARROWx"), ("ESCALATE", "ESCALATEx")):
             with self.subTest(s=s, new=new):
                 bad = in_para(t, "Continuation.", lambda p: p.replace(s, new))
                 self.assertIn("Continuation. lacks %r" % s, b13_problems("controller", bad))
@@ -1539,12 +1605,12 @@ EXACT_PARAGRAPHS = {
             "Give every dispatch the headings `## Role`, `## Brief`, `## Findings`, `## Claims`, `## Budget: tokens=<n> minutes=<n>`, `## Model`, `## Report`, `## Strict block` and `## Task`, in that order; the strict block is the role's prompt block, byte for byte.",
             "A fork dispatch is refused: dispatch a fresh agent with that grammar instead.",
             "Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top tier only to the roles in `top_tier_roles` (by default the final verifier and the exception reviewer).",
-            "Name tiers in every brief and report, never a model.",
+            "Name tiers in every brief and report, never a model, except under `## Model`, which names the model that `models.tiers` maps the chosen tier to.",   # U-2 (B4)
             "Pass each dispatch the model that `models.tiers` maps its tier to, explicitly in the dispatch call; a dispatch never inherits its dispatcher's model.",
         )),
         ("Zero bugs.", (
             "Zero bugs.",
-            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred.",
+            "A change's own bug makes its task incomplete; review minors are fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task when the binding verdict (STOP_NARROW or ESCALATE) stops the loop, and otherwise never deferred.",
             "An unrelated bug gets a register row and an owner.",
             "A deleted test is restored and fixed; dropping a test is never offered as a fix.",
         )),
@@ -1601,7 +1667,8 @@ EXACT_PARAGRAPHS = {
         ("No out-of-scope bucket.", (
             "No out-of-scope bucket.",
             "Every defect you see is reported, whether the diff touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
-            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A seeming exclusion is a class-narrowing question for the controller, never your reason to drop a finding.",
+            "Widening a fix's behaviour is out of scope for a fix round, and a fix diff that widens it is a finding; the dimension is re-checked.",
             "A missing input-domain table is a finding.",
         )),
         ("No subagents.", (
@@ -1618,7 +1685,7 @@ EXACT_PARAGRAPHS = {
         )),
         ("Verdict.", (
             "Verdict.",
-            "You judge whether the branch may go to the final verifier.",
+            "You judge whether the branch may open its pull request (and, at a stream's end, go to the final verifier where the profile enables it, strict).",
             "Report status DONE when every claim and gate re-ran clean at the tip and the change itself holds no finding (here the whole branch).",
             "A defect the change did not cause goes under Unrelated findings and does not by itself make the status DONE_WITH_FINDINGS.",
             "Report DONE_WITH_FINDINGS when the change itself holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`, naming the task it belongs to.",
@@ -1627,7 +1694,7 @@ EXACT_PARAGRAPHS = {
         ("No out-of-scope bucket.", (
             "No out-of-scope bucket.",
             "Every defect you see is reported, whether the branch touched it or not: one the change caused goes in findings, and one the change did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
-            "A seeming exclusion is a class-narrowing question for the owner, never your reason to drop a finding.",
+            "A seeming exclusion is a class-narrowing question for the controller, never your reason to drop a finding.",
             "A missing input-domain table is a finding.",
         )),
         ("No subagents.", (
@@ -1725,13 +1792,13 @@ EXACT_PARAGRAPHS = {
 SINGLE_SENTENCES = {
     "controller": [
         ("Owner-only decisions.",
-         "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
+         "A ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own) is the owner's."),
         ("Merge and checkpoint.",
          "The base branch (`base_branch`, default `main`) is protected: you never merge into it locally and never push to it; it changes only by merging an approved PR."),
         ("Merge and checkpoint.",
-         "A finished block or stream opens a pull request to the base branch, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
+         "A finished stream, or a block another stream consumes through an edge in the breakdown, opens a pull request to the base branch, and the merge happens per the project merge mode: the owner merges on the host, or the owner approves in chat naming the pull request and its head sha, you run `gh pr merge --merge --match-head-commit <sha>`, and you record the approval in the ledger."),
         ("Continuation.",
-         "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner question."),
+         "Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then the binding Rules N and T verdict: compute it after each review (by hand until `loopstats` exists) and ledger it as the `Loopstats:` line."),
         ("Continuation.",
          "When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same role with a continue prompt built from the handoff, the ledger and the status page."),
         ("Report contract.",
@@ -1739,25 +1806,25 @@ SINGLE_SENTENCES = {
     ],
     "implementer": [
         ("Owner-only decisions.",
-         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "implementer_transcription": [
         ("Owner-only decisions.",
-         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the work needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "investigator": [
         ("Owner-only decisions.",
-         "If the question needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the question needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "task_reviewer": [
         ("Owner-only decisions.",
-         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
@@ -1765,7 +1832,7 @@ SINGLE_SENTENCES = {
     ],
     "final_reviewer": [
         ("Owner-only decisions.",
-         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; claims you re-ran (claim, direct command, contradiction command, output excerpt, PASS or FAIL); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
@@ -1775,7 +1842,7 @@ SINGLE_SENTENCES = {
         ("Adversarial scope.",
          "You run at the top tier, which only the roles in `top_tier_roles` use (by default the final verifier and the exception reviewer): `tier4`, or the configured `top_tier_fallback` when the project sets no `tier4`."),
         ("Owner-only decisions.",
-         "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the verification needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "Then, in order: the verdict; the attempts to break the branch (attempt, command, output excerpt, held or broke); gates you re-ran (command and result line); findings; unrelated findings; decision needed; denials (verbatim); budget used."),
         ("Report contract.",
@@ -1785,13 +1852,13 @@ SINGLE_SENTENCES = {
         ("Exception scope.",
          "You run at the top tier, which only the roles in `top_tier_roles` use (by default the final verifier and the exception reviewer): `tier4`, or the configured `top_tier_fallback` when the project sets no `tier4`."),
         ("Owner-only decisions.",
-         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the review needs a ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
     "audit_reviewer": [
         ("Owner-only decisions.",
-         "If the audit needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the audit needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
         ("Coverage first.",
@@ -1803,16 +1870,84 @@ SINGLE_SENTENCES = {
     ],
     "audit_verifier": [
         ("Owner-only decisions.",
-         "If the verification needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `finding-class`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
+         "If the verification needs another ruling in a class named by `decision_classes.owner_only` in the project config (the defaults `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute` and `program-close`; a project may add its own), write the question with at least two options and their cost under Decision needed and stop with status NEEDS_DECISION."),
         ("Report contract.",
          "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."),
     ],
 }
 
+# Task 2c.3: the plan roles' and the drafter's pins. Their Zero bugs, No subagents, Owner-only and Report-contract
+# sentences are the investigator's and the task reviewer's own (the prose says the same), reused by name.
+_DRAFT_OWNER = SINGLE_SENTENCES["investigator"][0][1].replace("the question needs", "the draft needs")
+_PLAN_PRECEDENCE = ("Report contract.",
+                    "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE.")
+EXACT_PARAGRAPHS["plan_writer"] = list(EXACT_PARAGRAPHS["investigator"])
+EXACT_PARAGRAPHS["drafter"] = list(EXACT_PARAGRAPHS["investigator"])
+EXACT_PARAGRAPHS["plan_reviewer"] = [
+    ("Zero bugs.", (
+        "Zero bugs.",
+        "A defect in the draft is a finding and makes the draft incomplete.",
+        "A defect you find outside the draft is not fixed by you: record file:line, a reproducer and the class statement under Unrelated findings, so the controller registers it with an owner.",
+    )),
+    ("Verdict.", (
+        "Verdict.",
+        "You judge this one draft.",
+        "Report status DONE only on a clean pass: every quote, line number and consumed signature re-checked and no finding.",
+        "A cosmetic item (spec section 8) is not a finding.",
+        "Report DONE_WITH_FINDINGS when the draft holds a finding, with each finding as file:line, a reproducer and its class statement `class: <dimension>: <members>`.",
+        "Report NEEDS_DECISION when a ruling in the owner-only classes is needed, and BLOCKED when you could not run a check.",
+    )),
+    ("No out-of-scope bucket.", (
+        "No out-of-scope bucket.",
+        "Every defect you see is reported, whether the draft touched it or not: one the draft caused goes in findings, and one the draft did not cause goes under Unrelated findings with file:line, a reproducer and its class statement.",
+        "A seeming exclusion is a class-narrowing question for the controller, never your reason to drop a finding.",
+        "A missing input-domain table is a finding.",
+    )),
+    ("No subagents.", (
+        "No subagents.",
+        "Do not dispatch agents, workflows or other agent tasks, and never ask another agent to do something you were refused.",
+        "On a permission denial, stop, quote the denial verbatim, and report status DENIED.",
+    )),
+]
+SINGLE_SENTENCES["plan_writer"] = [("Owner-only decisions.", _DRAFT_OWNER), _PLAN_PRECEDENCE]
+SINGLE_SENTENCES["drafter"] = [("Owner-only decisions.", _DRAFT_OWNER), _PLAN_PRECEDENCE]
+SINGLE_SENTENCES["plan_reviewer"] = [SINGLE_SENTENCES["task_reviewer"][0], _PLAN_PRECEDENCE]
+
+# Task P4.3 (D-Q6, D-Q7): the two program blocks. The sentences shared with the controller block are the controller's.
+_CTRL_EXACT = dict(EXACT_PARAGRAPHS["controller"])
+_CTRL_DISPATCH = _CTRL_EXACT["Dispatch discipline."]          # label, role map, dispatch, headings, fork, tiers x2, model
+TREE_STREAM = ("In the default tree the session acts as the program controller, you run at level 1, sub-controllers at "
+               "level 2 and workers at level 3; the depth limit decides when a separate `program_controller` or nested "
+               "sub-controllers are used.")
+TREE_PROGRAM = ("In the default tree the session acts as the program controller and runs these duties itself, stream "
+                "controllers run at level 1, sub-controllers at level 2 and workers at level 3; the depth limit decides "
+                "when a separate `program_controller` or nested sub-controllers are used.")
+STREAM_DISPATCHES = ("You dispatch workers, and you may dispatch a sub-controller when you judge it better, within the "
+                     "configured depth and concurrency limits; workers never dispatch.")
+PROGRAM_DISPATCHES = ("You dispatch stream controllers and never a worker, within the configured depth and concurrency "
+                      "limits.")
+BRIEF_LINES = ("A stream controller's `## Brief` carries the lines `program: <p>` and `stream: <s>`, each at the start "
+               "of a line.")
+EXACT_PARAGRAPHS["stream_controller"] = [
+    ("Dispatch discipline.", _CTRL_DISPATCH[:2] + (STREAM_DISPATCHES, TREE_STREAM) + _CTRL_DISPATCH[3:]),
+    ("Zero bugs.", (
+        "Zero bugs.",
+        "A change's own bug makes its task incomplete; every finding of a review is fixed in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task when the binding verdict (STOP_NARROW or ESCALATE) stops the loop, and otherwise never deferred.",
+        "An unrelated bug gets a register row and an owner.",
+        "A deleted test is restored and fixed; dropping a test is never offered as a fix.",
+    )),
+]
+EXACT_PARAGRAPHS["program_controller"] = [
+    ("Dispatch discipline.", _CTRL_DISPATCH[:2] + (PROGRAM_DISPATCHES, TREE_PROGRAM, _CTRL_DISPATCH[3], BRIEF_LINES)
+     + _CTRL_DISPATCH[4:]),
+]
+SINGLE_SENTENCES["stream_controller"] = [SINGLE_SENTENCES["controller"][0], SINGLE_SENTENCES["controller"][-1]]
+SINGLE_SENTENCES["program_controller"] = [SINGLE_SENTENCES["controller"][0], SINGLE_SENTENCES["controller"][-1]]
+
 
 EXACT_LABELS = frozenset(("Dispatch discipline.", "Zero bugs.", "Verdict.", "No out-of-scope bucket.", "No subagents."))
 OWNER_CLASSES = ("`triage`", "`spec-direction`", "`scope`", "`merge-grant`", "`model-policy`", "`issue-close`",
-                 "`finding-class`", "`rule-override`", "`program-create`", "`stream-ownership`", "`stream-merge`",
+                 "`rule-override`", "`program-create`", "`stream-ownership`", "`stream-merge`",
                  "`request-dispute`", "`program-close`")                    # gates/lib/config.py defaults, owner Q-U1 (a)
 PRECEDENCE = "When more than one status applies, report the first of DENIED, BLOCKED, NEEDS_DECISION, DONE_WITH_FINDINGS, DONE."
 TR = ("task_reviewer", "final_reviewer", "final_verifier")
@@ -1833,6 +1968,18 @@ KEY_MUTANTS = (
      "makes the branch incomplete", "leaves the branch complete"),
     ("R-OOS dropped", ("task_reviewer", "final_reviewer"), "No out-of-scope bucket.",
      "Every defect you see is reported", "Every defect you see is dropped"),
+    ("D3 class-narrowing question back to the owner", ("task_reviewer", "final_reviewer", "plan_reviewer"),"No out-of-scope bucket.",
+     "question for the controller", "question for the owner"),
+    ("D3 widening a fix is in scope", ("task_reviewer",), "No out-of-scope bucket.",
+     "is out of scope for a fix round", "is in scope for a fix round"),
+    ("D3 controller class ruling back to the owner", ("controller",), "Finding class.",
+     "is the controller's", "is the owner's"),
+    ("D1 verdict advisory again", ("controller",), "Continuation.", "then the binding Rules", "then the advisory Rules"),
+    ("D4 deferral without a named task", ("controller",), "Zero bugs.",
+     "or registered against a named task when the binding verdict (STOP_NARROW or ESCALATE) stops the loop, ", ""),
+    ("5.2 verifier per block again", ("controller",), "Merge and checkpoint.", "once per stream", "once per block"),
+    ("5.6 whole stream waits", ("controller",), "Owner-only decisions.", "only the work that depends on it waits",
+     "the whole stream waits"),
     ("R-Verdict does make", TR, "Verdict.", "does not by itself make", "does make"),
     ("F-B13rr-1 audit mapping back to otherwise", ("audit_reviewer",), "Report contract.",
      "and DONE_WITH_FINDINGS when it holds at least one", "and DONE_WITH_FINDINGS otherwise"),
@@ -1889,7 +2036,8 @@ class B13KeyTest(unittest.TestCase):
         for role in WRITTEN:
             want = set(LABELS[role]) & (EXACT_LABELS | ({"Method."} if role in AUDIT_ROLES else set()))
             self.assertEqual({label for label, _ in EXACT_PARAGRAPHS[role]}, want, role)
-            self.assertIn(("Zero bugs."), {label for label, _ in EXACT_PARAGRAPHS[role]})
+            if "Zero bugs." in LABELS[role]:                 # D-Q6: the program controller carries no such paragraph
+                self.assertIn(("Zero bugs."), {label for label, _ in EXACT_PARAGRAPHS[role]})
             owner = [s for label, s in SINGLE_SENTENCES[role] if label == "Owner-only decisions."]
             self.assertEqual(len(owner), 1, role)
             self.assertTrue(all(whole_token(c, owner[0]) for c in OWNER_CLASSES), role)       # Q-U1 (a)
@@ -1981,7 +2129,7 @@ class B13KeyTest(unittest.TestCase):
                 self.assertIn("; unrelated findings;", tail, role)
             if "Decision needed" in t:
                 self.assertIn("; decision needed;", tail, role)
-            if role != "controller":
+            if role not in CONTROLLERS:
                 self.assertIn("Decision needed", t, role)
                 self.assertIn("; decision needed; denials (verbatim);", tail, role)
             if role in ("implementer", "implementer_transcription", "investigator"):
@@ -2033,17 +2181,30 @@ CTRL_BACKGROUND = ("Before you ledger a child's result, list its background job 
 WORKER_BACKGROUND = ("A poll loop has a bounded timeout and never matches its own command line; a job you no longer need "
                      "is stopped with TaskStop, not by pattern-killing processes; the report lists each background id "
                      "as finished or stopped.")
-CONTINUATION = (   # controller "Continuation." unchanged (session-resume design 3.9)
-    "Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then an owner "
-    "question. One block runs per agent context, at most `block.max_tasks` tasks, with a clean worktree at every "
-    "checkpoint. When you reach a checkpoint, 80 % of your token or time budget, or a usage-limit stop, write your "
-    "handoff and return. When a child returns a handoff or BLOCKED: budget, dispatch at once a fresh agent of the same "
-    "role with a continue prompt built from the handoff, the ledger and the status page. Nothing continues from "
-    "inherited memory, and the owner never clears the session and re-prompts.")
+CONTINUATION = (   # controller "Continuation." (session-resume design 3.9; process v2 design 5.4, 5.7, D1, D6)
+    "Continuation. Fix loop rounds 1-3 resume the implementer, rounds 4-5 a fresh agent one tier up, then the binding "
+    "Rules N and T verdict: compute it after each review (by hand until `loopstats` exists) and ledger it as the "
+    "`Loopstats:` line. Before `loopstats` runs, have each finding of that review recorded as a finding record "
+    "(schema `finding`), each with `python3 -m gates findings new --review-round <k> --caused-by-change yes|no --dimension <dimension>` (plus its required flags), under `paths.findings` on the "
+    "task's branch: you write them and mint each id with `findings new` (owner answer Q-PV2-3 (a), "
+    "2026-11-17). The records stay on that branch while its pull request is open and merge with it. "
+    "STOP_NARROW stops the loop, and its open findings are narrowed in one last round or "
+    "registered for a planned task. ESCALATE stops the loop: open LOW and MEDIUM findings are registered against a "
+    "named follow-up task, and an open CRITICAL or HIGH finding is an owner question that blocks only that task. A "
+    "change-caused CRITICAL or HIGH finding is fixed whatever the verdict. One block runs per agent context, at most "
+    "`block.max_tasks` tasks, with a clean worktree at every checkpoint. When you reach a checkpoint, 80 % of your "
+    "token or time budget, or a usage-limit stop, write your handoff and return. When a child returns a handoff or "
+    "BLOCKED: budget, dispatch at once a fresh agent of the same role with a continue prompt built from the handoff, "
+    "the ledger and the status page. After a usage-limit stop the limit is account-wide, so dispatch nothing at once: "
+    "the session that owns the program schedules a wake-up at the reset time the limit message names and "
+    "re-dispatches from the handoffs; with no scheduling tool the handoff names the resume command and the owner "
+    "runs it. Nothing continues from inherited memory, and the owner never clears the session and re-prompts.")
 RESUME_PINS = ((("controller", "Merge and checkpoint.", "handoff is complete"),)
                + tuple((r, "Background work.", "TaskStop") for r in WRITTEN)
-               + tuple((r, "Owner-only decisions.", "recommended") for r in WRITTEN))
-ZERO_BUGS_TAIL = "in the fix round, or registered as a LOW under LOW_PLATEAU, and otherwise never deferred."  # DN-4 (a)
+               + tuple((r, "Owner-only decisions.", "recommended") for r in WRITTEN)
+               + (("program_controller", "Sync.", "Batch-cut"),))          # Task P4.3: the plan's third pin
+ZERO_BUGS_TAIL = ("in the fix round, or registered as a LOW under LOW_PLATEAU, or registered against a named task when "
+                  "the binding verdict (STOP_NARROW or ESCALATE) stops the loop, and otherwise never deferred.")  # DN-4 (a), D4
 
 
 def resume_sentences(role):
@@ -2051,6 +2212,8 @@ def resume_sentences(role):
     out = [("Owner-only decisions.", OWNER_RECOMMENDED, "last")]
     if role == "controller":
         out += [("Merge and checkpoint.", HANDOFF_COMPLETE, HANDOFF_ANCHOR), ("Background work.", CTRL_BACKGROUND, "last")]
+    elif role in CONTROLLERS:      # Task P4.3: the program blocks dispatch children too (child jobs are listed, TaskStop)
+        out.append(("Background work.", CTRL_BACKGROUND, "last"))
     else:
         out.append(("Background work.", WORKER_BACKGROUND, "last"))
     return out
@@ -2088,11 +2251,13 @@ class SessionResumeTest(unittest.TestCase):
         for role, label, token in RESUME_PINS:
             t = disk(role)
             dest = "Budget."
-            sentence = [s for l, s, _ in resume_sentences(role) if l == label][0]
-            for name, bad in (("absent", in_para(t, label, lambda p: p.replace(token, "zzz"))),
-                              ("moved", other_para(t, label, token, dest)),
-                              ("joined", in_para(t, label, lambda p: p.replace(token, "x" + token))),
-                              ("sentence deleted", in_para(t, label, lambda p: p.replace(" " + sentence, "")))):
+            found = [s for l, s, _ in resume_sentences(role) if l == label]      # none for the Batch-cut pin
+            cases = [("absent", in_para(t, label, lambda p: p.replace(token, "zzz"))),
+                     ("moved", other_para(t, label, token, dest)),
+                     ("joined", in_para(t, label, lambda p: p.replace(token, "x" + token)))]
+            if found:
+                cases.append(("sentence deleted", in_para(t, label, lambda p: p.replace(" " + found[0], ""))))
+            for name, bad in cases:
                 with self.subTest(role=role, label=label, case=name):
                     self.assertTrue(resume_problems(role, bad))
 
@@ -2169,32 +2334,60 @@ HANDBACK_2 = ("A child has finished only when its handback arrives, never becaus
 NEVER_RETURN = "Never return while a child you dispatched still runs: questions and progress go up as messages."
 FINAL_REPLY = "Your final reply is at most 10 lines with the same fields."
 INPUT_ROLES = ("implementer", "task_reviewer", "final_reviewer")
+# Task B4: U-2 (tier against model), U-4 (open grammar), U-5 (no handback with live children), controller form.
+CHOOSE_MODEL = ("Choose each model by tier from `models.tiers`, never below the role's minimum tier, and give the top "
+                "tier only to the roles in `top_tier_roles` (by default the final verifier and the exception "
+                "reviewer).")
+U2_CTRL = ("Name tiers in every brief and report, never a model, except under `## Model`, which names the model that "
+           "`models.tiers` maps the chosen tier to.")
+OPEN_GRAMMAR = ("A table enumerates the full input class or restricts the input, so the code refuses what lies outside "
+                "the enumerated class, and never samples an open grammar.")
+FIX_WHOLE = "A row without a test is a finding, and the fix re-checks the whole dimension the row names, by narrowing, not by widening behaviour."
+LIVE_CTRL = ("Before you write your handoff, dispatch nothing new and wait, inside your turn, for the handback of every "
+             "child still running; a child that a usage-limit stop cuts off before its handback is listed in your "
+             "handoff's `live_subagents`.")
 DIRECTIVES = (   # (id, role, label, sentences in order, the anchor they follow or None for last, what follows or None)
     ("A1", "controller", "Input domain.", (VERSION_ROWS,), None, None),
     ("A2", "controller", "Rulings.", (SMALL_POINT_CTRL, OWNER_KEEPS_CTRL), None, None),
     ("A3", "controller", "Dispatch discipline.", (EXPLICIT_MODEL,), None, None),
     ("A4", "controller", "Report contract.", (HANDBACK_1, HANDBACK_2), NEVER_RETURN, FINAL_REPLY),
+    ("A5", "controller", "Dispatch discipline.", (U2_CTRL,), CHOOSE_MODEL, EXPLICIT_MODEL),            # U-2 (B4)
+    ("A6", "controller", "Input domain.", (OPEN_GRAMMAR,), FIX_WHOLE, VERSION_ROWS),                   # U-4 (B4)
+    ("A7", "controller", "Budget.", (LIVE_CTRL,), None, None),                                         # U-5 (B4)
 ) + tuple(("B", r, "Input domain.", (VERSION_ROWS,), None, None) for r in INPUT_ROLES)
 DIRECTIVE_TOKENS = (   # (role, label, whole token): case-sensitive whole tokens of the new sentences
     ("controller", "Rulings.", "Decision (owner delegation): what -- why -- cost if wrong"),
     ("controller", "Dispatch discipline.", "never inherits"),
+    ("controller", "Dispatch discipline.", "except under"),
+    ("controller", "Input domain.", "open grammar"),
+    ("controller", "Budget.", "live_subagents"),
     ("controller", "Report contract.", "handed back"),
     ("controller", "Report contract.", "handback"),
-) + tuple((r, "Input domain.", "version differences") for r in ("controller",) + INPUT_ROLES)
+) + tuple((r, "Input domain.", "version differences") for r in ("controller",) + INPUT_ROLES) + (
+    # process v2 (design 5.3): a fix only narrows or corrects; new behaviour becomes a proposed task
+    ("implementer", "Input domain.", "by narrowing"),
+    ("implementer", "Input domain.", "failing closed"),
+    ("implementer", "Unstated behaviour.", "may only narrow or correct"),
+    ("implementer", "Unstated behaviour.", "quotes"),
+    ("implementer", "Unstated behaviour.", "proposed task"),
+    ("implementer", "Commit gate.", "touched-area tests"),
+    ("implementer_transcription", "Commit gate.", "touched-area tests"),
+)
 DIRECTIVE_HARMLESS = (   # (role, label, old, new): an unpinned word elsewhere in the same paragraph; every check passes
     ("controller", "Input domain.", "Dispatch no task", "Send no task"),
     ("controller", "Rulings.", "Rule at most", "Rule no more than"),
-    ("implementer", "Input domain.", "Fix the whole dimension", "Repair the whole dimension"),
+    ("implementer", "Input domain.", "Cover the whole dimension", "Handle the whole dimension"),
     ("task_reviewer", "Input domain.", "Open the task's", "Read the task's"),
     ("final_reviewer", "Input domain.", "Open every task's", "Read every task's"),
 )
 
 
-def placed_problem(p, sentences, anchor, follow):
-    """True when the sentences do not stand once each, in order, directly after the anchor (or last without one)."""
+def placed_problem(p, sentences, anchor, follow, text):
+    """True when the sentences do not stand once each, in order, directly after the anchor (or last without one);
+    FV-1 (B4): each sentence is counted over the whole file `text`, so a copy in another paragraph is refused."""
     chain = " ".join(sentences)
     want = (anchor + " " if anchor else "") + chain + (" " + follow if follow else "")
-    if want not in p or any(p.count(s) != 1 for s in sentences):
+    if want not in p or any(text.count(s) != 1 for s in sentences):
         return True
     return not anchor and not follow and not p.endswith(" " + chain)
 
@@ -2209,7 +2402,7 @@ def directive_problems(role, text):
         except ValueError as e:
             out.append("%s %s: unreadable: %s" % (ident, label, e))
             continue
-        if placed_problem(p, sentences, anchor, follow):
+        if placed_problem(p, sentences, anchor, follow, text):
             out.append("%s %s: %r not in place" % (ident, label, sentences[0][:40]))
     return out
 
@@ -2255,9 +2448,30 @@ class OwnerDirectiveBlockTest(unittest.TestCase):
         for ident, role, label, sentences, anchor, follow in DIRECTIVES:
             for s in sentences:
                 for dest in ("Budget.", "Background work."):
+                    if dest == label:                          # B4: A7 sits in Budget. itself
+                        continue
                     with self.subTest(id=ident, role=role, sentence=s[:30], dest=dest):
                         bad = other_para(disk(role), label, s, dest)
                         self.assertTrue(directive_problems(role, bad))
+
+    def test_copied_into_another_paragraph_refused(self):        # B4 row 4, FV-1: the copy is counted over the whole file
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            for s in sentences:
+                for dest in ("Budget.", "Background work.", "Verification method."):
+                    if dest == label:
+                        continue
+                    with self.subTest(id=ident, role=role, sentence=s[:30], dest=dest):
+                        t = disk(role)
+                        self.assertEqual(directive_problems(role, t), [])
+                        bad = in_para(t, dest, lambda p: p + " " + s)
+                        got = directive_problems(role, bad)
+                        self.assertTrue(any(x.startswith("%s %s:" % (ident, label)) for x in got), got)
+
+    def test_same_sentence_in_another_file_accepted(self):       # B4 row 6: the count is per file
+        for r in INPUT_ROLES:
+            self.assertEqual(directive_problems(r, disk(r)), [])
+        self.assertEqual(disk("controller").count(VERSION_ROWS), 1)
+        self.assertEqual(disk("implementer").count(VERSION_ROWS), 1)
 
     def test_misplaced_refused(self):                            # row 3: first, before the anchor, glued, reordered
         for ident, role, label, sentences, anchor, follow in DIRECTIVES:
@@ -2302,13 +2516,38 @@ class OwnerDirectiveBlockTest(unittest.TestCase):
                     bad = in_para(t, label, lambda p: p.replace(token, new))
                     self.assertTrue(token_problems(role, bad))
 
-    def test_harmless_rewording_passes(self):                    # row 6 (spec section 14)
+    def text_of(self, role):
+        """The text the harmless rows run on; the row-2 test replaces it with a reworded copy (FR-1)."""
+        return disk(role)
+
+    def test_harmless_rewording_passes(self):                    # row 6 (spec section 14); FR-1 (B4): absent = visible skip
+        self.harmless_ran = []
         for role, label, old, new in DIRECTIVE_HARMLESS:
             with self.subTest(role=role, label=label, new=new):
-                t = disk(role)
-                self.assertIn(old, paragraph(t, label))
+                t = self.text_of(role)
+                if old not in paragraph(t, label):
+                    self.skipTest("FR-1: %r is reworded on disk; unpinned, so never a failure" % old)
                 bad = in_para(t, label, lambda p: p.replace(old, new, 1))
                 self.assertEqual(all_problems(role, bad), [])
+                self.harmless_ran.append(old)
+
+    def test_harmless_row_absent_on_disk_is_skipped_not_failed(self):   # B4 rows 2, 3 (FR-1)
+        absent = [old for role, label, old, new in DIRECTIVE_HARMLESS if old not in paragraph(disk(role), label)]
+        for i, (role, label, old, new) in enumerate(DIRECTIVE_HARMLESS):
+            with self.subTest(reworded=old):
+                case = OwnerDirectiveBlockTest("test_harmless_rewording_passes")
+                case.text_of = lambda r, i=i: (in_para(disk(r), DIRECTIVE_HARMLESS[i][1],
+                                                       lambda p: p.replace(DIRECTIVE_HARMLESS[i][2],
+                                                                           DIRECTIVE_HARMLESS[i][3], 1))
+                                               if r == DIRECTIVE_HARMLESS[i][0] and DIRECTIVE_HARMLESS[i][2]
+                                               in paragraph(disk(r), DIRECTIVE_HARMLESS[i][1]) else disk(r))
+                result = unittest.TestResult()
+                case.run(result)
+                gone = absent + ([old] if old not in absent else [])
+                self.assertEqual((result.failures, result.errors), ([], []))
+                self.assertTrue(result.wasSuccessful())
+                self.assertEqual(len(result.skipped), len(gone), result.skipped)
+                self.assertEqual(case.harmless_ran, [o for _, _, o, _ in DIRECTIVE_HARMLESS if o not in gone])
 
     def test_control_and_non_ascii_bytes_in_new_sentence_refused(self):   # row 8
         for ident, role, label, sentences, anchor, follow in DIRECTIVES:
@@ -2360,7 +2599,22 @@ class OwnerDirectiveBlockTest(unittest.TestCase):
                 self.assertEqual(len(got), 1, got)
                 self.assertEqual(block_problems(bad.encode("ascii"), "controller"), [])
 
-    def test_unassigned_code_point_refused_by_the_character_check(self):   # row 14 (U+2C2F: Cn on 3.9, Ll on 3.13)
+    def test_digit_runs_glued_to_each_b4_sentence_refused_the_same(self):   # B4 row 13 (U-2, U-4, U-5; no int() on text)
+        for ident, role, label, sentences, anchor, follow in DIRECTIVES:
+            if ident not in ("A5", "A6", "A7"):
+                continue
+            got = []
+            for n in (4300, 4301):
+                with self.subTest(id=ident, digits=n):
+                    s = sentences[-1]
+                    bad = disk(role).replace(s, s + "9" * n, 1)
+                    problems = directive_problems(role, bad)
+                    self.assertTrue(any(x.startswith("%s %s:" % (ident, label)) for x in problems), problems)
+                    self.assertEqual(block_problems(bad.encode("ascii"), role), [])
+                    got.append([x.split(" not in place")[0] for x in problems])
+            self.assertEqual(got[0], got[1])
+
+    def test_version_dependent_code_point_refused_by_the_character_check(self):   # row 14 (U+2C2F: Cn on 3.9, Lu on 3.13)
         c = chr(0x2C2F)
         for ident, role, label, sentences, anchor, follow in DIRECTIVES:
             with self.subTest(id=ident, role=role):
@@ -2369,6 +2623,166 @@ class OwnerDirectiveBlockTest(unittest.TestCase):
                 self.assertEqual([h[0] for h in forbidden_hits(bad)][:1], [pc.CHAR_KIND])
                 self.assertTrue(any(x.startswith("%s %s: unreadable" % (ident, label))
                                     for x in directive_problems(role, bad)))
+
+
+# Task P4.3 (D-Q8 (a)): the literal command and keyword tokens of plan P:3207-3209, each in the paragraph that carries it.
+# (role, label, whole token); written out by hand from the plan lines.
+PROGRAM_PINS = (
+    ("program_controller", "Dispatch discipline.", "depth limit"),
+    ("program_controller", "Dispatch discipline.", "`program_controller`"),
+    ("program_controller", "Sync.", "SYNC"),
+    ("program_controller", "Sync.", "Agent:"),
+    ("program_controller", "Sync.", "Integration:"),
+    ("program_controller", "Sync.", "`program`"),
+    ("program_controller", "Sync.", "`questions`"),
+    ("program_controller", "Sync.", "`decisions`"),
+    ("program_controller", "Merge relay.", "gh pr merge"),
+    ("program_controller", "Merge relay.", "--match-head-commit"),
+    ("program_controller", "Merge relay.", "program merged"),
+    ("program_controller", "Merge relay.", "MERGED"),
+    ("program_controller", "Owner-only decisions.", "SendMessage"),
+    ("program_controller", "Continuation.", "python3 -m gates continue"),
+    ("program_controller", "Report contract.", "status:"),
+    ("stream_controller", "Dispatch discipline.", "depth limit"),
+    ("stream_controller", "Dispatch discipline.", "`program_controller`"),
+    ("stream_controller", "Merge and checkpoint.", "gh pr create"),
+    ("stream_controller", "Merge and checkpoint.", "merged:<stacked_on>"),
+    ("stream_controller", "Owner-only decisions.", "SendMessage"),
+    ("stream_controller", "Continuation.", "python3 -m gates continue"),
+    ("stream_controller", "Report contract.", "status:"),
+)
+
+
+def pin_problems(role, text):
+    out = []
+    for role_, label, token in PROGRAM_PINS:
+        if role_ != role:
+            continue
+        try:
+            if not whole_token(token, paragraph(text, label)):
+                out.append("%s lacks %r" % (label, token))
+        except ValueError:
+            out.append("%s is missing" % label)
+    return out
+
+
+class ProgramBlocksTest(unittest.TestCase):
+    """Task P4.3 rows PB1-PB6, PR1-PR22, PP1-PP6 of task-P4.3-domain.md."""
+
+    def test_pins_hold_on_disk(self):                              # PR1-PR19, PP1-PP3
+        for role in ("program_controller", "stream_controller"):
+            with self.subTest(role=role):
+                self.assertEqual(pin_problems(role, disk(role)), [])
+                self.assertEqual(resume_problems(role, disk(role)), [])
+                self.assertEqual(key_problems(role, disk(role)), [])
+
+    def test_pins_refuse_absent_moved_joined(self):                # D-Q8 mutators
+        for role, label, token in PROGRAM_PINS:
+            t = disk(role)
+            for name, bad in (("absent", in_para(t, label, lambda p: p.replace(token, "zzz"))),
+                              ("moved", other_para(t, label, token, "Budget.")),
+                              ("joined before", in_para(t, label, lambda p: p.replace(token, "x" + token))),
+                              ("joined after", in_para(t, label, lambda p: p.replace(token, token + "x")))):
+                with self.subTest(role=role, label=label, token=token, case=name):
+                    self.assertTrue(pin_problems(role, bad))
+
+    def test_batch_cut_pinned_for_program_controller_only(self):   # PP3, PP5
+        self.assertIn(("program_controller", "Sync.", "Batch-cut"), RESUME_PINS)
+        self.assertFalse([p for p in RESUME_PINS if p[2] == "Batch-cut" and p[0] != "program_controller"])
+        self.assertTrue(whole_token("Batch-cut", "the `Batch-cut:` fact"))
+        self.assertFalse(whole_token("Batch-cut", "Batch-cutoff"))
+        self.assertFalse(whole_token("Batch-cut", "xBatch-cut"))
+
+    def test_intro_names_the_role(self):                           # PR20
+        want = {"program_controller": "You act as the program controller of one live program under the strict-delivery "
+                                      "process, and dispatch stream controllers. ",
+                "stream_controller": "You run one stream of a program under the strict-delivery process, and dispatch "
+                                     "sub-controllers and workers. "}
+        for role, start in want.items():
+            line = disk(role).split("\n")[2]
+            self.assertEqual(line, start + pc.INTRO_END, role)
+            self.assertNotIn("every worker", disk(role))
+
+    def test_first_line_and_label_mutations(self):                 # PB6
+        for role in ("program_controller", "stream_controller"):
+            t = disk(role)
+            labs = LABELS[role]
+            self.assertEqual(kinds(t.encode("ascii"), role), set())
+            wrong = t.replace("# Strict block: " + role, "# Strict block: controller", 1)
+            self.assertIn("first-line", kinds(wrong.encode("ascii"), role))
+            for lab in labs:
+                with self.subTest(role=role, drop=lab):
+                    bad = t.replace("\n\n" + paragraph(t, lab), "", 1)
+                    self.assertIn("labels", kinds(bad.encode("ascii"), role))
+            a, b = labs[2], labs[3]
+            swapped = t.replace(paragraph(t, a), "@@A@@").replace(paragraph(t, b), paragraph(t, a)).replace("@@A@@", paragraph(t, b))
+            self.assertIn("labels", kinds(swapped.encode("ascii"), role))
+            for lab, items in REQUIRED.items():
+                if lab not in labs:
+                    continue
+                for s in items:
+                    s = s[0] if isinstance(s, tuple) else s
+                    with self.subTest(role=role, label=lab, required=s):
+                        bad = in_para(t, lab, lambda p: p.replace(s, "zzz")) if s in paragraph(t, lab) else None
+                        if bad is not None and lab != "Background work.":
+                            self.assertIn("required", kinds(bad.encode("ascii"), role))
+
+    def test_forbidden_and_bytes(self):                            # PB4, PB5
+        for role in ("program_controller", "stream_controller"):
+            raw = disk(role).encode("ascii")
+            self.assertEqual(block_problems(raw, role), [])
+            self.assertEqual(forbidden_hits(disk(role)), [])
+            self.assertEqual(pc.placeholder_hits(disk(role)), [])
+            self.assertTrue(raw.endswith(b"\n") and not raw.endswith(b"\n\n"))
+            for word in ("Opus", "sonnet", "lap-timer"):
+                bad = disk(role).replace("Zero bugs.", "Zero bugs. " + word, 1).replace("Owner-only decisions.",
+                                                                                        "Owner-only decisions. " + word, 1)
+                self.assertTrue(forbidden_hits(bad), word)
+
+    def test_pins_in_the_other_paragraph_do_not_count(self):       # PP1, PP2: a pin counts only in its paragraph
+        for role, label, token in RESUME_PINS:
+            if role not in ("program_controller", "stream_controller"):
+                continue
+            bad = other_para(disk(role), label, token, "Budget.")
+            self.assertTrue(resume_problems(role, bad), (role, label, token))
+
+    def test_rq_5_5_is_not_contradicted(self):                     # PR15: Block 5 later inserts the drift steps
+        t = disk("program_controller")
+        sync = paragraph(t, "Sync.")
+        for text in (sync, paragraph(t, "Merge relay.")):
+            for phrase in ("git push", "push the base", "rebase the", "git merge --ff-only", "check drift", "drift report"):
+                self.assertNotIn(phrase, text)
+        self.assertIn("never by a rebase", sync)
+        self.assertLess(sync.index("merge the base branch into the integration branch"), sync.index("`SYNC` line"))
+        self.assertLess(sync.index("combined") if "combined" in sync else sync.index("test the streams together"),
+                        sync.index("`SYNC` line"))
+        self.assertIn("nothing is ever pushed or merged to it directly", paragraph(t, "Merge relay."))
+
+    def test_no_worker_prose(self):                                # PR22
+        for role in ("program_controller", "stream_controller"):
+            t = disk(role)
+            self.assertIn("You never implement and never review.", disk("program_controller"))
+            self.assertNotIn("you implement", t.lower())
+            self.assertNotIn("you review the", t.lower())
+
+    def test_program_blocks_write_requirements(self):              # PR10-PR14, PR16-PR19 (review rows, literal checks)
+        pcn = disk("program_controller")
+        self.assertIn("`program`, `questions` and `decisions`", pcn)
+        self.assertIn("never merge the integration branch into any other branch", pcn)
+        self.assertIn("Refresh only at a sync, when every stream is at a checkpoint", pcn)
+        self.assertIn("whenever you dispatch or reap a child", pcn)
+        self.assertIn("naming the PR and its head sha", pcn)
+        self.assertIn("read the merge back from the host", pcn)
+        self.assertIn("reach the base branch by the one records pull request", pcn)
+        scn = disk("stream_controller")
+        for s in ("`<worktrees>/<program>/<stream>/main`", "a branch cut from the base branch", "after a clean review and green gates",
+                  "you never merge that pull request", "never merge the integration branch into your own",
+                  "Never edit another stream's files or status row", "stop with status NEEDS_DECISION",
+                  "only after the previous sub-block's pull request has merged and the stream branch has been updated from the base branch",
+                  "each pull request head holds one new sub-block", "Push your work branches at every checkpoint"):
+            self.assertIn(s, scn)
+        for t in (pcn, scn):
+            self.assertIn("Never return while a child you dispatched still runs", t)
 
 
 if __name__ == "__main__":

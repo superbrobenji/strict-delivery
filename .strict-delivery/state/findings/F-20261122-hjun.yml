@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-hjun
+status: open
+source: "PR-P4 final review: .superpowers/sdd/2026-10-31-strict-delivery-framework/g8/final-review-P4.md FR-1"
+severity: LOW
+class: "plan Step 1 test names/assertions: test_answers_printed_per_source (tests/test_continue_cli.py:789) builds one source and lacks the plan :3178 two-source assertion (ANS_REPORT_Q and ANS_HANDOFF_Q)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P4.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: aa3218918009db37eb12af4f48b40ca3e3d1344a
+    by: stream-a15
+review_round: 3
+caused_by_change: true
+dimension: plan Task P4.2 Step 1 tests (:3159-3179)

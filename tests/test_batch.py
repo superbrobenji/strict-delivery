@@ -6,16 +6,17 @@ import copy
 import os
 import unittest
 
-from gates.lib import batch
+from gates.lib import batch, migrations
 from gates.lib.result import GateError
 
+TAG = "decision/%d" % migrations.current_version("decision")
 ID0, ID1, ID2 = "DEC-20261031-a2b3", "DEC-20261101-c4d5", "DEC-20261101-e6f7"
 ID3, ID4 = "DEC-20261102-g8h9", "DEC-20261102-j2k3"
 AB = [{"label": "a", "cost": "low"}, {"label": "b", "cost": "high"}]
 
 
 def row(**over):
-    r = {"schema": "decision/2", "id": ID1, "status": "open", "class": "scope", "question": "Which?",
+    r = {"schema": TAG, "id": ID1, "status": "open", "class": "scope", "question": "Which?",
          "options": copy.deepcopy(AB), "recommended": "a", "asked_at": "a1b2c3d", "asked_by": "agent",
          "topics": ["ids"], "applies_to": [], "checked_against": [], "effect": "one-off", "source": "r/a.md"}
     r.update(over)

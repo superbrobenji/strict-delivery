@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-w4im
+status: open
+source: "PR-P3 final review: .superpowers/sdd/2026-10-31-strict-delivery-framework/g7/final-review-P3.md FR-P3-1"
+severity: HIGH
+class: "seam: CI checkout shape x rules needing a local base branch: findings.may_delete via cleanup.final_merge/merge.merged_errors (gates/lib/findings.py:276-294, gates/lib/merge.py:63-64) needs refs/heads/<base_branch>, which the matrix gates job (.github/workflows/strict-delivery.yml:10-28) never creates, so run_all register fails register.base.deleted.<id> on every cleanup PR deleting a resolved finding"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P3.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 116de3ad0eba16d45188aeaf09cc43da936c174b
+    by: stream-a16
+review_round: 2
+caused_by_change: true
+dimension: workflow and CI seam (plan :2913, :2975, :3038)

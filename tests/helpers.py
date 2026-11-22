@@ -1,6 +1,8 @@
 """Shared test helpers: fixture repositories built with plain git, isolated from the user's git config."""
+import contextlib
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from typing import Optional
@@ -23,8 +25,27 @@ TOP = "git rev-parse --show-toplevel: root must be the repository top level"
 E128 = "git rev-parse --show-toplevel failed (exit 128)"
 
 
+@contextlib.contextmanager
+def int_limit(value):
+    """Run the body with ``sys.set_int_max_str_digits(value)`` (restored after); ``None`` leaves the limit as it is."""
+    if value is None:
+        yield
+        return
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(value)
+    try:
+        yield
+    finally:
+        sys.set_int_max_str_digits(old)
+
+
+# The int string-conversion limit settings every digit-count row runs under: the default, 640 (the lowest CPython 3.11+
+# accepts) and 0 (unlimited). Interpreters before 3.11 have no such limit, so only the default exists there.
+INT_LIMITS = (None, 640, 0) if hasattr(sys, "set_int_max_str_digits") else (None,)
+
+
 def minimal_config() -> dict:
-    return {"schema": "config/1", "framework_version": "0.0.0", "profile": "strict"}
+    return {"schema": "config/2", "framework_version": "0.0.0", "profile": "strict"}
 
 
 def git(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -> str:

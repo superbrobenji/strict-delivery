@@ -18,6 +18,7 @@ from gates.lib import config, decisions, ids, schema
 from gates.lib.store import Store
 from gates.tools import decisions_cli
 from tests.helpers import E128, TOP, GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
+from tests.test_fold_table import FORTY
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEC = ".strict-delivery/state/decisions"
@@ -63,6 +64,9 @@ def ask_argv(cls="scope", question="Keep the prefix rule?", options=("yes::none"
     argv = ["ask", "--class", cls, "--question", question]
     for o in options:
         argv += ["--option", o]
+    if cls != "model-policy" and not any(e.startswith("--rec") for e in extra) and options \
+            and "::" in options[0]:  # D-M10: every ask names its recommended option, the first label
+        argv += ["--recommend", options[0].partition("::")[0]]
     return argv + ["--effect", effect, "--by", by] + list(extra)
 
 
@@ -149,7 +153,8 @@ class PlanTests(Base):
         self.assertEqual(self.rec(new), {
             "schema": dtag(), "id": new, "status": "open", "class": "scope", "question": "Keep the prefix rule?",
             "options": [{"label": "yes", "cost": "none"}, {"label": "no", "cost": "rework"}], "asked_at": head,
-            "asked_by": "controller", "topics": [], "applies_to": [], "checked_against": [], "effect": "one-off"})
+            "asked_by": "controller", "topics": [], "applies_to": [], "checked_against": [], "effect": "one-off",
+            "recommended": "yes"})
 
     def test_decide_records_git_email(self):  # F6
         self.put(dec(DA, "open"))
@@ -234,6 +239,33 @@ class PlanTests(Base):
         code, out, _ = self.cli("find", "widget", "--all")
         self.assertEqual(out, "%s [] Widget rule? -> Yes\n%s [] Widget again? -> (withdrawn)\n" % (DA, DC))
 
+    def test_fold_ascii_case(self):  # Task U1 D1: a record side of any case, an ASCII query side
+        self.put(dec(DA, effect="lasting", landed_in=["CLAUDE.md"], topics=["Alpha"], question="Prefix rule?"),
+                 dec(DB, effect="lasting", landed_in=["CLAUDE.md"], topics=["beta"], question="Other rule?"))
+        line = "%s [Alpha] Prefix rule? -> Yes\n" % DA
+        self.assertEqual(self.cli("find", "--topic", "alpha"), (0, line, ""))
+        self.assertEqual(self.cli("find", "PREFIX"), (0, line, ""))
+        self.assertEqual(self.cli("find", "--topic", "alph"), (0, "", ""))
+
+    def test_fold_full_folding_cli(self):  # Task U1 D2: ASCII terms against full-folding record text
+        sharp, kelvin = "Stra" + chr(0xDF) + "e rule?", chr(0x212A) + " rule?"
+        self.put(dec(DA, effect="lasting", landed_in=["CLAUDE.md"], question=sharp),
+                 dec(DB, effect="lasting", landed_in=["CLAUDE.md"], question=kelvin))
+        self.assertEqual(self.cli("find", "STRASSE"), (0, "%s [] %s -> Yes\n" % (DA, sharp), ""))
+        self.assertEqual(self.cli("find", "strasse"), (0, "%s [] %s -> Yes\n" % (DA, sharp), ""))
+        self.assertEqual(self.cli("find", "k", "rule"), (0, "%s [] %s -> Yes\n" % (DB, kelvin), ""))
+        self.assertEqual(self.cli("find", "K"), (0, "%s [] %s -> Yes\n" % (DB, kelvin), ""))
+
+    def test_cli_forty_refused(self):  # Task U1 D10: the argv whitelists refuse each of the 40, on both interpreters
+        self.put(dec(DA, effect="lasting", landed_in=["CLAUDE.md"]))
+        for cp in FORTY:
+            c = chr(cp)
+            with self.subTest(hex(cp)):
+                self.refused(["find", c], "TERM: U+%04X is not allowed" % cp)
+                self.refused(["find", "--topic", c], "--topic: must match")
+                self.refused(ask_argv(question="Keep " + c + "?"), "--question: U+%04X is not allowed" % cp)
+                self.refused(ask_argv(extra=["--topic", c]), "--topic: must match")
+
     def test_gates_pass_after_ask_and_decide(self):
         new, _ = self.ask(extra=["--topic", "ids"])
         self.assertEqual(self.cli("decide", new, "--answer", "Yes")[0], 0)
@@ -291,14 +323,14 @@ class Argv(Base):
 
     def test_A6_equals_form_passes_leading_dash(self):
         code, out, err = self.cli("ask", "--class", "scope", "--question=-x", "--option=a::b", "--option", "c::d",
-                                  "--effect", "one-off", "--by", "w")
+                                  "--effect", "one-off", "--by", "w", "--recommend", "a")
         self.assertEqual(code, 0, err)
         r = self.rec(out.strip())
         self.assertEqual((r["question"], r["options"][0]), ("-x", {"label": "a", "cost": "b"}))
 
     def test_A7_abbreviations(self):
         code, out, err = self.cli("ask", "--cl", "scope", "--quest", "q", "--opt=a::b", "--opt", "c::d", "--eff",
-                                  "one-off", "--by", "w")
+                                  "one-off", "--by", "w", "--rec", "a")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.rec(out.strip())["question"], "q")
         self.assertIn("ambiguous option", self.usage(ask_argv(extra=["--p", "x"])))
@@ -1342,6 +1374,268 @@ class Batch(Base):
         import datetime
         with mock.patch.object(decisions_cli.ids, "utc_today", return_value=datetime.date(2027, 3, 4)):
             self.assertEqual(self.ok("--answered", "--source", "r"), "Owner answers (2027-03-04), binding\n")
+
+
+# ---------------------------------------------------------------- Task 2c.1: ask --overrides, --recommend, --source
+# (table task-2c.1-domain.md sections 5-7 with the binding controller decisions D-Q3, D-Q4, D-Q26-D-Q28)
+
+def raw_ask(cls="scope", options=("a::x", "b::y"), extra=(), question="Q?"):
+    """An ``ask`` argv with no ``--recommend`` added (ask_argv adds one)."""
+    argv = ["ask", "--class", cls, "--question", question]
+    for o in options:
+        argv += ["--option", o]
+    return argv + ["--effect", "one-off", "--by", "me"] + list(extra)
+
+
+class Overrides(Base):
+    def last(self):
+        return sorted(self.recs())[-1]
+
+    def new_rec(self, argv):
+        code, out, err = self.cli(*argv)
+        self.assertEqual((code, err), (0, ""), err)
+        return self.rec(out.splitlines()[-1])
+
+    def test_ask_without_overrides_unchanged(self):  # O1
+        for cls in ("rule-override", "scope"):
+            with self.subTest(cls=cls):
+                self.assertNotIn("overrides", self.new_rec(ask_argv(cls=cls)))
+
+    def test_ask_writes_overrides(self):  # O2
+        for rule in ("SD-R2", "SD-R1", "SD-R19"):
+            with self.subTest(rule=rule):
+                r = self.new_rec(ask_argv(cls="rule-override", extra=["--overrides", rule]))
+                self.assertEqual((r["overrides"], r["class"]), (rule, "rule-override"))
+                self.assertEqual(decisions.validate(r, self.cfg()), [])
+        self.assertTrue(gate_decisions.check(["--root", self.root]).ok())
+        self.assertTrue(gate_schema.check(["--root", self.root]).ok())
+
+    def test_ask_fixed_override_writes_nothing(self):  # O3
+        for rule in ("SD-R3", "SD-R12", "SD-R18"):
+            with self.subTest(rule=rule):
+                self.refused(ask_argv(cls="rule-override", extra=["--overrides", rule]), "fixed rule")
+        self.assertEqual(os.path.exists(os.path.join(self.root, DEC)), False)
+
+    def test_ask_overrides_forms(self):  # O4, X1
+        nines = "9" * 4300
+        for v, needle in (("SD-R20", "is not a base playbook rule"), ("SD-R100", "is not a base playbook rule"),
+                          ("SD-R0", "does not match SD-R"), ("SD-R01", "does not match SD-R"),
+                          ("SD-R", "does not match SD-R"), ("sd-r2", "does not match SD-R"),
+                          ("SD-R+2", "does not match SD-R"), ("SD-R٢", "U+0662 is not allowed"),
+                          ("SD-R2 ", "must not start or end with a space"), (" SD-R2", "must not start or end"),
+                          ("SD-R" + nines, "is not a base playbook rule"),
+                          ("SD-R" + nines + "9", "is not a base playbook rule")):
+            with self.subTest(v=v[:14]):
+                self.refused(ask_argv(cls="rule-override", extra=["--overrides=" + v]), needle)
+
+    def test_ask_overrides_empty(self):  # O5
+        self.refused(ask_argv(cls="rule-override", extra=["--overrides", ""]), "--overrides: must not be empty")
+
+    def test_ask_overrides_repeated(self):  # O6 (D-Q3)
+        for form in (["--overrides", "SD-R2", "--overrides", "SD-R4"], ["--overrides", "SD-R2", "--overrides=SD-R2"],
+                     ["--overrides=SD-R2", "--overr", "SD-R4"]):
+            with self.subTest(form=form):
+                self.refused(ask_argv(cls="rule-override", extra=form), "--overrides given more than once")
+
+    def test_ask_overrides_with_other_class_refused(self):  # O7
+        for cls in ("scope", "merge-grant", "model-policy", "issue-close"):
+            with self.subTest(cls=cls):
+                self.refused(ask_argv(cls=cls, extra=["--overrides", "SD-R2"]), "overrides: only class rule-override")
+        self.refused(ask_argv(cls="profile-override", extra=["--overrides", "SD-R2"]),
+                     "class: profile-override is not in decision_classes.owner_only")
+
+    def test_ask_rule_override_class_not_owner_only(self):  # O8
+        write_record(self.root, ".strict-delivery/config.yml",
+                     {**minimal_config(), "decision_classes": {"owner_only": ["house-rule"]}})
+        # the table's refusal cannot arise: config merges ``owner_only`` into the defaults (config._merge_map), so a
+        # project's list never removes ``rule-override``; the class stays accepted (reported as a table divergence)
+        r = self.new_rec(ask_argv(cls="rule-override", extra=["--overrides", "SD-R2"]))
+        self.assertEqual(r["overrides"], "SD-R2")
+
+    def test_decide_takes_no_overrides(self):  # O9, O10, S7
+        self.put(dec(DA, "open"))
+        for argv in (["decide", DA, "--answer", "a", "--overrides", "SD-R2"],
+                     ["decide", DA, "--answer", "a", "--source", "r.md"],
+                     ["decide", DA, "--answer", "a", "--recommend", "a"],
+                     ["withdraw", DA, "--reason", "r", "--overrides", "SD-R2"],
+                     ["withdraw", DA, "--reason", "r", "--source", "r.md"],
+                     ["find", "--overrides", "SD-R2"], ["batch", "--overrides", "SD-R2"],
+                     ["batch", "--recommend", "a"]):
+            with self.subTest(argv=argv):
+                self.usage(argv)
+
+    def test_ask_override_check_order(self):  # O11, M13 (D-Q26): the first failing check is the one refusal
+        # no --recommend and a fixed rule: the missing-recommend refusal comes first (the rule check is validate's)
+        self.refused(raw_ask(cls="rule-override", extra=["--overrides", "SD-R3"]),
+                     "--recommend LABEL is required: name the recommended option")
+        self.refused(raw_ask(cls="rule-override", extra=["--overrides", "SD-R3", "--recommend", "a"]), "fixed rule")
+        # an existing check (--class) precedes the new ones
+        self.refused(raw_ask(cls="", extra=["--overrides", ""]), "--class: must not be empty")
+        # --overrides' own check precedes --recommend's and --source's
+        self.refused(raw_ask(extra=["--overrides", "", "--recommend", "zz", "--source", ""]),
+                     "--overrides: must not be empty")
+        self.refused(raw_ask(extra=["--recommend", "", "--source", ""]), "--recommend: must not be empty")
+
+    def test_ask_candidates_unchanged_by_overrides(self):  # O12
+        self.put(dec(DA, topics=["ids"], question="Old question"))
+        plain = self.cli(*ask_argv(cls="rule-override", extra=["--topic", "ids"]))
+        withflag = self.cli(*ask_argv(cls="rule-override", extra=["--topic", "ids", "--overrides", "SD-R2"]))
+        self.assertEqual(plain[0], 0)
+        self.assertEqual(withflag[0], 0)
+        self.assertEqual(plain[1].splitlines()[0], "candidate %s: Old question" % DA)
+        self.assertEqual(withflag[1].splitlines()[0], "candidate %s: Old question" % DA)
+        self.assertIn(DA, self.rec(withflag[1].splitlines()[-1])["checked_against"])
+        self.assertEqual(self.rec(plain[1].splitlines()[-1])["checked_against"], [DA])
+
+    def test_ask_overrides_record_bytes(self):  # O13
+        r = self.new_rec(ask_argv(cls="rule-override", extra=["--overrides", "SD-R2"]))
+        self.assertEqual(list(r)[-2:], ["overrides", "recommended"])
+        self.assertEqual(self.rec(r["id"]), r)
+
+
+class Recommend(Base):
+    def new_rec(self, argv):
+        code, out, err = self.cli(*argv)
+        self.assertEqual((code, err), (0, ""), err)
+        return self.rec(out.splitlines()[-1])
+
+    def test_ask_requires_recommend_except_model_policy(self):  # M1, M2, M3 (plan P:1956)
+        for cls in ("scope", "merge-grant", "triage", "rule-override"):
+            with self.subTest(cls=cls):
+                self.refused(raw_ask(cls=cls), "--recommend LABEL is required: name the recommended option")
+        self.assertFalse(os.path.exists(os.path.join(self.root, DEC)))
+        self.assertNotIn("recommended", self.new_rec(raw_ask(cls="model-policy")))
+        self.refused(raw_ask(cls="model-policy", extra=["--recommend", "a"]),
+                     "--recommend: class model-policy carries no recommended option")
+
+    def test_ask_recommend_unknown_label_refused(self):  # M4
+        for v in ("c", "A", "ab", "a ", ""):
+            with self.subTest(v=v):
+                self.refused(raw_ask(extra=["--recommend", v]), "--recommend: " if v in ("a ", "") else
+                             "recommended: %s is not the label of exactly one option" % v)
+
+    def test_ask_duplicate_option_labels_with_recommend(self):  # M6
+        self.refused(raw_ask(options=("a::x", "a::y"), extra=["--recommend", "a"]), "--option label: a given twice")
+        self.refused(raw_ask(options=("a::x", "a::y")), "--option label: a given twice")
+
+    def test_ask_recommend_given_twice(self):  # M7 (D-Q3)
+        for form in (["--recommend", "a", "--recommend", "b"], ["--recommend", "a", "--recommend", "a"],
+                     ["--recommend=a", "--recomm", "b"]):
+            with self.subTest(form=form):
+                self.refused(raw_ask(extra=form), "--recommend given more than once")
+
+    def test_ask_recommend_label_forms(self):  # M8, X1, X2
+        long_label = "L" * 4300
+        for label in ("a", long_label, "x" * 4301):
+            with self.subTest(n=len(label)):
+                r = self.new_rec(raw_ask(options=(label + "::c", "b::y"), extra=["--recommend", label])) \
+                    if len(label) <= 4300 else None
+                if r is not None:
+                    self.assertEqual(r["recommended"], label)
+        self.refused(raw_ask(extra=["--recommend", "café"]), "--recommend: ")  # not printable ASCII on any UCD
+        self.refused(raw_ask(extra=["--recommend", "\U0001fae8"]), "--recommend: U+1FAE8 is not allowed")
+        self.refused(raw_ask(extra=["--recommend", "a::b"]), "recommended: a::b is not the label")
+        self.usage(raw_ask(extra=["--recommend", "-x"]))
+        r = self.new_rec(["ask", "--class", "scope", "--question", "Q?", "--option=-x::c", "--option", "b::y",
+                          "--effect", "one-off", "--by", "me", "--recommend=-x"])
+        self.assertEqual(r["recommended"], "-x")
+
+    def test_ask_one_option_refused(self):  # M9
+        self.refused(raw_ask(options=("a::x",), extra=["--recommend", "a"]), "options")
+
+    def test_ask_recommend_and_source_written(self):  # M5, S1, S2 (plan P:1958)
+        r = self.new_rec(raw_ask(extra=["--recommend", "a", "--source", "r/report.md"]))
+        self.assertEqual((r["recommended"], r["source"]), ("a", "r/report.md"))
+        self.assertEqual(r["options"], [{"label": "a", "cost": "x"}, {"label": "b", "cost": "y"}])
+        self.assertEqual(decisions.validate(r, self.cfg()), [])
+        self.assertNotIn("source", self.new_rec(raw_ask(extra=["--recommend", "b"])))
+
+    def test_ask_recommend_visible_in_batch(self):  # M12
+        r = self.new_rec(raw_ask(extra=["--recommend", "b"]))
+        code, out, err = self.cli("batch")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(r["id"], out)
+        self.assertIn("Recommended: b -- cost: y\nAlternatives:\n- a -- cost: x\n", out)
+
+    def test_ask_check_order(self):  # M13
+        self.refused(raw_ask(cls="", extra=[]), "--class: must not be empty")  # an existing check before --recommend
+        self.refused(raw_ask(options=("bad",)), "--option: expected LABEL::COST")
+
+
+class Source(Base):
+    def test_ask_source_empty_refused(self):  # S3
+        self.refused(raw_ask(extra=["--recommend", "a", "--source", ""]), "--source: must not be empty")
+
+    def test_ask_source_given_twice(self):  # S5 (D-Q3)
+        for form in (["--source", "a.md", "--source", "b.md"], ["--source=a.md", "--source=a.md"],
+                     ["--source", "a.md", "--sou", "b.md"]):
+            with self.subTest(form=form):
+                self.refused(raw_ask(extra=["--recommend", "a"] + form), "--source given more than once")
+
+    def test_ask_source_forms(self):  # S4 (D-Q28)
+        for v in ("/abs/x.md", "../x", "a//b", "a b.md", "a\nb", "a\rb", "a\x7fb", "café", " a.md", "a.md ",
+                  "report.md#L3", "a/", "./a.md", "a/*.md", "a?.md", "a[1].md", "x" * 4301 if False else "a/../b"):
+            with self.subTest(v=v):
+                self.refused(raw_ask(extra=["--recommend", "a", "--source=" + v]), "--source: ")
+        for v in ("r/report.md", "a", "x" * 4301, "https:/x"):
+            with self.subTest(ok=v[:12]):
+                code, out, err = self.cli(*raw_ask(extra=["--recommend", "a", "--source=" + v]))
+                self.assertEqual((code, err), (0, ""), err)
+                self.assertEqual(self.rec(out.splitlines()[-1])["source"], v)
+
+    def test_ask_source_any_class(self):  # S6
+        for cls in ("scope", "model-policy"):
+            with self.subTest(cls=cls):
+                extra = ["--source", "r.md"] + (["--recommend", "a"] if cls != "model-policy" else [])
+                code, out, err = self.cli(*raw_ask(cls=cls, extra=extra))
+                self.assertEqual((code, err), (0, ""), err)
+                self.assertEqual(self.rec(out.splitlines()[-1])["source"], "r.md")
+
+    def test_source_flag_only_on_ask(self):  # S7 (batch keeps its own --source, whose meaning is unrelated)
+        self.put(dec(DA, "open"))
+        self.usage(["decide", DA, "--answer", "a", "--source", "r.md"])
+        self.usage(["withdraw", DA, "--reason", "r", "--source", "r.md"])
+        self.assertEqual(self.cli("batch", "--answered", "--source", "r.md")[0], 0)
+
+    def test_ask_source_not_printed(self):  # S8, with a divergence: the batch printer (Task 1d.3, session-resume design
+        # line 78) groups questions under one `### source:` header, so the path appears once, as that header, and in
+        # no question block; the table's "never printed" contradicts design line 78
+        code, out, err = self.cli(*raw_ask(extra=["--recommend", "a", "--source", "secret/report.md"]))
+        self.assertEqual(code, 0, err)
+        code, out, err = self.cli("batch")
+        self.assertEqual(out.count("secret/report.md"), 1)
+        self.assertIn("### source: secret/report.md\n", out)
+
+
+class QuestionTagTopic(Base):
+    """Task P4.1 decision D-Q1 (a): ``--topic`` of ``ask`` and ``find`` also takes exactly ``q:<name>:<name>``, the tag of
+    plan :3089; every other topic with a colon stays refused."""
+
+    def test_tag_accepted_by_ask_and_stored(self):  # TG2
+        new, _ = self.ask(extra=["--topic", "q:a-plan:q1"])
+        self.assertEqual(self.rec(new)["topics"], ["q:a-plan:q1"])
+
+    def test_tag_accepted_by_find(self):
+        new, _ = self.ask(extra=["--topic=q:a-plan:q1"])
+        self.assertEqual(self.cli("find", "--all", "--topic", "q:a-plan:q1"),
+                         (0, "%s [q:a-plan:q1] Keep the prefix rule? -> (open)\n" % new, ""))
+        self.assertEqual(self.cli("find", "--all", "--topic", "q:a-plan:q10"), (0, "", ""))
+
+    def test_other_colon_topics_stay_refused(self):
+        bad = ["q:", "q::", "q:a", "q:a:", "q::b", "q:a:b:c", "Q:a:b", "q:A:b", "q:a:B", "x:a:b", "q:-a:b", "q:a:-b",
+               "q:a b:c", "q:a:b ", " q:a:b", "q:a:b\n", "q:é:b", "q:a_b:c", "a:b", ":", "q:a:b#", "qq:a:b", "q:a:b:"]
+        for t in bad:
+            with self.subTest(topic=t):
+                self.refused(ask_argv(extra=["--topic=" + t]), "--topic: must match [a-z0-9][a-z0-9-]*")
+                self.refused(["find", "--topic=" + t], "--topic: must match [a-z0-9][a-z0-9-]*")
+
+    def test_plain_topics_unchanged_and_program_flag_keeps_old_rule(self):
+        self.assertEqual(self.rec(self.ask(extra=["--topic", "ids"])[0])["topics"], ["ids"])
+        self.refused(ask_argv(cls="merge-grant", extra=["--plan", "p", "--program", "q:a:b", "--stream", "s"]),
+                     "--program: must match")
+
+    def test_tag_given_twice_refused(self):
+        self.refused(ask_argv(extra=["--topic=q:a:b", "--topic=q:a:b"]), "--topic: q:a:b given twice")
 
 
 if __name__ == "__main__":

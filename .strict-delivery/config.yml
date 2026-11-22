@@ -1,3 +1,25 @@
-schema: config/1
+schema: config/2
 framework_version: "0.0.0"
 profile: strict
+commands:
+  test: 'python3 -c "import sys; sys.exit(0 if sys.version_info[:2] == (3, 9) else ''commands.test: python3 is not Python 3.9'')" && python3.13 -c "import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else ''commands.test: python3.13 is not Python 3.13'')" && python3 -m unittest discover -s tests -t . && python3.13 -m unittest discover -s tests -t .'
+top_tier_roles: [final_verifier, exception_reviewer]
+reviews:
+  small:
+    exclude:
+      - .strict-delivery/**
+      - .github/workflows/**
+      - .claude/**
+      - CLAUDE.md
+      - gates/lib/**
+      - gates/schemas/**
+      - gates/gate_schema.py
+      - gates/hook.py
+      - gates/hooks/**
+      - hooks/**
+      - gates/gate_dispatch.py
+      - gates/__main__.py
+      - gates/producers.py
+      - gates/run_all.py
+merge:
+  mode: controller
