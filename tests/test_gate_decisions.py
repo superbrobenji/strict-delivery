@@ -1,5 +1,6 @@
 """Tests of gates/gate_decisions.py through main() on real fixture repositories (Task 1c.1 input-domain table:
 rows A, R, C, O, J). Expected lines are written by hand from the fixture text."""
+import builtins
 import contextlib
 import io
 import json
@@ -835,6 +836,539 @@ class OutputTests(Base):  # J1, J3
         self.build()
         self.assertEqual(self.run_()[1], 0)
         self.assertEqual(run_argv(["--root", os.path.join(self.tmp, "nope")])[1], 1)
+
+
+# ---------------------------------------------------------------- Task 4b.1: override authorisation
+A, B, C = "DEC-20261031-aaaa", "DEC-20261031-bbbb", "DEC-20261031-cccc"
+K, LK = "block.max_tasks", "limits.max_children.stream_controller"
+PO = "profile-override"
+NEED = "; a profile override needs class profile-override"
+OTHER_CLASSES = ("triage", "spec-direction", "scope", "model-policy", "issue-close", "rule-override",
+                 "program-create", "stream-ownership", "stream-merge", "request-dispute", "program-close")
+
+
+def good(id_, **kw):
+    return lasting(id_, **{"class": PO, **kw})
+
+
+def ov_cfg(pairs, owner=(PO,), **extra):
+    cfg = dict(minimal_config(), decision_classes={"owner_only": list(owner)})
+    if pairs:
+        cfg["overrides"] = {k: {"value": 4, "decision": d} for k, d in pairs}
+    cfg.update(extra)
+    return cfg
+
+
+def fail(reason, key=K):
+    return "FAIL decisions.override.%s: %s" % (key, reason)
+
+
+def gate_proc(root, *argv):
+    p = subprocess.run([sys.executable, "-m", "gates"] + list(argv) + ["--root", root], cwd=REPO,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return p.stdout.decode(), p.returncode, p.stderr
+
+
+class OverrideBase(Base):
+    def ov(self, rows, pairs, files=None, cfg_extra=None, commit=True, owner=(PO,)):
+        ids = " ".join(r["id"] for r in rows if type(r.get("id")) is str and r.get("landed_in") and
+                       r.get("status") != "open")  # an open id in a scanned file is an open-ref FAIL
+        f = {"CLAUDE.md": "rules: %s\n" % ids}
+        f.update(files or {})
+        return self.build(rows, f, ov_cfg(pairs, owner, **(cfg_extra or {})), commit)
+
+    def ovl(self, out=None):
+        out = self.run_()[0] if out is None else out
+        return [ln for ln in out.splitlines() if "decisions.override." in ln]
+
+    def one(self, rows, decision=A, **kw):
+        self.ov(rows, [(K, decision)], **kw)
+        return self.ovl()
+
+    def injected(self, overrides, *args):
+        cfg = dict(gate_decisions.config.load(self.work), overrides=overrides)
+        with mock.patch.object(gate_decisions.config, "load", return_value=cfg):
+            return run_argv(["--root", self.work] + list(args))
+
+
+class OverrideBasicTests(OverrideBase):
+    def test_override_with_answered_decision_passes(self):  # OVR3, DST6, CLS1, KEY1
+        self.ov([good(A)], [(K, A)])
+        self.assertEqual(self.ovl(), ["PASS decisions.override.block.max_tasks"])
+
+    def test_override_with_open_decision_fails(self):  # DST5, RC2
+        self.assertEqual(self.one([row(A, "open", **{"class": PO})]), [fail(A + " is open")])
+
+    def test_override_superseded_by_answered_fails(self):  # SUP2
+        self.assertEqual(self.one([good(A), lasting(B, supersedes=A)]), [fail("%s is superseded by %s" % (A, B))])
+
+    def test_override_wrong_class_fails(self):  # CLS2 (the plan's)
+        out = self.one([lasting(A)])
+        self.assertEqual(out, [fail(A + " has class scope" + NEED)])
+
+    def test_no_overrides_no_line(self):  # OVR1
+        self.build([good(A)], {"CLAUDE.md": A}, ov_cfg([]))
+        self.assertNotIn("decisions.override", self.run_()[0])
+
+    def test_no_overrides_output_unchanged(self):  # OVR1, E4
+        self.build([good(A)], {"CLAUDE.md": A}, ov_cfg([]))
+        self.assertEqual(gate_proc(self.work, "check", "decisions"), (passes(*CATS), 0, b""))
+
+    def test_empty_overrides_no_line(self):  # OVR2
+        self.build([good(A)], {"CLAUDE.md": A}, ov_cfg([]))
+        self.assertEqual(self.injected({}), (passes(*CATS), 0))
+
+    def test_two_overrides_two_lines_in_file_order(self):  # OVR4, KEY2, KEY3
+        self.ov([good(A), row(B, "open", **{"class": PO})], [(K, A), (LK, B)])
+        self.assertEqual(self.ovl(), ["PASS decisions.override.block.max_tasks", fail(B + " is open", LK)])
+        self.assertEqual(self.run_()[1], 1)
+        self.ov([good(A)], [("limits.max_depth", A), ("limits.max_concurrent", A)])
+        self.assertEqual(self.ovl(), ["PASS decisions.override.limits.max_depth",
+                                      "PASS decisions.override.limits.max_concurrent"])
+
+    def test_override_lines_follow_file_order(self):  # OVR5
+        self.ov([good(A), row(B, "open", **{"class": PO})], [(LK, B), (K, A)])
+        self.assertEqual(self.ovl(), [fail(B + " is open", LK), "PASS decisions.override.block.max_tasks"])
+
+    def test_one_decision_two_overrides_two_lines(self):  # OVR6
+        self.ov([good(A)], [(K, A), (LK, A)])
+        self.assertEqual(self.ovl(), ["PASS decisions.override.block.max_tasks",
+                                      "PASS decisions.override.limits.max_children.stream_controller"])
+
+    def test_one_decision_two_overrides_both_fail(self):  # OVR7
+        for name, rows, why in (
+                ("open", [row(A, "open", **{"class": PO})], A + " is open"),
+                ("withdrawn", [row(A, "withdrawn", **{"class": PO})], A + " is withdrawn"),
+                ("superseded", [good(A), lasting(B, supersedes=A)], "%s is superseded by %s" % (A, B)),
+                ("class", [lasting(A)], A + " has class scope" + NEED)):
+            with self.subTest(name):
+                self.work = os.path.join(self.tmp, "w-" + name)  # a fresh repository per case
+                os.mkdir(self.work)
+                self.ov(rows, [(K, A), (LK, A)])
+                self.assertEqual(self.ovl(), [fail(why), fail(why, LK)])
+
+    def test_many_overrides_one_line_each(self):  # OVR8
+        self.ov([good(A), row(B, "open", **{"class": PO})], [(K, A)])
+        ovs = {}
+        for i in range(1000):
+            ovs["limits.max_children.r%d" % i] = {"value": 4, "decision": (A, B, C)[i % 3]}
+        out, code = self.injected(ovs)
+        want = []
+        for i in range(1000):
+            key = "limits.max_children.r%d" % i
+            want.append(["PASS decisions.override." + key, fail(B + " is open", key),
+                         fail(C + " is missing", key)][i % 3])
+        self.assertEqual((self.ovl(out), code), (want, 1))
+
+    def test_override_value_not_read(self):  # OVR9
+        self.ov([good(A)], [(K, A)])
+        outs = [self.injected({K: {"value": v, "decision": A}}) for v in (4, 5, [1, 2])]
+        self.assertEqual(outs[0], outs[1])
+        self.assertEqual(outs[0], outs[2])
+        self.assertEqual(outs[0], (passes(*CATS) + "PASS decisions.override.block.max_tasks\n", 0))
+
+    def test_overrides_refused_by_config_is_one_input_line(self):  # OVR10-OVR13
+        def e(**kw):
+            return {K: dict({"value": 4, "decision": A}, **kw)}
+        shapes = {
+            "int": 3, "str": "x", "bool": True, "list": [1], "null": None,
+            "entry-int": {K: 4}, "no-decision": {K: {"value": 4}}, "no-value": {K: {"decision": A}},
+            "extra": e(note="x"), "bad-key": {"paths.state": {"value": 4, "decision": A}},
+            "block": {"block": {"value": 4, "decision": A}},
+            "limits-key": {"limits.max_kids": {"value": 4, "decision": A}},
+            "empty-id": e(decision=""), "foreign-prefix": e(decision="F-20261111-abcd"),
+            "lower-prefix": e(decision="dec-20261031-aaaa"), "id-null": e(decision=None),
+            "id-int": e(decision=5), "id-list": e(decision=[A]), "id-newline": e(decision=A + "\n"),
+            "id-space": e(decision=A + " "),
+        }
+        for name, value in shapes.items():
+            with self.subTest(name):
+                self.build([good(A)], {"CLAUDE.md": A}, ov_cfg([], overrides=value))
+                out, code = self.run_()
+                self.input_fail(out, code, "overrides")
+                self.assertNotIn("decisions.override.", out)
+
+    def _raw_config(self, *lines):
+        self.ov([good(A)], [])
+        head = ["schema: config/2", 'framework_version: "0.0.0"', "profile: strict", "overrides:"]
+        self.put(".strict-delivery/config.yml", "".join(ln + "\n" for ln in head + list(lines)))
+        return self.run_()
+
+    def test_duplicate_override_key_is_one_input_line(self):  # OVR13
+        out, code = self._raw_config("  block.max_tasks:", "    value: 4", "    decision: " + A,
+                                     "  block.max_tasks:", "    value: 5", "    decision: " + A)
+        self.input_fail(out, code, "duplicate key")
+
+    def test_override_value_digit_text_is_one_input_line(self):  # V1
+        for digits in (1001, 4300, 4301):
+            with self.subTest(digits):
+                out, code = self._raw_config("  block.max_tasks:", "    value: " + "7" * digits, "    decision: " + A)
+                self.input_fail(out, code, "integer too large")
+
+    def test_injected_bad_overrides_shape_is_input_fail(self):  # OVR14, OVR15
+        class S(str):
+            pass
+        self.ov([good(A)], [])
+        for name, value, why in (
+                ("list", [("k", {})], "overrides: must be a mapping"), ("str", "x", "overrides: must be a mapping"),
+                ("none", None, "overrides: must be a mapping"),
+                ("entry", {"k": 5}, "overrides.k: must be a mapping"),
+                ("no-decision", {"k": {"value": 4}}, "overrides.k.decision: required key is missing"),
+                ("int-decision", {"k": {"decision": 5}}, "overrides.k.decision: must be a string"),
+                ("none-decision", {"k": {"decision": None}}, "overrides.k.decision: must be a string"),
+                ("subclass", {"k": {"decision": S(A)}}, "overrides.k.decision: must be a string"),
+                ("int-key", {1: {"decision": A, "value": 4}}, "overrides.1: key must be a string"),
+                ("late-bad", {"a": {"decision": A, "value": 4}, "b": 5}, "overrides.b: must be a mapping"),
+                # a key with LF, NUL and a backslash is escaped once, by the render (written by hand)
+                ("ctl-key", {"a\nb\x00c\\d": 5}, "overrides.a\\nb\\x00c\\\\d: must be a mapping")):
+            with self.subTest(name):
+                out, code = self.injected(value)
+                self.assertEqual((out, code), ("FAIL decisions.input: " + why + "\n", 1))
+
+
+class OverrideDecisionTests(OverrideBase):
+    def test_override_missing_decision_fails(self):  # DST1
+        self.assertEqual(self.one([good(B)]), [fail(A + " is missing")])
+
+    def test_override_with_no_register_directory_is_missing(self):  # DST2, ST1, ST2
+        self.ov([], [(K, A)])
+        out = self.run_()[0]
+        self.assertEqual(self.ovl(out), [fail(A + " is missing")])
+        self.assertTrue(out.startswith(passes(*CATS)), out)
+        os.makedirs(os.path.join(self.work, DEC))
+        self.assertEqual(self.ovl(), [fail(A + " is missing")])
+
+    def test_override_decision_read_from_configured_path(self):  # DST3
+        extra = {"paths": {"decisions": ".sd/dec"}}
+        self.ov([], [(K, A)], cfg_extra=extra)
+        write_record(self.work, ".sd/dec/%s.yml" % A, good(A))
+        write_record(self.work, "%s/%s.yml" % (DEC, B), good(B))
+        self.put("CLAUDE.md", "%s %s\n" % (A, B))
+        self.assertEqual(self.ovl(), ["PASS decisions.override.block.max_tasks"])
+        self.ov([], [(K, B)], cfg_extra=extra)  # B sits under the default directory only
+        write_record(self.work, "%s/%s.yml" % (DEC, B), good(B))
+        self.assertEqual(self.ovl(), [fail(B + " is missing")])
+
+    def test_override_id_exact_match(self):  # DST4
+        self.ov([good("DEC-20261031-aaab")], [(K, A)])
+        write_record(self.work, "%s/x1.yml" % DEC, good("DEC-20261031-AAAA"))
+        write_record(self.work, "%s/x2.yml" % DEC, good("dec-20261031-aaaa"))
+        self.assertEqual(self.ovl(), [fail(A + " is missing")])
+
+    def test_override_withdrawn_decision_fails(self):  # DST8
+        self.assertEqual(self.one([row(A, "withdrawn", **{"class": PO})]), [fail(A + " is withdrawn")])
+
+    def test_override_withdrawn_and_wrong_class(self):  # DST9, D-Q2 (a)
+        self.assertEqual(self.one([row(A, "withdrawn")]), [fail(A + " is withdrawn")])
+
+    def test_override_open_and_wrong_class(self):  # DST10, D-Q2 (a)
+        self.assertEqual(self.one([row(A, "open")]), [fail(A + " is open")])
+
+    def test_override_one_off_decision(self):  # DST7, D-Q1 (b)
+        self.assertEqual(self.one([row(A, "answered", **{"class": PO})]), [fail(A + " is not in force")])
+
+    def test_override_unreadable_status(self):  # DST11, DST12, CLS7, D-Q1 (b)
+        base = good(A)
+        no_status = {k: v for k, v in base.items() if k != "status"}
+        no_effect = {k: v for k, v in base.items() if k != "effect"}
+        no_class = {k: v for k, v in base.items() if k != "class"}
+        for name, r, why in (
+                ("status-bogus", dict(base, status="bogus"), A + " is not in force"),
+                ("status-missing", no_status, A + " is not in force"),
+                ("status-none", dict(base, status=None), A + " is not in force"),
+                ("effect-missing", no_effect, A + " is not in force"),
+                ("effect-none", dict(base, effect=None), A + " is not in force"),
+                ("class-missing", no_class, A + " has class None" + NEED),
+                ("class-none", dict(base, **{"class": None}), A + " has class None" + NEED),
+                ("class-int", dict(base, **{"class": 5}), A + " has class 5" + NEED),
+                # D-Q1 (b), spec design.md:642: a non-str class is made an exact str (its str() text) and escaped once,
+                # by the renderer: str(['a\\b']) holds 2 backslashes, the render doubles each: 4 (written by hand)
+                ("class-list", dict(base, **{"class": ["a\\b"]}), A + " has class ['a" + "\\" * 4 + "b']" + NEED),
+                # str(['a<LF>b']) is [, ', a, backslash, n, b, ', ]: the render doubles the one backslash: 2
+                ("class-list-lf", dict(base, **{"class": ["a\nb"]}), A + " has class ['a" + "\\" * 2 + "nb']" + NEED),
+                ("class-dict-nul", dict(base, **{"class": {"k": "\x00"}}),
+                 A + " has class {'k': '" + "\\" + "\\" + "x00'}" + NEED)):
+            with self.subTest(name):
+                self.assertEqual(self.one([r]), [fail(why)])
+
+    def test_schema_invalid_decision_judged_by_its_row(self):  # DST13, DST14, DST16, D4
+        for name, drop in (("no-question", "question"), ("no-answer", "answer")):
+            with self.subTest(name):
+                r = {k: v for k, v in good(A).items() if k != drop}
+                self.ov([r], [(K, A)])
+                out = self.run_()[0]
+                self.assertEqual(self.ovl(out), ["PASS decisions.override.block.max_tasks"])
+                self.assertIn("FAIL decisions.schema.%s: " % A, out)
+        self.ov([good(A)], [(K, A)], files={"CLAUDE.md": "nothing\n"})  # the cite is missing: landed FAILs
+        out = self.run_()[0]
+        self.assertEqual(self.ovl(out), ["PASS decisions.override.block.max_tasks"])
+        self.assertIn("FAIL decisions.landed.%s: " % A, out)
+
+    def test_override_reads_working_tree_not_git(self):  # DST15
+        self.ov([good(A)], [(K, A)], commit=False)
+        self.assertEqual(self.ovl(), ["PASS decisions.override.block.max_tasks"])
+
+    def test_override_matches_row_id_not_file_name(self):  # DUP3
+        self.ov([], [(K, A)])
+        write_record(self.work, "%s/other.yml" % DEC, good(A))
+        self.put("CLAUDE.md", A)
+        out = self.run_()[0]
+        self.assertEqual(self.ovl(out), ["PASS decisions.override.block.max_tasks"])
+        self.assertIn("FAIL decisions.store.name.%s/other.yml" % DEC, out)
+
+    def test_override_foreign_prefix_record_not_matched(self):  # DUP4
+        self.ov([], [(K, A)])
+        write_record(self.work, "%s/%s.yml" % (DEC, A), good("F-20261031-aaaa"))
+        out = self.run_()[0]
+        self.assertEqual(self.ovl(out), [fail(A + " is missing")])
+        self.assertIn("FAIL decisions.store.id", out)
+
+    def test_override_record_without_id_ignored(self):  # DUP5
+        self.ov([], [(K, A)])
+        write_record(self.work, "%s/x.yml" % DEC, {k: v for k, v in good(A).items() if k != "id"})
+        self.assertEqual(self.ovl(), [fail(A + " is missing")])
+
+    def test_override_duplicate_id(self):  # DUP1, DUP2, D-Q4 (a)
+        self.ov([], [(K, A)])
+        write_record(self.work, "%s/x.yml" % DEC, good(A))
+        write_record(self.work, "%s/y.yml" % DEC, good(A))
+        self.put("CLAUDE.md", A)
+        out = self.run_()[0]
+        self.assertEqual(self.ovl(out), ["PASS decisions.override.block.max_tasks"])
+        self.assertIn("FAIL decisions.store.duplicate.%s" % A, out)
+        write_record(self.work, "%s/x.yml" % DEC, row(A, "open", **{"class": PO}))
+        out = self.run_()[0]
+        self.assertEqual(self.ovl(out), [fail(A + " is open")])
+        self.assertIn("FAIL decisions.store.duplicate.%s" % A, out)
+
+
+class OverrideClassTests(OverrideBase):
+    def test_override_each_other_class_fails(self):  # CLS2, CLS9
+        for c in OTHER_CLASSES:
+            with self.subTest(c):
+                self.assertEqual(self.one([lasting(A, **{"class": c})]), [fail("%s has class %s%s" % (A, c, NEED))])
+
+    def test_override_merge_grant_class_fails(self):  # CLS3, D-Q2 (a)
+        self.assertEqual(self.one([lasting(A, **{"class": "merge-grant"})]),
+                         [fail("%s has class merge-grant%s" % (A, NEED))])
+
+    def test_override_project_class_fails(self):  # CLS4
+        self.ov([lasting(A, **{"class": "team-x"})], [(K, A)], owner=(PO, "team-x"))
+        self.assertEqual(self.ovl(), [fail("%s has class team-x%s" % (A, NEED))])
+
+    def test_override_unlisted_class_fails(self):  # CLS5
+        out = self.one([lasting(A, **{"class": "free-text"})])
+        self.assertEqual(out, [fail("%s has class free-text%s" % (A, NEED))])
+
+    def test_override_class_exact_match(self):  # CLS6, V4
+        for c, shown in (("Profile-Override", "Profile-Override"), ("PROFILE-OVERRIDE", "PROFILE-OVERRIDE"),
+                         ("profile_override", "profile_override"), ("profile-override ", "profile-override "),
+                         ("profile-override\n", "profile-override\\n"), ("profile-overrid", "profile-overrid"),
+                         ("profile-override2", "profile-override2"), ("İ", "İ"), ("K", "K")):
+            with self.subTest(c):
+                self.assertEqual(self.one([lasting(A, **{"class": c})]),
+                                 [fail("%s has class %s%s" % (A, shown, NEED))])
+
+    def test_override_class_text_escaped_once(self):  # CLS8
+        for c, shown in (("a\nb", "a\\nb"), ("a\x00b", "a\\x00b"), ("é", "é"), ("a\\b", "a\\\\b"),
+                         ("x" * 3000, "x" * 3000)):
+            with self.subTest(c[:8]):
+                out = self.one([lasting(A, **{"class": c})])
+                self.assertEqual(out, [fail("%s has class %s%s" % (A, shown, NEED))])
+
+    def test_override_unicode_key_and_class_same_on_both(self):  # V2
+        self.ov([lasting(A, **{"class": "Ꟁ"})], [(K, A)])
+        self.assertEqual(self.ovl(), [fail("%s has class \\ua7c0%s" % (A, NEED))])
+        out, code = self.injected({"Ꟁ": {"value": 4, "decision": B}})
+        self.assertEqual(self.ovl(out), ["FAIL decisions.override.\\ua7c0: %s is missing" % B])
+
+
+class OverrideSupersessionTests(OverrideBase):
+    def test_override_superseded_by_open_still_passes(self):  # SUP1
+        self.assertEqual(self.one([good(A), row(B, "open", supersedes=A)]), ["PASS decisions.override." + K])
+
+    def test_override_superseded_by_one_off_answered_fails(self):  # SUP3
+        self.assertEqual(self.one([good(A), row(B, "answered", supersedes=A)]),
+                         [fail("%s is superseded by %s" % (A, B))])
+
+    def test_override_withdrawn_superseder_ignored(self):  # SUP4
+        self.assertEqual(self.one([good(A), row(B, "withdrawn", supersedes=A)]), ["PASS decisions.override." + K])
+
+    def test_override_naming_the_superseder_passes(self):  # SUP5
+        self.assertEqual(self.one([good(A), good(B, supersedes=A)], B), ["PASS decisions.override." + K])
+
+    def test_override_superseder_class_irrelevant(self):  # SUP6
+        self.assertEqual(self.one([good(A), lasting(B, supersedes=A, **{"class": "scope"})]),
+                         [fail("%s is superseded by %s" % (A, B))])
+
+    def test_override_superseded_chain(self):  # SUP7, D-Q3 (a)
+        self.assertEqual(self.one([good(A), lasting(B, supersedes=A), lasting(C, supersedes=B)]),
+                         [fail("%s is superseded by %s" % (A, C))])
+
+    def test_override_chain_with_open_tail(self):  # SUP8
+        rows = [good(A), good(B, supersedes=A), row(C, "open", supersedes=B)]
+        self.ov(rows, [(K, A), (LK, B)])
+        self.assertEqual(self.ovl(), [fail("%s is superseded by %s" % (A, B)), "PASS decisions.override." + LK])
+
+    def test_override_forked_supersession(self):  # SUP9, D-Q3 (a)
+        out = self.one([good(A), lasting(B, supersedes=A), lasting(C, supersedes=A)])
+        self.assertEqual(out, [fail("%s is superseded by more than one answered decision (%s, %s); fork.%s"
+                                    % (A, B, C, A))])
+
+    def test_override_fork_open_and_answered(self):  # SUP10
+        out = self.one([good(A), row(B, "open", supersedes=A), lasting(C, supersedes=A)])
+        self.assertEqual(out, [fail("%s is superseded by %s" % (A, C))])
+        self.assertIn("FAIL decisions.refs.fork." + A, self.run_()[0])
+
+    def test_override_self_supersession_not_superseded(self):  # SUP11
+        out = self.one([good(A, supersedes=A)])
+        self.assertEqual(out, ["PASS decisions.override." + K])
+        self.assertIn("FAIL decisions.refs.supersedes." + A, self.run_()[0])
+
+    def test_override_supersession_cycle(self):  # SUP12, D-Q3 (a)
+        self.ov([good(A, supersedes=B), good(B, supersedes=A)], [(K, A), (LK, B)])
+        self.assertEqual(self.ovl(), [fail("%s is superseded by %s" % (A, B)),
+                                      fail("%s is superseded by %s" % (B, A), LK)])
+
+    def test_override_unrelated_supersedes_ignored(self):  # SUP13
+        for sup in ("DEC-20261031-zzzz", 5, ""):
+            with self.subTest(sup):
+                self.assertEqual(self.one([good(A), lasting(B, supersedes=sup)]), ["PASS decisions.override." + K])
+
+    def test_override_withdrawn_and_superseded(self):  # SUP14, D-Q2 (a)
+        out = self.one([row(A, "withdrawn", **{"class": PO}), lasting(B, supersedes=A)])
+        self.assertEqual(out, [fail(A + " is withdrawn")])
+
+    def test_override_superseded_and_wrong_class(self):  # D-Q2 (a): superseded comes before class
+        out = self.one([lasting(A), lasting(B, supersedes=A)])
+        self.assertEqual(out, [fail("%s is superseded by %s" % (A, B))])
+
+    def test_override_open_and_superseded(self):  # SUP15, D-Q2 (a)
+        out = self.one([row(A, "open", **{"class": PO}), lasting(B, supersedes=A)])
+        self.assertEqual(out, [fail(A + " is open")])
+
+
+class OverrideKeyAndLineTests(OverrideBase):
+    def test_override_key_escaped_once(self):  # KEY5-KEY13
+        self.ov([good(A)], [])
+        for key, shown in (("a\nb", "a\\nb"), ("a\x00b", "a\\x00b"), ("a\rb", "a\\rb"), ("a\tb", "a\\tb"),
+                           ("﻿a", "\\ufeffa"), ("café", "café"), ("Ꟁ", "\\ua7c0"),
+                           ("\U0001fae8", "\\U0001fae8"), ("a\\b", "a\\\\b"), ("a b", "a b"),
+                           ("k" * 3000, "k" * 3000)):
+            with self.subTest(shown[:10]):
+                out, code = self.injected({key: {"value": 4, "decision": A}})
+                self.assertEqual((self.ovl(out), code), (["PASS decisions.override." + shown], 0))
+
+    def test_override_decision_text_escaped_once(self):  # KEY14
+        self.ov([good(A)], [])
+        out, code = self.injected({"k": {"value": 4, "decision": "a\nb\\c"}})
+        self.assertEqual((self.ovl(out), code), ([fail("a\\nb\\\\c is missing", "k")], 1))
+
+    def test_json_includes_override_lines(self):  # KEY15
+        self.ov([good(A), row(B, "open", **{"class": PO})], [(K, A), (LK, B)])
+        text, code = run_argv(["--json", "--root", self.work])
+        doc = json.loads(text)
+        self.assertEqual(code, 1)
+        self.assertEqual(doc["lines"][-2:], [
+            {"id": "decisions.override.block.max_tasks", "status": "PASS", "reason": ""},
+            {"id": "decisions.override.limits.max_children.stream_controller", "status": "FAIL",
+             "reason": B + " is open"}])
+
+    def test_override_lines_are_last(self):  # LIN1
+        self.ov([good(A)], [(K, A)])
+        self.assertEqual(self.run_()[0], passes(*CATS) + "PASS decisions.override.block.max_tasks\n")
+
+    def test_other_lines_unchanged_with_overrides(self):  # LIN2
+        self.ov([good(A), lasting(B, **{"class": "scope"})], [(K, A), (LK, B)])
+        self.assertEqual(self.run_()[0].splitlines()[:7], passes(*CATS).splitlines())
+
+    def test_override_lines_with_other_failures(self):  # LIN3, RC3
+        self.ov([good(A), row(OID)], [(K, A)], files={"docs/a.md": OID + "\n", "CLAUDE.md": A + "\n"})
+        out, code = self.run_()
+        ls = out.splitlines()
+        self.assertEqual(code, 1)
+        self.assertEqual(ls[-2], "PASS decisions.scan")
+        self.assertEqual(ls[-1], "PASS decisions.override.block.max_tasks")
+        self.assertIn("FAIL decisions.open-ref.docs/a.md:1: docs/a.md:1 references unanswered %s; "
+                      "the human answers it first" % OID, out)
+
+    def test_override_lines_with_bad_scan_glob(self):  # LIN4
+        self.ov([good(A)], [(K, A)], cfg_extra={"decisions": {"scan": ["[z-a]"]}})
+        out, code = self.run_()
+        ls = out.splitlines()
+        self.assertEqual(code, 1)
+        self.assertTrue(ls[-2].startswith("FAIL decisions.scan-glob.0: "), out)
+        self.assertEqual(ls[-1], "PASS decisions.override.block.max_tasks")
+        self.assertNotIn("PASS decisions.scan\n", out)
+
+    def _register_state(self, make):
+        self.ov([], [(K, A)])
+        os.makedirs(os.path.join(self.work, DEC), exist_ok=True)
+        make(os.path.join(self.work, DEC, A + ".yml"))
+        out, code = self.run_()
+        self.input_fail(out, code)
+        self.assertNotIn("decisions.override", out)
+
+    def test_override_lines_absent_on_symlinked_record(self):  # ST3
+        real = os.path.join(self.tmp, "real.yml")
+        write_record(self.tmp, "real.yml", good(A))
+        self._register_state(lambda p: os.symlink(real, p))
+
+    def test_override_lines_absent_on_dangling_record(self):  # ST4
+        self._register_state(lambda p: os.symlink(os.path.join(self.tmp, "nowhere"), p))
+
+    def test_override_lines_absent_on_fifo_record(self):  # ST5
+        self._register_state(os.mkfifo)
+
+    def test_override_lines_absent_on_directory_record(self):  # ST6
+        self._register_state(os.mkdir)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode 0 file")
+    def test_override_lines_absent_on_unreadable_record(self):  # ST7
+        def make(p):
+            write_record(self.work, DEC + "/" + A + ".yml", good(A))
+            os.chmod(p, 0)
+            self.addCleanup(os.chmod, p, 0o600)
+        self._register_state(make)
+
+    def test_override_lines_absent_on_unborn_head(self):  # LIN5
+        git(self.work, "init", "-q", "-b", "main")
+        write_record(self.work, ".strict-delivery/config.yml", ov_cfg([(K, A)]))
+        self.input_fail(*self.run_())
+
+    def test_override_pass_exit_zero(self):  # RC1
+        self.ov([good(A)], [(K, A)])
+        self.assertEqual(gate_proc(self.work, "check", "decisions"),
+                         (passes(*CATS) + "PASS decisions.override.block.max_tasks\n", 0, b""))
+
+    def test_override_fail_exit_one(self):  # RC2, RC4
+        self.ov([row(A, "open", **{"class": PO})], [(K, A)])
+        self.assertEqual(gate_proc(self.work, "check", "decisions"),
+                         (passes(*CATS) + fail(A + " is open") + "\n", 1, b""))
+        self.assertEqual(self.run_()[1], 1)
+
+    def test_run_all_includes_override_lines(self):  # LIN8
+        for profile, key in (("strict", K), ("light", LK)):  # a limits key is valid under every profile
+            with self.subTest(profile):
+                self.work = os.path.join(self.tmp, "w-" + profile)
+                os.mkdir(self.work)
+                self.ov([good(A)], [(key, A)], cfg_extra={"profile": profile})
+                out = gate_proc(self.work, "run_all")[0]
+                ls = out.splitlines()
+                self.assertEqual(ls[ls.index("PASS decisions.scan") + 1], "PASS decisions.override." + key, out)
+
+    @unittest.skipUnless(hasattr(builtins, "BaseExceptionGroup"), "no BaseExceptionGroup before Python 3.11")
+    def test_exception_groups_not_swallowed(self):  # V3
+        self.ov([good(A)], [(K, A)])
+        eg = builtins.ExceptionGroup("g", [ValueError("x")])
+        with mock.patch.object(gate_decisions.config, "load", side_effect=eg):
+            out, code = run_argv(["--root", self.work])
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith("FAIL decisions.input: ExceptionGroup: "), out)
+        beg = builtins.BaseExceptionGroup("g", [KeyboardInterrupt()])
+        with mock.patch.object(gate_decisions.config, "load", side_effect=beg):
+            with self.assertRaises(builtins.BaseExceptionGroup):
+                run_argv(["--root", self.work])
 
 
 if __name__ == "__main__":
