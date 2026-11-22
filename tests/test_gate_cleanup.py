@@ -349,6 +349,31 @@ class MergeTests(Gx):
         os.unlink(path)  # deleted in the tree, present at HEAD: HEAD's text
         self.assertEqual(self.g("--plan", "p")[1].splitlines()[0], "PASS cleanup.merge")
 
+    def test_merge_line_read_after_ledger_deleted(self):  # MG5
+        s = self.scen()
+        self.cleanup_branch(s)  # the second commit removes the ledger
+        self.assertNotIn(LEDGER, git(self.root, "ls-files").split("\n"))
+        self.assertFalse(os.path.exists(os.path.join(self.root, *LEDGER.split("/"))))
+        first_parent = git(self.root, "rev-list", "--first-parent", "main").split("\n")  # oracle: the merge is on main
+        self.assertIn(s["merge"], first_parent)
+        self.assertIn("MERGED", git(self.root, "show", "main:" + LEDGER))  # the text before its deletion holds the line
+        self.assertEqual(self.g("--plan", "p"), (0, CLEAN))
+        self.assertEqual(self.both(["--plan", "p", "--root", self.root]), (0, CLEAN))
+
+    def test_plan_step1_tests_exist(self):  # OUT12: the plan's Step 1 test names (plan 3045-3062), written by hand
+        names = {"test_clean_after_final_merge_passes": MergeTests, "test_left_ledger_fails": GoneTests,
+                 "test_no_final_merge_stops_after_merge_line": MergeTests,
+                 "test_open_finding_still_owned_by_plan_fails": OwnerTests,
+                 "test_cited_open_decision_fails": DecisionTests, "test_lasting_decision_unlanded_fails": DecisionTests,
+                 "test_program_close_needs_decision": ArgvTests}
+        for name, cls in names.items():
+            with self.subTest(test=name):
+                self.assertTrue(callable(getattr(cls, name, None)), "%s is not a method of %s" % (name, cls.__name__))
+        sa = importlib.import_module("tests.test_self_adoption")  # the eighth: its plan assertion is in its body
+        found = [c for c in vars(sa).values() if inspect.isclass(c) and hasattr(c, "test_workflow_runs_cleanup_for_cleanup_heads")]
+        self.assertEqual(len(found), 1)
+        self.assertIn('"gates check cleanup --plan"', inspect.getsource(found[0].test_workflow_runs_cleanup_for_cleanup_heads))
+
     def test_ledger_file_kinds(self):  # MG10
         s = self.scenario()
         path = os.path.join(self.root, *LEDGER.split("/"))
@@ -811,6 +836,39 @@ class DecisionTests(Gx):
         self.decision(did("c"), "answered", "lasting", supersedes=did("a"), landed_in=[PLAYBOOK])
         self.assertEqual(self.g("--plan", "p"), (0, CLEAN))
 
+    def test_first_record_of_a_cited_id_decides(self):  # OP4: two records of one id; the first in file-name order is read
+        s = self.scen(extra={SPEC: "cites %s\n" % did("a")})
+        self.cleanup_branch(s)
+        self.put("%s/DEC-20261031-a000.yml" % DEC, emit({"schema": "decision/1", "id": did("a"), "status": "open",
+                                                         "class": "scope"}))
+        self.decision(did("a"), "answered", "lasting")  # DEC-20261101-aaaa.yml, no landed_in
+        self.assertEqual(self.g("--plan", "p"), (1, "PASS cleanup.merge\nPASS cleanup.gone\nPASS cleanup.owner\n"
+                                                    "FAIL cleanup.open." + did("a") + ": decision " + did("a") + " is cited "
+                                                    "by the cleaned files and is still open\nPASS cleanup.landed\n"))
+
+    def test_records_with_an_unhashable_id_are_skipped(self):  # OP8: an id that is a list is no id
+        s = self.scen(extra={SPEC: "cites %s\n" % did("a")})
+        self.cleanup_branch(s)
+        self.put("%s/DEC-20261031-a000.yml" % DEC, emit({"schema": "decision/1", "id": ["x"], "status": "answered",
+                                                         "class": "scope", "effect": "lasting"}))
+        self.decision(did("a"), "answered", "one-off")
+        self.assertEqual(self.g("--plan", "p"), (0, CLEAN))
+
+    def test_withdrawn_cited_record_superseded_by_a_lasting_one_not_judged(self):  # OP3, LD6
+        s = self.scen(extra={SPEC: "cites %s\n" % did("a")})
+        self.cleanup_branch(s)
+        self.decision(did("a"), "withdrawn", "lasting")
+        self.decision(did("b"), "answered", "lasting", supersedes=did("a"))  # in force, no landed_in, but never cited
+        self.assertEqual(self.g("--plan", "p"), (0, CLEAN))
+
+    def test_landed_reasons_joined_with_semicolons(self):  # LD3
+        s = self.scen(extra={SPEC: "cites %s\n" % did("a")})
+        self.cleanup_branch(s)
+        self.decision(did("a"), "answered", "lasting", landed_in=["README.md", "./x.md"])
+        self.assertEqual(self.g("--plan", "p")[1].splitlines()[-1],
+                         "FAIL cleanup.landed.%s: landed_in: README.md is not a playbook, CLAUDE.md or architecture.md; "
+                         "landed_in: ./x.md is not a normalised repo-relative path with an optional non-empty #anchor" % did("a"))
+
     def test_landed_uses_one_tracked_set(self):  # LD9
         s = self.scen(extra={SPEC: "cites %s %s\n" % (did("a"), did("b"))})
         self.cleanup_branch(s)
@@ -983,6 +1041,71 @@ class ProgramTests(Gx):
                          ["PASS cleanup.merge", "FAIL cleanup.gone." + PG + "/program-plan.md"] +
                          ["FAIL cleanup.owner." + fid(c) for c in "def"] + ["FAIL cleanup.open." + did(c) for c in "abc"] +
                          ["PASS cleanup.landed"])
+
+    def restream(self, **fields):
+        """streams.yml on the integration branch with ``fields`` replaced (a key set to None is removed)."""
+        git(self.root, "checkout", "-q", NAME + "/integration")
+        streams = {"schema": "streams/1", "program": NAME, "plan": PG + "/program-plan.md", "specs": [],
+                   "streams": [{"id": "a", "plan": PG + "/a-plan.md"}, {"id": "b", "plan": PG + "/b-plan.md"}]}
+        streams.update(fields)
+        self.put("%s/%s/streams.yml" % (PROGRAMS, NAME), emit({k: v for k, v in streams.items() if v is not None}))
+        commit_all(self.root, "streams variant")
+        git(self.root, "checkout", "-q", "cleanup/" + NAME)
+
+    def test_program_streams_yml_shapes_refused(self):  # PM6: a malformed streams.yml is one cleanup.input line, never a crash
+        a, b = self.build()
+        self.close()
+        self.close_branch(a, b)
+        cases = (("streams not a list", dict(streams=5), "streams.yml: streams must be a list"),
+                 ("streams absent", dict(streams=None), "streams.yml: streams must be a list"),
+                 ("a row not a mapping", dict(streams=["x"]), "streams.yml: streams.0.plan must be a string"),
+                 ("a row plan not a string", dict(streams=[{"id": "a", "plan": 5}]),
+                  "streams.yml: streams.0.plan must be a string"),
+                 ("a row plan not .md", dict(streams=[{"id": "a", "plan": PG + "/a-plan.txt"}]),
+                  "streams.yml: streams.0.plan: " + PG + "/a-plan.txt is not " + PG + "/<name>.md"),
+                 ("specs not a list", dict(specs=5), "streams.yml: specs must be a list"))
+        for name, fields, text in cases:
+            with self.subTest(case=name):
+                self.restream(**fields)
+                code, out = self.gp()
+                self.assertEqual(code, 1)
+                self.assertEqual(out.splitlines()[-1], "FAIL cleanup.input: " + text)
+
+    def test_program_unmerged_streams_listed_sorted_and_once(self):  # PM3: duplicates dropped, slug order
+        self.scen(plan="a-plan", tag="sa", fid="F-20261031-k3f9", final=False)
+        self.scen(plan="b-plan", tag="sb", fid="F-20261031-n5n5", final=False)
+        self.program(plans=("b-plan", "a-plan", "b-plan"))
+        self.close()
+        self.assertEqual(self.gp(), (1, "FAIL cleanup.merge: stream plan a-plan has no final merge; the program is not "
+                                        "finished; stream plan b-plan has no final merge; the program is not finished\n"))
+
+    def test_program_close_first_record_of_an_id_decides(self):  # PM2: two records of one id; the first in file-name order
+        a, b = self.build()
+        self.close_branch(a, b)
+        self.close()  # DEC-20261031-p6q7.yml: answered
+        self.put("%s/DEC-20261031-a000.yml" % DEC, emit({"schema": "decision/1", "id": D3, "status": "open",
+                                                         "class": "program-close", "program": NAME}))
+        self.assertEqual(self.gp(), (1, "FAIL cleanup.merge: decision %s is not answered\n" % D3))
+
+    def test_program_shared_files_read_at_the_base_branch(self):  # PM9, MG14: removed at HEAD, cited on the base branch
+        a = self.scen(plan="a-plan", tag="sa", fid="F-20261031-k3f9")
+        b = self.scen(plan="b-plan", tag="sb", fid="F-20261031-n5n5")
+        self.program()
+        self.put(PG + "/program-plan.md", "cites %s\n" % did("c"))
+        commit_all(self.root, "program plan")
+        git(self.root, "branch", "trunk", "main")  # the base branch is trunk; main moves on without the program plan
+        git(self.root, "rm", "-q", "--", PG + "/program-plan.md")
+        commit_all(self.root, "main loses the plan")
+        write_record(self.root, ".strict-delivery/config.yml", dict(minimal_config(), merge={"mode": "controller"},
+                                                                    base_branch="trunk"))
+        git(self.root, "checkout", "-q", "-b", "cleanup/" + NAME, "trunk")
+        git(self.root, "rm", "-q", "--", *sorted((a["set"] | b["set"]) | {PG + "/program-plan.md"}))
+        commit_all(self.root, "cleanup")
+        self.close()
+        self.decision(did("c"))
+        self.assertEqual(self.gp(), (1, "PASS cleanup.merge\nPASS cleanup.gone\nPASS cleanup.owner\nFAIL cleanup.open." +
+                                     did("c") + ": decision " + did("c") + " is cited by the cleaned files and is still "
+                                     "open\nPASS cleanup.landed\n"))
 
 
 class OutputTests(Gx):
