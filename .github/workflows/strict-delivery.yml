@@ -2,6 +2,7 @@ name: strict-delivery
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -24,4 +25,54 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m unittest discover -s tests -t . -v
       - run: python -m gates index
+      - name: Create the local base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git rev-parse --verify --quiet "refs/heads/$BASE_REF" > /dev/null || git branch "$BASE_REF" "origin/$BASE_REF"
       - run: python -m gates run_all --base origin/${{ github.event_name == 'pull_request' && github.base_ref || github.event.repository.default_branch }}
+
+  # Task P3.1: a pull request is also checked at its head sha, with every integration branch of a program present.
+  pull-request:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Create the local integration branches
+        run: |
+          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/*/integration'); do
+            name="${ref#origin/}"
+            git branch "$name" "$ref"
+          done
+      - name: Create the local base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git rev-parse --verify --quiet "refs/heads/$BASE_REF" > /dev/null || git branch "$BASE_REF" "origin/$BASE_REF"
+      - name: Check the streams of the head branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: python -m gates check streams --branch "$HEAD_REF"
+      # Task P3.3: a cleanup/<plan> head is also judged by check cleanup; any other head skips the step.
+      # A tail that names a program is a program close, checked by hand with --program and --decision.
+      - name: Check the cleanup of a cleanup head
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$HEAD_REF" in
+            cleanup/*) ;;
+            *) exit 0 ;;
+          esac
+          PLAN="${HEAD_REF#cleanup/}"
+          if python -c 'import sys; from gates.lib import programs; sys.exit(0 if programs.program_problem(sys.argv[1]) == "" else 1)' "$PLAN"; then
+            echo "program close: check it by hand with check cleanup --program NAME --decision DEC"
+            exit 0
+          fi
+          python -m gates check cleanup --plan="$PLAN"

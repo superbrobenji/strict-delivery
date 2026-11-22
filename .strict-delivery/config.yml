@@ -21,3 +21,5 @@ reviews:
       - gates/__main__.py
       - gates/producers.py
       - gates/run_all.py
+merge:
+  mode: controller

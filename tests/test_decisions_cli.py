@@ -1607,5 +1607,36 @@ class Source(Base):
         self.assertIn("### source: secret/report.md\n", out)
 
 
+class QuestionTagTopic(Base):
+    """Task P4.1 decision D-Q1 (a): ``--topic`` of ``ask`` and ``find`` also takes exactly ``q:<name>:<name>``, the tag of
+    plan :3089; every other topic with a colon stays refused."""
+
+    def test_tag_accepted_by_ask_and_stored(self):  # TG2
+        new, _ = self.ask(extra=["--topic", "q:a-plan:q1"])
+        self.assertEqual(self.rec(new)["topics"], ["q:a-plan:q1"])
+
+    def test_tag_accepted_by_find(self):
+        new, _ = self.ask(extra=["--topic=q:a-plan:q1"])
+        self.assertEqual(self.cli("find", "--all", "--topic", "q:a-plan:q1"),
+                         (0, "%s [q:a-plan:q1] Keep the prefix rule? -> (open)\n" % new, ""))
+        self.assertEqual(self.cli("find", "--all", "--topic", "q:a-plan:q10"), (0, "", ""))
+
+    def test_other_colon_topics_stay_refused(self):
+        bad = ["q:", "q::", "q:a", "q:a:", "q::b", "q:a:b:c", "Q:a:b", "q:A:b", "q:a:B", "x:a:b", "q:-a:b", "q:a:-b",
+               "q:a b:c", "q:a:b ", " q:a:b", "q:a:b\n", "q:é:b", "q:a_b:c", "a:b", ":", "q:a:b#", "qq:a:b", "q:a:b:"]
+        for t in bad:
+            with self.subTest(topic=t):
+                self.refused(ask_argv(extra=["--topic=" + t]), "--topic: must match [a-z0-9][a-z0-9-]*")
+                self.refused(["find", "--topic=" + t], "--topic: must match [a-z0-9][a-z0-9-]*")
+
+    def test_plain_topics_unchanged_and_program_flag_keeps_old_rule(self):
+        self.assertEqual(self.rec(self.ask(extra=["--topic", "ids"])[0])["topics"], ["ids"])
+        self.refused(ask_argv(cls="merge-grant", extra=["--plan", "p", "--program", "q:a:b", "--stream", "s"]),
+                     "--program: must match")
+
+    def test_tag_given_twice_refused(self):
+        self.refused(ask_argv(extra=["--topic=q:a:b", "--topic=q:a:b"]), "--topic: q:a:b given twice")
+
+
 if __name__ == "__main__":
     unittest.main()

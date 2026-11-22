@@ -13,6 +13,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -164,7 +165,7 @@ class HookCase(GitIsolatedTestCase):
     def hook_path(self, root, name):
         return os.path.join(gitinfo.hooks_dir(root), name)
 
-    def push_line(self, local_ref, local_sha, remote_ref="refs/heads/main", remote_sha=ZEROS):
+    def push_line(self, local_ref, local_sha, remote_ref="refs/heads/work", remote_sha=ZEROS):
         return ("%s %s %s %s\n" % (local_ref, local_sha, remote_ref, remote_sha)).encode("utf-8")
 
 
@@ -1245,7 +1246,7 @@ class PrePushTest(HookCase):
         for kind, flags in FLAG_KINDS:
             with self.subTest(kind):
                 d, remote = setup(flags, False)
-                rc, out = self.git_run(d, "push", "-q", "origin", "main")
+                rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
                 self.assertNotEqual(rc, 0, out)
                 self.assertEqual(out.split("error: failed to push")[0], flagged_line("a.txt"))  # git adds its own error
                 self.assertNotIn("PASS", out)  # no gate line
@@ -1268,7 +1269,7 @@ class PrePushTest(HookCase):
             d, remote = setup(FLAG_KINDS[0][1], False)
             git(d, "update-index", "--no-assume-unchanged", "a.txt")
             git(d, "checkout", "-q", "--", "a.txt")
-            rc, out = self.git_run(d, "push", "-q", "origin", "main")
+            rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
             self.assertEqual(rc, 0, out)
 
     def test_pre_push_refuses_fsmonitor_hidden_change(self):  # FM5, FM8 (Q-G1-4 (a), D-18; review-2 U-R2-1)
@@ -1291,7 +1292,7 @@ class PrePushTest(HookCase):
             for staged, want in ((False, dirty % "a.txt"), (True, dirty % "b.txt" + dirty % "a.txt")):
                 with self.subTest(source=source, staged=staged):
                     d, remote, env = setup(source, staged)
-                    rc, out = self.run_proc(["git", "-C", d, "push", "-q", "origin", "main"], env=self.env(**env))
+                    rc, out = self.run_proc(["git", "-C", d, "push", "-q", "origin", "main:work"], env=self.env(**env))
                     self.assertNotEqual(rc, 0, out)
                     self.assertEqual(out.split("error: failed to push")[0], want)  # git adds its own error; no gate line
                     self.assertEqual(git(remote, "for-each-ref"), "")  # the remote is unchanged
@@ -1306,19 +1307,230 @@ class PrePushTest(HookCase):
         remote = os.path.join(self.tmp, "remote.git")
         git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
         git(d, "remote", "add", "origin", remote)
-        rc, out = self.git_run(d, "push", "-q", "origin", "main")
+        rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
         self.assertEqual(rc, 0, out)
         self.assertIn("PASS schema.config", out)
-        pushed = git(remote, "rev-parse", "refs/heads/main")
+        pushed = git(remote, "rev-parse", "refs/heads/work")
         self.assertEqual(pushed, self.head(d))
         write_file(d, "c.txt")
         git(d, "add", "c.txt")
         git(d, "commit", "-q", "--no-verify", "-m", "second")
         write_file(d, "a.txt", "dirty\n")
-        rc, out = self.git_run(d, "push", "-q", "origin", "main")
+        rc, out = self.git_run(d, "push", "-q", "origin", "main:work")
         self.assertNotEqual(rc, 0)
         self.assertIn("FAIL githook.dirty: a.txt: tracked file has a change; commit it before pushing\n", out)
-        self.assertEqual(git(remote, "rev-parse", "refs/heads/main"), pushed)  # the remote is unchanged
+        self.assertEqual(git(remote, "rev-parse", "refs/heads/work"), pushed)  # the remote is unchanged
+
+
+BASE_LINE = "FAIL githook.base: %s is protected; open a pull request\n"
+
+
+class BaseRefusalTest(HookCase):
+    """Task P3.1 producer 5: ``githook pre-push`` refuses a stdin line whose remote ref is ``refs/heads/<base_branch>``
+    (owner directive; rows PP1-PP25, decisions D-Q4 (a) and D-Q5 (a)). The expected texts are written out by hand."""
+
+    def push(self, root, stdin):
+        return self.hook(["pre-push", "--root", root, "origin", "url"], stdin)
+
+    def based(self, base):
+        return self.repo(config=dict(minimal_config(), profile="standard", base_branch=base))
+
+    def refused(self, d, stdin, want):
+        called = self.fake_gates()
+        rc, out, err = self.push(d, stdin)
+        self.assertEqual((rc, out, err), (1, want, ""))
+        self.assertEqual(called, [])  # before any gate runs
+
+    def passes(self, d, stdin):
+        called = self.fake_gates()
+        rc, out, err = self.push(d, stdin)
+        self.assertEqual((rc, err), (0, ""), out)
+        self.assertEqual(called, list(GATES5))
+        self.assertNotIn("githook.base", out)
+
+    def test_push_work_branch_passes(self):  # PP1
+        d = self.repo()
+        self.passes(d, self.push_line("refs/heads/feat", self.head(d), "refs/heads/feat"))
+
+    def test_push_to_base_refused(self):  # PP2, PP3, PP15; plan :2946-2948
+        d = self.repo()
+        head = self.head(d)
+        for local in ("HEAD", "refs/heads/main"):
+            with self.subTest(local=local):
+                self.refused(d, self.push_line(local, head, "refs/heads/main", "a" * 40), BASE_LINE % "main")
+        called = self.fake_gates()
+        rc, out, err = self.push(d, self.push_line("HEAD", head, "refs/heads/main"))
+        self.assertTrue(rc != 0 and "githook.base" in out + err)
+
+    def test_delete_base_refused(self):  # PP4: a deletion of the remote base branch; other deletions stay allowed
+        d = self.repo()
+        for zeros, old in (("0" * 40, "a" * 40), ("0" * 64, "a" * 64)):
+            with self.subTest(width=len(zeros)):
+                self.refused(d, self.push_line("(delete)", zeros, "refs/heads/main", old), BASE_LINE % "main")
+        self.passes(d, self.push_line("(delete)", ZEROS, "refs/heads/old", "a" * 40))
+
+    def test_base_among_several_lines(self):  # PP5, PP6
+        d = self.repo()
+        head = self.head(d)
+        work = self.push_line("refs/heads/feat", head, "refs/heads/feat")
+        base = self.push_line("HEAD", head, "refs/heads/main")
+        other = self.push_line("refs/heads/other", head, "refs/heads/other")
+        self.refused(d, work + base + other, BASE_LINE % "main")
+        self.refused(d, base + work + other, BASE_LINE % "main")
+
+    def test_base_twice(self):  # PP17, D-Q4: one line per offending stdin line (git itself refuses two updates to one ref)
+        d = self.repo()
+        base = self.push_line("HEAD", self.head(d), "refs/heads/main")
+        self.refused(d, base + base, (BASE_LINE % "main") * 2)
+
+    def test_base_branch_configured_name(self):  # PP7
+        d = self.based("trunk")
+        head = self.head(d)
+        self.refused(d, self.push_line("HEAD", head, "refs/heads/trunk"), BASE_LINE % "trunk")
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/main"))  # main is not the base here
+
+    def test_base_with_slash(self):  # PP8
+        d = self.based("release/1.0")
+        head = self.head(d)
+        self.refused(d, self.push_line("HEAD", head, "refs/heads/release/1.0"), BASE_LINE % "release/1.0")
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/release"))
+
+    def test_base_exact_match_only(self):  # PP9: no prefix, suffix, nested name or case folding
+        d = self.repo()
+        head = self.head(d)
+        for remote in ("refs/heads/mainx", "refs/heads/xmain", "refs/heads/main/x", "refs/heads/feature/main",
+                       "refs/heads/Main", "refs/heads/MAIN", "refs/heads/mai", "refs/heads/main-tag"):
+            with self.subTest(remote=remote):
+                self.passes(d, self.push_line("HEAD", head, remote))
+
+    def test_base_other_namespaces_pass(self):  # PP10, PP11: a tag, a remote-tracking name or refs/for is not the branch
+        d = self.repo()
+        head = self.head(d)
+        for remote in ("refs/tags/main", "refs/remotes/origin/main", "refs/for/main", "refs/notes/main", "main", "heads/main"):
+            with self.subTest(remote=remote):
+                self.passes(d, self.push_line("HEAD", head, remote))
+
+    def test_base_any_local_side(self):  # PP12: the rule reads the remote ref only
+        d = self.repo()
+        head = self.head(d)
+        for local, sha in (("HEAD", head), (head, head), ("(delete)", ZEROS), ("refs/heads/feat", head),
+                           ("refs/tags/v1", head)):
+            with self.subTest(local=local[:12]):
+                self.refused(d, self.push_line(local, sha, "refs/heads/main"), BASE_LINE % "main")
+
+    def test_base_and_push_sha(self):  # PP13, D-Q4: the push-sha line, then the base line; never a gate
+        d = self.repo()
+        head = self.head(d)
+        git(d, "branch", "other")
+        write_file(d, "c.txt")
+        git(d, "add", "c.txt")
+        git(d, "commit", "-q", "-m", "second")
+        head, other = self.head(d), git(d, "rev-parse", "other")
+        self.refused(d, self.push_line("refs/heads/other", other, "refs/heads/main"),
+                     "FAIL githook.push-sha: refs/heads/other: pushes %s, not HEAD %s; check out the branch to push it\n"
+                     % (other, head) + BASE_LINE % "main")
+
+    def test_base_and_dirty(self):  # PP14, D-Q4: the dirty line, then the base line
+        d = self.repo()
+        write_file(d, "a.txt", "two\n")
+        self.refused(d, self.push_line("HEAD", self.head(d), "refs/heads/main"),
+                     "FAIL githook.dirty: a.txt: tracked file has a change; commit it before pushing\n" + BASE_LINE % "main")
+
+    def test_base_line_text(self):  # PP16: the name goes through the frozen print table, whatever the interpreter
+        for name, shown in (("maࡰn", "ma\\u0870n"), ("m" * 300, "m" * 300), ("aⰯb", "a\\u2c2fb")):
+            with self.subTest(name=name[:6]):
+                d = self.based(name)
+                self.refused(d, self.push_line("HEAD", self.head(d), "refs/heads/" + name), BASE_LINE % shown)
+
+    def test_p31_unicode_same_on_both(self):  # V2: the remote ref equals the configured name byte for byte; no case method
+        d = self.based("maࡰn")
+        head = self.head(d)
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/MAࡰN"))
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/maࡱn"))
+
+    def test_base_branch_odd_names(self):  # PP23: a name with a space can never equal a remote ref (four fields)
+        d = self.based("a b")
+        head = self.head(d)
+        self.passes(d, self.push_line("HEAD", head, "refs/heads/a"))
+        rc, out, err = self.push(d, b"HEAD %s refs/heads/a b %s\n" % (head.encode(), ZEROS.encode()))
+        self.assertEqual((rc, err), (1, ""))
+        self.assertEqual(out, "FAIL githook.input: pre-push line 1: expected 4 fields, found 5\n")
+
+    def test_base_malformed_stdin_is_input(self):  # PP18: the stdin is validated before the base rule
+        d = self.repo()
+        called = self.fake_gates()
+        rc, out, err = self.push(d, self.push_line("HEAD", "a" * 39, "refs/heads/main"))
+        self.assertEqual((rc, out, err), (1, "FAIL githook.input: pre-push line 1: field 2 is not a lowercase hex sha of "
+                                             "40 or 64 digits\n", ""))
+        self.assertEqual(called, [])
+
+    def test_base_empty_stdin(self):  # PP19
+        d = self.repo()
+        self.passes(d, b"")
+
+    def test_base_needs_config(self):  # PP22: head, then stdin, then config: a missing config is githook.input
+        d = self.repo()
+        os.unlink(os.path.join(d, CONFIG))
+        called = self.fake_gates()
+        rc, out, err = self.push(d, self.push_line("HEAD", self.head(d), "refs/heads/main"))
+        self.assertEqual((rc, err), (1, ""))
+        self.assertTrue(out.startswith("FAIL githook.input: ") and out.count("\n") == 1, out)
+        self.assertIn("config.yml", out)
+        self.assertEqual(called, [])
+        u = os.path.join(self.tmp, "unborn2")
+        os.mkdir(u)
+        git(u, "init", "-q", "-b", "main")
+        rc, out, err = self.push(u, self.push_line("HEAD", "a" * 40, "refs/heads/main"))
+        self.assertEqual(out, "FAIL githook.input: git rev-parse HEAD failed (exit 128)\n")  # HEAD is read first
+
+    def test_base_rule_adds_no_git_call(self):  # PP24: stdin and config only
+        with open(os.path.join(FRAMEWORK, "gates", "tools", "githooks.py"), encoding="utf-8") as fh:
+            tree = __import__("ast").parse(fh.read())
+        fn = [n for n in tree.body if isinstance(n, __import__("ast").FunctionDef) and n.name == "_base_lines"]
+        self.assertEqual(len(fn), 1)
+        names = {n.id for n in __import__("ast").walk(fn[0]) if isinstance(n, __import__("ast").Name)}
+        self.assertFalse(names & {"gitinfo", "subprocess", "os", "config"}, names)
+
+    def test_mirror_delete_limit(self):  # PP20, D-Q5 (a): git sends no stdin line for a remote branch a mirror deletes
+        d = self.repo()
+        remote = os.path.join(self.tmp, "mirror.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(d, "remote", "add", "origin", remote)
+        git(d, "push", "-q", "origin", "main")
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/feat")  # the remote may delete main: it is not its current branch
+        git(d, "branch", "-m", "main", "feat")  # the clone no longer has a local main
+        seen = os.path.join(self.tmp, "stdin.bin")  # a recording hook: what git itself writes on the hook's stdin
+        hook = os.path.join(gitinfo.hooks_dir(d), "pre-push")
+        os.makedirs(os.path.dirname(hook), exist_ok=True)
+        with open(hook, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\ncat > '%s'\n" % seen)
+        os.chmod(hook, 0o755)
+        rc, out = self.git_run(d, "push", "-q", "--mirror", "origin")
+        self.assertEqual(rc, 0, out)
+        heads = git(remote, "for-each-ref", "--format=%(refname)", "refs/heads").split("\n")
+        self.assertEqual(heads, ["refs/heads/feat"])  # main is gone from the remote
+        stdin = read_bytes(seen)
+        self.assertNotIn(b"refs/heads/main", stdin)  # git sent no line for the deleted branch: the stated limit
+        called = self.fake_gates()
+        rc, out, err = self.push(d, stdin)
+        self.assertEqual((rc, err), (0, ""))  # so the hook cannot refuse it; host branch protection covers this
+        self.assertNotIn("githook.base", out)
+
+    def test_real_push_to_base_refused(self):  # PP25: through real git, the shim, a bare remote made here
+        d = self.repo(install=True)
+        remote = os.path.join(self.tmp, "real.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(d, "remote", "add", "origin", remote)
+        git(d, "checkout", "-q", "-b", "feat")
+        rc, out = self.git_run(d, "push", "-q", "origin", "HEAD:main")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("FAIL githook.base: main is protected; open a pull request\n", out)
+        self.assertNotIn("PASS", out)  # before any gate
+        self.assertEqual(git(remote, "for-each-ref"), "")  # the push did not happen
+        rc, out = self.git_run(d, "push", "-q", "origin", "feat")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(git(remote, "rev-parse", "refs/heads/feat"), self.head(d))
+        self.assertEqual(git(remote, "for-each-ref", "--format=%(refname)"), "refs/heads/feat")
 
 
 class InstallTest(HookCase):
@@ -1770,6 +1982,8 @@ FSMON_HOOKS = (  # row FM2: what the hook answers; the first reports no change, 
     ("exits non-zero", "exit 3\n", 0o755), ("garbage", "printf 'garbage'\n", 0o755),
     ("not executable", "printf 'tok\\0'\n", 0o644))
 FSMON_OFF = ["git", "-c", "core.fsmonitor=false"]  # D-18: before -C and the subcommand, on every index-reading call
+DAEMON_CMD = "fsmonitor-" + "-daemon"  # the built-in daemon's subcommand; the guard below bans its invocation
+DAEMON_IPC = DAEMON_CMD + ".ipc"
 FSMON_SOURCES = ("repository config", "global config", "git -c", "GIT_CONFIG_COUNT")  # row FM1
 
 
@@ -2043,15 +2257,12 @@ class UnstagedPathsTest(Repos):
             env, hidden = fsmon_hidden(self.tmp, d)
             self.assertTrue(hidden)
             self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
-        with self.subTest("core.fsmonitor=true: the built-in daemon, stopped at the end"):  # FM1 (measured)
+        with self.subTest("the built-in daemon is never started (core.fsmonitor set to true)"):  # FM1 (measured)
             d = self.fresh(["a.txt", "b.txt"])
             git(d, "config", "core.fsmonitor", "true")
-            try:
-                git(d, "status", "--porcelain", check=False)
-                write_file(d, "a.txt", "hidden change\n")
-                self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
-            finally:
-                git(d, "fsmonitor--daemon", "stop", check=False)  # never leaves a daemon running
+            write_file(d, "a.txt", "hidden change\n")  # no plain git call after the setting: only the gates' own
+            self.assertEqual(gitinfo.unstaged_paths(d), ["a.txt"])
+            self.assertFalse(os.path.exists(os.path.join(d, ".git", DAEMON_IPC)))
 
     def test_unstaged_paths_argv(self):  # the call's exact argument list (P:1718, P:33)
         d = self.fresh()
@@ -2363,6 +2574,130 @@ class HooksDirTest(Repos):
         d = self.fresh()
         check_root_forms(self, root_forms(self.tmp, d), {"hooks_dir": gitinfo.hooks_dir})
 
+
+# ---- guard: no test starts git's built-in file-system monitor daemon (owner direction 2026-11-22; two suite hangs).
+# A line-based scan of the whole of every tests/*.py. Only the sample literals in FSMON_SAMPLES below are skipped, by
+# name. Limit: a value that reaches the config through a variable or a split string (``value = "tr" + "ue"``) cannot
+# be seen by a text scan; the one allow-listed subtest is therefore also bounded to a few calls after the setting.
+_KEY = r"core\.fsmonitor"
+_TRUTHY = r"(?:true|yes|on|1)\b"
+_SET_TRUE = re.compile(_KEY + r"(?:\s*=\s*|[\"']\s*,\s*[\"'])" + _TRUTHY, re.I)  # -c k=v, GIT_CONFIG_PARAMETERS, config call
+_FILE_TRUE = re.compile(r"fsmonitor\s*=\s*" + _TRUTHY, re.I)  # a config file body (key, equals sign, true value)
+_ENV_VALUE = re.compile(r"GIT_CONFIG_VALUE_\w+[\"']?\s*[:,=]\s*[\"']?" + _TRUTHY, re.I)  # the GIT_CONFIG_KEY_n/VALUE_n pair
+_ENV_KEY = re.compile(r"GIT_CONFIG_KEY_\w+[\"']?\s*[:,=]\s*[\"']" + _KEY, re.I)
+_AFTER_CALL = re.compile(r"\bgit\(|\bsubprocess\.|\bgit_run\(|\brun_proc\(|\bgitinfo\.(?!unstaged_paths\b)\w+")
+_SUBTEST = re.compile(r"\s*with self\.subTest\([\"']([^\"']*)[\"']")
+FSMON_TRUE_ALLOWED = ("test_githooks.py", "test_unstaged_paths_ignore_fsmonitor",
+                      "the built-in daemon is never started (core.fsmonitor set to true)")  # the one allow-listed subtest block
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _enclosing(lines, i, pattern):
+    """The first match of ``pattern`` on a line before line ``i`` that is indented less than line ``i``."""
+    want = _indent(lines[i])
+    for back in range(i - 1, -1, -1):
+        m = re.match(pattern, lines[back])
+        if m and lines[back].strip() and _indent(lines[back]) < want:
+            return m
+    return None
+
+
+def scan_fsmonitor_daemon(name, text):
+    """``(line, why)`` for every line of the test file ``name`` (base name) with ``text`` that could start the daemon."""
+    lines = text.split("\n")
+    found = []
+    skip = False
+    for i, line in enumerate(lines):
+        if line.startswith("FSMON_SAMPLES = ("):  # this guard's own sample literals, up to the closing line
+            skip = True
+        if skip:
+            skip = line != ")"
+            continue
+        if line.startswith(("DAEMON_CMD =", "DAEMON_IPC =")):
+            continue
+        if (DAEMON_CMD in line or "DAEMON_CMD" in line) and DAEMON_IPC not in line and "DAEMON_IPC" not in line:
+            found.append((i + 1, "invokes the built-in daemon command"))  # even a status probe: it can hang
+        env_value = _ENV_VALUE.search(line) and any(
+            _ENV_KEY.search(lines[k]) for k in range(max(0, i - 4), min(len(lines), i + 5)))
+        if not (_SET_TRUE.search(line) or _FILE_TRUE.search(line) or env_value):
+            continue
+        func = _enclosing(lines, i, r"\s*def (\w+)")
+        sub = _enclosing(lines, i, _SUBTEST.pattern)
+        if (name, func and func.group(1), sub and sub.group(1)) != FSMON_TRUE_ALLOWED:
+            found.append((i + 1, "sets core.fsmonitor to a true value outside the allow-listed subtest"))
+            continue
+        for j in range(i + 1, len(lines)):
+            rest = lines[j]
+            if rest.strip() and _indent(rest) < _indent(line):
+                break
+            if _AFTER_CALL.search(rest) and '"config"' not in rest:
+                found.append((j + 1, "git call after the true setting other than gitinfo.unstaged_paths"))
+    return sorted(set(found))
+
+
+class FsmonitorDaemonGuardTest(unittest.TestCase):
+    def test_no_test_file_starts_the_daemon(self):
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        bad = []
+        names = sorted(n for n in os.listdir(tests_dir) if n.endswith(".py"))
+        self.assertIn("test_githooks.py", names)
+        for n in names:
+            with open(os.path.join(tests_dir, n), encoding="utf-8") as fh:
+                bad += ["tests/%s:%d: %s" % (n, line, why) for line, why in scan_fsmonitor_daemon(n, fh.read())]
+        self.assertEqual(bad, [])
+
+    def test_scanner_flags_each_pattern(self):  # the guard kills: each banned shape is found, each allowed one is not
+        for label, name, text, want in FSMON_SAMPLES:
+            with self.subTest(label):
+                got = [line for line, _ in scan_fsmonitor_daemon(name, text)]
+                self.assertEqual(got, want)
+
+
+_OK = FSMON_TRUE_ALLOWED
+_BLOCK = ("    def %s(self):\n        with self.subTest(\"%s\"):\n            git(d, \"config\", \"%s\", \"%s\")\n"
+          % (_OK[1], _OK[2], "core." + "fsmonitor", "tr" + "ue"))
+FSMON_SAMPLES = (
+    # label, file name, text, the lines the scanner must flag
+    ("daemon command, git()", "x.py", 'git(d, "fsmonitor--daemon", "stop")', [1]),
+    ("daemon command, argv", "x.py", 'run(["git", "fsmonitor--daemon", "run"])', [1]),
+    ("daemon .ipc file name only", "x.py", "path = '.git/' + DAEMON_IPC", []),
+    ("config call, lowercase true", "x.py", 'def test_a():\n    git(d, "config", "core.fsmonitor", "true")', [2]),
+    ("-c key=true", "x.py", 'argv = ["git", "-c", "core.fsmonitor=true", "status"]', [1]),
+    ("GIT_CONFIG_PARAMETERS", "x.py", "env = {'GIT_CONFIG_PARAMETERS': \"'core.fsmonitor=true'\"}", [1]),
+    ("mixed-case key", "x.py", 'git(d, "config", "core.fsMonitor", "true")', [1]),
+    ("value yes", "x.py", "x = 'core.fsmonitor=yes'", [1]),
+    ("value on", "x.py", "x = 'core.fsmonitor=on'", [1]),
+    ("value 1", "x.py", "x = 'core.fsmonitor=1'", [1]),
+    ("value TRUE", "x.py", "x = 'core.fsmonitor=TRUE'", [1]),
+    ("config file body", "x.py", 'fh.write("[core]\\n\\tfsmonitor = true\\n")', [1]),
+    ("config file body, On", "x.py", 'fh.write("fsmonitor=On")', [1]),
+    ("GIT_CONFIG_KEY/VALUE one line", "x.py",
+     'env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "true"}', [1]),
+    ("GIT_CONFIG_KEY/VALUE two lines", "x.py",
+     'env = {"GIT_CONFIG_KEY_0": "core.fsMonitor",\n       "GIT_CONFIG_VALUE_0": "yes"}', [2]),
+    ("GIT_CONFIG_KEY/VALUE, KEY other", "x.py", 'env = {"GIT_CONFIG_KEY_0": "color.ui", "GIT_CONFIG_VALUE_0": "true"}', []),
+    ("GIT_CONFIG_VALUE with a hook", "x.py",
+     'env = {"GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": hook}', []),
+    ("false value", "x.py", 'git(d, "config", "core.fsmonitor", "false")', []),
+    ("hook variable", "x.py", 'git(d, "config", "core.fsmonitor", hook)', []),
+    ("hook path value", "x.py", "x = 'core.fsmonitor=/tmp/hook'", []),
+    ("true in another test function", _OK[0], "    def other(self):\n        with self.subTest(\"%s\"):\n            git(d, \"config\", \"core.fsmonitor\", \"true\")" % _OK[2], [3]),
+    ("true in another subtest of the allowed test", _OK[0], "    def %s(self):\n        with self.subTest(\"other\"):\n            git(d, \"config\", \"core.fsmonitor\", \"true\")" % _OK[1], [3]),
+    ("true in the allowed subtest", _OK[0], _BLOCK, []),
+    ("allowed subtest + unstaged_paths", _OK[0], _BLOCK + "            self.assertEqual(gitinfo.unstaged_paths(d), [])\n", []),
+    ("allowed subtest + git status", _OK[0], _BLOCK + '            git(d, "status", "--porcelain")\n', [4]),
+    ("allowed subtest + git diff", _OK[0], _BLOCK + '            git(d, "diff", check=False)\n', [4]),
+    ("allowed subtest + subprocess git", _OK[0], _BLOCK + '            subprocess.run(["git", "status"])\n', [4]),
+    ("allowed subtest + subprocess FSMON_OFF", _OK[0], _BLOCK + "            subprocess.run(FSMON_OFF + [\"-C\", d, \"status\"])\n", [4]),
+    ("allowed subtest + run_proc", _OK[0], _BLOCK + '            self.run_proc(["git", "status"])\n', [4]),
+    ("allowed subtest + other gitinfo call", _OK[0], _BLOCK + "            gitinfo.dirty_paths(d)\n", [4]),
+    ("allowed subtest + daemon command", _OK[0], _BLOCK + "            run(FSMON_OFF + [DAEMON_CMD, 'status'])\n", [4]),
+    ("git call after the subtest block", _OK[0], _BLOCK + '        with self.subTest("next"):\n            git(d, "status")\n', []),
+    ("env shape in the allowed subtest block", _OK[0], _BLOCK + '            env = {"GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "1"}\n', []),
+)
 
 
 if __name__ == "__main__":

@@ -7,17 +7,22 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
 from gates import __main__ as gates_main
-from gates.lib import claims as claims_lib, config, dispatch, migrations
+from gates.lib import claims as claims_lib, config, dispatch, migrations, programs
+from gates.lib.result import GateError
+from tests.test_dispatch_lib import NAME, add_program
 from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config,
                            write_record)
 
 ENV_D, ENV_C = "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
 ALL_PASS = ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar", "PASS dispatch.role",
-            "PASS dispatch.dispatcher", "PASS dispatch.depth", "PASS dispatch.concurrency", "PASS dispatch.children",
+            "PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream", "PASS dispatch.depth", "PASS dispatch.concurrency", "PASS dispatch.children",
             "PASS dispatch.model", "PASS dispatch.tier", "PASS dispatch.top-tier", "PASS dispatch.block",
             "PASS dispatch.claims", "PASS dispatch.decisions"]
 MODELS = {1: "haiku", 2: "sonnet", 3: "opus", 4: "fable"}
@@ -372,7 +377,7 @@ class ModelTierTest(GateCase):
                     out, code = self.lines(d)
                     self.assertEqual(code, 1)
                     self.assertEqual(out, ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar",
-                                           "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.depth",
+                                           "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream", "PASS dispatch.depth",
                                            "PASS dispatch.concurrency", "PASS dispatch.children", "PASS dispatch.model",
                                            "FAIL dispatch.tier: top_tier_fallback '%s' names a tier that is unset or "
                                            "not tier1-tier4" % shown,
@@ -665,7 +670,7 @@ class VersionTest(GateCase):
                     out, code = self.run_gate(self.write_input(raw.encode()))
                     outs.append(out)
                     self.assertEqual(code, 1)
-                    self.assertEqual(len(out.splitlines()), 14, out)
+                    self.assertEqual(len(out.splitlines()), 16, out)
                     self.assertIn(want_depth, out.splitlines())
         self.assertEqual(len(set(outs)), 1)                          # the same bytes under every limit setting
         os.environ.pop(ENV_D)
@@ -714,14 +719,14 @@ class VersionTest(GateCase):
                 out, code = self.lines(self.write_input(raw(field, "9" * 600)))
                 self.assertEqual(out, {
                     "depth": ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar", "PASS dispatch.role",
-                              "PASS dispatch.dispatcher", "FAIL dispatch.depth: dispatcher depth %s + 1 + 0 "
+                              "PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream", "FAIL dispatch.depth: dispatcher depth %s + 1 + 0 "
                               "level(s) below implementer exceeds max_depth 3" % ("9" * 600), "PASS dispatch.concurrency",
                               "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
                               "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
                               "PASS dispatch.decisions"],
                     "live_children": ALL_PASS,
                     "live_total": ["PASS dispatch.input", "PASS dispatch.fork", "PASS dispatch.grammar",
-                                   "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.depth",
+                                   "PASS dispatch.role", "PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream", "PASS dispatch.depth",
                                    "FAIL dispatch.concurrency: %s running + 1 exceeds max_concurrent 20" % ("9" * 600),
                                    "PASS dispatch.children", "PASS dispatch.model", "PASS dispatch.tier",
                                    "PASS dispatch.top-tier", "PASS dispatch.block", "PASS dispatch.claims",
@@ -755,6 +760,313 @@ class VersionTest(GateCase):
         out, _ = self.run_gate(self.base(prompt=prompt("implementerࡰ")))
         self.assertIn("FAIL dispatch.role: the first non-empty line of ## Role must be exactly one role id, not "
                       "'implementer\\u0870'", out)
+
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BRIEF = "program: %s\nstream: a" % NAME
+PROG_ORDER = ["PASS dispatch.dispatcher", "PASS dispatch.program", "PASS dispatch.stream"]
+
+
+def ids(out):
+    return [ln.split(":")[0].split(" ")[1] for ln in out]
+
+
+class ProgramLinesTest(GateCase):
+    """Task P4.3, rows GL1-GL21 of task-P4.3-domain.md with D-Q5 (a): the lines come right after dispatch.dispatcher."""
+
+    def setUp(self):
+        super().setUp()
+        for key, val in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.root, "config", key, val)
+
+    def stream_dispatch(self, brief=BRIEF, live=True, **over):
+        d = self.base("stream_controller", program_live=live, prompt=prompt("stream_controller", brief=brief,
+                                                                           model=MODELS[3]))
+        d.update(over)
+        return d
+
+    def test_session_dispatches_stream_controller_in_live_program(self):     # GL1, Q-H5 (a)
+        add_program(self.root)
+        out, code = self.lines(self.stream_dispatch())
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out[4:7], PROG_ORDER)
+        self.assertEqual(ids(out)[:8], ["dispatch.input", "dispatch.fork", "dispatch.grammar", "dispatch.role",
+                                        "dispatch.dispatcher", "dispatch.program", "dispatch.stream", "dispatch.depth"])
+        self.assertTrue(all(ln.startswith("PASS") for ln in out), out)
+
+    def test_stream_controller_without_live_program_refused(self):           # GL2
+        out, code = self.lines(self.stream_dispatch(live=False))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL dispatch.dispatcher: session may not dispatch stream_controller (program_live false; "
+                      "allowed: none)", out)
+        self.assertTrue(any(ln.startswith("FAIL dispatch.program: ") for ln in out), out)
+        self.assertTrue(any(ln.startswith("FAIL dispatch.stream: ") for ln in out), out)
+
+    def test_gate_claim_false_against_live_program_fails_program_line(self):  # GL3, GL4
+        add_program(self.root)
+        out, code = self.lines(self.base("implementer", program_live=False))
+        self.assertEqual(code, 1)
+        self.assertIn("PASS dispatch.dispatcher", out)
+        got = [ln for ln in out if ln.startswith("FAIL dispatch.program")]
+        self.assertEqual(got, ["FAIL dispatch.program: program_live is false in the input, but true in git "
+                               "(1 live program(s))"])
+        self.assertIn("PASS dispatch.stream", out)
+        os.environ.pop(ENV_D, None)
+        git(self.root, "branch", "-q", "-D", NAME + "/integration")
+        d = self.base("controller", program_live=True, dispatcher=dict(SESSION, id="stream_controller", depth=1))
+        out, code = self.lines(d)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL dispatch.program: program_live is true in the input, but false in git "
+                      "(0 live program(s))", out)
+
+    def test_session_dispatches_program_controller(self):                   # GL5
+        add_program(self.root)
+        out, code = self.lines(self.base("program_controller", program_live=True,
+                                         prompt=prompt("program_controller", brief="program: " + NAME, model=MODELS[3])))
+        self.assertEqual((out[4:8], code), (PROG_ORDER + ["PASS dispatch.depth"], 0), out)
+
+    def test_program_roles_depth_matrix(self):                             # GL6
+        add_program(self.root)
+        for role in ("program_controller", "stream_controller"):
+            brief = "program: " + NAME if role == "program_controller" else BRIEF
+            for limit, env in ((3, None), (6, "5")):
+                for depth in (0, 1):
+                    want = {("program_controller", 3, 0): True, ("program_controller", 3, 1): False,
+                            ("program_controller", 6, 0): True, ("program_controller", 6, 1): True,
+                            ("stream_controller", 3, 0): True, ("stream_controller", 3, 1): True,
+                            ("stream_controller", 6, 0): True, ("stream_controller", 6, 1): True}[(role, limit, depth)]
+                    with self.subTest(role=role, limit=limit, depth=depth):
+                        os.environ.pop(ENV_D, None)
+                        if env:
+                            os.environ[ENV_D] = env
+                        # a depth-1 dispatcher of program_controller (the one controller the session may not be at depth 1)
+                        disp = dict(SESSION, depth=depth)
+                        out, _ = self.lines(self.base(role, program_live=True, dispatcher=disp,
+                                                      prompt=prompt(role, brief=brief, model=MODELS[3])))
+                        self.assertIn("PASS dispatch.dispatcher", out)
+                        self.assertIn("PASS dispatch.program", out)
+                        self.assertEqual(any(ln.startswith("PASS dispatch.depth") for ln in out), want, out)
+
+    def test_program_controller_dispatches_stream_controller(self):         # GL7
+        add_program(self.root)
+        d = self.stream_dispatch(dispatcher=dict(SESSION, id="program_controller", depth=1))
+        out, code = self.lines(d)
+        self.assertEqual((out[4:8], code), (PROG_ORDER + ["PASS dispatch.depth"], 0), out)
+
+    def test_stream_controller_cannot_dispatch_program_controller(self):    # GL8
+        add_program(self.root)
+        d = self.base("program_controller", program_live=True, dispatcher=dict(SESSION, id="stream_controller", depth=1),
+                      prompt=prompt("program_controller", brief="program: " + NAME, model=MODELS[3]))
+        self.assertTrue(self.only(d, "dispatcher").startswith("FAIL dispatch.dispatcher: stream_controller may not "))
+
+    def test_worker_dispatcher_refused_with_program_lines(self):            # GL9
+        add_program(self.root)
+        for w in ("implementer", "task_reviewer"):
+            for role in ("stream_controller", "program_controller"):
+                with self.subTest(w=w, role=role):
+                    out, code = self.lines(self.base(role, program_live=True, dispatcher=dict(SESSION, id=w),
+                                                     prompt=prompt(role, brief=BRIEF, model=MODELS[3])))
+                    self.assertIn("FAIL dispatch.dispatcher: %s is a worker role, and a worker dispatches no agent" % w, out)
+                    self.assertTrue({"dispatch.program", "dispatch.stream"} <= set(ids(out)))
+                    self.assertEqual(code, 1)
+
+    def test_program_lines_not_checked_without_role(self):                  # GL10
+        for brief_prompt in (prompt("implementer").replace("## Role\nimplementer\n\n", ""),
+                             prompt("implementer").replace("## Role\nimplementer", "## Role\nboss")):
+            out, code = self.lines(self.base(prompt=brief_prompt))
+            self.assertEqual(code, 1)
+            self.assertIn("FAIL dispatch.dispatcher: not checked: dispatch.role failed", out)
+            self.assertIn("FAIL dispatch.program: not checked: dispatch.role failed", out)
+            self.assertIn("FAIL dispatch.stream: not checked: dispatch.role failed", out)
+            i = ids(out)
+            self.assertEqual(i[i.index("dispatch.dispatcher"):i.index("dispatch.dispatcher") + 4],
+                             ["dispatch.dispatcher", "dispatch.program", "dispatch.stream", "dispatch.depth"])
+
+    def test_input_failure_prints_only_input_line(self):                    # GL11
+        out, code = self.lines(self.base(program_live="yes"))
+        self.assertEqual((len(out), code), (1, 1))
+        self.assertTrue(out[0].startswith("FAIL dispatch.input: "))
+
+    def test_program_line_joins_reasons(self):                              # GL12
+        add_program(self.root)
+        out, _ = self.lines(self.stream_dispatch(brief="nothing", live=False))
+        got = [ln for ln in out if ln.startswith("FAIL dispatch.program: ")][0]
+        parts = got[len("FAIL dispatch.program: "):].split("; ")
+        self.assertEqual(len(parts), 2, got)
+        self.assertTrue(parts[0].startswith("program_live is false in the input"))
+        self.assertTrue(parts[1].startswith("## Brief holds no line 'program: <program>'"))
+
+    def test_stream_line_fails_for_unknown_stream(self):                    # BL14 through the gate
+        add_program(self.root)
+        out, code = self.lines(self.stream_dispatch(brief="program: %s\nstream: nope" % NAME))
+        self.assertEqual(code, 1)
+        self.assertIn("PASS dispatch.program", out)
+        self.assertTrue(any(ln.startswith("FAIL dispatch.stream: ") for ln in out))
+
+    def test_stream_not_checked_after_program_failure(self):                # D-Q4 through the gate
+        add_program(self.root)
+        out, _ = self.lines(self.stream_dispatch(brief="program: 20261102-y\nstream: a"))
+        self.assertIn("FAIL dispatch.stream: stream not checked: the program line failed", out)
+
+    def test_program_lines_git_failure(self):                              # GL15, D-Q3: live_programs' GateError
+        with mock.patch.object(programs, "live_programs", side_effect=GateError("refs are broken")):
+            out, code = self.lines(self.base())
+        self.assertEqual((out, code), (["FAIL dispatch.input: refs are broken"], 1))
+
+    def test_program_roles_min_tier(self):                                  # GL17
+        add_program(self.root)
+        for role in ("program_controller", "stream_controller"):
+            brief = "program: " + NAME if role == "program_controller" else BRIEF
+            for model, ok in ((MODELS[3], True), (MODELS[2], False), (MODELS[1], False)):
+                with self.subTest(role=role, model=model):
+                    d = self.base(role, program_live=True, model=model, prompt=prompt(role, brief=brief, model=model))
+                    self.assertEqual(self.only(d, "tier").startswith("PASS"), ok)
+
+    def test_run_all_has_no_dispatch_line(self):                           # GL21
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            gates_main.main(["run_all", "--root", self.root])
+        self.assertNotIn("dispatch.", buf.getvalue())
+
+    def test_gate_dispatch_subprocess(self):                               # GL18
+        add_program(self.root)
+        path = self.write_input(self.stream_dispatch())
+        env = dict(os.environ, PYTHONPATH=REPO)
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "dispatch", "--root", self.root, "--input", path,
+                            "--prompts", self.prompts], cwd=REPO, env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+        inproc, code = self.lines(path)
+        self.assertEqual((p.returncode, p.stdout.decode("utf-8").splitlines()), (code, inproc))
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(p.stdout.decode("utf-8").splitlines()[4:7], PROG_ORDER)
+
+    def real(self, role):
+        with open(os.path.join(REPO, "skills", "strict-delivery", "prompts", role + ".md"), encoding="utf-8",
+                  newline="") as fh:
+            return fh.read()
+
+    def real_dispatch(self, role, **over):
+        brief = "program: " + NAME if role == "program_controller" else BRIEF
+        return self.base(role, program_live=True, prompt=prompt(role, brief=brief, model=MODELS[3],
+                                                                body=self.real(role)), **over)
+
+    def test_program_role_blocks_present_byte_equal_and_absent(self):      # GL16, plan P:3218
+        add_program(self.root)
+        real_dir = os.path.join(REPO, "skills", "strict-delivery", "prompts")
+        for role in ("program_controller", "stream_controller"):
+            d = self.real_dispatch(role)
+            with self.subTest(role=role, case="present"):
+                out, code = self.run_gate(d, "--prompts", real_dir, prompts=False)
+                self.assertIn("PASS dispatch.block\n", out)
+                self.assertEqual(code, 0, out)
+            for name, body in (("one byte", self.real(role).replace("Zero bugs.", "Zero bug.", 1)
+                                if role == "stream_controller" else self.real(role).replace("Sync.", "Sync", 1)),
+                               ("trailing space", self.real(role).replace("\n\n", " \n\n", 1)),
+                               ("CRLF", self.real(role).replace("\n", "\r\n")),
+                               ("BOM", "﻿" + self.real(role))):
+                with self.subTest(role=role, case=name):
+                    bad = self.real_dispatch(role)
+                    bad["prompt"] = prompt(role, brief="program: %s\nstream: a" % NAME, model=MODELS[3], body=body)
+                    out, code = self.run_gate(bad, "--prompts", real_dir, prompts=False)
+                    self.assertIn("FAIL dispatch.block: ## Strict block is not the block ", out)
+            with self.subTest(role=role, case="absent"):
+                empty = os.path.join(self.tmp, "emptyprompts")
+                os.makedirs(empty, exist_ok=True)
+                out, code = self.run_gate(d, "--prompts", empty, prompts=False)
+                self.assertIn("FAIL dispatch.block: strict block file %s cannot be read (No such file or directory)"
+                              % os.path.join(empty, role + ".md"), out)
+                self.assertEqual(code, 1)
+
+    def test_default_prompts_dir_serves_program_blocks(self):              # GL19, via the subprocess's own package
+        add_program(self.root)
+        os.makedirs(os.path.join(self.root, "skills", "strict-delivery", "prompts"))     # a decoy under --root
+        for role in ("program_controller", "stream_controller"):
+            path = self.write_input(self.real_dispatch(role))
+            p = subprocess.run([sys.executable, "-m", "gates", "check", "dispatch", "--root", self.root, "--input", path],
+                               cwd=REPO, env=dict(os.environ, PYTHONPATH=REPO), stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+            out = p.stdout.decode("utf-8")
+            self.assertEqual(p.returncode, 0, out)
+            self.assertIn("PASS dispatch.block\n", out)
+            self.assertNotIn("FAIL", out)
+
+
+class StepFiveTest(GitIsolatedTestCase):
+    """Task P4.3 Step 5 (rows EN1-EN9, D-Q10 (a)): a repository carrying this checkout's real gates package and prompt
+    blocks; ``program create``, then the commit of the program folder on the integration branch, then the gate."""
+
+    def setUp(self):
+        super().setUp()
+        for name in (ENV_D, ENV_C):
+            os.environ.pop(name, None)
+        from tests import test_program_cli as pcli
+        self.pcli = pcli
+        self.fx = pcli.Fx("create")
+        self.fx.tmp, self.fx.work = self.tmp, self.work
+        self.fx.addCleanup = self.addCleanup
+        pcli.make_repo(self.work)
+        self.fx.write_main(pcli.PG + "/%s.md" % pcli.PLAN, pcli.PLAN_TEXT)
+        pcli.write_record(self.work, "%s/%s/breakdown.yml" % (pcli.PS, pcli.PLAN), pcli.breakdown_row())
+        self.fx.decision(pcli.DEC)
+        for key, val in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(self.work, "config", key, val)
+        shutil.copytree(os.path.join(REPO, "gates"), os.path.join(self.work, "gates"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(os.path.join(REPO, "skills", "strict-delivery", "prompts"),
+                        os.path.join(self.work, "skills", "strict-delivery", "prompts"))
+        commit_all(self.work, "plan")
+        self.fx.iw = os.path.join(self.tmp, "w", NAME, "integration")
+        git(self.work, "worktree", "add", "-q", "-b", NAME + "/integration", self.fx.iw, "main")
+        self.fx.sf = os.path.join(self.tmp, "streams.yml")
+        self.fx.set_streams(pcli.streams_row())
+        self.n = 0
+
+    def gate(self, role="stream_controller", brief=BRIEF, live=True, dispatcher=None, body=None):
+        self.n += 1
+        with open(os.path.join(self.work, "skills", "strict-delivery", "prompts", role + ".md"), encoding="utf-8",
+                  newline="") as fh:
+            real = fh.read()
+        model = config.load(self.work)["models"]["tiers"]["tier3"]
+        data = {"prompt": prompt(role, brief=brief, model=model, body=real if body is None else body), "model": model,
+                "dispatcher": dispatcher or dict(SESSION), "program_live": live}
+        path = os.path.join(self.tmp, "step5-%d.json" % self.n)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "dispatch", "--root", self.work, "--input", path],
+                           cwd=self.work, env=dict(os.environ, PYTHONPATH=""), stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+        return p.stdout.decode("utf-8").splitlines(), p.returncode
+
+    def test_step5_enable(self):                                           # EN1-EN9
+        code, out, err = self.fx.create()
+        self.assertEqual((code, err, out), (0, "", "push %s/integration\n" % NAME))        # EN5
+        before, bcode = self.gate()                                         # EN6: not committed yet: not live
+        self.assertEqual(bcode, 1)
+        self.assertTrue(any(ln.startswith("FAIL dispatch.program: ") for ln in before), before)
+        self.fx.commit_iw()                                                 # D-Q10 (a)
+        out, code = self.gate()                                             # EN8
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out and all(ln.startswith("PASS ") for ln in out), out)
+        for want in ("dispatch.dispatcher", "dispatch.program", "dispatch.stream", "dispatch.block", "dispatch.tier",
+                     "dispatch.depth"):
+            self.assertIn("PASS " + want, out)
+        out, code = self.gate("program_controller", brief="program: " + NAME)
+        self.assertEqual(code, 0, out)
+        for name, kw, want in (                                             # EN9
+                ("claim", dict(live=False), "FAIL dispatch.program: "),
+                ("unknown stream", dict(brief="program: %s\nstream: nope" % NAME), "FAIL dispatch.stream: "),
+                ("no program line", dict(brief="stream: a"), "FAIL dispatch.program: "),
+                ("worker dispatcher", dict(dispatcher=dict(SESSION, id="implementer")), "FAIL dispatch.dispatcher: "),
+                ("block byte", dict(body="x"), "FAIL dispatch.block: ")):
+            with self.subTest(name):
+                out, code = self.gate(**kw)
+                self.assertEqual(code, 1, out)
+                self.assertTrue(any(ln.startswith(want) for ln in out), out)
+        git(self.work, "worktree", "remove", "--force", self.fx.iw)
+        git(self.work, "branch", "-q", "-D", NAME + "/integration")
+        out, code = self.gate()
+        self.assertEqual(code, 1)
+        self.assertTrue(any(ln.startswith("FAIL dispatch.program: ") for ln in out), out)
 
 
 if __name__ == "__main__":
