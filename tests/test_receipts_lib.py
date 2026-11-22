@@ -1001,8 +1001,9 @@ class ReceiptsDir(Base):
 
     def test_receipts_dir_is_fifo(self):  # RD8
         os.mkfifo(self.rdir)
-        with self.assertRaisesRegex(GateError, "is not a directory"):
-            self.rec()
+        kind, val = watched(self.rec)  # R1-1: a FIFO opened by name would block; the watchdog fails it by name
+        self.assertEqual(kind, "err")
+        self.assertRegex(str(val), "is not a directory")
 
     def test_parallel_first_creation(self):  # RD9
         procs = [subprocess.Popen([sys.executable, "-m", "gates.tools.receipt_cli", "add", "--session", SID, "--path",
@@ -1464,7 +1465,9 @@ class Load(Base):
         self.assertRegex(self.msg(), "receipts: is not a directory")
         os.unlink(self.rdir)
         os.mkfifo(self.rdir)
-        self.assertRegex(self.msg(), "receipts: is not a directory")
+        kind, val = watched(self.msg)  # R1-1: watchdog, never only a hang
+        self.assertEqual(kind, "ok")
+        self.assertRegex(val, "receipts: is not a directory")
 
     def test_load_parent_symlink(self):  # LD14
         cfg = copy.deepcopy(self.cfg)
@@ -1781,7 +1784,8 @@ class ReceiptsDirRace(Base):
                     at = os.path.join(base, *parts[:pos])
                     with open_hook(parts[pos - 1], self.swap(kind, at, parts[pos:], base, out, False), after=True,
                                    directory=True) as hk:
-                        row = record(base, cfg, SID, "a.txt")
+                        kind_, row = watched(lambda: record(base, cfg, SID, "a.txt"))  # R1-1: FIFO kinds never hang
+                        self.assertEqual(kind_, "ok", row)
                     self.assertGreater(hk["fired"], 0)
                     self.assertEqual(row["path"], os.path.join(base, "a.txt"))
                     moved = os.path.join(base, *parts[:pos - 1], parts[pos - 1] + ".moved", *parts[pos:], SID + ".yml")
