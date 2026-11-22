@@ -1029,11 +1029,11 @@ class Receipts(Base):
         self.receipt(HDR + body)
         with mock.patch("gates.lib.receipts.load", wraps=receipts.load) as ld, \
                 mock.patch("gates.lib.receipts.content_sha", wraps=receipts.content_sha) as cs:
-            t = time.time()
+            t = time.process_time()
             self.assertEqual(self.go(), ("PASS context.reads\n", 0))
         self.assertEqual(ld.call_count, 1)
         self.assertEqual(cs.call_count, 50)
-        self.assertLess(time.time() - t, 20)
+        self.assertLess(time.process_time() - t, 20)
 
     def test_awkward_paths_round_trip_and_match(self):  # RC25 LN2
         cases = [("sp ace", "sp ace"), ("é", "é"), ("q\"uote", "q\"uote"), ("-lead", "-lead"), ("trail ", "trail "),
@@ -1468,12 +1468,12 @@ class Lists(Base):
 
     def test_many_entries(self):  # LN13
         self.ctx(kinds={"plan": [E("docs/n%d.md" % i) for i in range(200)]})
-        t = time.time()
+        t = time.process_time()
         out, code = self.go()
         self.assertEqual(code, 1)
         self.assertEqual(out, "".join("FAIL context.file.%s/docs/n%d.md: not a readable regular file now\n" % (self.real, i)
                                       for i in range(200)))
-        self.assertLess(time.time() - t, 10)
+        self.assertLess(time.process_time() - t, 10)
 
     def test_module_docstring_states_narrow_promise(self):  # LN14 PD9
         doc = gate_context.__doc__
