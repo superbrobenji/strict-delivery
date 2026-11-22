@@ -771,9 +771,11 @@ class FileSetTest(unittest.TestCase):
     def test_program_role_file_is_format_checked(self):       # S5; Task P4.3: the role has a LABELS row now
         raw = join(["# Strict block: stream_controller", "", INTRO, "", "Zero bugs. None."]).encode("ascii")
         got = self.check({"stream_controller.md": raw}, written=())
-        self.assertEqual({p.split(":")[1].strip() for p in got}, {"labels"})
-        self.assertTrue(all(p.startswith("stream_controller.md: ") for p in got), got)
-        self.assertFalse(any("no LABELS row" in p for p in got), got)
+        self.assertEqual(got, [
+            "stream_controller.md: labels: expected ['Verification method.', 'Dispatch discipline.', "
+            "'Input domain.', 'Oracle.', 'Rulings.', 'Finding class.', 'Zero bugs.', 'Owner-only decisions.', "
+            "'Continuation.', 'Merge and checkpoint.', 'Budget.', 'Background work.', 'Report contract.'], "
+            "got ['Zero bugs.']"])
 
     def test_format_errors_are_named_with_the_file(self):
         got = self.check({"implementer.md": good("implementer")[:-1]})
