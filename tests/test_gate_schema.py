@@ -432,8 +432,14 @@ class Config(GateCase):
             ok = {"models": {"tiers": {"tier1": "x"}}, "drift": {"estimate_factor_pct": 5},
                   # Task 4a.2: config.load now checks the shape of an override entry; this one is valid
                   "overrides": {"limits.max_depth": {"value": 2, "decision": "DEC-20261111-abcd"}},
+                  # Task 4a.3: config.load now types these five keys; each value below is valid (hand-written)
+                  "roles": {"x": {"prompt": "p.md", "min_tier": "tier2"}}, "block": {"max_tasks": 2},
+                  "rulings": {"max_per_block": 2}, "dispatch": {"max_prompt_chars": 2},
+                  "budgets": {"controller": {"tokens": 2, "minutes": 2}},
                   }.get(key, {"x": [1, {"y": 2}]})
-            write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ok}))
+            # strict presets block.max_tasks (a file value is refused, Task 4a.2), so the block row runs under light
+            write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ok},
+                                                  **({"profile": "light"} if key == "block" else {})))
             self.assertEqual(self.lines()[0], ["PASS schema.kinds", "PASS schema.config"], key)
             write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ["a"]}))
             self.assertEqual(self.lines()[0][1:], [pre + "%s: must be a mapping" % key], key)

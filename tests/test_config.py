@@ -17,7 +17,7 @@ MISSING = ".strict-delivery/config.yml: missing; run /strict-delivery:init"
 
 # Written independently of config.DEFAULTS (from the brief), so the loader is compared with a second copy.
 OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
-              "rule-override", "program-create", "stream-ownership", "stream-merge",
+              "rule-override", "profile-override", "program-create", "stream-ownership", "stream-merge",
               "request-dispute", "program-close"]
 EXPECTED = {
     "schema": minimal_config()["schema"],  # the tag of minimal_config() is tested by test_minimal_config_is_current
@@ -332,9 +332,8 @@ class RequiredKeysTest(ConfigCase):
                 self.assertNotIn("\\\\n", out)
 
     def test_not_yet_landed_keys_accepted_unchecked(self):  # C18
-        extra = {"commands": {"test": "make test"}, "roles": 5, "rulings": None,
-                 "dispatch": "x", "budgets": {"a": {"b": 1}}, "top_tier_roles": [""],
-                 "top_tier_fallback": True}
+        # Task 4a.3: roles, rulings, dispatch and budgets are typed now (TypedReadersTest); these stay unchecked
+        extra = {"commands": {"test": "make test"}, "top_tier_roles": [""], "top_tier_fallback": True}
         cfg = self.with_extra(extra)
         want = copy.deepcopy(EXPECTED)
         want.update(extra)
@@ -883,6 +882,658 @@ class Config2Test(ConfigCase):
                     with self.assertRaises(beg) as cm:
                         config.load(self.root)
                 self.assertIs(cm.exception, exc)
+
+
+PFX = ".strict-delivery/config.yml: "
+GRAMMAR = "keys must be role ids of [a-z][a-z0-9_]*"
+INT1 = "must be an integer of at least 1"
+DIG = "must be an integer of at most 600 digits"
+PROMPT_REASON = "must be a normalised repo-relative path ending in .md"
+TIER_REASON = "must be one of tier1, tier2, tier3, tier4"
+ENTRY = {"prompt": "p.md", "min_tier": "tier2"}
+DEC_ID = "DEC-20261111-abcd"
+FRAMEWORK_ROLES = ("program_controller", "stream_controller", "controller", "implementer",
+                   "implementer_transcription", "task_reviewer", "final_reviewer", "final_verifier",
+                   "exception_reviewer", "audit_reviewer", "audit_verifier", "investigator", "plan_writer",
+                   "plan_reviewer", "drafter")
+FIVE = ("roles", "budgets", "block", "rulings", "dispatch")
+LEAF = {"block": "max_tasks", "rulings": "max_per_block", "dispatch": "max_prompt_chars"}
+VALID_ALL = {"roles": {"doc_writer": {"prompt": "playbooks/doc.md", "min_tier": "tier2"}},
+             "budgets": {"controller": {"tokens": 5000, "minutes": 30}},
+             "block": {"max_tasks": 4}, "rulings": {"max_per_block": 2}, "dispatch": {"max_prompt_chars": 20000}}
+
+
+class SubStr(str):
+    pass
+
+
+class SubDict(dict):
+    pass
+
+
+class TypedReadersTest(ConfigCase):
+    """Task 4a.3: the typed readers of roles, budgets, block, rulings and dispatch; rows K, RO, RE, RP, RT, BU, BL, ER,
+    IX, V of .superpowers/sdd/2026-10-31-strict-delivery-framework/task-4a.3-domain.md. Every expected value is written
+    by hand from the plan (P:4323-4336) and the table's binding decisions."""
+
+    def light(self, extra):
+        return dict({"profile": "light"}, **extra)
+
+    def ok(self, extra):
+        return self.with_extra(self.light(extra))
+
+    def raw(self, body, profile="light"):
+        self.put_bytes(emit(dict(minimal_config(), profile=profile)).encode("utf-8") + body.encode("utf-8"))
+        return config.load(self.root)
+
+    def raw_refused(self, body, profile="light"):
+        with self.assertRaises(GateError) as e:
+            self.raw(body, profile)
+        return str(e.exception)
+
+    def inj(self, extra, profile="light"):
+        """config.load with the parsed document injected (the YAML subset cannot write ``{}`` or a non-str key)."""
+        data = dict(minimal_config(), profile=profile, **extra)
+        real = yamlsub.load
+
+        def fake(path, shown):
+            return copy.deepcopy(data) if shown == config.CONFIG_PATH else real(path, shown)
+        with mock.patch.object(yamlsub, "load", side_effect=fake):
+            return config.load(self.root)
+
+    def inj_refused(self, extra, profile="light"):
+        with self.assertRaises(GateError) as e:
+            self.inj(extra, profile)
+        return str(e.exception)
+
+    def bad(self, extra, key, reason):
+        msg = self.refused(self.light(extra))
+        self.assertEqual(msg, "%s%s: %s" % (PFX, key, reason))
+
+    def unknown(self, extra, dotted):
+        msg = self.refused(self.light(extra))
+        self.assertEqual(msg, "%sunknown key '%s'" % (PFX, dotted))
+
+    def injected_bad(self, extra, text):
+        self.assertEqual(self.inj_refused(extra), PFX + text)
+
+    def roles(self, key, entry=None):
+        return {"roles": {key: dict(ENTRY) if entry is None else entry}}
+
+    def prompt(self, p):
+        return self.roles("x", {"prompt": p, "min_tier": "tier2"})
+
+    def prompt_refused(self, p):
+        msg = self.refused(self.light(self.prompt(p)))
+        self.assertTrue(msg.startswith(PFX + "roles.x.prompt: must be a "), msg)
+        self.assertEqual(len(msg.splitlines()), 1)
+        return msg
+
+    # ---- K rows
+    def test_five_keys_absent_by_default(self):  # K1
+        for p, block in (("light", None), ("standard", {"max_tasks": 5}), ("strict", {"max_tasks": 3})):
+            with self.subTest(profile=p):
+                cfg = self.with_extra({"profile": p})
+                for k in ("roles", "budgets", "rulings", "dispatch"):
+                    self.assertNotIn(k, cfg)
+                self.assertEqual(cfg.get("block"), block)
+        for k in FIVE:
+            self.assertNotIn(k, config.DEFAULTS)
+
+    def test_five_keys_empty_mapping_accepted(self):  # K2, BL9, BU5
+        for k in FIVE:
+            with self.subTest(key=k):
+                self.assertEqual(self.inj({k: {}})[k], {})
+        self.assertEqual(self.inj({"block": {}}, "strict")["block"], {"max_tasks": 3})
+        self.assertEqual(self.inj({"budgets": {"controller": {}}})["budgets"], {"controller": {}})
+
+    def test_five_keys_not_a_mapping(self):  # K3
+        for k in FIVE:
+            for v in (None, 5, True, "x", "", [], ["a"], [{"a": 1}]):
+                with self.subTest(key=k, value=v):
+                    self.bad({k: v}, k, "must be a mapping")
+
+    def test_block_not_a_mapping_any_profile(self):  # BL3, IX3: the same text for every profile
+        for p in ("light", "standard", "strict"):
+            for v in ([1, 2], 5, "x", None, True):
+                with self.subTest(profile=p, value=v):
+                    msg = self.refused({"profile": p, "block": v})
+                    self.assertEqual(msg, PFX + "block: must be a mapping")
+
+    def test_five_keys_exact_dict_only(self):  # K4
+        import collections
+        for k in FIVE:
+            for v in (SubStr("x"), collections.OrderedDict(), SubDict(), collections.OrderedDict(a=1)):
+                with self.subTest(key=k, value=type(v).__name__):
+                    self.injected_bad({k: v}, "%s: must be a mapping" % k)
+
+    def test_five_keys_unknown_subkey(self):  # K5, BL8
+        for extra, dotted in (({"block": {"max_task": 3}}, "block.max_task"),
+                              ({"block": {"Max_tasks": 3}}, "block.Max_tasks"),
+                              ({"block": {"other": 1}}, "block.other"),
+                              ({"block": {"max_tasks": 3, "other": 1}}, "block.other"),
+                              ({"rulings": {"max": 1}}, "rulings.max"),
+                              ({"rulings": {"x": 1}}, "rulings.x"),
+                              ({"dispatch": {"max_prompt_char": 1}}, "dispatch.max_prompt_char"),
+                              ({"dispatch": {"x": 1}}, "dispatch.x")):
+            with self.subTest(extra=extra):
+                self.unknown(extra, dotted)
+
+    def test_block_unknown_subkey(self):  # BL8, ST9: 4a.2 accepted these before this reader
+        self.assertEqual(self.refused({"profile": "light", "block": {"other": 1}}),
+                         PFX + "unknown key 'block.other'")
+        self.assertEqual(self.refused({"profile": "light", "block": {"Max_tasks": 4}}),
+                         PFX + "unknown key 'block.Max_tasks'")
+        for p in ("strict", "standard"):  # step 3 does not see 'other'; the reader refuses it after the merge
+            with self.subTest(profile=p):
+                self.assertEqual(self.refused({"profile": p, "block": {"other": 1}}),
+                                 PFX + "unknown key 'block.other'")
+
+    def test_five_keys_case_variants_unknown_top_level(self):  # K6
+        for k in ("Roles", "ROLES", "Block", "block ", "roles.x", "block.max_tasks", "Budgets", "rulings ", "Dispatch"):
+            with self.subTest(key=k):
+                self.assertEqual(self.refused({"profile": "light", k: {"a": 1}}), "%sunknown key '%s'" % (PFX, k))
+
+    def test_five_keys_int_value_wrong_shape(self):  # K7
+        for k, leaf in LEAF.items():
+            for v in ({"n": 3}, [1], {"a": 1}):
+                with self.subTest(key=k, value=v):
+                    self.bad({k: {leaf: v}}, "%s.%s" % (k, leaf), INT1)
+
+    def test_five_keys_check_order(self):  # K8, D5: roles, budgets, block, rulings, dispatch
+        self.bad({"roles": 5, "block": [1], "dispatch": 5}, "roles", "must be a mapping")
+        self.bad({"roles": 5, "budgets": 5}, "roles", "must be a mapping")
+        self.bad({"budgets": 5, "block": [1], "dispatch": 5}, "budgets", "must be a mapping")
+        self.bad({"block": [1], "rulings": 5, "dispatch": 5}, "block", "must be a mapping")
+        self.bad({"rulings": 5, "dispatch": 5}, "rulings", "must be a mapping")
+        self.bad({"dispatch": 5}, "dispatch", "must be a mapping")
+        for _ in range(2):  # ER9: the same text twice
+            self.bad({"roles": 5, "block": [1]}, "roles", "must be a mapping")
+
+    def test_roles_shape_accepted(self):  # K9, planned Step 1
+        cfg = self.ok({"roles": {"doc_writer": {"prompt": "playbooks/doc.md", "min_tier": "tier2"}}})
+        self.assertEqual(cfg["roles"]["doc_writer"]["min_tier"], "tier2")
+        self.assertEqual(cfg["roles"], {"doc_writer": {"prompt": "playbooks/doc.md", "min_tier": "tier2"}})
+
+    def test_all_five_keys_valid_light(self):  # K9
+        cfg = self.ok(VALID_ALL)
+        for k in FIVE:
+            self.assertEqual(cfg[k], VALID_ALL[k])
+
+    def test_five_keys_not_aliased(self):  # K10
+        a = self.ok(VALID_ALL)
+        a["roles"]["doc_writer"]["prompt"] = "mutated.md"
+        a["budgets"]["controller"]["tokens"] = 1
+        b = self.ok(VALID_ALL)
+        self.assertEqual(b["roles"]["doc_writer"]["prompt"], "playbooks/doc.md")
+        self.assertEqual(b["budgets"]["controller"]["tokens"], 5000)
+        for k in FIVE:
+            self.assertNotIn(k, config.DEFAULTS)
+
+    def test_five_keys_values_unchanged_by_validation(self):  # K11, RO14
+        extra = {"roles": {"zeta": dict(ENTRY), "alpha": {"min_tier": "tier3", "prompt": "a/b.md"}},
+                 "budgets": {"plan_writer": {"minutes": 3, "tokens": 5}, "controller": {"tokens": 7}}}
+        cfg = self.ok(extra)
+        self.assertEqual(list(cfg["roles"]), ["zeta", "alpha"])
+        self.assertEqual(list(cfg["roles"]["alpha"]), ["min_tier", "prompt"])
+        self.assertEqual(list(cfg["budgets"]), ["plan_writer", "controller"])
+        self.assertEqual(cfg["roles"], extra["roles"])
+        self.assertEqual(cfg["budgets"], extra["budgets"])
+
+    # ---- RO rows
+    def test_roles_id_accepted(self):  # RO1, RO2, RO15, RO10
+        for key in ("x", "doc_writer", "a1", "x_", "a_b_c", "a" + "b" * 199, "a" * 5000, "a" * 100000,
+                    "session", "program_controller"):
+            with self.subTest(key=key[:20], n=len(key)):
+                self.assertEqual(list(self.ok(self.roles(key))["roles"]), [key])
+
+    def test_roles_framework_id_shape_passes(self):  # RO2: config does not know dispatch.ROLES; gate_dispatch refuses
+        for key in FRAMEWORK_ROLES:
+            with self.subTest(key=key):
+                self.assertIn(key, self.ok(self.roles(key))["roles"])
+
+    def test_roles_id_refusals(self):  # RO3-RO7
+        for key in ("X", "Doc_writer", "xY", "DOC", "1x", "_x", "9", "_", "a-b", "a.b", "a b", "a/b", "a:b", "x!",
+                    "x,y", "", " x", "x ", "x\t"):
+            with self.subTest(key=key):
+                self.assertEqual(self.refused(self.light(self.roles(key))), "%sroles: %s" % (PFX, GRAMMAR))
+
+    def test_roles_id_newline_nul_refused(self):  # RO8: re.match(...$) would accept "x\n"
+        for key in ("x\n", "x\r", "x\x00", "\ufeffx", "x\u2028", "\nx"):
+            with self.subTest(key=key):
+                msg = self.refused(self.light(self.roles(key)))
+                self.assertEqual(msg, "%sroles: %s" % (PFX, GRAMMAR))
+                self.assertEqual(len(msg.splitlines()), 1)
+
+    def test_roles_id_non_ascii_refused(self):  # RO9
+        for key in ("\u00e9", "x\u00e9", "\uff58", "k\u212a", "\u0131", "\u0445", "\ua7c0", "\U0001fae8", "x\u0661"):
+            with self.subTest(key=key):
+                self.assertEqual(self.refused(self.light(self.roles(key))), "%sroles: %s" % (PFX, GRAMMAR))
+
+    def test_roles_non_str_id_injected(self):  # RO11, RO12
+        for key in (1, None, True, ("a",), SubStr("x")):
+            with self.subTest(key=repr(key)):
+                self.injected_bad({"roles": {key: dict(ENTRY)}}, "roles: " + GRAMMAR)
+
+    def test_roles_duplicate_id(self):  # RO13
+        msg = self.raw_refused("roles:\n  x:\n    prompt: a.md\n    min_tier: tier2\n  x:\n    prompt: b.md\n"
+                               "    min_tier: tier2\n")
+        self.assertIn("duplicate key 'x'", msg)
+
+    def test_roles_many_ids(self):  # RO16
+        roles = {"r%d" % i: dict(ENTRY) for i in range(1000)}
+        self.assertEqual(len(self.ok({"roles": roles})["roles"]), 1000)
+
+    # ---- RE rows
+    def test_roles_entry_not_a_mapping(self):  # RE1
+        for v in (None, 5, "p.md", ["p.md"], True):
+            with self.subTest(value=v):
+                self.assertEqual(self.refused(self.light({"roles": {"x": v}})), PFX + "roles.x: must be a mapping")
+        self.injected_bad({"roles": {"x": SubDict(ENTRY)}}, "roles.x: must be a mapping")
+
+    def test_roles_entry_empty(self):  # RE2: D-Q2 (A) both keys required
+        self.injected_bad({"roles": {"x": {}}}, "roles.x.prompt: required key is missing")
+
+    def test_roles_entry_missing_key(self):  # RE3
+        self.bad({"roles": {"x": {"min_tier": "tier2"}}}, "roles.x.prompt", "required key is missing")
+        self.bad({"roles": {"x": {"prompt": "p.md"}}}, "roles.x.min_tier", "required key is missing")
+
+    def test_roles_entry_unknown_key(self):  # RE4
+        for extra in ({"extra": 1}, {"Prompt": "x"}, {"model": "opus"}):
+            with self.subTest(extra=extra):
+                self.unknown({"roles": {"x": dict(ENTRY, **extra)}}, "roles.x." + list(extra)[0])
+        self.unknown({"roles": {"x": {"prompts": "p.md", "min_tier": "tier2"}}}, "roles.x.prompts")
+
+    def test_roles_entry_check_order(self):  # RE5, D5: unknown key first, then values; prompt before min_tier
+        self.unknown({"roles": {"x": {"prompt": "p.txt", "extra": 1, "min_tier": "tier9"}}}, "roles.x.extra")
+        self.bad({"roles": {"x": {"prompt": "p.txt", "min_tier": "tier9"}}}, "roles.x.prompt", PROMPT_REASON)
+
+    def test_roles_same_prompt_two_ids(self):  # RE6
+        cfg = self.ok({"roles": {"a": dict(ENTRY), "b": dict(ENTRY)}})
+        self.assertEqual(cfg["roles"]["a"], cfg["roles"]["b"])
+
+    # ---- RP rows
+    def test_roles_prompt_accepted(self):  # RP1, RP11, RP15, RP17
+        for p in ("p.md", "a/b/c.md", "playbooks/doc_writer.md", ".strict-delivery/prompts/x.md", "P.md",
+                  "\u00e9.md", "p\u0301.md", "\u65e5\u672c.md", "missing/none.md", "x" * 5000 + ".md",
+                  "x" * 100000 + ".md", "a/.hidden.md", "p.md.md"):
+            with self.subTest(prompt=p[:30], n=len(p)):
+                self.assertEqual(self.ok(self.prompt(p))["roles"]["x"]["prompt"], p)
+
+    def test_roles_prompt_refusals(self):  # RP2-RP6, RP8: the plan's values and the normalisation sweep
+        for p in ("../p.md", "a/../b.md", "a/..", "..", "/p.md", "/", "//p.md", "a//b.md", "p.txt", "p", "p.md.txt",
+                  "p.markdown", "md", "p.md ", "p.md\n", "", "./p.md", "a/./b.md", "p.md/", "a/b/../c.md", "a/b/./",
+                  "."):
+            with self.subTest(prompt=p):
+                self.prompt_refused(p)
+
+    def test_roles_prompt_suffix_case(self):  # RP7
+        for p in ("p.MD", "p.Md", "p.mD"):
+            with self.subTest(prompt=p):
+                self.bad(self.prompt(p), "roles.x.prompt", PROMPT_REASON)
+
+    def test_roles_prompt_suffix_message(self):  # RP5: the exact wording for a clean path with a wrong suffix
+        for p in ("p.txt", "p", "p.markdown", "md"):
+            with self.subTest(prompt=p):
+                self.bad(self.prompt(p), "roles.x.prompt", PROMPT_REASON)
+
+    def test_roles_prompt_backslash(self):  # RP9, D-Q4 (B)
+        for p in ("a\\b.md", "\\p.md", "a\\\\b.md", "p\\.md"):
+            with self.subTest(prompt=p):
+                self.bad(self.prompt(p), "roles.x.prompt", PROMPT_REASON)
+
+    def test_roles_prompt_control_chars(self):  # RP10
+        for p in ("a\x00b.md", "a\nb.md", "a\rb.md", "a\tb.md", "\x7f.md", "\u0085.md"):
+            with self.subTest(prompt=p):
+                self.assertNotIn(p, self.prompt_refused(p))
+
+    def test_roles_prompt_non_ascii(self):  # RP11: printable non-ASCII stays accepted (D-Q4 (B)); NBSP is a space
+        for p in ("\u00e9.md", "\u65e5\u672c.md"):
+            with self.subTest(prompt=p):
+                self.assertIn("x", self.ok(self.prompt(p))["roles"])
+        for p in ("\u00a0p.md", "p\u00a0.md", "\u3000p.md"):
+            with self.subTest(prompt=p):
+                self.prompt_refused(p)
+
+    def test_roles_prompt_unicode_table_frozen(self):  # RP12, V2: the frozen table decides, on both interpreters
+        for p in ("\ua7c0.md", "\U0001fae8.md"):
+            with self.subTest(prompt=p):
+                msg = self.refused(self.light(self.prompt(p)))
+                self.assertEqual(msg, PFX + "roles.x.prompt: must be a non-empty normalised repo-relative path of "
+                                 "printable characters")
+
+    def test_roles_prompt_dot_md_only(self):  # RP13, D-Q4 (B)
+        for p in (".md", "a/.md", "a/b/.md"):
+            with self.subTest(prompt=p):
+                self.bad(self.prompt(p), "roles.x.prompt", PROMPT_REASON)
+
+    def test_roles_prompt_whitespace(self):  # RP14, D-Q4 (B): any space
+        for p in (" p.md", "p .md", "a b/c.md", "a/ b.md", "p.md ", "\tp.md"):
+            with self.subTest(prompt=p):
+                self.prompt_refused(p)
+
+    def test_roles_prompt_length(self):  # RP15, D-Q3 (A): no cap
+        for n in (5000, 100000):
+            with self.subTest(n=n):
+                p = "x" * n + ".md"
+                self.assertEqual(self.ok(self.prompt(p))["roles"]["x"]["prompt"], p)
+
+    def test_roles_prompt_wrong_type(self):  # RP16
+        for p in (5, True, None, ["p.md"], {"a": "b"}):
+            with self.subTest(prompt=p):
+                self.prompt_refused(p)
+        msg = self.inj_refused(self.prompt(SubStr("p.md")))
+        self.assertTrue(msg.startswith(PFX + "roles.x.prompt: must be a "), msg)
+
+    def test_roles_prompt_existence_not_checked(self):  # RP17
+        cfg = self.ok(self.prompt("missing/none.md"))
+        self.assertEqual(cfg["roles"]["x"]["prompt"], "missing/none.md")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "missing")))
+
+    # ---- RT rows
+    def test_roles_min_tier_each_accepted(self):  # RT1
+        for t in ("tier1", "tier2", "tier3", "tier4"):
+            with self.subTest(tier=t):
+                self.assertEqual(self.ok(self.roles("x", {"prompt": "p.md", "min_tier": t}))["roles"]["x"]["min_tier"],
+                                 t)
+
+    def test_roles_min_tier_tier4_without_model(self):  # RT9
+        cfg = self.ok(self.roles("x", {"prompt": "p.md", "min_tier": "tier4"}))
+        self.assertNotIn("tier4", cfg["models"]["tiers"])
+        self.assertEqual(cfg["roles"]["x"]["min_tier"], "tier4")
+
+    def test_roles_min_tier_refusals(self):  # RT2-RT5, RT7, RT8
+        for t in ("tier5", "tier0", "tier10", "tier01", 3, "3", 1, True, None, "Tier2", "TIER2", "tier 2", "tier2 ",
+                  " tier2", "tier2\n", "tier-2", "t2", ["tier2"], {"a": "tier2"}, "opus", "sonnet",
+                  "claude-sonnet-5-5", ""):
+            with self.subTest(tier=t):
+                self.bad(self.roles("x", {"prompt": "p.md", "min_tier": t}), "roles.x.min_tier", TIER_REASON)
+
+    def test_roles_min_tier_non_ascii(self):  # RT6
+        for t in ("tier\u0662", "tier\uff12", "t\u0131er2", "tier2\u00a0"):
+            with self.subTest(tier=t):
+                self.bad(self.roles("x", {"prompt": "p.md", "min_tier": t}), "roles.x.min_tier", TIER_REASON)
+
+    def test_roles_min_tier_float_and_str_subclass(self):  # RT3: 3.0 (injected), a str subclass of a valid tier
+        self.injected_bad({"roles": {"x": {"prompt": "p.md", "min_tier": 3.0}}}, "roles.x.min_tier: " + TIER_REASON)
+        self.injected_bad({"roles": {"x": {"prompt": "p.md", "min_tier": SubStr("tier2")}}},  # D6: exact str only
+                          "roles.x.min_tier: " + TIER_REASON)
+
+    # ---- BU rows
+    def test_budgets_framework_role_keys(self):  # BU1
+        for role in FRAMEWORK_ROLES:
+            with self.subTest(role=role):
+                self.assertEqual(self.ok({"budgets": {role: {"tokens": 5, "minutes": 3}}})["budgets"],
+                                 {role: {"tokens": 5, "minutes": 3}})
+
+    def test_budgets_unknown_role_shape_only(self):  # BU2
+        cfg = self.ok({"budgets": {"doc_writer": {"tokens": 5}, "nobody": {"minutes": 1}}})
+        self.assertEqual(cfg["budgets"], {"doc_writer": {"tokens": 5}, "nobody": {"minutes": 1}})
+        cfg = self.ok({"roles": self.roles("doc_writer")["roles"], "budgets": {"doc_writer": {"tokens": 5}}})
+        self.assertEqual(cfg["budgets"], {"doc_writer": {"tokens": 5}})
+
+    def test_budgets_key_grammar(self):  # BU3, D-Q1 (A)
+        for key in ("X", "1x", "a-b", "a.b", "", "x\n", " x", "\uff58", "k\u212a", "\ua7c0", "Controller", "a b"):
+            with self.subTest(key=key):
+                msg = self.refused(self.light({"budgets": {key: {"tokens": 5}}}))
+                self.assertEqual(msg, "%sbudgets: %s" % (PFX, GRAMMAR))
+        for key in (1, None, SubStr("x")):
+            with self.subTest(key=repr(key)):
+                self.injected_bad({"budgets": {key: {"tokens": 5}}}, "budgets: " + GRAMMAR)
+        self.assertIn("a" * 5000, self.ok({"budgets": {"a" * 5000: {"tokens": 5}}})["budgets"])
+
+    def test_budgets_entry_not_a_mapping(self):  # BU4
+        for v in (5, None, [1], "5", True):
+            with self.subTest(value=v):
+                self.bad({"budgets": {"controller": v}}, "budgets.controller", "must be a mapping")
+        self.injected_bad({"budgets": {"controller": SubDict()}}, "budgets.controller: must be a mapping")
+
+    def test_budgets_entry_empty(self):  # BU5
+        self.assertEqual(self.inj({"budgets": {"controller": {}}})["budgets"]["controller"], {})
+
+    def test_budgets_unknown_entry_key(self):  # BU6
+        for entry, k in (({"tokens": 5, "max": 3}, "max"), ({"token": 5}, "token"), ({"Tokens": 5}, "Tokens"),
+                         ({"tokens": 5, "minutes": 3, "extra": 1}, "extra")):
+            with self.subTest(entry=entry):
+                self.unknown({"budgets": {"controller": entry}}, "budgets.controller." + k)
+
+    def test_budgets_tokens_valid(self):  # BU7, BU9
+        for f in ("tokens", "minutes"):
+            for v in (1, 5000, 10 ** 599):
+                with self.subTest(field=f, value=v):
+                    self.assertEqual(self.ok({"budgets": {"controller": {f: v}}})["budgets"]["controller"][f], v)
+
+    NOT_INT = (0, -1, True, False, "5", "2.5", "5.0", None, [5], {"a": 1}, "", "07", "1_000", "0x10", "+5", " 5")
+
+    def test_budgets_tokens_refusals(self):  # BU8, BU13
+        for f in ("tokens", "minutes"):
+            for v in self.NOT_INT:
+                with self.subTest(field=f, value=v):
+                    self.bad({"budgets": {"controller": {f: v}}}, "budgets.controller.%s" % f, INT1)
+        self.injected_bad({"budgets": {"controller": {"tokens": 2.5}}}, "budgets.controller.tokens: " + INT1)
+
+    def test_budgets_minutes_values(self):  # BU9
+        self.bad({"budgets": {"controller": {"minutes": 0}}}, "budgets.controller.minutes", INT1)
+        self.assertEqual(self.ok({"budgets": {"controller": {"minutes": 30}}})["budgets"]["controller"],
+                         {"minutes": 30})
+
+    def test_budgets_both_keys(self):  # BU10, D5: tokens before minutes
+        self.assertEqual(self.ok({"budgets": {"c": {"tokens": 5, "minutes": 3}}})["budgets"]["c"],
+                         {"tokens": 5, "minutes": 3})
+        self.bad({"budgets": {"c": {"tokens": 0, "minutes": 3}}}, "budgets.c.tokens", INT1)
+        self.bad({"budgets": {"c": {"tokens": 5, "minutes": 0}}}, "budgets.c.minutes", INT1)
+        self.bad({"budgets": {"c": {"minutes": 0, "tokens": 0}}}, "budgets.c.tokens", INT1)
+
+    def test_budgets_duplicate_role(self):  # BU12
+        self.assertIn("duplicate key 'controller'", self.raw_refused(
+            "budgets:\n  controller:\n    tokens: 1\n  controller:\n    tokens: 2\n"))
+
+    # ---- BL rows
+    def test_block_rulings_dispatch_ints_valid(self):  # BL1, BL10, BL12
+        for k, leaf in LEAF.items():
+            for v in (1, 2, 4, 5, 100000, 10 ** 599, 1000000):
+                with self.subTest(key=k, value=v):
+                    self.assertEqual(self.ok({k: {leaf: v}})[k], {leaf: v})
+
+    def test_block_rulings_dispatch_ints(self):  # BL2, BL4, BL5, BL6, planned Step 1
+        bad = (0, -1, -10 ** 30, True, False, "5", "2.5", "5.0", "07", "1_000", "0x10", "+5", None, [3],
+               {"a": 1}, "", " 5")
+        for k, leaf in LEAF.items():
+            for v in bad:
+                with self.subTest(key=k, value=v):
+                    self.bad({k: {leaf: v}}, "%s.%s" % (k, leaf), INT1)
+            with self.subTest(key=k, value="float"):
+                self.injected_bad({k: {leaf: 2.5}}, "%s.%s: %s" % (k, leaf, INT1))
+
+    def test_block_rulings_dispatch_digit_caps(self):  # BL7: 600 accepted, 601 and 10**700 refused
+        for k, leaf in LEAF.items():
+            with self.subTest(key=k):
+                self.assertEqual(self.ok({k: {leaf: 10 ** 600 - 1}})[k][leaf], 10 ** 600 - 1)
+                self.bad({k: {leaf: 10 ** 600}}, "%s.%s" % (k, leaf), DIG)
+                self.bad({k: {leaf: 10 ** 700}}, "%s.%s" % (k, leaf), DIG)
+
+    def test_block_value_is_shape_only(self):  # BL10
+        self.assertEqual(self.ok({"block": {"max_tasks": 1}})["block"], {"max_tasks": 1})
+        self.assertEqual(self.ok({"rulings": {"max_per_block": 1000000}})["rulings"], {"max_per_block": 1000000})
+
+    def test_no_preset_for_rulings_dispatch_budgets(self):  # BL11
+        for p in ("light", "standard", "strict"):
+            cfg = self.with_extra({"profile": p})
+            for k in ("rulings", "dispatch", "budgets", "roles"):
+                self.assertNotIn(k, cfg)
+
+    def test_light_block_max_tasks_direct_typed(self):  # IX9
+        self.assertEqual(self.ok({"block": {"max_tasks": 4}})["block"], {"max_tasks": 4})
+        self.bad({"block": {"max_tasks": 0}}, "block.max_tasks", INT1)
+
+    # ---- IX rows
+    def test_typed_block_accepts_applied_override(self):  # IX4, IX11
+        ovr = {"overrides": {"block.max_tasks": {"value": 4, "decision": DEC_ID}}}
+        for p in ("strict", "standard"):
+            with self.subTest(profile=p):
+                self.assertEqual(self.with_extra(dict(ovr, profile=p))["block"], {"max_tasks": 4})
+
+    def test_override_bad_value_names_the_override_not_the_block(self):  # IX5, IX6
+        for v in (0, -1, True, "3", None, [3]):
+            with self.subTest(value=v):
+                msg = self.refused({"overrides": {"block.max_tasks": {"value": v, "decision": DEC_ID}}})
+                self.assertTrue(msg.startswith(PFX + "overrides.block.max_tasks.value: "), msg)
+        msg = self.refused({"overrides": {"block.max_tasks": {"value": 10 ** 600, "decision": DEC_ID}}})
+        self.assertEqual(msg, PFX + "overrides.block.max_tasks.value: " + DIG)
+
+    def test_policy_key_in_file_precedes_typed_readers(self):  # IX1, IX2, K8
+        for p in ("strict", "standard"):
+            with self.subTest(profile=p):
+                msg = self.refused({"profile": p, "block": {"max_tasks": 4, "other": 1}, "roles": 5})
+                self.assertEqual(msg, "%sblock.max_tasks: preset by profile %s; change it under overrides with the "
+                                 "authorising decision" % (PFX, p))
+
+    def test_override_of_five_keys_non_policy_refused(self):  # IX8
+        for key in ("rulings.max_per_block", "dispatch.max_prompt_chars", "budgets.controller.tokens",
+                    "roles.x.min_tier"):
+            with self.subTest(key=key):
+                msg = self.refused({"overrides": {key: {"value": 1, "decision": DEC_ID}}})
+                self.assertEqual(msg, "%soverrides.%s: not a policy key of profile strict and not a limits key"
+                                 % (PFX, key))
+
+    # ---- ER rows
+    def test_typed_readers_error_form(self):  # ER1, ER2, ER5 (refused() asserts the root path is absent)
+        cases = (("roles.x.prompt", self.roles("x", {"prompt": "p.txt", "min_tier": "tier2"})),
+                 ("roles.x.min_tier", self.roles("x", {"prompt": "p.md", "min_tier": "tier5"})),
+                 ("budgets.controller.tokens", {"budgets": {"controller": {"tokens": 0}}}),
+                 ("block.max_tasks", {"block": {"max_tasks": 0}}),
+                 ("rulings.max_per_block", {"rulings": {"max_per_block": 0}}),
+                 ("dispatch.max_prompt_chars", {"dispatch": {"max_prompt_chars": 0}}),
+                 ("roles", {"roles": 5}), ("block", {"block": 5}))
+        for key, extra in cases:
+            with self.subTest(key=key):
+                self.assertTrue(self.refused(self.light(extra)).startswith("%s%s: " % (PFX, key)))
+
+    def test_typed_readers_raise_only_gateerror(self):  # ER3
+        junk = (None, 5, True, "x", "", [], [1], {}, {"a": 1}, {"a": {}}, {"a": {"prompt": 5}}, 2.5, SubStr("x"),
+                SubDict(), {1: 2}, {None: {}}, {("a",): 1}, {"x": {"prompt": {}, "min_tier": []}},
+                {"x": {"tokens": [], "minutes": {}}}, {"max_tasks": [], "max_per_block": {}})
+        for k in FIVE:
+            for v in junk:
+                with self.subTest(key=k, value=repr(v)[:40]):
+                    try:
+                        self.inj({k: copy.deepcopy(v)})
+                    except GateError:
+                        pass
+
+    def test_typed_readers_message_one_line(self):  # ER4: ids and keys never reach the line raw
+        for bad in ("x\ny", "x\x00", "\ufeffx", "x\ud800", "x\r\n", "x\u2028y"):
+            for extra in ({"roles": {bad: dict(ENTRY)}}, {"budgets": {bad: {"tokens": 1}}},
+                          {"block": {bad: 1}}, {"rulings": {bad: 1}}, {"dispatch": {bad: 1}},
+                          {"roles": {"x": dict(ENTRY, **{bad: 1})}}, {"budgets": {"c": {bad: 1}}}):
+                with self.subTest(bad=bad, extra=str(extra)[:30]):
+                    msg = self.inj_refused(extra)
+                    self.assertEqual(len(msg.splitlines()), 1)
+                    for ch in ("\n", "\r", "\x00", "\ufeff", "\ud800", "\u2028"):
+                        self.assertNotIn(ch, msg)
+
+    def test_typed_readers_no_value_echo(self):  # ER7
+        for extra in ({"block": {"max_tasks": 10 ** 700}}, {"budgets": {"c": {"tokens": "x" * 5000}}},
+                      self.roles("x", {"prompt": "q" * 5000 + ".txt", "min_tier": "tier2"}),
+                      self.roles("x", {"prompt": "p.md", "min_tier": "z" * 5000})):
+            with self.subTest(extra=str(extra)[:30]):
+                msg = self.refused(self.light(extra))
+                self.assertLess(len(msg), 200)
+                for frag in ("7" * 10, "x" * 10, "q" * 10, "z" * 10):
+                    self.assertNotIn(frag, msg)
+
+    def test_unknown_key_shape_matches_limits(self):  # ER6, D7
+        self.assertEqual(self.refused(self.light({"limits": {"x": 1}})), PFX + "unknown key 'limits.x'")
+        self.assertEqual(self.refused(self.light({"block": {"x": 1}})), PFX + "unknown key 'block.x'")
+
+    def test_typed_readers_run_after_existing_checks(self):  # ER8
+        self.assertEqual(self.refused({"profile": "light", "roles": 5, "zzz": 1}), PFX + "unknown key 'zzz'")
+        msg = self.refused({"profile": "light", "roles": 5, "schema": "config/9"})
+        self.assertTrue(msg.startswith(PFX + "schema: "), msg)
+        msg = self.refused({"profile": "light", "roles": 5, "context": {"max_lines": 0}})
+        self.assertEqual(msg, PFX + "context.max_lines: " + INT1)
+
+    # ---- V rows
+    def test_typed_readers_digit_caps(self):  # V1, BU11, BL7: 600 accepted, 601-1000 named, over 1000 by yamlsub
+        cases = (("budgets.controller.tokens", "budgets:\n  controller:\n    tokens: %s\n",
+                  lambda c: c["budgets"]["controller"]["tokens"]),
+                 ("budgets.controller.minutes", "budgets:\n  controller:\n    minutes: %s\n",
+                  lambda c: c["budgets"]["controller"]["minutes"]),
+                 ("block.max_tasks", "block:\n  max_tasks: %s\n", lambda c: c["block"]["max_tasks"]),
+                 ("rulings.max_per_block", "rulings:\n  max_per_block: %s\n",
+                  lambda c: c["rulings"]["max_per_block"]),
+                 ("dispatch.max_prompt_chars", "dispatch:\n  max_prompt_chars: %s\n",
+                  lambda c: c["dispatch"]["max_prompt_chars"]))
+        too_large = r"\A\.strict-delivery/config\.yml: integer too large \(line [0-9]+\)\Z"
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for key, template, get in cases:
+                    for digits in (600, 601, 1000, 1001, 4300, 4301):
+                        with self.subTest(limit=lim, key=key, digits=digits):
+                            body = template % ("7" * digits)
+                            if digits == 600:
+                                self.assertEqual(get(self.raw(body)), int("7" * digits))
+                            elif digits > 1000 or (lim == 640 and digits > 640):
+                                self.assertRegex(self.raw_refused(body), too_large)
+                            else:
+                                self.assertEqual(self.raw_refused(body), "%s%s: %s" % (PFX, key, DIG))
+
+    def test_typed_readers_unicode_same_on_both(self):  # V2: hand-written verdicts, identical on 3.9 and 3.13
+        for key in ("\ua7c0", "\ua7c1", "\U0001fae8", "\uff58", "k\u212a", "x\u00e9"):
+            with self.subTest(key=key):
+                self.assertEqual(self.refused(self.light(self.roles(key))), "%sroles: %s" % (PFX, GRAMMAR))
+        for p in ("\ua7c0.md", "\U0001fae8.md"):
+            with self.subTest(prompt=p):
+                self.assertTrue(self.refused(self.light(self.prompt(p)))
+                                .startswith(PFX + "roles.x.prompt: must be a non-empty normalised"))
+        for t in ("tier\u0662", "tier\uff12"):
+            with self.subTest(tier=t):
+                self.bad(self.roles("x", {"prompt": "p.md", "min_tier": t}), "roles.x.min_tier", TIER_REASON)
+
+    def test_typed_readers_catch_nothing(self):  # V3: no except clause was added to config.py by this task
+        with open(config.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertEqual(src.count("except "), 1)  # the one in load(): yamlsub.YamlError, as before this task
+
+
+class ProfileOverrideClassTest(ConfigCase):
+    """Task 4a.3: ``profile-override`` is a default owner-only class, after ``rule-override`` (rows OC, decision D8)."""
+
+    def test_profile_override_is_default_owner_only(self):  # OC1, OC2, Q-B4plan-4 (a)
+        got = config.load(self.root)["decision_classes"]["owner_only"]
+        self.assertIn("profile-override", got)
+        self.assertEqual(got, OWNER_ONLY)
+        self.assertEqual(got.index("profile-override"), got.index("rule-override") + 1)
+        self.assertEqual(len(got), 13)
+        self.assertEqual(config.DEFAULTS["decision_classes"]["owner_only"], OWNER_ONLY)
+
+    def test_owner_only_union_with_profile_override(self):  # OC4
+        for given in (["profile-override"], ["hardware", "profile-override"], ["profile-override", "hardware"]):
+            with self.subTest(given=given):
+                cfg = self.with_extra({"decision_classes": {"owner_only": given}})
+                want = OWNER_ONLY + (["hardware"] if "hardware" in given else [])
+                self.assertEqual(cfg["decision_classes"]["owner_only"], want)
+
+    def test_profile_override_cannot_be_dropped(self):  # OC6
+        for given in (["hardware"], ["triage"], ["rule-override", "zeta"]):
+            with self.subTest(given=given):
+                got = self.with_extra({"decision_classes": {"owner_only": given}})["decision_classes"]["owner_only"]
+                self.assertIn("profile-override", got)
+                self.assertEqual(got.count("profile-override"), 1)
+
+    def test_profile_override_near_names_are_other_classes(self):  # OC9
+        near = ["profile-overrides", "Profile-Override", "profile_override", "profile-override "]
+        got = self.with_extra({"decision_classes": {"owner_only": near}})["decision_classes"]["owner_only"]
+        self.assertEqual(got, OWNER_ONLY + near)
+
+    def test_decisions_validate_accepts_profile_override(self):  # OC10: the class is known to decisions.validate
+        from gates.lib import decisions
+        cfg = config.load(self.root)
+        tag = "decision/%d" % migrations.current_version("decision")
+        missing = "class: %s is not in decision_classes.owner_only"
+        self.assertNotIn(missing % "profile-override", decisions.validate({"schema": tag, "class": "profile-override"},
+                                                                          cfg))
+        self.assertIn(missing % "bogus", decisions.validate({"schema": tag, "class": "bogus"}, cfg))  # contradiction
 
 
 if __name__ == "__main__":

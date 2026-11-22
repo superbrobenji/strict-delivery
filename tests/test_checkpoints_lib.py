@@ -47,7 +47,7 @@ ROLE_IDS = ("program_controller", "stream_controller", "controller", "implemente
             "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer", "audit_reviewer",
             "audit_verifier", "investigator", "plan_writer", "plan_reviewer", "drafter")
 OWNER_ONLY = ("triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close", "rule-override",
-              "program-create", "stream-ownership", "stream-merge", "request-dispute", "program-close")
+              "profile-override", "program-create", "stream-ownership", "stream-merge", "request-dispute", "program-close")
 
 
 def resume(ids_=()):

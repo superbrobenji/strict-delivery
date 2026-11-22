@@ -38,7 +38,7 @@ A question in an owner-only class is always the owner's: the agent that needs it
 
 The classes are config `decision_classes.owner_only`; a project may add its own classes and never drops a default one.
 
-Default owner-only classes: `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute`, `program-close`.
+Default owner-only classes: `triage`, `spec-direction`, `scope`, `merge-grant`, `model-policy`, `issue-close`, `rule-override`, `profile-override`, `program-create`, `stream-ownership`, `stream-merge`, `request-dispute`, `program-close`.
 
 `playbook/decisions.md` says what the owner decides in each class.
 
