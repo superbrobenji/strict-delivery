@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-3ckx
+status: open
+source: "5a.2-f task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/5a2f-review-1.md R1-1"
+severity: MEDIUM
+class: "FIFO-by-name rows: a test of a FIFO state must fail by name, never only hang; members: ReceiptsDir.test_receipts_dir_is_fifo (tests/test_receipts_lib.py:1002, unwatched; hangs under the O_DIRECTORY-dropped mutant of _step), and every other mkfifo test in tests/test_receipts_lib.py (:454, :753, :1200, :1244, :1466, :1500, :1516, :1627, :1632, :2036, :2059, :2167, :2283) checked for a watchdog"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.2-f
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 67d71eeaddb384c279424dbe10ebde628e393951
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: "1c static states: FIFO fails by name (DS7)"
