@@ -216,7 +216,7 @@ def check(args: list) -> Result:
             res.fail("dispatch.role", str(e))
 
     if role is None:
-        for name in ("dispatcher", "depth"):
+        for name in ("dispatcher", "program", "stream", "depth"):
             _not_checked(res, "dispatch." + name, "dispatch.role")
     else:
         did = disp["id"]
@@ -227,6 +227,9 @@ def check(args: list) -> Result:
                      % (did, role, "true" if live else "false", ", ".join(dispatch.DISPATCHERS[live][role]) or "none"))
         else:
             res.passed("dispatch.dispatcher")
+        perrors = dispatch.program_errors(sections, role, root, cfg, live)    # a GateError of git is dispatch.input
+        _line(res, "dispatch.program", [r for s, r in perrors if s == "program"])
+        _line(res, "dispatch.stream", [r for s, r in perrors if s == "stream"])
         _line(res, "dispatch.depth", [] if dispatch.depth_ok(role, disp["depth"], max_depth) else
               ["dispatcher depth %d + 1 + %d level(s) below %s exceeds max_depth %d"
                % (disp["depth"], dispatch.LEVELS_BELOW.get(role, 0), role, max_depth)])

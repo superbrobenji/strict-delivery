@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-bprg
+status: open
+source: "P4.2 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g8/P4.2-review-1.md R1-1"
+severity: MEDIUM
+class: "input-domain IJ7 write-failure: continue_cli._create leaves a partial --input-json file after a failed write (no unlink), says 'cannot be created' although the file exists, and a retry is refused with 'File exists'"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P4.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d52f6c67dbd0245222c5104bcab62c5bdc1ed004
+    by: stream-a15
+review_round: 1
+caused_by_change: true
+dimension: IJ7 write failure leaves nothing (inherited P2.2 D-Q11)
