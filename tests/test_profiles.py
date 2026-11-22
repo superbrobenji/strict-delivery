@@ -790,10 +790,10 @@ class MergeTest(MergeCase):
     def test_empty_block_in_file_accepted(self):  # M25
         self.assertEqual(self.load_data({"block": {}})["block"], {"max_tasks": 3})
 
-    def test_block_other_subkey_untouched(self):  # M26, M34; Task 4a.3 (ST9): the typed reader refuses it
+    def test_block_other_subkey_refused(self):  # M26, M34; Task 4a.3 (ST9): the typed reader refuses it
         self.refused({"block": {"other": 1}}, ".strict-delivery/config.yml: unknown key 'block.other'")
 
-    def test_policy_merges_into_block_mapping(self):  # M34; Task 4a.3 (ST9): the typed reader refuses it
+    def test_policy_into_block_mapping_refused(self):  # M34; Task 4a.3 (ST9): the typed reader refuses it
         self.refused({"profile": "standard", "block": {"other": 1}},
                      ".strict-delivery/config.yml: unknown key 'block.other'")
 

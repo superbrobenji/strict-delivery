@@ -61,7 +61,7 @@ _PROFILES = profiles.PROFILES
 # An override of a limit: the two caps, or one role's child cap (the role grammar of the ``roles`` ids, decision D13).
 _LIMITS_KEY = re.compile(r"limits\.(max_depth|max_concurrent|max_children\.[a-z][a-z0-9_]*)")
 _ROLE_ID = re.compile(r"[a-z][a-z0-9_]*")  # explicit ASCII classes and fullmatch: no str.isidentifier, no "$" newline
-_OPEN_MAPS =("models.tiers",)  # mappings that keep keys the defaults do not name
+_OPEN_MAPS = ("models.tiers",)  # mappings that keep keys the defaults do not name
 
 
 def _bad(key: str, reason: str) -> GateError:

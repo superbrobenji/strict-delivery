@@ -1,4 +1,5 @@
 """Tests for the config loader (gates.lib.config), on fixture repositories made by make_repo."""
+import ast
 import contextlib
 import copy
 import io
@@ -1490,10 +1491,19 @@ class TypedReadersTest(ConfigCase):
             with self.subTest(tier=t):
                 self.bad(self.roles("x", {"prompt": "p.md", "min_tier": t}), "roles.x.min_tier", TIER_REASON)
 
-    def test_typed_readers_catch_nothing(self):  # V3: no except clause was added to config.py by this task
+    def test_typed_readers_catch_nothing(self):  # V3: no try statement in any new typed reader (ast, not source text)
+        readers = ("_validate", "_role_keys", "_entry_keys", "_validate_prompt", "_validate_roles",
+                   "_validate_budgets", "_validate_int_map")
         with open(config.__file__, encoding="utf-8") as fh:
-            src = fh.read()
-        self.assertEqual(src.count("except "), 1)  # the one in load(): yamlsub.YamlError, as before this task
+            tree = ast.parse(fh.read())
+        funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        kinds = tuple(k for k in (ast.Try, getattr(ast, "TryStar", None)) if k is not None)
+        for name in readers:
+            self.assertIn(name, funcs)
+            with self.subTest(reader=name):
+                self.assertEqual([n.lineno for n in ast.walk(funcs[name]) if isinstance(n, kinds)], [])
+        self.assertIn("load", funcs)  # the one try in load(): yamlsub.YamlError, as before this task
+        self.assertEqual(sum(isinstance(n, kinds) for n in ast.walk(tree)), 1)
 
 
 class ProfileOverrideClassTest(ConfigCase):
