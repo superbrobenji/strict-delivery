@@ -18,15 +18,17 @@ import unittest
 from unittest import mock
 
 from gates import gate_context, gate_schema, producers, run_all
-from gates.lib import config, context, dispatch, receipts, schema
+from gates.lib import config, context, dispatch, migrations, receipts, schema
 from gates.lib.result import GateError, ParseEntryRefused, run_gate, safe_text
 from gates.tools import context_cli
 from tests.helpers import (GitIsolatedTestCase, INT_LIMITS, commit_all, git, int_limit, make_repo, minimal_config, within,
                            write_record)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CTX_TAG = "context/%d" % migrations.current_version("context")  # fixtures take the tag from the schema (plan P:32)
+RCPT_TAG = "receipt/%d" % migrations.current_version("receipt")
 S = "3f2b8c1e-9d4a-4b7e-8f10-2a6c5d9e0b13"
-HDR = "schema: receipt/1\nreads:\n"
+HDR = ("schema: " + RCPT_TAG + "\nreads:\n")
 KINDS_TEXT = "plan, program, program-controller, stream-block, sync, or stream-<id>-block"
 SESSION_TEXT = "session: must be 1 to 128 characters, A-Z a-z 0-9 _ -, starting with a letter or a digit"
 PLAN_HANDOFF = ".strict-delivery/state/plans/p/handoff.md"
@@ -82,7 +84,7 @@ class Base(GitIsolatedTestCase):
         return path
 
     def ctx(self, **kw):
-        write_record(self.fx, ".strict-delivery/context.yml", {"schema": "context/1", **kw})
+        write_record(self.fx, ".strict-delivery/context.yml", {"schema": CTX_TAG, **kw})
 
     def profile(self, p):
         write_record(self.fx, ".strict-delivery/config.yml", dict(minimal_config(), profile=p))
@@ -242,13 +244,13 @@ class Producer(Base):
         self.assertEqual(code, 1)
 
     def test_producer_valid_context_file_passes(self):  # PR7
-        write_record(self.fx, ".strict-delivery/context.yml", {"schema": "context/1"})
+        write_record(self.fx, ".strict-delivery/context.yml", {"schema": CTX_TAG})
         out, code = self.schema_out(self.fx, producers.PRODUCER_MODULES + ("gates.gate_context",))
         self.assertIn("PASS schema.context\n", out)
         self.assertEqual(code, 0, out)
 
     def test_producer_invalid_context_file_fails(self):  # PR8
-        for row in ({"schema": "context/1", "bogus": 1}, {"schema": "context/1", "every": "x"}, {"schema": "context/9"}):
+        for row in ({"schema": CTX_TAG, "bogus": 1}, {"schema": CTX_TAG, "every": "x"}, {"schema": "context/9"}):
             with self.subTest(row=row):
                 write_record(self.fx, ".strict-delivery/context.yml", row)
                 out, code = self.schema_out(self.fx, producers.PRODUCER_MODULES + ("gates.gate_context",))
@@ -256,7 +258,7 @@ class Producer(Base):
                 self.assertIn("FAIL schema.context..strict-delivery/context.yml: ", out)
 
     def test_check_schema_does_not_run_context_errors(self):  # PR9
-        write_record(self.fx, ".strict-delivery/context.yml", {"schema": "context/1", "every": [
+        write_record(self.fx, ".strict-delivery/context.yml", {"schema": CTX_TAG, "every": [
             {"path": "../x", "why": "w"}, {"path": "a.md", "why": "w"}, {"path": "a.md", "why": "w2"}]})
         out, code = self.schema_out(self.fx, producers.PRODUCER_MODULES + ("gates.gate_context",))
         self.assertIn("PASS schema.context\n", out)
@@ -594,7 +596,7 @@ class Inputs(Base):
 
     def test_context_file_states(self):  # IN4
         path = self.fx + "/.strict-delivery/context.yml"
-        valid = "schema: context/1\n"
+        valid = ("schema: " + CTX_TAG + "\n")
         other = os.path.join(self.tmp, "other.yml")
         with open(other, "w") as fh:
             fh.write(valid)
@@ -932,7 +934,7 @@ class Receipts(Base):
         sha = "a" * 40
         cases = [(b"- a\n- b\n", None), (b"\xff\xfe", ".strict-delivery/receipts/%s.yml: not valid UTF-8" % S),
                  ("schema: receipt/2\nreads: []\n".encode(), None),
-                 (("schema: receipt/1\nreads:\n  - path: /x\n    sha: %s\n    extra: 1\n" % sha).encode(), None),
+                 ((("schema: " + RCPT_TAG + "\nreads:\n  - path: /x\n    sha: %s\n    extra: 1\n") % sha).encode(), None),
                  (HDR.encode() + ROW("/x", "A" * 40).encode(), None), (HDR.encode() + ROW("/x", "abcdef0").encode(), None),
                  (HDR.encode() + ROW("/x", "12345678901234567890").encode(), None)]
         for data, exact in cases:
@@ -963,7 +965,7 @@ class Receipts(Base):
                                      "to start the session's receipts again\n" % S, 1))
 
     def test_empty_reads_list_is_no_rows(self):  # RC19
-        self.receipt("schema: receipt/1\nreads: []\n")
+        self.receipt(("schema: " + RCPT_TAG + "\nreads: []\n"))
         self.assertEqual(self.go(), (self.fail_a(), 1))
 
     def test_receipt_bom_and_crlf_accepted(self):  # RC20

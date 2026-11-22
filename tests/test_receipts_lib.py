@@ -16,14 +16,16 @@ import threading
 import unittest
 from unittest import mock
 
-from gates.lib import config, receipts, schema, yamlsub
+from gates.lib import config, migrations, receipts, schema, yamlsub
 from gates.lib.receipts import content_sha, load, record, session_problem
 from gates.lib.result import GateError
 from tests.helpers import GitIsolatedTestCase, INT_LIMITS, git, make_repo, watched
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RCPT_TAG = "receipt/%d" % migrations.current_version("receipt")  # fixtures take the tag from the schema (plan P:32)
+RCPT_TAGB = RCPT_TAG.encode()
 SID = "3f2b8c1e-9d4a-4b7e-8f10-2a6c5d9e0b13"
-HDR = "schema: receipt/1\nreads:\n"
+HDR = ("schema: " + RCPT_TAG + "\nreads:\n")
 EMPTY = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 CRLF = "c30dea8a3641ea99b125d04d599d843712292759"
 REMEDY = "delete it to start the session's receipts again"
@@ -129,7 +131,7 @@ class Schema(Base):
         return schema.validate(schema.load_schema(RECEIPT_YML), value, self.cfg)
 
     def with_reads(self, reads):
-        return {"schema": "receipt/1", "reads": reads}
+        return {"schema": RCPT_TAG, "reads": reads}
 
     def test_receipt_schema_loads(self):  # SC1
         sch = schema.load_schema(RECEIPT_YML)
@@ -160,12 +162,12 @@ class Schema(Base):
     def test_receipt_schema_unknown_top_key(self):  # SC5
         for key in ("lines", "extra", "read"):
             with self.subTest(key=key):
-                self.assertEqual(self.valid({"schema": "receipt/1", "reads": [], key: 3}), [key + ": unknown key"])
-        self.assertEqual(self.valid({"schema": "receipt/1", "Reads": []}),
+                self.assertEqual(self.valid({"schema": RCPT_TAG, "reads": [], key: 3}), [key + ": unknown key"])
+        self.assertEqual(self.valid({"schema": RCPT_TAG, "Reads": []}),
                          ["reads: required key is missing", "Reads: unknown key"])
 
     def test_receipt_schema_reads_type(self):  # SC6
-        self.assertEqual(self.valid({"schema": "receipt/1"}), ["reads: required key is missing"])
+        self.assertEqual(self.valid({"schema": RCPT_TAG}), ["reads: required key is missing"])
         self.assertEqual(self.valid(self.with_reads(None)), ["reads: must not be null"])
         self.assertEqual(self.valid(self.with_reads([])), [])
         for v in ("", {}, {"a": 1}, "x", 3, True):
@@ -216,7 +218,7 @@ class Schema(Base):
     def test_receipt_schema_duplicates(self):  # SC12
         row = {"path": "/a", "sha": "abcdef1"}
         self.assertEqual(self.valid(self.with_reads([row, dict(row)])), [])
-        for text in ("schema: receipt/1\nschema: receipt/1\nreads: []\n",
+        for text in (("schema: " + RCPT_TAG + "\nschema: " + RCPT_TAG + "\nreads: []\n"),
                      HDR + "  - path: /a\n    sha: abcdef1\n    sha: abcdef1\n"):
             with self.subTest(text=text):
                 with self.assertRaises(yamlsub.YamlError):
@@ -1370,7 +1372,7 @@ class Load(Base):
         self.assertRegex(self.msg(), "reads: must not be null")
 
     def test_load_empty_flow_list(self):  # LD6
-        self.put_rf(b"schema: receipt/1\nreads: []\n")
+        self.put_rf((b"schema: " + RCPT_TAGB + b"\nreads: []\n"))
         self.assertEqual(load(self.root, self.cfg, SID), [])
 
     def test_load_truncated_every_offset(self):  # LD7
@@ -1392,7 +1394,7 @@ class Load(Base):
 
     def test_load_schema_failure_names_file(self):  # LD8
         rel = ".strict-delivery/receipts/" + SID + ".yml"
-        for text in ("schema: receipt/2\nreads: []\n", "schema: receipt/1\nreads: []\nextra: 1\n",
+        for text in ("schema: receipt/2\nreads: []\n", ("schema: " + RCPT_TAG + "\nreads: []\nextra: 1\n"),
                      HDR + "  - path: ''\n    sha: " + S40() + "\n", HDR + "  - path: /a\n    sha: ZZZ\n",
                      HDR + "  - path: /a\n    sha: abcdef1\n", HDR + "  - path: /a\n    sha: " + S40().upper() + "\n"):
             with self.subTest(text=text):
@@ -1412,10 +1414,10 @@ class Load(Base):
 
     def test_load_yaml_errors(self):  # LD9
         rel = ".strict-delivery/receipts/" + SID + ".yml"
-        for data in (b"schema: receipt/1\nschema: receipt/1\nreads: []\n", b"schema: receipt/1\nreads:\n\t- a\n",
-                     b"schema: receipt/1\nreads: {a: 1}\n", b"schema: &x receipt/1\nreads: []\n",
-                     b"schema: receipt/1\nreads: []\x00\n", b"schema: receipt/1\nreads: [\xff]\n",
-                     b"schema: receipt/1\nreads: " + b"9" * 1001 + b"\n"):
+        for data in ((b"schema: " + RCPT_TAGB + b"\nschema: " + RCPT_TAGB + b"\nreads: []\n"), (b"schema: " + RCPT_TAGB + b"\nreads:\n\t- a\n"),
+                     (b"schema: " + RCPT_TAGB + b"\nreads: {a: 1}\n"), b"schema: &x receipt/1\nreads: []\n",
+                     (b"schema: " + RCPT_TAGB + b"\nreads: []\x00\n"), (b"schema: " + RCPT_TAGB + b"\nreads: [\xff]\n"),
+                     (b"schema: " + RCPT_TAGB + b"\nreads: ") + b"9" * 1001 + b"\n"):
             with self.subTest(data=data):
                 self.put_rf(data)
                 m = self.msg()

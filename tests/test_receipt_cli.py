@@ -10,13 +10,14 @@ import sys
 import unittest
 from unittest import mock
 
-from gates.lib import yamlsub
+from gates.lib import migrations, yamlsub
 from gates.tools import receipt_cli
 from tests.helpers import GitIsolatedTestCase, make_repo, within
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RCPT_TAG = "receipt/%d" % migrations.current_version("receipt")  # fixtures take the tag from the schema (plan P:32)
 SID = "3f2b8c1e-9d4a-4b7e-8f10-2a6c5d9e0b13"
-HDR = "schema: receipt/1\nreads:\n"
+HDR = ("schema: " + RCPT_TAG + "\nreads:\n")
 
 
 def blob(data):

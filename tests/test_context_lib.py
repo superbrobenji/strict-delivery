@@ -8,16 +8,18 @@ import tempfile
 import unittest
 from unittest import mock
 
-from gates.lib import config, context, dispatch, gitinfo, schema
+from gates.lib import config, context, dispatch, gitinfo, migrations, schema
 from gates.lib.context import (HANDOFFS, KINDS, PLACEHOLDERS, absolute, context_errors, handoff_reads, kind_of, load,
                                required, split, values_for)
 from gates.lib.result import GateError
 from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, within, write_record
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CTX_TAG = "context/%d" % migrations.current_version("context")  # fixtures take the tag from the schema (plan P:32)
+CTX_TAGB = CTX_TAG.encode()
 CFG = copy.deepcopy(config.DEFAULTS)
 CFG["ids"] = dict(config.DEFAULTS["ids"])
-ROW = {"schema": "context/1"}
+ROW = {"schema": CTX_TAG}
 PLAN = "2026-10-31-strict-delivery-framework"
 HANDOFF_PATH = ".strict-delivery/state/plans/p/handoff.md"
 
@@ -28,7 +30,7 @@ def E(p, **kw):
     return d
 
 
-CTX = {"schema": "context/1",
+CTX = {"schema": CTX_TAG,
        "every": [E("{paths.decisions}/in-force.md")],
        "kinds": {"plan": [E("{paths.plan_state}/{plan}/handoff.md")]},
        "roles": {"task_reviewer": [E("{brief}")]}}
@@ -389,7 +391,7 @@ class Required(unittest.TestCase):
         self.assertEqual(got[-1], ({"path": "docs/x.md", "lines": "3-9", "why": "w"}, "docs/x.md"))
 
     def test_required_missing_sections(self):  # R3
-        self.assertEqual(required({"schema": "context/1"}, "plan", "implementer", {}), [])
+        self.assertEqual(required({"schema": CTX_TAG}, "plan", "implementer", {}), [])
         self.assertEqual(len(required({"every": [E("a")]}, "sync", None, {})), 1)
 
     def test_required_role_none(self):  # R4
@@ -901,8 +903,8 @@ class Load(GitIsolatedTestCase):
         return str(cm.exception)
 
     def test_load_valid(self):  # L1
-        self.put("schema: context/1\n")
-        self.assertEqual(load(self.root, self.cfg), {"schema": "context/1"})
+        self.put(("schema: " + CTX_TAG + "\n"))
+        self.assertEqual(load(self.root, self.cfg), {"schema": CTX_TAG})
         write_record(self.root, ".strict-delivery/context.yml", CTX)
         self.assertEqual(load(self.root, self.cfg), CTX)
 
@@ -916,9 +918,9 @@ class Load(GitIsolatedTestCase):
         self.assertNotIn("init", got)
 
     def test_load_symlink(self):  # L4
-        write(os.path.join(self.root, "real.yml"), b"schema: context/1\n")
+        write(os.path.join(self.root, "real.yml"), (b"schema: " + CTX_TAGB + b"\n"))
         os.symlink("../real.yml", self.path)
-        self.assertEqual(load(self.root, self.cfg), {"schema": "context/1"})
+        self.assertEqual(load(self.root, self.cfg), {"schema": CTX_TAG})
 
     def test_load_dangling_symlink(self):  # L5
         os.symlink("gone.yml", self.path)
@@ -934,7 +936,7 @@ class Load(GitIsolatedTestCase):
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads everything")
     def test_load_unreadable(self):  # L7
-        self.put("schema: context/1\n")
+        self.put(("schema: " + CTX_TAG + "\n"))
         os.chmod(self.path, 0)
         self.addCleanup(os.chmod, self.path, stat.S_IRUSR | stat.S_IWUSR)
         self.assertIn("Permission denied", self.err())
@@ -954,10 +956,10 @@ class Load(GitIsolatedTestCase):
         self.assertNotIn("(line", self.err())
 
     def test_load_bom_crlf(self):  # L10 / PD11
-        write(self.path, b"\xef\xbb\xbfschema: context/1\n")
-        self.assertEqual(load(self.root, self.cfg), {"schema": "context/1"})
-        write(self.path, b"schema: context/1\r\nevery: []\r\n")
-        self.assertEqual(load(self.root, self.cfg), {"schema": "context/1", "every": []})
+        write(self.path, (b"\xef\xbb\xbfschema: " + CTX_TAGB + b"\n"))
+        self.assertEqual(load(self.root, self.cfg), {"schema": CTX_TAG})
+        write(self.path, (b"schema: " + CTX_TAGB + b"\r\nevery: []\r\n"))
+        self.assertEqual(load(self.root, self.cfg), {"schema": CTX_TAG, "every": []})
 
     def test_load_schema_tag(self):  # L11
         for tag, want in (("config/2", "got config/2"), ("context/2", "got context/2")):
@@ -967,12 +969,12 @@ class Load(GitIsolatedTestCase):
         self.assertIn("got (missing)", self.err())
 
     def test_load_unknown_key(self):  # L12
-        self.put("schema: context/1\nextra: 1\n")
+        self.put(("schema: " + CTX_TAG + "\nextra: 1\n"))
         self.assertIn("extra: unknown key", self.err())
 
     def test_load_lists_every_problem(self):  # L13
-        self.put('schema: context/1\nextra: 1\nkinds:\n  nope: []\nevery:\n  - path: a\n    why: w\n    ref: x\n'
-                 '  - path: "../b"\n    why: w\n    lines: 9-3\nroles:\n  nobody:\n    - path: c\n      why: w\n')
+        self.put(('schema: ' + CTX_TAG + '\nextra: 1\nkinds:\n  nope: []\nevery:\n  - path: a\n    why: w\n    ref: x\n'
+                 '  - path: "../b"\n    why: w\n    lines: 9-3\nroles:\n  nobody:\n    - path: c\n      why: w\n'))
         got = self.err()
         for want in ("extra: unknown key", "kinds.nope: unknown key", "every.0.ref: unknown key", "every.1.path:",
                      "every.1.lines:", "roles.nobody: not a role"):
@@ -982,17 +984,17 @@ class Load(GitIsolatedTestCase):
         self.assertEqual(got.count("\n"), 0)
 
     def test_load_bare_string_listed_once(self):  # PD3, PD10
-        self.put("schema: context/1\nevery:\n  - a\n")
+        self.put(("schema: " + CTX_TAG + "\nevery:\n  - a\n"))
         got = self.err()
         self.assertEqual(got.count("every.0"), 1)
 
     def test_load_without_schema_file(self):  # L14
-        self.put("schema: context/1\n")
+        self.put(("schema: " + CTX_TAG + "\n"))
         with tempfile.TemporaryDirectory() as empty, mock.patch.object(schema, "SCHEMAS_DIR", empty):
             self.assertIn("context.yml", self.err())
 
     def test_load_root_forms(self):  # L15
-        self.put("schema: context/1\n")
+        self.put(("schema: " + CTX_TAG + "\n"))
         for bad in ("", None, 5):
             with self.assertRaises(GateError) as cm:
                 load(bad, self.cfg)
@@ -1005,32 +1007,32 @@ class Load(GitIsolatedTestCase):
         git(self.root, "commit", "-qm", "ctx")
         linked = os.path.join(self.tmp, "linked")
         git(self.root, "worktree", "add", "-q", linked, "-b", "other")
-        self.assertEqual(load(linked, self.cfg), {"schema": "context/1"})
+        self.assertEqual(load(linked, self.cfg), {"schema": CTX_TAG})
         os.unlink(os.path.join(linked, ".strict-delivery/context.yml"))
-        write(os.path.join(linked, ".strict-delivery/context.yml"), b"schema: context/1\nevery: []\n")
-        self.assertEqual(load(linked, self.cfg), {"schema": "context/1", "every": []})  # its own checkout
+        write(os.path.join(linked, ".strict-delivery/context.yml"), (b"schema: " + CTX_TAGB + b"\nevery: []\n"))
+        self.assertEqual(load(linked, self.cfg), {"schema": CTX_TAG, "every": []})  # its own checkout
 
     def test_load_custom_context_path(self):  # L16
         cfg = copy.deepcopy(self.cfg)
         cfg["paths"]["context"] = "elsewhere/c.yml"
-        write(os.path.join(self.root, "elsewhere/c.yml"), b"schema: context/1\nevery: []\n")
-        self.assertEqual(load(self.root, cfg), {"schema": "context/1", "every": []})
+        write(os.path.join(self.root, "elsewhere/c.yml"), (b"schema: " + CTX_TAGB + b"\nevery: []\n"))
+        self.assertEqual(load(self.root, cfg), {"schema": CTX_TAG, "every": []})
 
     def test_load_large(self):  # L17
-        self.put("schema: context/1\n" + "# c\n" * 1_300_000)
-        self.assertEqual(load(self.root, self.cfg), {"schema": "context/1"})
+        self.put(("schema: " + CTX_TAG + "\n") + "# c\n" * 1_300_000)
+        self.assertEqual(load(self.root, self.cfg), {"schema": CTX_TAG})
 
     def test_load_int_lines(self):  # L18
-        self.put("schema: context/1\nevery:\n  - path: a\n    why: w\n    lines: 3\n")
+        self.put(("schema: " + CTX_TAG + "\nevery:\n  - path: a\n    why: w\n    lines: 3\n"))
         self.assertIn("every.0.lines: must be a non-empty string", self.err())
-        self.put("schema: context/1\nevery:\n  - path: a\n    why: w\n    lines: %s\n" % ("9" * 1001))
+        self.put(("schema: " + CTX_TAG + "\nevery:\n  - path: a\n    why: w\n    lines: %s\n") % ("9" * 1001))
         self.assertIn("integer too large", self.err())
 
     def test_load_fresh_object(self):  # L19
-        self.put("schema: context/1\nevery: []\n")
+        self.put(("schema: " + CTX_TAG + "\nevery: []\n"))
         a = load(self.root, self.cfg)
         a["every"].append(1)
-        self.assertEqual(load(self.root, self.cfg), {"schema": "context/1", "every": []})
+        self.assertEqual(load(self.root, self.cfg), {"schema": CTX_TAG, "every": []})
 
 
 class RepositoryFile(unittest.TestCase):

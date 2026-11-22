@@ -10,10 +10,12 @@ import subprocess
 import sys
 import unittest
 
+from gates.lib import migrations
 from gates.tools import context_cli
 from tests.helpers import GitIsolatedTestCase, git, make_repo, within, write_record
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CTX_TAG = "context/%d" % migrations.current_version("context")  # fixtures take the tag from the schema (plan P:32)
 PLAN_PATH = ".strict-delivery/state/plans/p/handoff.md"
 INFORCE = ".strict-delivery/state/decisions/in-force.md"
 BLOB_RE = re.compile(r"blob [0-9a-f]{40} --")
@@ -53,7 +55,7 @@ class Base(GitIsolatedTestCase):
         return path
 
     def ctx(self, row=None, **kw):
-        row = {"schema": "context/1", **kw} if row is None else row
+        row = {"schema": CTX_TAG, **kw} if row is None else row
         write_record(self.root, ".strict-delivery/context.yml", row)
 
     def run_cli(self, *argv, root=True):
@@ -452,7 +454,7 @@ class Arguments(Base):
         self.assertIn("/strict-delivery:init", err)
 
     def test_cli_invalid_context_file(self):  # C32
-        self.ctx({"schema": "context/1", "extra": 1, "every": [E("../a")]})
+        self.ctx({"schema": CTX_TAG, "extra": 1, "every": [E("../a")]})
         code, out, err = self.run_cli("plan")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("extra: unknown key", err)
