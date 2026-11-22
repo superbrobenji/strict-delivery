@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-6y86
+status: open
+source: PR-6E final review 2 at d61a5a2 (records/PR-6E-final-review-2.md, PR6E2-1)
+severity: LOW
+class: "run_pin /bin/sh variant rows: task-6E.1-domain.md RN5 (-15 only, test accepts -15 or 143), RN6 (exit -1 -> 255, test now exit 511), no row for /bin/sh = bash or dash (CI-L1, 56a9dc5)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6E.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d61a5a28c0bb94330c9386bba1a206d5be044d08
+    by: stream-records
+review_round: 5
+caused_by_change: true
+dimension: run_pin shell variant
