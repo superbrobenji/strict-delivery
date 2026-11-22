@@ -1234,12 +1234,35 @@ class RunPin(GitIsolatedTestCase):
     def test_run_pin_signal_codes(self):  # RN5: no kill command; the child signals itself
         argv = self.py("term.py", "import signal\nsignal.raise_signal(signal.SIGTERM)\n")
         self.assertEqual(run_pin(self.root, argv), -15)
-        self.assertEqual(run_pin(self.root, " ".join(shlex.quote(a) for a in argv)), -15)
-        self.assertEqual(run_pin(self.root, " ".join(shlex.quote(a) for a in argv) + "; exit $?"), 143)
+        text = " ".join(shlex.quote(a) for a in argv)
+        self.assertEqual(run_pin(self.root, "exec " + text), -15)  # the shell is replaced by the child
+        # a lone command: bash and some dash builds exec it (-15), other dash builds keep the shell, which exits 128+15
+        self.assertIn(run_pin(self.root, text), (-15, 143))
+        self.assertEqual(run_pin(self.root, text + "; exit $?"), 143)
 
     def test_run_pin_shell_modulo(self):  # RN6
         self.assertEqual(run_pin(self.root, "exit 256"), 0)
-        self.assertEqual(run_pin(self.root, "exit -1"), 255)
+        self.assertEqual(run_pin(self.root, "exit 511"), 255)  # not "exit -1": dash refuses a negative number (exit 2)
+
+    def test_run_pin_same_verdict_under_each_shell(self):  # CI-L1: /bin/sh is bash on macOS, dash on Ubuntu
+        shells = [sh for sh in ("/bin/sh", "/bin/bash", "/bin/dash", "/usr/bin/dash") if os.path.exists(sh)]
+        self.assertTrue(shells)
+        real_run = evidence.subprocess.run
+        argv = self.py("term2.py", "import signal\nsignal.raise_signal(signal.SIGTERM)\n")
+        text = " ".join(shlex.quote(a) for a in argv)
+        for sh in shells:
+            def run_under(*a, _sh=sh, **k):
+                if k.get("shell"):
+                    k["executable"] = _sh
+                return real_run(*a, **k)
+            with self.subTest(shell=sh), mock.patch.object(evidence.subprocess, "run", run_under):
+                self.assertEqual(run_pin(self.root, "exit 3"), 3)
+                self.assertEqual(run_pin(self.root, "exit 256"), 0)
+                self.assertEqual(run_pin(self.root, "exit 511"), 255)
+                self.assertEqual(run_pin(self.root, "exec " + text), -15)
+                self.assertIn(run_pin(self.root, text), (-15, 143))
+                self.assertEqual(run_pin(self.root, text + "; exit $?"), 143)
+                self.assertEqual(run_pin(self.root, "exit 0"), 0)
 
     def test_run_pin_cwd(self):  # RN7
         argv = self.py("cwd.py", "import os, sys\nsys.exit(0 if os.path.realpath(os.getcwd()) == os.environ['WANT'] else 1)\n")
