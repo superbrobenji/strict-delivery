@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from gates.lib import config, gitinfo
-from gates.lib.merge import merged_errors
+from gates.lib.merge import MODES, agent_may_merge, merged_errors
 from gates.lib.result import GateError, GitNotFound
 from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config
 
@@ -456,7 +456,7 @@ class ModuleShape(unittest.TestCase):
         with open(os.path.join(REPO, rel), encoding="utf-8") as fh:
             return fh.read()
 
-    def test_merge_module_shape(self):  # MG35: only merged_errors is public; Task P3.1 adds the rest
+    def test_merge_module_shape(self):  # MG35, MD10: Task P3.1 adds MODES and agent_may_merge (edited on purpose)
         tree = ast.parse(self.source("gates/lib/merge.py"))
         public = []
         for node in tree.body:
@@ -464,7 +464,7 @@ class ModuleShape(unittest.TestCase):
                 public.append(node.name)
             elif isinstance(node, ast.Assign):
                 public += [t.id for t in node.targets if isinstance(t, ast.Name)]
-        self.assertEqual([n for n in public if not n.startswith("_")], ["merged_errors"])
+        self.assertEqual([n for n in public if not n.startswith("_")], ["MODES", "agent_may_merge", "merged_errors"])
 
     def test_merge_module_reads_no_unicode_property(self):  # V2
         tree = ast.parse(self.source("gates/lib/merge.py"))
@@ -488,6 +488,116 @@ class ModuleShape(unittest.TestCase):
                 self.assertNotEqual(type(node).__name__, "TryStar", rel)
                 if isinstance(node, ast.Name):
                     self.assertNotIn(node.id, ("ExceptionGroup", "BaseExceptionGroup"), rel)
+
+
+class _SubDict(dict):
+    pass
+
+
+class AgentMayMergeTests(GitIsolatedTestCase):
+    """Task P3.1 producer 1: ``MODES`` and ``agent_may_merge`` (rows MD1-MD11, decision D-Q1 (b): an exception for a
+    malformed cfg, the bool only for a valid one)."""
+
+    def repo(self, name, mode):
+        path = os.path.join(self.work, name)
+        os.makedirs(path)
+        cfg = minimal_config()
+        if mode is not None:
+            cfg["merge"] = {"mode": mode}
+        return make_repo(path, cfg)
+
+    def source(self, rel):
+        with open(os.path.join(REPO, rel), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_modes_literal(self):  # MD1
+        self.assertIs(type(MODES), tuple)
+        self.assertEqual(MODES, ("host", "controller"))
+
+    def test_modes_equal_config_modes(self):  # MD2
+        for m in MODES:
+            with self.subTest(mode=m):
+                self.assertEqual(config.load(self.repo("r-" + m, m))["merge"]["mode"], m)
+        with self.assertRaises(GateError):
+            config.load(self.repo("r-auto", "auto"))
+        tree = ast.parse(self.source("gates/lib/config.py"))
+        literals = [tuple(e.value for e in n.elts) for n in ast.walk(tree)
+                    if isinstance(n, ast.Tuple) and n.elts and all(isinstance(e, ast.Constant) for e in n.elts)]
+        self.assertIn(("host", "controller"), literals)  # the validator's literal is the same set as MODES
+
+    def test_merge_modes_single_literal(self):  # MD3
+        tree = ast.parse(self.source("gates/lib/merge.py"))
+        tuples = [tuple(e.value for e in n.elts) for n in ast.walk(tree)
+                  if isinstance(n, ast.Tuple) and n.elts and all(isinstance(e, ast.Constant) for e in n.elts)]
+        self.assertEqual(tuples.count(("host", "controller")), 1)
+        self.assertNotIn("_MODES", [n.id for n in ast.walk(tree) if isinstance(n, ast.Name)])
+        self.assertIn("MODES", [n.id for n in ast.walk(tree) if isinstance(n, ast.Name)])
+
+    def test_default_mode_is_host(self):  # MD4, MD-plan :2940
+        absent = config.load(self.repo("absent", None))
+        host = config.load(self.repo("host", "host"))
+        controller = config.load(self.repo("controller", "controller"))
+        self.assertIs(agent_may_merge(absent), False)
+        self.assertIs(agent_may_merge(host), False)
+        self.assertIs(agent_may_merge(controller), True)
+
+    def test_agent_may_merge_bare_dict(self):  # MD5
+        self.assertIs(agent_may_merge({"merge": {"mode": "controller"}}), True)
+        self.assertIs(agent_may_merge({"merge": {"mode": "host"}}), False)
+
+    def test_agent_may_merge_exact_compare(self):  # MD6, D-Q1: a mode off the enum raises, never True
+        for bad in ("Controller", "controller ", "CONTROLLER", "auto", "", "contrôller", "Ⱟ"):
+            with self.subTest(mode=bad):
+                with self.assertRaises(GateError):
+                    agent_may_merge({"merge": {"mode": bad}})
+
+    def test_agent_may_merge_mode_types(self):  # MD7
+        class S(str):
+            pass
+        for bad in (None, 1, True, ["controller"], {"a": 1}, S("controller")):
+            with self.subTest(mode=repr(bad)):
+                with self.assertRaises(GateError):
+                    agent_may_merge({"merge": {"mode": bad}})
+
+    def test_agent_may_merge_cfg_shapes(self):  # MD8
+        good = {"merge": {"mode": "controller"}}
+        for bad in (None, [], "controller", {}, {"merge": None}, {"merge": "controller"}, {"merge": {}},
+                    {"merge": []}, _SubDict(good), {"merge": _SubDict(mode="controller")}):
+            with self.subTest(cfg=repr(bad)):
+                with self.assertRaises(GateError):
+                    agent_may_merge(bad)
+
+    def test_agent_may_merge_pure(self):  # MD9
+        import copy
+        cfg = {"merge": {"mode": "controller"}, "other": [1, {"a": 2}]}
+        before = copy.deepcopy(cfg)
+        with mock.patch("builtins.open", side_effect=AssertionError("open")), \
+                mock.patch("subprocess.run", side_effect=AssertionError("subprocess")), \
+                mock.patch("subprocess.Popen", side_effect=AssertionError("popen")):
+            self.assertIs(agent_may_merge(cfg), True)
+        self.assertEqual(cfg, before)
+
+    def test_p31_digit_limits_same_on_both(self):  # V1: P3.1 adds no int() of text in the three files it touches
+        expect = {"gates/lib/merge.py": 0, "gates/tools/githooks.py": 0, "gates/gate_checkpoint.py": 2}
+        for rel, count in expect.items():
+            tree = ast.parse(self.source(rel))
+            calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id == "int"]
+            self.assertEqual(len(calls), count, rel)  # gate_checkpoint's two are _reads, on validated line ranges
+
+    def test_p31_no_exception_groups(self):  # V3
+        for rel in ("gates/lib/merge.py", "gates/gate_checkpoint.py", "gates/tools/githooks.py"):
+            for node in ast.walk(ast.parse(self.source(rel))):
+                self.assertNotEqual(type(node).__name__, "TryStar", rel)
+                if isinstance(node, ast.Name):
+                    self.assertNotIn(node.id, ("ExceptionGroup", "BaseExceptionGroup"), rel)
+
+    def test_p31_unicode_same_on_both(self):  # V2: no case or property method; U+0870 and U+2C2F are plain bytes
+        for odd in ("ࡰ", "Ⱟ", "\U0001fae8"):
+            with self.subTest(odd=odd):
+                with self.assertRaises(GateError):
+                    agent_may_merge({"merge": {"mode": odd}})
+                self.assertIs(agent_may_merge({"merge": {"mode": "controller"}, "base_branch": "ma%sn" % odd}), True)
 
 
 if __name__ == "__main__":

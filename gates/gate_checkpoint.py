@@ -1,7 +1,8 @@
 """Gate ``checkpoint``: the basic checkpoint check (spec 9; plan Task P1.3; decisions D-Q1 to D-Q26 of its table).
 
 One line per id, in this order: ``handoff``, ``ledger``, ``agree``, ``head``, ``clean``, ``pushed``, ``reads``,
-``worktrees`` (later tasks add lines without moving these). ``--plan SLUG`` names the workspace
+``worktrees``, ``merges`` (Task P3.1: every ``MERGED`` line of the ledger passes ``merge.merged_errors``; it prints
+only when the handoff and the ledger passed, and later tasks add lines without moving these). ``--plan SLUG`` names the workspace
 ``<paths.plan_state>/<SLUG>/``. A line prints only when its inputs exist (D-Q2): ``ledger``, ``agree``, ``head``,
 ``reads`` and ``worktrees`` need a handoff that passed ``checkpoint.handoff``; ``agree`` also needs ``checkpoint.ledger``
 to pass; ``clean`` and ``pushed`` always print. Several reasons for one id are joined with ``"; "`` (D-Q15), so every
@@ -16,7 +17,7 @@ import re
 import stat
 import sys
 
-from gates.lib import checkpoints, config, gitinfo, schema
+from gates.lib import checkpoints, config, gitinfo, merge, schema
 from gates.lib.result import GateError, Line, Result, _Once, gate_args, repo_root, run_gate
 
 PRODUCES: tuple = ()
@@ -123,10 +124,11 @@ def _same_commit(root: str, a: str, b: str) -> tuple:
 
 
 def _ledger(root: str, cfg: dict, row: dict) -> tuple:
-    """``(lines, reasons)``: the conforming ``CHECKPOINT`` lines and what is wrong with the ledger the handoff names."""
+    """``(lines, reasons, text)``: the conforming ``CHECKPOINT`` lines, what is wrong with the ledger the handoff names,
+    and its text (``""`` when it could not be read)."""
     text, problem = _read_text(root, row["ledger"])
     if text is None:
-        return [], [problem]
+        return [], [problem], ""
     reasons = []
     plan_text = None
     try:
@@ -147,7 +149,19 @@ def _ledger(root: str, cfg: dict, row: dict) -> tuple:
         if not (last["total"] >= 1 and last["passed"] == last["total"] and last["gates"] == "PASS"):
             reasons.append("line %d: last CHECKPOINT is not green (tests=%d/%d gates=%s)"
                            % (last["line"], last["passed"], last["total"], last["gates"]))
-    return lines, reasons
+    return lines, reasons, text
+
+
+def _merges(root: str, cfg: dict, plan: str, text: str) -> list:
+    """``<suffix>: <reason>`` for every ``MERGED`` line of the ledger text that fails ``merge.merged_errors`` (Task P3.1,
+    decision D-Q2). A ``ValueError`` (a non-slug plan, a line the grammar should have refused) is one reason, its text."""
+    reasons = []
+    try:
+        for line in checkpoints.merged_lines(text):
+            reasons += ["%s: %s" % e for e in merge.merged_errors(root, cfg, plan, line)]
+    except ValueError as e:
+        reasons.append(str(e))
+    return reasons
 
 
 def _agree(root: str, row: dict, last: dict) -> list:
@@ -301,8 +315,11 @@ def check(args: list) -> Result:
     _add(res, "checkpoint.handoff", reasons)
     good = not reasons
     lines = []
+    ledger_text = None  # set when the ledger passed: checkpoint.merges needs it
     if good:
-        lines, ledger_reasons = _ledger(root, cfg, row)
+        lines, ledger_reasons, text = _ledger(root, cfg, row)
+        if not ledger_reasons:
+            ledger_text = text
         _add(res, "checkpoint.ledger", ledger_reasons)
         if not ledger_reasons:
             _add(res, "checkpoint.agree", _agree(root, row, lines[-1]))
@@ -314,6 +331,8 @@ def check(args: list) -> Result:
     if good:
         _add(res, "checkpoint.reads", _reads(root, row))
         _add(res, "checkpoint.worktrees", _worktrees(root, row))
+    if ledger_text is not None:
+        _add(res, "checkpoint.merges", _merges(root, cfg, ns.plan, ledger_text))
     return res
 
 

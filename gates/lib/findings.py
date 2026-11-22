@@ -11,7 +11,7 @@ import os
 from typing import List
 
 from gates.lib import decisions, gitinfo, schema
-from gates.lib.result import _raw
+from gates.lib.result import GateError, GitNotFound, _raw
 
 STATUSES = ["open", "planned", "in-progress", "fixed-unpinned", "pinned", "deferred", "closed", "merged"]
 RESOLVED = {"closed", "merged"}
@@ -274,16 +274,21 @@ def epic_errors(records: list) -> list:
 # ---------------------------------------------------------------- delete
 
 def may_delete(row: object, root: str, cfg: dict, decision_records: list) -> bool:
-    """True only when the row is resolved and an answered ``merge-grant`` decision names the plan in its
-    ``resolved_by`` (OQ-5). ``root`` is for the merge-commit check that arrives with ``gate_cleanup``."""
+    """True only when the row is resolved and the plan named by its ``resolved_by`` has a final merge
+    (``cleanup.final_merge`` exists; OQ-5, Q-15 (a), spec §7.2). No grant records exist for pull request merges, so
+    ``decision_records`` is not read (the signature is unchanged), nor are the fields Q-ES adds. A ``resolved_by`` that is
+    not a plan slug, and a ledger or history that cannot be read, are a refusal (``False``, decision D-Q9), never a raise
+    that would hide every other register line; an unusable ``root`` still raises."""
+    from gates.lib import cleanup  # imported here: cleanup imports this module
     gitinfo._require_toplevel(root)
     if not is_resolved(row):
         return False
     plan = row.get("resolved_by")
-    if type(plan) is not str or plan == "":
+    if not cleanup.is_slug(plan):
         return False
-    for rec in decision_records:
-        d = decisions._row(rec)
-        if d.get("class") == decisions.CLASS_GRANT and d.get("plan") == plan and _answered(rec, cfg):
-            return True
-    return False
+    try:
+        return cleanup.final_merge(root, cfg, plan) is not None
+    except GitNotFound:
+        raise
+    except GateError:  # a ValueError cannot arise: the slug is checked above and final_merge catches a line's
+        return False
