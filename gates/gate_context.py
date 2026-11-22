@@ -25,7 +25,7 @@ import stat
 import sys
 
 from gates.lib import config, context, dispatch, gitinfo, receipts
-from gates.lib.result import GateError, Result, _Once, gate_args, repo_root, run_gate, safe_text
+from gates.lib.result import GateError, Result, _Once, gate_args, repo_root, run_gate
 
 PRODUCES: tuple = ("context",)
 
