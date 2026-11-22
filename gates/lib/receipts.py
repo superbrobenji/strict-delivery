@@ -36,14 +36,132 @@ def session_problem(key: object) -> str:
     return ""
 
 
+_REAL_OPEN, _REAL_MKDIR, _REAL_STAT = os.open, os.mkdir, os.stat  # membership is judged on these, not on a test's wrapper
+_NO_FD = "directory descriptors are not supported on this platform"
+
+
+def _need_fd_support(create: bool, shown: str, what: str) -> None:
+    """Decision D-Q1: a platform without the descriptor calls is refused, never served by a path walk."""
+    ok = (_REAL_OPEN in os.supports_dir_fd and _REAL_STAT in os.supports_dir_fd
+          and _REAL_STAT in os.supports_follow_symlinks and (not create or _REAL_MKDIR in os.supports_dir_fd)
+          and hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_NONBLOCK"))
+    if not ok:
+        raise GateError("%s: %s (%s)" % (shown, what, _NO_FD))
+
+
+def _kind(name: str, dir_fd: int) -> str:
+    """What ``name`` is in the directory ``dir_fd`` right now, never following a symlink (decision D-Q2: the sentence is
+    chosen by this ``stat`` after a failed open, never by errno): gone, other (the stat failed), link, dir, reg, special."""
+    try:
+        mode = os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        return "gone"
+    except OSError:
+        return "other"
+    if stat.S_ISLNK(mode):
+        return "link"
+    if stat.S_ISDIR(mode):
+        return "dir"
+    return "reg" if stat.S_ISREG(mode) else "special"
+
+
+def _step(parent: int, name: str, shown: str, create: bool, mode: int, what: str) -> object:
+    """The descriptor of the directory ``name`` inside ``parent``, opened ``O_DIRECTORY | O_NOFOLLOW`` so the object
+    checked is the object used (F-20261121-vhs6). ``None`` when it is missing and ``create`` is false. A missing one
+    is made with ``mkdir(dir_fd=)`` and opened once more; a second miss is an error, never a loop."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    for attempt in (0, 1):
+        try:
+            return os.open(name, flags, dir_fd=parent)
+        except OSError as e:
+            err = e
+        kind = _kind(name, parent)
+        if kind == "link":
+            raise GateError("%s: is a symlink; directories must be real directories" % shown)
+        if kind in ("reg", "special"):
+            raise GateError("%s: is not a directory" % shown)
+        if kind == "gone" and isinstance(err, FileNotFoundError) and attempt == 0:
+            if not create:
+                return None
+            try:
+                os.mkdir(name, mode, dir_fd=parent)
+            except FileExistsError:
+                pass  # a rival made it first: opened (and checked) by the second attempt
+            except OSError as e:
+                raise GateError("%s: %s (%s)" % (shown, what, e.strerror or type(e).__name__)) from None
+            continue
+        raise GateError("%s: %s (%s)" % (shown, what, err.strerror or type(err).__name__)) from None
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _descend(fd: int, parts: list, base: str, create: bool, what: str) -> object:
+    """Open ``parts`` one below the other from the directory ``fd`` (which is consumed: closed on every exit). The last
+    component of a created chain is 0o700. Returns the descriptor of the last one, or ``None`` when one is missing."""
+    try:
+        for i, comp in enumerate(parts):
+            nxt = _step(fd, comp, base + "/".join(parts[:i + 1]), create, 0o700 if i == len(parts) - 1 else 0o777, what)
+            os.close(fd)
+            fd = nxt
+            if fd is None:
+                return None
+        out, fd = fd, None
+        return out
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _read_by_descriptor(path: str, parts: list) -> bytes:
+    """The bytes of the regular file ``path`` (absolute, normalised, ``parts`` its components), every directory and the
+    file opened by descriptor with no symlink followed and no FIFO opened blocking (U-A)."""
+    what = "cannot read file"
+    try:
+        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        raise GateError("/: %s (%s)" % (what, e.strerror or type(e).__name__)) from None
+    dirfd = _descend(fd, parts[:-1], "/", False, what)
+    if dirfd is None:
+        raise GateError("%s: %s (%s)" % (path, what, os.strerror(errno.ENOENT)))
+    try:
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
+        except OSError as e:
+            kind = _kind(parts[-1], dirfd)
+            if kind == "link":
+                raise GateError("%s: is a symlink" % path) from None
+            if kind in ("dir", "special"):
+                raise GateError("%s: is not a regular file" % path) from None
+            raise GateError("%s: %s (%s)" % (path, what, e.strerror or type(e).__name__)) from None
+    finally:
+        os.close(dirfd)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise GateError("%s: is not a regular file" % path)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    except OSError as e:
+        raise GateError("%s: %s (%s)" % (path, what, e.strerror or type(e).__name__)) from None
+    finally:
+        os.close(fd)
+
+
 def content_sha(path: str) -> str:
-    """The 40-hex git blob id of the raw bytes of the regular file ``path``, computed here (no git, no filters)."""
+    """The 40-hex git blob id of the raw bytes of the regular file ``path``, computed here (no git, no filters).
+    ``path`` must be absolute and normalised (``record`` passes a ``realpath``); a symlink at any component is refused."""
     if type(path) is not str:
         raise GateError("path must be a string")
+    parts = path.split("/")[1:] if path.startswith("/") else [""]
+    if any(p in ("", ".", "..") for p in parts):
+        raise GateError("%s: path must be absolute and normalised" % path)
+    _need_fd_support(False, path, "cannot read file")
     try:
-        data = yamlsub._read_regular_file(path, path)
-    except yamlsub.YamlError as e:
-        raise GateError(e.reason) from None
+        data = _read_by_descriptor(path, parts)
+    except ValueError as e:  # embedded NUL, unencodable name
+        raise GateError("%s: cannot read file (invalid path: %s)" % (path, type(e).__name__)) from None
     return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
 
 
@@ -75,32 +193,18 @@ def _top(root: str) -> str:
 
 
 def _walk(top: str, rel: str, create: bool) -> object:
-    """The receipts directory below ``top``: every component ``lstat``-ed, none a symlink or a non-directory. ``None``
-    when a component is missing and ``create`` is false; with ``create`` the missing ones are made (the last 0o700)."""
-    cur = top
+    """The descriptor of the receipts directory below ``top`` (the caller closes it): ``top`` is opened once and each
+    component is opened from the descriptor of the one before, ``O_DIRECTORY | O_NOFOLLOW``, so none is a symlink or a
+    non-directory when used (F-20261121-vhs6). ``None`` when a component is missing and ``create`` is false; with
+    ``create`` the missing ones are made (the last 0o700)."""
     parts = rel.split("/")
-    for i, comp in enumerate(parts):
-        cur = os.path.join(cur, comp)
-        shown = "/".join(parts[:i + 1])
-        try:
-            try:
-                st = os.lstat(cur)
-            except FileNotFoundError:
-                if not create:
-                    return None
-                try:
-                    os.mkdir(cur, 0o700 if i == len(parts) - 1 else 0o777)
-                except FileExistsError:
-                    pass  # a rival made it first: checked below
-                st = os.lstat(cur)
-        except OSError as e:
-            raise GateError("%s: cannot use the receipts directory (%s)" % (shown, e.strerror or type(e).__name__)) \
-                from None
-        if stat.S_ISLNK(st.st_mode):
-            raise GateError("%s: is a symlink; directories must be real directories" % shown)
-        if not stat.S_ISDIR(st.st_mode):
-            raise GateError("%s: is not a directory" % shown)
-    return cur
+    what = "cannot use the receipts directory"
+    _need_fd_support(create, parts[0], what)
+    try:
+        fd = os.open(top, os.O_RDONLY | os.O_DIRECTORY)  # the root: not judged here (decision CD3)
+    except OSError as e:
+        raise GateError("root: %s (%s)" % (what, e.strerror or type(e).__name__)) from None
+    return _descend(fd, parts, "", create, what)
 
 
 def _row_text(row: dict) -> bytes:
@@ -123,19 +227,20 @@ def record(root: str, cfg: dict, session: str, path: str) -> dict:
     real = os.path.realpath(os.path.join(top, path))  # an absolute path replaces top in the join
     row = {"path": real, "sha": content_sha(real)}
     body = _row_text(row)  # built before anything is created: a refusal leaves no header-only file
-    dirpath = _walk(top, rel, True)
-    fpath = os.path.join(dirpath, session + ".yml")
-    shown = rel + "/" + session + ".yml"
+    dirfd = _walk(top, rel, True)
+    name = session + ".yml"
+    shown = rel + "/" + name
     try:
         try:
-            st = os.lstat(fpath)
-        except FileNotFoundError:
-            st = None
-        if st is not None and not stat.S_ISREG(st.st_mode):
-            raise GateError("%s: %s; receipt files must be regular files" % (
-                shown, "is a symlink" if stat.S_ISLNK(st.st_mode) else "is not a regular file"))
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
-        fd = os.open(fpath, flags, 0o600)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+            fd = os.open(name, flags, 0o600, dir_fd=dirfd)
+        except OSError as e:
+            kind = _kind(name, dirfd)  # decision D-Q4 (a): the same sentences as a file that was a symlink all along
+            if kind == "link":
+                raise GateError("%s: is a symlink; receipt files must be regular files" % shown) from None
+            if kind in ("dir", "special"):
+                raise GateError("%s: is not a regular file; receipt files must be regular files" % shown) from None
+            raise
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise GateError("%s: is not a regular file; receipt files must be regular files" % shown)
@@ -147,6 +252,8 @@ def record(root: str, cfg: dict, session: str, path: str) -> dict:
             os.close(fd)
     except OSError as e:
         raise GateError("%s: cannot append (%s)" % (shown, e.strerror or type(e).__name__)) from None
+    finally:
+        os.close(dirfd)
     return row
 
 
@@ -155,14 +262,20 @@ def _write(fd: int, data: bytes, shown: str) -> None:
         raise GateError("%s: short write" % shown)
 
 
-def _read_nofollow(fpath: str, shown: str, fail) -> bytes:
-    """The bytes of the receipt file, opened ``O_NOFOLLOW | O_NONBLOCK`` and checked regular on the descriptor, so a
-    symlink or a FIFO swapped in after the ``lstat`` is refused as the ``lstat`` path refuses it (decision D-Q2)."""
+def _read_nofollow(dirfd: int, name: str, shown: str, fail) -> object:
+    """The bytes of the receipt file ``name`` in the directory ``dirfd`` (``None`` when there is none), opened
+    ``O_NOFOLLOW | O_NONBLOCK`` and checked regular on the descriptor: a symlink, FIFO, socket or directory, present at
+    the open or swapped in just before it, gets the one sentence (decisions D-Q2, D-Q4 (a))."""
     try:
-        fd = os.open(fpath, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
     except OSError as e:
-        if e.errno == errno.ELOOP:
+        kind = _kind(name, dirfd)
+        if kind == "gone" and isinstance(e, FileNotFoundError):
+            return None
+        if kind == "link":
             raise fail("%s: is a symlink; receipt files must be regular files" % shown) from None
+        if kind in ("dir", "special"):
+            raise fail("%s: is not a regular file; receipt files must be regular files" % shown) from None
         raise yamlsub.YamlError(0, "%s: cannot read file (%s)" % (shown, e.strerror or type(e).__name__)) from None
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -184,26 +297,22 @@ def load(root: str, cfg: dict, session: str) -> list:
     ``receipt/1``, holds a sha that is not 40 hex or lacks its final newline raises a GateError naming it."""
     rel = _check_args(root, cfg, session)
     top = _top(root)
-    dirpath = _walk(top, rel, False)
-    if dirpath is None:
+    dirfd = _walk(top, rel, False)
+    if dirfd is None:
         return []
-    fpath = os.path.join(dirpath, session + ".yml")
-    shown = rel + "/" + session + ".yml"
+    name = session + ".yml"
+    shown = rel + "/" + name
 
     def fail(why: str) -> GateError:
         return GateError("%s; %s" % (why, _REMEDY))
 
     try:
-        st = os.lstat(fpath)
-    except FileNotFoundError:
-        return []
-    except OSError as e:
-        raise fail("%s: cannot read file (%s)" % (shown, e.strerror or type(e).__name__)) from None
-    if not stat.S_ISREG(st.st_mode):
-        raise fail("%s: %s; receipt files must be regular files" % (
-            shown, "is a symlink" if stat.S_ISLNK(st.st_mode) else "is not a regular file"))
-    try:
-        data = _read_nofollow(fpath, shown, fail)
+        try:
+            data = _read_nofollow(dirfd, name, shown, fail)
+        finally:
+            os.close(dirfd)
+        if data is None:
+            return []
         try:
             text = yamlsub._file_text(data)
         except UnicodeDecodeError:

@@ -3,10 +3,12 @@ binding controller decisions D-Q1 (a) (``load`` also needs 40-hex shas and a fin
 (``O_NOFOLLOW | O_NONBLOCK`` and a regular-file check), PD1-PD14). Expected values are written by hand: blob ids from
 git's own rule ``sha1("blob <n>\\0" + bytes)`` (and compared with ``git hash-object --no-filters``), the golden
 receipt bytes in full. Receipt files read by ``load`` are written by hand, never by ``record``."""
+import contextlib
 import copy
 import errno
 import hashlib
 import os
+import socket
 import stat
 import subprocess
 import sys
@@ -38,6 +40,69 @@ def row_text(p, s):
 
 def S40(c="a"):
     return c * 40
+
+
+@contextlib.contextmanager
+def open_hook(name, action, *, after=False, nth=1, directory=None):
+    """Task 5a.2-f swap hook: wraps ``os.open`` (and ``os.close``). The ``nth`` open of the bare ``name`` made with
+    ``dir_fd=`` (and, when ``directory`` is not None, with ``O_DIRECTORY`` set or clear) runs ``action()`` just before
+    the real open (just after it with ``after=True``). The yielded dict counts the matching opens (``seen``), the
+    firings (``fired``: a test asserts it is > 0, so a hook that never fires fails the test) and holds the descriptors
+    opened and not yet closed (``live``). ``name=None`` only tracks descriptors."""
+    st = {"seen": 0, "fired": 0, "live": set()}
+    real_open, real_close = os.open, os.close
+
+    def op(n, flags, *a, **k):
+        fire = False
+        if name is not None and n == name and "dir_fd" in k and (
+                directory is None or bool(flags & os.O_DIRECTORY) == directory):
+            st["seen"] += 1
+            fire = st["seen"] == nth
+        if fire and not after:
+            st["fired"] += 1
+            action()
+        fd = real_open(n, flags, *a, **k)
+        st["live"].add(fd)
+        if fire and after:
+            st["fired"] += 1
+            action()
+        return fd
+
+    def cl(fd):
+        st["live"].discard(fd)
+        return real_close(fd)
+    with mock.patch.object(receipts.os, "open", op), mock.patch.object(receipts.os, "close", cl):
+        yield st
+
+
+def watched(fn, secs=10):
+    """``("ok", value)`` or ``("err", exception)`` of ``fn()`` run in a daemon thread; a call that has not returned
+    after ``secs`` seconds (a blocked open of a FIFO) raises AssertionError."""
+    res = []
+
+    def go():
+        try:
+            res.append(("ok", fn()))
+        except BaseException as e:  # noqa: BLE001 - handed to the test
+            res.append(("err", e))
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    t.join(secs)
+    if t.is_alive():
+        raise AssertionError("the call did not return within %d s (a FIFO was opened by name?)" % secs)
+    return res[0]
+
+
+def bind_socket(at):
+    """A bound AF_UNIX socket file at the path ``at`` (bound by a relative name: a socket path is limited to 104 bytes)."""
+    s = socket.socket(socket.AF_UNIX)
+    old = os.getcwd()
+    os.chdir(os.path.dirname(at))
+    try:
+        s.bind(os.path.basename(at))
+    finally:
+        os.chdir(old)
+        s.close()
 
 
 class Base(GitIsolatedTestCase):
@@ -412,10 +477,11 @@ class ContentSha(Base):
                 with self.assertRaisesRegex(GateError, "not a regular file"):
                     content_sha(p)
 
-    def test_content_sha_follows_symlink(self):  # CS14
+    def test_content_sha_refuses_symlink(self):  # CS14 (5a.2-f U-A: a symlink is refused, no longer followed)
         t = self.put("t", b"abc")
         os.symlink(t, self.root + "/lnk")
-        self.assertEqual(content_sha(self.root + "/lnk"), blob(b"abc"))
+        with self.assertRaisesRegex(GateError, "/lnk: is a symlink$"):
+            content_sha(self.root + "/lnk")
 
     def test_content_sha_dangling_and_loop(self):  # CS15, VN6
         os.symlink(self.root + "/missing", self.root + "/dang")
@@ -429,7 +495,7 @@ class ContentSha(Base):
     def test_content_sha_symlink_to_dir(self):  # CS16
         os.mkdir(self.root + "/d")
         os.symlink(self.root + "/d", self.root + "/ld")
-        with self.assertRaisesRegex(GateError, "not a regular file"):
+        with self.assertRaisesRegex(GateError, "/ld: is a symlink$"):  # 5a.2-f U-A: the link is refused as a link
             content_sha(self.root + "/ld")
 
     @unittest.skipIf(os.geteuid() == 0, "uid 0 reads a mode-000 file")
@@ -453,10 +519,11 @@ class ContentSha(Base):
             content_sha(self.root + "/a\0b")
 
     def test_content_sha_surrogate_path(self):  # CS20
+        # self.root, not /tmp: /tmp is a symlink on macOS and a symlinked component is refused (5a.2-f CS-F2)
         with self.assertRaisesRegex(GateError, "invalid path: UnicodeEncodeError"):
-            content_sha("/tmp/x\ud800")
+            content_sha(self.root + "/x\ud800")
         with self.assertRaisesRegex(GateError, "No such file"):
-            content_sha("/tmp/x\udcff")
+            content_sha(self.root + "/x\udcff")
 
     def test_content_sha_wrong_types(self):  # CS21
         import pathlib
@@ -474,12 +541,13 @@ class ContentSha(Base):
             with self.assertRaises(GateError):
                 content_sha(p)
 
-    def test_content_sha_relative_is_cwd(self):  # CS23
+    def test_content_sha_relative_refused(self):  # CS23 (5a.2-f CS-F6: a relative path is no longer read from the cwd)
         p = self.put("rel.txt", b"rel")
         old = os.getcwd()
         self.addCleanup(os.chdir, old)
         os.chdir(self.root)
-        self.assertEqual(content_sha("rel.txt"), blob(b"rel"))
+        with self.assertRaisesRegex(GateError, "^rel.txt: path must be absolute and normalised$"):
+            content_sha("rel.txt")
         self.assertEqual(content_sha(p), blob(b"rel"))
 
     def test_content_sha_header_length_from_bytes_read(self):  # CS24
@@ -525,7 +593,8 @@ class ContentSha(Base):
             with mock.patch("gates.lib.yamlsub.os.fstat", return_value=os.stat(self.root)):
                 with self.assertRaises(GateError):
                     content_sha(p)
-        self.assertEqual(len(opened), 3)
+        # 5a.2-f: a call opens "/", every directory below it and the file: one descriptor per path component, plus "/"
+        self.assertEqual(len(opened), 3 * (len(p.split("/")) - 1 + 1))
         self.assertEqual(sorted(opened), sorted(closed))
 
     def test_content_sha_depends_on_bytes_only(self):  # CS27
@@ -972,13 +1041,6 @@ class ReceiptFile(Base):
     def rec(self, s=SID):
         return record(self.root, self.cfg, s, "a.txt")
 
-    def absent(self, real_lstat):
-        try:
-            real_lstat(self.rf)
-        except FileNotFoundError:
-            return True
-        return False
-
     def test_parallel_appends_keep_every_row(self):  # RF1, LD25
         for i in range(20):
             self.put("f%d" % i, b"c%d" % i)
@@ -1079,9 +1141,9 @@ class ReceiptFile(Base):
 
         def op(*a, **k):
             fd = real_open(*a, **k)
-            if a[0] == self.rf:
+            if a[0] == SID + ".yml" and "dir_fd" in k:  # the receipt file, opened by name inside the directory
                 opened.append(fd)
-                live.add(fd)
+            live.add(fd)  # 5a.2-f: every descriptor, the directory ones included
             return fd
 
         def cl(fd):
@@ -1109,7 +1171,7 @@ class ReceiptFile(Base):
         real = os.open
 
         def op(path, flags, *a, **k):
-            if path == self.rf:
+            if path == SID + ".yml" and "dir_fd" in k:
                 seen.append((flags, a))
             return real(path, flags, *a, **k)
         with mock.patch.object(receipts.os, "open", op):
@@ -1166,43 +1228,25 @@ class ReceiptFile(Base):
             self.rec()
         self.assertFalse(os.path.lexists(target))
 
-    def test_symlink_swapped_in_after_lstat_is_refused_by_nofollow(self):  # RF16/RF17, O_NOFOLLOW alone
+    def test_symlink_swapped_in_before_open_is_refused_by_nofollow(self):  # RF16/RF17, O_NOFOLLOW alone (5a.2-f D-Q4 (a))
         target = os.path.join(self.other(), "new.yml")
         os.makedirs(self.rdir)
-        real_lstat = os.lstat
-
-        def lstat(p, *a, **k):
-            if p == self.rf and self.absent(real_lstat):
-                os.symlink(target, self.rf)  # swapped in between the lstat and the open
-                raise FileNotFoundError(errno.ENOENT, "No such file or directory")
-            return real_lstat(p, *a, **k)
-        with mock.patch.object(receipts.os, "lstat", lstat):
-            with self.assertRaisesRegex(GateError, "cannot append"):
+        with open_hook(SID + ".yml", lambda: os.symlink(target, self.rf), directory=False) as hk:
+            with self.assertRaises(GateError) as cm:  # swapped in immediately before the receipt open
                 self.rec()
+        self.assertGreater(hk["fired"], 0)
+        self.assertEqual(str(cm.exception), ".strict-delivery/receipts/" + SID
+                         + ".yml: is a symlink; receipt files must be regular files")  # was "cannot append (...)"
         self.assertFalse(os.path.lexists(target))
 
-    def test_receipt_file_fifo_swapped_in_after_lstat_never_blocks(self):  # RF15, O_NONBLOCK and fstat alone
+    def test_receipt_file_fifo_swapped_in_before_open_never_blocks(self):  # RF15, O_NONBLOCK and fstat alone
         os.makedirs(self.rdir)
-        real_lstat = os.lstat
-        res = []
-
-        def lstat(p, *a, **k):
-            if p == self.rf and self.absent(real_lstat):
-                os.mkfifo(self.rf)
-                raise FileNotFoundError(errno.ENOENT, "No such file or directory")
-            return real_lstat(p, *a, **k)
-
-        def go():
-            with mock.patch.object(receipts.os, "lstat", lstat):
-                try:
-                    self.rec()
-                except GateError as e:
-                    res.append(e)
-        t = threading.Thread(target=go, daemon=True)
-        t.start()
-        t.join(10)
-        self.assertFalse(t.is_alive())
-        self.assertEqual(len(res), 1)
+        with open_hook(SID + ".yml", lambda: os.mkfifo(self.rf), directory=False) as hk:
+            kind, val = watched(self.rec)
+        self.assertGreater(hk["fired"], 0)
+        self.assertEqual(kind, "err")
+        self.assertEqual(str(val), ".strict-delivery/receipts/" + SID
+                         + ".yml: is not a regular file; receipt files must be regular files")
 
     def test_fstat_regular_check_on_descriptor(self):  # D-Q2: the descriptor check
         os.makedirs(self.rdir)
@@ -1231,9 +1275,9 @@ class ReceiptFile(Base):
 
         def op(*a, **k):
             fd = real_open(*a, **k)
-            if a[0] == self.rf:
+            if a[0] == SID + ".yml" and "dir_fd" in k:
                 opened.append(fd)
-                live.add(fd)
+            live.add(fd)  # 5a.2-f: every descriptor, the directory ones included
             return fd
 
         def cl(fd):
@@ -1435,42 +1479,30 @@ class Load(Base):
         os.symlink(valid, self.rf)
         self.assertRegex(self.msg(), "is a symlink; receipt files must be regular files; " + REMEDY)
 
-    def test_load_symlink_swapped_in_after_lstat(self):  # R1-1: O_NOFOLLOW on the open of load
+    def test_load_symlink_swapped_in_before_open(self):  # R1-1: O_NOFOLLOW on the open of load
         valid = self.put("valid.yml", self.GOOD.encode(), base=self.other())
         os.makedirs(self.rdir)
         self.put_rf(b"")
-        real_lstat = os.lstat
 
-        def lstat(p, *a, **k):
-            st = real_lstat(p, *a, **k)
-            if p == self.rf and not stat.S_ISLNK(st.st_mode):
-                os.unlink(self.rf)
-                os.symlink(valid, self.rf)  # swapped in between the lstat and the open
-            return st
-        with mock.patch.object(receipts.os, "lstat", lstat):
+        def swap():
+            os.unlink(self.rf)
+            os.symlink(valid, self.rf)  # swapped in immediately before the open
+        with open_hook(SID + ".yml", swap, directory=False) as hk:
             self.assertRegex(self.msg(), "is a symlink; receipt files must be regular files; " + REMEDY)
+        self.assertGreater(hk["fired"], 0)
 
-    def test_load_fifo_swapped_in_after_lstat_never_blocks(self):  # R1-1: O_NONBLOCK and the fstat check
+    def test_load_fifo_swapped_in_before_open_never_blocks(self):  # R1-1: O_NONBLOCK and the fstat check
         os.makedirs(self.rdir)
         self.put_rf(b"")
-        real_lstat = os.lstat
 
-        def lstat(p, *a, **k):
-            st = real_lstat(p, *a, **k)
-            if p == self.rf and stat.S_ISREG(st.st_mode):
-                os.unlink(self.rf)
-                os.mkfifo(self.rf)
-            return st
-        res = []
-
-        def go():
-            with mock.patch.object(receipts.os, "lstat", lstat):
-                res.append(self.msg())
-        t = threading.Thread(target=go, daemon=True)
-        t.start()
-        t.join(10)
-        self.assertFalse(t.is_alive())
-        self.assertRegex(res[0], "is not a regular file; receipt files must be regular files; " + REMEDY)
+        def swap():
+            os.unlink(self.rf)
+            os.mkfifo(self.rf)
+        with open_hook(SID + ".yml", swap, directory=False) as hk:
+            kind, val = watched(self.msg)
+        self.assertGreater(hk["fired"], 0)
+        self.assertEqual(kind, "ok")
+        self.assertRegex(val, "is not a regular file; receipt files must be regular files; " + REMEDY)
 
     def test_load_dangling_symlink(self):  # LD16
         os.makedirs(self.rdir)
@@ -1536,6 +1568,786 @@ class Load(Base):
     def test_load_root_not_directory(self):  # root forms of load
         with self.assertRaises(GateError):
             load(self.root + "/missing", self.cfg, SID)
+
+
+# ------------------------------------------------------------------------------------------------ 5a.2-f (race)
+
+GOOD_ELSEWHERE = HDR + row_text("/elsewhere", S40("e"))
+GOOD_MINE = HDR + row_text("/mine", S40("a"))
+LINK_KINDS = ("in", "out", "dangling", "linkfile", "linkfifo")
+NOTDIR_KINDS = ("file", "fifo")
+S_LINK = "%s: is a symlink; directories must be real directories"
+S_NOTDIR = "%s: is not a directory"
+F_LINK = "%s: is a symlink; receipt files must be regular files"
+F_NONREG = "%s: is not a regular file; receipt files must be regular files"
+
+
+class ReceiptsDirRace(Base):
+    """Task 5a.2-f (table task-5a.2-f-domain.md; row ids in the comments): the receipts directory is walked by
+    descriptor, so a component swapped after the check is never followed; the receipt file in a swapped non-regular
+    state gives the one sentence; ``content_sha`` refuses a symlink. Sentences are written out by hand."""
+
+    n = 0
+
+    def setUp(self):
+        super().setUp()
+        self.put("a.txt", b"a")
+
+    def fresh(self, depth):
+        """(base, out, parts, cfg): a plain directory as the root with a.txt in it, an outside directory, the
+        components of ``paths.receipts`` (``depth`` of d1/d2/d3) and the config naming them."""
+        ReceiptsDirRace.n += 1
+        base = os.path.join(self.tmp, "r%d" % self.n)
+        out = os.path.join(self.tmp, "o%d" % self.n)
+        os.mkdir(base)
+        os.mkdir(out)
+        parts = ["d1", "d2", "d3"][:depth]
+        cfg = copy.deepcopy(self.cfg)
+        cfg["paths"]["receipts"] = "/".join(parts)
+        self.put("a.txt", b"a", base=base)
+        return base, out, parts, cfg
+
+    def plant(self, kind, at, rest, base, out, receipt):
+        """Put a ``kind`` object at the path ``at``; a link's target holds the directories ``rest`` (and, with
+        ``receipt``, a valid receipt that names /elsewhere)."""
+        if kind in ("in", "out"):
+            tgt = os.path.join(base, "inside") if kind == "in" else os.path.join(out, "o")
+            d = os.path.join(tgt, *rest)
+            os.makedirs(d)
+            if receipt:
+                with open(os.path.join(d, SID + ".yml"), "w") as fh:
+                    fh.write(GOOD_ELSEWHERE)
+            os.symlink(tgt, at)
+        elif kind == "dangling":
+            os.symlink(os.path.join(out, "nope"), at)
+        elif kind == "linkfile":
+            self.put("f", b"x", base=out)
+            os.symlink(os.path.join(out, "f"), at)
+        elif kind == "linkfifo":
+            os.mkfifo(os.path.join(out, "ff"))
+            os.symlink(os.path.join(out, "ff"), at)
+        elif kind == "file":
+            open(at, "w").close()
+        elif kind == "fifo":
+            os.mkfifo(at)
+        elif kind == "socket":
+            bind_socket(at)
+        elif kind == "dir":
+            os.mkdir(at)
+        else:
+            raise AssertionError(kind)
+
+    def swap(self, kind, at, rest, base, out, receipt):
+        """The swap: the real object at ``at`` is renamed away and a ``kind`` object put at its name."""
+        def action():
+            os.rename(at, at + ".moved")
+            self.plant(kind, at, rest, base, out, receipt)
+        return action
+
+    def want_dir(self, kind, shown):
+        return (S_LINK if kind in LINK_KINDS else S_NOTDIR) % shown
+
+    def no_leak(self, base, out):
+        """Nothing was written through a swapped component: no receipt file in the outside directory or in the
+        in-root link target, and the dangling target was not created."""
+        for top in (os.path.join(out), os.path.join(base, "inside")):
+            for dp, dn, fn in os.walk(top):
+                self.assertNotIn(SID + ".yml", fn, dp)
+        self.assertFalse(os.path.lexists(os.path.join(out, "nope")))
+
+    def positions(self):
+        return [(d, p) for d in (1, 2, 3) for p in range(1, d + 1)]
+
+    # -- 1a: a component swapped between the check and the use (the swap runs immediately before its open) ---------
+
+    def test_record_component_swapped(self):  # DW1-DW7, DW10, DC6, DR2
+        for depth, pos in self.positions():
+            for kind in LINK_KINDS + NOTDIR_KINDS:
+                with self.subTest(depth=depth, pos=pos, kind=kind):
+                    base, out, parts, cfg = self.fresh(depth)
+                    os.makedirs(os.path.join(base, *parts))
+                    at = os.path.join(base, *parts[:pos])
+                    with open_hook(parts[pos - 1], self.swap(kind, at, parts[pos:], base, out, False),
+                                   directory=True) as hk:
+                        kind_, val = watched(lambda: record(base, cfg, SID, "a.txt"))
+                    self.assertGreater(hk["fired"], 0)
+                    self.assertEqual(kind_, "err")
+                    self.assertIs(type(val), GateError)
+                    self.assertEqual(str(val), self.want_dir(kind, "/".join(parts[:pos])))
+                    self.assertEqual(hk["live"], set())
+                    self.no_leak(base, out)
+                    for dp, dn, fn in os.walk(base):
+                        self.assertNotIn(SID + ".yml", fn, dp)
+
+    def test_record_created_component_swapped(self):  # DW1-DW7 for a component made by this call, DW10, DC6
+        for depth, pos in self.positions():
+            for kind in LINK_KINDS + NOTDIR_KINDS:
+                with self.subTest(depth=depth, pos=pos, kind=kind):
+                    base, out, parts, cfg = self.fresh(depth)
+                    at = os.path.join(base, *parts[:pos])
+                    # the first open of the name fails (missing), the mkdir makes it, the swap runs before the 2nd open
+                    with open_hook(parts[pos - 1], self.swap(kind, at, parts[pos:], base, out, False), nth=2,
+                                   directory=True) as hk:
+                        kind_, val = watched(lambda: record(base, cfg, SID, "a.txt"))
+                    self.assertGreater(hk["fired"], 0)
+                    self.assertEqual(kind_, "err")
+                    self.assertEqual(str(val), self.want_dir(kind, "/".join(parts[:pos])))
+                    self.assertEqual(hk["live"], set())
+                    self.no_leak(base, out)
+                    for dp, dn, fn in os.walk(base):
+                        self.assertNotIn(SID + ".yml", fn, dp)
+
+    def test_load_component_swapped(self):  # DW1-DW7, DW10, DC7, DR2, DR3
+        for depth, pos in self.positions():
+            for kind in LINK_KINDS + NOTDIR_KINDS:
+                with self.subTest(depth=depth, pos=pos, kind=kind):
+                    base, out, parts, cfg = self.fresh(depth)
+                    os.makedirs(os.path.join(base, *parts))
+                    with open(os.path.join(base, *parts, SID + ".yml"), "w") as fh:
+                        fh.write(GOOD_MINE)
+                    at = os.path.join(base, *parts[:pos])
+                    with open_hook(parts[pos - 1], self.swap(kind, at, parts[pos:], base, out, True),
+                                   directory=True) as hk:
+                        kind_, val = watched(lambda: load(base, cfg, SID))
+                    self.assertGreater(hk["fired"], 0)
+                    self.assertEqual(kind_, "err", val)  # never the rows of the swapped-in target
+                    self.assertEqual(str(val), self.want_dir(kind, "/".join(parts[:pos])))
+                    self.assertEqual(hk["live"], set())
+                    self.assertFalse(os.path.lexists(os.path.join(out, "nope")))
+
+    def test_component_swapped_to_socket(self):  # DW8
+        for op in ("record", "load"):
+            with self.subTest(op=op):
+                base, out, parts, cfg = self.fresh(3)
+                os.makedirs(os.path.join(base, *parts))
+                at = os.path.join(base, "d1", "d2")
+                call = (lambda: record(base, cfg, SID, "a.txt")) if op == "record" else (lambda: load(base, cfg, SID))
+                with open_hook("d2", self.swap("socket", at, ["d3"], base, out, False), directory=True) as hk:
+                    kind_, val = watched(call)
+                self.assertGreater(hk["fired"], 0)
+                self.assertEqual((kind_, str(val)), ("err", "d1/d2: is not a directory"))
+                self.assertEqual(hk["live"], set())
+
+    def test_component_swapped_to_other_real_directory(self):  # DW9: what is opened is what is checked
+        def swap(at):
+            def action():
+                os.rename(at, at + ".moved")
+                os.mkdir(at)
+            return action
+        base, out, parts, cfg = self.fresh(1)
+        os.mkdir(os.path.join(base, "d1"))
+        with open_hook("d1", swap(os.path.join(base, "d1")), directory=True) as hk:
+            record(base, cfg, SID, "a.txt")
+        self.assertGreater(hk["fired"], 0)
+        self.assertTrue(os.path.isfile(os.path.join(base, "d1", SID + ".yml")))
+        self.assertEqual(load(base, cfg, SID), [{"path": os.path.join(base, "a.txt"), "sha": blob(b"a")}])
+        base, out, parts, cfg = self.fresh(1)
+        os.mkdir(os.path.join(base, "d1"))
+        with open(os.path.join(base, "d1", SID + ".yml"), "w") as fh:
+            fh.write(GOOD_ELSEWHERE)
+
+        def swap_load():
+            os.rename(os.path.join(base, "d1"), os.path.join(base, "d1.moved"))
+            os.mkdir(os.path.join(base, "d1"))
+            with open(os.path.join(base, "d1", SID + ".yml"), "w") as fh:
+                fh.write(GOOD_MINE)
+        with open_hook("d1", swap_load, directory=True) as hk:
+            rows = load(base, cfg, SID)
+        self.assertGreater(hk["fired"], 0)
+        self.assertEqual(rows, [{"path": "/mine", "sha": S40("a")}])
+
+    def test_static_component_symlink_every_position(self):  # DS11: the first bad component is named, record and load
+        for depth, pos in self.positions():
+            with self.subTest(depth=depth, pos=pos):
+                base, out, parts, cfg = self.fresh(depth)
+                if pos > 1:
+                    os.makedirs(os.path.join(base, *parts[:pos - 1]))
+                os.symlink(out, os.path.join(base, *parts[:pos]))
+                want = S_LINK % "/".join(parts[:pos])
+                for fn in (lambda: record(base, cfg, SID, "a.txt"), lambda: load(base, cfg, SID)):
+                    with self.assertRaises(GateError) as cm:
+                        fn()
+                    self.assertEqual(str(cm.exception), want)
+                self.assertEqual(os.listdir(out), [])
+
+    # -- 1b: a swap after the component was opened: the descriptor pins the object that was checked ------------------
+
+    def test_swap_after_open_writes_to_checked_directory(self):  # DW11, Q3, M4, M15
+        for depth, pos in ((1, 1), (3, 3), (3, 1), (3, 2)):
+            for kind in LINK_KINDS + NOTDIR_KINDS:
+                with self.subTest(depth=depth, pos=pos, kind=kind):
+                    base, out, parts, cfg = self.fresh(depth)
+                    os.makedirs(os.path.join(base, *parts))
+                    at = os.path.join(base, *parts[:pos])
+                    with open_hook(parts[pos - 1], self.swap(kind, at, parts[pos:], base, out, False), after=True,
+                                   directory=True) as hk:
+                        row = record(base, cfg, SID, "a.txt")
+                    self.assertGreater(hk["fired"], 0)
+                    self.assertEqual(row["path"], os.path.join(base, "a.txt"))
+                    moved = os.path.join(base, *parts[:pos - 1], parts[pos - 1] + ".moved", *parts[pos:], SID + ".yml")
+                    with open(moved, "rb") as fh:  # written into the directory object that was opened
+                        self.assertEqual(fh.read(), (HDR + row_text(row["path"], blob(b"a"))).encode())
+                    self.assertEqual(hk["live"], set())
+                    self.no_leak(base, out)
+
+    def test_mkdir_after_parent_swap_creates_in_checked_parent(self):  # DW12, Q3, M5
+        base, out, parts, cfg = self.fresh(2)
+        os.mkdir(os.path.join(base, "d1"))
+        state = {"fired": 0}
+        real_mkdir = os.mkdir
+
+        def mk(name, mode=0o777, **k):
+            if name == "d2" and "dir_fd" in k:
+                state["fired"] += 1
+                os.rename(os.path.join(base, "d1"), os.path.join(base, "d1.moved"))
+                os.symlink(out, os.path.join(base, "d1"))
+            return real_mkdir(name, mode, **k)
+        with mock.patch.object(receipts.os, "mkdir", mk):
+            record(base, cfg, SID, "a.txt")
+        self.assertGreater(state["fired"], 0)
+        self.assertTrue(os.path.isfile(os.path.join(base, "d1.moved", "d2", SID + ".yml")))
+        self.assertEqual(os.listdir(out), [])
+
+    def test_load_swap_after_open_reads_checked_directory(self):  # DW13, FS13
+        for pos in (1, 2):
+            with self.subTest(pos=pos):
+                base, out, parts, cfg = self.fresh(2)
+                os.makedirs(os.path.join(base, "d1", "d2"))
+                with open(os.path.join(base, "d1", "d2", SID + ".yml"), "w") as fh:
+                    fh.write(GOOD_MINE)
+                at = os.path.join(base, *parts[:pos])
+                with open_hook(parts[pos - 1], self.swap("out", at, parts[pos:], base, out, True), after=True,
+                               directory=True) as hk:
+                    rows = load(base, cfg, SID)
+                self.assertGreater(hk["fired"], 0)
+                self.assertEqual(rows, [{"path": "/mine", "sha": S40("a")}])  # never /elsewhere
+                self.assertEqual(hk["live"], set())
+
+    # -- 1d: creation and its race -----------------------------------------------------------------------------------
+
+    def test_mkdir_lost_race_to_real_directory(self):  # DC1 (deterministic), M9: a lost mkdir re-opens the winner's
+        base, out, parts, cfg = self.fresh(2)
+        real_mkdir = os.mkdir
+
+        def mk(name, mode=0o777, **k):
+            real_mkdir(name, mode, **k)  # the rival made it first
+            raise FileExistsError(errno.EEXIST, "File exists")
+        with mock.patch.object(receipts.os, "mkdir", mk):
+            record(base, cfg, SID, "a.txt")
+        self.assertTrue(os.path.isfile(os.path.join(base, "d1", "d2", SID + ".yml")))
+
+    def test_mkdir_lost_race_to_symlink(self):  # DC2
+        base, out, parts, cfg = self.fresh(2)
+        os.mkdir(os.path.join(base, "d1"))
+        opens = []
+        real_open = os.open
+        real_mkdir = os.mkdir
+
+        def op(n, flags, *a, **k):
+            if n == "d2" and "dir_fd" in k:
+                opens.append(n)
+            return real_open(n, flags, *a, **k)
+
+        def mk(name, mode=0o777, **k):
+            if name == "d2" and "dir_fd" in k:
+                os.symlink(out, os.path.join(base, "d1", "d2"))  # a rival's symlink wins the name
+                raise FileExistsError(errno.EEXIST, "File exists")
+            return real_mkdir(name, mode, **k)
+        with mock.patch.object(receipts.os, "open", op), mock.patch.object(receipts.os, "mkdir", mk):
+            with self.assertRaises(GateError) as cm:
+                record(base, cfg, SID, "a.txt")
+        self.assertEqual(str(cm.exception), S_LINK % "d1/d2")
+        self.assertEqual(len(opens), 2)  # one re-open only
+        self.assertEqual(os.listdir(out), [])
+
+    def test_walk_bounded_retry(self):  # DC5, M9
+        base, out, parts, cfg = self.fresh(1)
+        real_mkdir = os.mkdir
+        calls = {"mkdir": 0, "open": 0}
+        real_open = os.open
+
+        def op(n, flags, *a, **k):
+            if n == "d1" and "dir_fd" in k:
+                calls["open"] += 1
+            return real_open(n, flags, *a, **k)
+
+        def mk(name, mode=0o777, **k):
+            calls["mkdir"] += 1
+            if calls["mkdir"] > 1:
+                raise AssertionError("a third attempt: the retry is not bounded")
+            real_mkdir(name, mode, **k)
+            os.rmdir(os.path.join(base, name))  # the component vanishes again
+        with mock.patch.object(receipts.os, "open", op), mock.patch.object(receipts.os, "mkdir", mk):
+            with self.assertRaises(GateError) as cm:
+                record(base, cfg, SID, "a.txt")
+        self.assertEqual(str(cm.exception), "d1: cannot use the receipts directory (No such file or directory)")
+        self.assertEqual(calls, {"mkdir": 1, "open": 2})
+
+    def test_load_missing_component_returns_empty_and_creates_nothing(self):  # DS12, DC7, M11
+        base, out, parts, cfg = self.fresh(3)
+        os.mkdir(os.path.join(base, "d1"))
+        with open_hook(None, None) as hk:
+            self.assertEqual(load(base, cfg, SID), [])
+            self.assertEqual(hk["live"], set())  # DR3
+        self.assertEqual(os.listdir(os.path.join(base, "d1")), [])
+        self.assertEqual(sorted(os.listdir(base)), ["a.txt", "d1"])
+
+    def test_nested_modes(self):  # DC3, PD9
+        base, out, parts, cfg = self.fresh(3)
+        old = os.umask(0)
+        os.umask(old)
+        record(base, cfg, SID, "a.txt")
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(base, "d1")).st_mode), 0o777 & ~old)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(base, "d1", "d2")).st_mode), 0o777 & ~old)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(base, "d1", "d2", "d3")).st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(base, "d1", "d2", "d3", SID + ".yml")).st_mode), 0o600)
+
+    # -- 1e: support, names, permissions -----------------------------------------------------------------------------
+
+    def unsupported(self, base, cfg, what):
+        """``record`` (with the blob id supplied, so the walk's own check is reached) and ``load`` on a platform
+        lacking ``what``: both refused, nothing opened or created."""
+        opens = []
+        real_open = os.open
+
+        def op(*a, **k):
+            opens.append(a)
+            return real_open(*a, **k)
+        want = "d1: cannot use the receipts directory (directory descriptors are not supported on this platform)"
+        with mock.patch.object(receipts.os, "open", op), \
+                mock.patch.object(receipts, "content_sha", return_value=blob(b"a")):
+            with self.assertRaises(GateError) as cm:
+                record(base, cfg, SID, "a.txt")
+            self.assertEqual(str(cm.exception), want, what)
+            if what != "mkdir":  # load never makes a directory
+                with self.assertRaises(GateError) as cm:
+                    load(base, cfg, SID)
+                self.assertEqual(str(cm.exception), want, what)
+            else:
+                self.assertEqual(load(base, cfg, SID), [])
+        if what != "mkdir":
+            self.assertEqual(opens, [])
+            self.assertEqual(os.listdir(base), ["a.txt"])
+
+    def test_walk_refuses_without_dir_fd_support(self):  # DE1, VN4, M10, M12
+        cur = set(os.supports_dir_fd)
+        follow = set(os.supports_follow_symlinks)
+        cases = [("all dir_fd", "supports_dir_fd", set()), ("open", "supports_dir_fd", cur - {os.open}),
+                 ("stat", "supports_dir_fd", cur - {os.stat}), ("mkdir", "supports_dir_fd", cur - {os.mkdir}),
+                 ("follow", "supports_follow_symlinks", follow - {os.stat}),
+                 ("no follow at all", "supports_follow_symlinks", set())]
+        for what, attr, value in cases:
+            with self.subTest(what=what):
+                base, out, parts, cfg = self.fresh(1)
+                with mock.patch.object(os, attr, value):
+                    self.unsupported(base, cfg, what)
+        for name in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"):
+            with self.subTest(flag=name):
+                base, out, parts, cfg = self.fresh(1)
+                saved = getattr(os, name)
+                delattr(os, name)
+                try:
+                    self.unsupported(base, cfg, name)
+                finally:
+                    setattr(os, name, saved)
+
+    def test_lstat_membership_is_not_needed(self):  # VN4, M12: os.lstat is not in supports_dir_fd on 3.9
+        base, out, parts, cfg = self.fresh(2)
+        real_lstat = os.lstat
+        used = []
+
+        def lstat(*a, **k):
+            if "dir_fd" in k:
+                used.append(a)
+            return real_lstat(*a, **k)
+        with mock.patch.object(os, "supports_dir_fd", set(os.supports_dir_fd) - {os.lstat}), \
+                mock.patch.object(receipts.os, "lstat", lstat):
+            record(base, cfg, SID, "a.txt")
+            self.assertEqual(len(load(base, cfg, SID)), 1)
+        self.assertEqual(used, [])  # os.stat(follow_symlinks=False) classifies, never os.lstat(dir_fd=)
+
+    def test_receipts_component_name_too_long(self):  # DE2
+        base, out, parts, cfg = self.fresh(1)
+        cfg["paths"]["receipts"] = "x" * 255
+        record(base, cfg, SID, "a.txt")
+        self.assertTrue(os.path.isfile(os.path.join(base, "x" * 255, SID + ".yml")))
+        cfg["paths"]["receipts"] = "x" * 256
+        with self.assertRaises(GateError) as cm:
+            record(base, cfg, SID, "a.txt")
+        self.assertEqual(str(cm.exception), "%s: cannot use the receipts directory (File name too long)" % ("x" * 256))
+
+    @unittest.skipIf(os.geteuid() == 0, "uid 0 opens a mode-000 directory")
+    def test_receipts_inner_component_unreadable(self):  # DE3
+        base, out, parts, cfg = self.fresh(2)
+        os.mkdir(os.path.join(base, "d1"))
+        os.chmod(os.path.join(base, "d1"), 0)
+        self.addCleanup(os.chmod, os.path.join(base, "d1"), 0o700)
+        for fn in (lambda: record(base, cfg, SID, "a.txt"), lambda: load(base, cfg, SID)):
+            with self.assertRaises(GateError) as cm:
+                fn()
+            self.assertEqual(str(cm.exception), "d1: cannot use the receipts directory (Permission denied)")
+
+    def test_receipts_component_non_ascii(self):  # DE4, VN2
+        base, out, parts, cfg = self.fresh(1)
+        cfg["paths"]["receipts"] = "é中"
+        record(base, cfg, SID, "a.txt")
+        self.assertEqual(len(load(base, cfg, SID)), 1)
+        self.assertTrue(os.path.isfile(os.path.join(base, "é中", SID + ".yml")))
+        cfg["paths"]["receipts"] = "Ⱟ"  # U+2C2F: printable at Unicode 15, not at 13: refused on both interpreters
+        with self.assertRaisesRegex(GateError, "paths.receipts"):
+            record(base, cfg, SID, "a.txt")
+
+    def test_receipts_dir_case_variant(self):  # DE5
+        base, out, parts, cfg = self.fresh(1)
+        cfg["paths"]["receipts"] = "Receipts"
+        os.mkdir(os.path.join(base, "receipts"))
+        if not os.path.exists(os.path.join(base, "Receipts")):
+            self.skipTest("a case-sensitive volume")
+        record(base, cfg, SID, "a.txt")
+        self.assertEqual(sorted(os.listdir(base)), ["a.txt", "receipts"])
+
+    # -- 1f: descriptors ---------------------------------------------------------------------------------------------
+
+    def test_dir_descriptors_closed_on_success(self):  # DR1
+        base, out, parts, cfg = self.fresh(3)
+        with open_hook(None, None) as hk:
+            record(base, cfg, SID, "a.txt")
+            self.assertEqual(hk["live"], set())
+            self.assertEqual(len(load(base, cfg, SID)), 1)
+            self.assertEqual(hk["live"], set())
+
+    def test_dir_descriptor_closed_when_file_open_fails(self):  # DR4
+        for kind in ("readonly", "link", "fifo", "dir"):
+            with self.subTest(kind=kind):
+                if kind == "readonly" and os.geteuid() == 0:
+                    continue
+                base, out, parts, cfg = self.fresh(1)
+                d = os.path.join(base, "d1")
+                os.mkdir(d)
+                rf = os.path.join(d, SID + ".yml")
+                if kind == "readonly":
+                    with open(rf, "w") as fh:
+                        fh.write(GOOD_MINE)
+                    os.chmod(rf, 0)  # unreadable and unwritable: both opens fail
+                    self.addCleanup(os.chmod, rf, 0o600)
+                elif kind == "link":
+                    os.symlink(os.path.join(out, "x"), rf)
+                elif kind == "fifo":
+                    os.mkfifo(rf)
+                else:
+                    os.mkdir(rf)
+                with open_hook(None, None) as hk:
+                    self.assertEqual(watched(lambda: record(base, cfg, SID, "a.txt"))[0], "err")
+                    self.assertEqual(watched(lambda: load(base, cfg, SID))[0], "err")
+                    self.assertEqual(hk["live"], set())
+
+    def test_no_descriptor_growth(self):  # DR6
+        base, out, parts, cfg = self.fresh(2)
+        record(base, cfg, SID, "a.txt")
+        before = len(os.listdir("/dev/fd"))
+        for _ in range(100):
+            record(base, cfg, SID, "a.txt")
+        load(base, cfg, SID)
+        self.assertEqual(len(os.listdir("/dev/fd")), before)
+
+    # -- U-2 and D-Q4 (a): the receipt file in a non-regular state, static or swapped, record and load ---------------
+
+    def file_state(self, kind, rf, out, base):
+        if kind == "socket":
+            bind_socket(rf)
+        elif kind == "fifo":
+            os.mkfifo(rf)
+        elif kind == "dir":
+            os.mkdir(rf)
+        elif kind == "link":
+            self.put("t.yml", b"keep", base=out)
+            os.symlink(os.path.join(out, "t.yml"), rf)
+        elif kind == "dangling":
+            os.symlink(os.path.join(out, "new.yml"), rf)
+        else:
+            raise AssertionError(kind)
+
+    def want_file(self, kind, remedy):
+        shown = ".strict-delivery/receipts/" + SID + ".yml"
+        text = (F_LINK if kind in ("link", "dangling") else F_NONREG) % shown
+        return text + ("; " + REMEDY if remedy else "")
+
+    def test_receipt_file_socket_static(self):  # FS1, FS8
+        os.makedirs(self.rdir)
+        bind_socket(self.rf)
+        kind, val = watched(lambda: record(self.root, self.cfg, SID, "a.txt"))
+        self.assertEqual((kind, str(val)), ("err", self.want_file("socket", False)))
+        kind, val = watched(lambda: load(self.root, self.cfg, SID))
+        self.assertEqual((kind, str(val)), ("err", self.want_file("socket", True)))
+
+    def test_load_file_swapped_non_regular(self):  # FS2, FS4, FS6, FS7 (load)
+        for kind in ("socket", "fifo", "dir", "link", "dangling"):
+            with self.subTest(kind=kind):
+                base, out, parts, cfg = self.fresh(1)
+                d = os.path.join(base, "d1")
+                os.mkdir(d)
+                rf = os.path.join(d, SID + ".yml")
+                with open(rf, "w") as fh:
+                    fh.write(GOOD_MINE)
+
+                def action():
+                    os.rename(rf, rf + ".moved")
+                    self.file_state(kind, rf, out, base)
+                with open_hook(SID + ".yml", action, directory=False) as hk:
+                    kind_, val = watched(lambda: load(base, cfg, SID))
+                self.assertGreater(hk["fired"], 0)
+                want = ("d1/" + SID + ".yml: is a symlink; receipt files must be regular files"
+                        if kind in ("link", "dangling")
+                        else "d1/" + SID + ".yml: is not a regular file; receipt files must be regular files")
+                self.assertEqual((kind_, str(val)), ("err", want + "; " + REMEDY))
+                self.assertEqual(hk["live"], set())
+                self.assertFalse(os.path.lexists(os.path.join(out, "new.yml")))
+
+    def test_record_file_swapped_non_regular(self):  # FS3, FS5, FS6, FS7 (record), D-Q4 (a)
+        for kind in ("socket", "fifo", "dir", "link", "dangling"):
+            for present in (False, True):
+                with self.subTest(kind=kind, present=present):
+                    base, out, parts, cfg = self.fresh(1)
+                    d = os.path.join(base, "d1")
+                    os.mkdir(d)
+                    rf = os.path.join(d, SID + ".yml")
+                    if present:
+                        with open(rf, "w") as fh:
+                            fh.write(GOOD_MINE)
+
+                    def action():
+                        if os.path.lexists(rf):
+                            os.rename(rf, rf + ".moved")
+                        self.file_state(kind, rf, out, base)
+                    with open_hook(SID + ".yml", action, directory=False) as hk:
+                        kind_, val = watched(lambda: record(base, cfg, SID, "a.txt"))
+                    self.assertGreater(hk["fired"], 0)
+                    want = ("d1/" + SID + ".yml: is a symlink; receipt files must be regular files"
+                            if kind in ("link", "dangling")
+                            else "d1/" + SID + ".yml: is not a regular file; receipt files must be regular files")
+                    self.assertEqual((kind_, str(val)), ("err", want))
+                    self.assertEqual(hk["live"], set())
+                    self.assertFalse(os.path.lexists(os.path.join(out, "new.yml")))
+
+    def test_file_open_error_keeps_strerror(self):  # FS11, FS12: a regular file after the failure keeps its strerror
+        os.makedirs(self.rdir)
+        self.put_rf(GOOD_MINE.encode())
+        real_open = os.open
+
+        def op(n, flags, *a, **k):
+            if n == SID + ".yml" and "dir_fd" in k:
+                raise OSError(errno.EIO, "Input/output error")
+            return real_open(n, flags, *a, **k)
+        with mock.patch.object(receipts.os, "open", op):
+            with self.assertRaises(GateError) as cm:
+                record(self.root, self.cfg, SID, "a.txt")
+            self.assertEqual(str(cm.exception), ".strict-delivery/receipts/" + SID + ".yml: cannot append (Input/output error)")
+            with self.assertRaises(GateError) as cm:
+                load(self.root, self.cfg, SID)
+            self.assertEqual(str(cm.exception), ".strict-delivery/receipts/" + SID
+                             + ".yml: cannot read file (Input/output error); " + REMEDY)
+
+    def test_sentence_not_chosen_by_errno(self):  # M13, M7: the same refusal whatever errno the platform gives
+        real_open = os.open
+        for err in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.ENXIO, errno.EOPNOTSUPP, errno.EIO, errno.EISDIR):
+            for kind in ("link", "dangling", "fifo", "file"):
+                with self.subTest(err=errno.errorcode[err], kind=kind):
+                    base, out, parts, cfg = self.fresh(2)
+                    os.mkdir(os.path.join(base, "d1"))
+
+                    def op(n, flags, *a, **k):
+                        if n == "d2" and "dir_fd" in k:
+                            raise OSError(err, os.strerror(err))  # whatever this platform says for the swapped name
+                        return real_open(n, flags, *a, **k)
+                    at = os.path.join(base, "d1", "d2")
+                    if kind in ("link", "dangling"):
+                        os.symlink(out if kind == "link" else os.path.join(out, "nope"), at)
+                        want = S_LINK % "d1/d2"
+                    elif kind == "fifo":
+                        os.mkfifo(at)
+                        want = S_NOTDIR % "d1/d2"
+                    else:
+                        open(at, "w").close()
+                        want = S_NOTDIR % "d1/d2"
+                    with mock.patch.object(receipts.os, "open", op):
+                        for fn in (lambda: record(base, cfg, SID, "a.txt"), lambda: load(base, cfg, SID)):
+                            kind_, val = watched(fn)
+                            self.assertEqual((kind_, str(val)), ("err", want))
+                    self.assertFalse(os.path.lexists(os.path.join(out, "nope")))
+
+    def test_file_sentence_not_chosen_by_errno(self):  # M13, M14: the receipt file's sentence, whatever the errno
+        real_open = os.open
+        for err in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.ENXIO, errno.EOPNOTSUPP, errno.EIO, errno.EISDIR):
+            for kind in ("link", "dangling", "fifo", "dir", "socket"):
+                with self.subTest(err=errno.errorcode[err], kind=kind):
+                    base, out, parts, cfg = self.fresh(1)
+                    os.mkdir(os.path.join(base, "d1"))
+                    rf = os.path.join(base, "d1", SID + ".yml")
+                    self.file_state(kind, rf, out, base)
+
+                    def op(n, flags, *a, **k):
+                        if n == SID + ".yml" and "dir_fd" in k:
+                            raise OSError(err, os.strerror(err))
+                        return real_open(n, flags, *a, **k)
+                    shown = "d1/" + SID + ".yml"
+                    want = (F_LINK if kind in ("link", "dangling") else F_NONREG) % shown
+                    with mock.patch.object(receipts.os, "open", op):
+                        kind_, val = watched(lambda: record(base, cfg, SID, "a.txt"))
+                        self.assertEqual((kind_, str(val)), ("err", want))
+                        kind_, val = watched(lambda: load(base, cfg, SID))
+                        self.assertEqual((kind_, str(val)), ("err", want + "; " + REMEDY))
+
+    # -- content_sha (U-A, rows CS-F1..CS-F6) ------------------------------------------------------------------------
+
+    def hashed_tree(self, depth):
+        """A real tree below the temp directory: ``c1/.../c<depth>/f.txt`` holding b"abc"."""
+        ReceiptsDirRace.n += 1
+        top = os.path.join(self.tmp, "h%d" % self.n)
+        parts = ["c%d" % i for i in range(1, depth + 1)]
+        path = self.put("/".join(parts + ["f.txt"]), b"abc", base=top)
+        return top, parts, path
+
+    def test_content_sha_refuses_final_symlink_swap(self):  # CS-F1, M-final-nofollow
+        for kind in ("in", "out", "dangling"):
+            with self.subTest(kind=kind):
+                top, parts, path = self.hashed_tree(1)
+                out = self.other()
+
+                def action():
+                    os.rename(path, path + ".moved")
+                    if kind == "in":
+                        os.symlink(path + ".moved", path)
+                    elif kind == "out":
+                        self.put("o.txt", b"other", base=out)
+                        os.symlink(os.path.join(out, "o.txt"), path)
+                    else:
+                        os.symlink(os.path.join(out, "nope"), path)
+                with open_hook("f.txt", action, directory=False) as hk:
+                    with self.assertRaises(GateError) as cm:
+                        content_sha(path)
+                self.assertGreater(hk["fired"], 0)
+                self.assertEqual(str(cm.exception), path + ": is a symlink")
+                self.assertEqual(hk["live"], set())
+
+    def test_content_sha_refusal_leaves_no_row(self):  # CS-F1 through record
+        os.makedirs(self.rdir)
+        out = self.other()
+        self.put("o.txt", b"other", base=out)
+        real = os.path.join(self.real, "a.txt")
+
+        def action():
+            os.rename(real, real + ".moved")
+            os.symlink(os.path.join(out, "o.txt"), real)
+        with open_hook("a.txt", action, directory=False) as hk:
+            with self.assertRaisesRegex(GateError, "a.txt: is a symlink$"):
+                record(self.root, self.cfg, SID, "a.txt")
+        self.assertGreater(hk["fired"], 0)
+        self.assertFalse(os.path.lexists(self.rf))
+
+    def test_content_sha_refuses_dir_component_swap(self):  # CS-F2, M-component-nofollow
+        for depth in (1, 2, 3):
+            for pos in range(1, depth + 1):
+                for kind in ("in", "out", "dangling"):
+                    with self.subTest(depth=depth, pos=pos, kind=kind):
+                        top, parts, path = self.hashed_tree(depth)
+                        out = self.other()
+                        at = os.path.join(top, *parts[:pos])
+
+                        def action():
+                            os.rename(at, at + ".moved")
+                            if kind == "in":
+                                os.symlink(at + ".moved", at)
+                            elif kind == "out":
+                                d = os.path.join(out, "o", *parts[pos:])
+                                os.makedirs(d, exist_ok=True)
+                                with open(os.path.join(d, "f.txt"), "wb") as fh:
+                                    fh.write(b"other")
+                                os.symlink(os.path.join(out, "o"), at)
+                            else:
+                                os.symlink(os.path.join(out, "nope"), at)
+                        with open_hook(parts[pos - 1], action, directory=True) as hk:
+                            with self.assertRaises(GateError) as cm:
+                                content_sha(path)
+                        self.assertGreater(hk["fired"], 0)
+                        self.assertEqual(str(cm.exception), S_LINK % at)
+                        self.assertEqual(hk["live"], set())
+
+    def test_content_sha_refuses_non_regular_swap(self):  # CS-F3, M-nonblock, M-fstat
+        for kind in ("fifo", "dir", "socket"):
+            with self.subTest(kind=kind):
+                top, parts, path = self.hashed_tree(1)
+
+                def action():
+                    os.rename(path, path + ".moved")
+                    if kind == "fifo":
+                        os.mkfifo(path)
+                    elif kind == "dir":
+                        os.mkdir(path)
+                    else:
+                        bind_socket(path)
+                with open_hook("f.txt", action, directory=False) as hk:
+                    kind_, val = watched(lambda: content_sha(path))
+                self.assertGreater(hk["fired"], 0)
+                self.assertEqual((kind_, str(val)), ("err", path + ": is not a regular file"))
+                self.assertEqual(hk["live"], set())
+
+    def test_content_sha_regular_files_unchanged(self):  # CS-F4 (with the CS1-CS27 tests above)
+        for depth in (1, 2, 3):
+            top, parts, path = self.hashed_tree(depth)
+            self.assertEqual(content_sha(path), blob(b"abc"))
+        self.assertEqual(content_sha(self.put("e", b"")), EMPTY)
+
+    def test_content_sha_fails_closed_without_dir_fd_support(self):  # CS-F5, M-support
+        top, parts, path = self.hashed_tree(1)
+        cur = set(os.supports_dir_fd)
+        want = path + ": cannot read file (directory descriptors are not supported on this platform)"
+        cases = [("supports_dir_fd", set()), ("supports_dir_fd", cur - {os.open}), ("supports_dir_fd", cur - {os.stat}),
+                 ("supports_follow_symlinks", set(os.supports_follow_symlinks) - {os.stat})]
+        for attr, value in cases:
+            with self.subTest(attr=attr, n=len(value)):
+                with mock.patch.object(os, attr, value):
+                    with open_hook(None, None) as hk:
+                        with self.assertRaises(GateError) as cm:
+                            content_sha(path)
+                self.assertEqual(str(cm.exception), want)
+                self.assertEqual(hk["live"], set())
+        for name in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"):
+            with self.subTest(flag=name):
+                saved = getattr(os, name)
+                delattr(os, name)
+                try:
+                    with self.assertRaises(GateError) as cm:
+                        content_sha(path)
+                finally:
+                    setattr(os, name, saved)
+                self.assertEqual(str(cm.exception), want)
+
+    def test_content_sha_missing_directory_component(self):  # CS-F2 sibling: a missing component is the usual refusal
+        top, parts, path = self.hashed_tree(1)
+        p = top + "/nodir/f.txt"
+        with self.assertRaises(GateError) as cm:
+            content_sha(p)
+        self.assertEqual(str(cm.exception), p + ": cannot read file (No such file or directory)")
+
+    def test_root_that_is_not_a_directory_when_opened(self):  # the walk's root open, CD3 (root swapped after _top)
+        base, out, parts, cfg = self.fresh(1)
+        notdir = os.path.join(base, "a.txt")
+        for fn in (lambda: load(base, cfg, SID), lambda: record(base, cfg, SID, "a.txt")):
+            with mock.patch.object(receipts, "_top", return_value=notdir), \
+                    mock.patch.object(receipts, "content_sha", return_value=blob(b"a")):
+                with self.assertRaises(GateError) as cm:
+                    fn()
+            self.assertEqual(str(cm.exception), "root: cannot use the receipts directory (Not a directory)")
+
+    def test_content_sha_refuses_unresolved_path(self):  # CS-F6
+        top, parts, path = self.hashed_tree(2)
+        for p in ("rel.txt", "c1/c2/f.txt", ".", "", "/", path + "/", top + "//c1/c2/f.txt", top + "/c1/../c1/c2/f.txt",
+                  top + "/./c1/c2/f.txt", "//" + path[1:]):
+            with self.subTest(p=p):
+                with self.assertRaises(GateError) as cm:
+                    content_sha(p)
+                self.assertEqual(str(cm.exception), p + ": path must be absolute and normalised")
+        self.assertEqual(content_sha(path), blob(b"abc"))
 
 
 if __name__ == "__main__":
