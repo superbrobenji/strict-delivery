@@ -45,7 +45,28 @@ jobs:
             name="${ref#origin/}"
             git branch "$name" "$ref"
           done
+      - name: Create the local base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git rev-parse --verify --quiet "refs/heads/$BASE_REF" > /dev/null || git branch "$BASE_REF" "origin/$BASE_REF"
       - name: Check the streams of the head branch
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: python -m gates check streams --branch "$HEAD_REF"
+      # Task P3.3: a cleanup/<plan> head is also judged by check cleanup; any other head skips the step.
+      # A tail that names a program is a program close, checked by hand with --program and --decision.
+      - name: Check the cleanup of a cleanup head
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$HEAD_REF" in
+            cleanup/*) ;;
+            *) exit 0 ;;
+          esac
+          PLAN="${HEAD_REF#cleanup/}"
+          if python -c 'import sys; from gates.lib import programs; sys.exit(0 if programs.program_problem(sys.argv[1]) == "" else 1)' "$PLAN"; then
+            echo "program close: check it by hand with check cleanup --program NAME --decision DEC"
+            exit 0
+          fi
+          python -m gates check cleanup --plan="$PLAN"

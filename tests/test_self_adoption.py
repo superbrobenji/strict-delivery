@@ -554,22 +554,47 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(sum("fetch-depth" in ln for ln in code_lines(self.pr())), 1)
 
     def test_pr_job_streams_command(self):  # WF3: the head ref reaches the shell through env, never through ${{ }} in run
+        # Edited on purpose by Task P3.3 (D-Q5 (i), D-Q7): the step list is exact, the streams step is the fifth of six,
+        # and the head ref and the base ref each reach a shell only through an env: line.
         sts = steps(self.pr())
-        last = sts[-1]
-        self.assertEqual(last["run"], 'python -m gates check streams --branch "$HEAD_REF"')
-        self.assertEqual(last["HEAD_REF"], "${{ github.head_ref }}")
+        self.assertEqual([st.get("name") for st in sts], [None, None, "Create the local integration branches",
+                                                          "Create the local base branch",
+                                                          "Check the streams of the head branch",
+                                                          "Check the cleanup of a cleanup head"])
+        streams = sts[4]
+        self.assertEqual(streams["run"], 'python -m gates check streams --branch "$HEAD_REF"')
+        self.assertEqual(streams["HEAD_REF"], "${{ github.head_ref }}")
         for st in sts:
             self.assertNotIn("${{", st.get("run", ""))
-        self.assertEqual(self.pr().count("github.head_ref"), 1)  # only in that env line
-        self.assertEqual(self.pr().count("${{"), 2)  # the checkout ref and the env value, nothing else
+        self.assertEqual([ln for ln in code_lines(self.pr()) if "${{" in ln],
+                         ["          ref: ${{ github.event.pull_request.head.sha }}",
+                          "          BASE_REF: ${{ github.base_ref }}", "          HEAD_REF: ${{ github.head_ref }}",
+                          "          HEAD_REF: ${{ github.head_ref }}"])
+        self.assertEqual(self.pr().count("github.head_ref"), 2)  # the streams step and the cleanup step, env lines only
+        self.assertEqual(self.pr().count("github.base_ref"), 1)
 
     def test_pr_job_creates_integration_before_streams(self):  # WF4
         names = [st.get("name") for st in steps(self.pr())]
         make = names.index("Create the local integration branches")
         check = names.index("Check the streams of the head branch")
         self.assertLess(make, check)
-        self.assertEqual(self.pr().count("git branch "), 1)
+        self.assertLess(make, names.index("Create the local base branch"))  # Task P3.3: after the loop, so it never repeats it
+        self.assertEqual(self.pr().count("git branch "), 2)  # the loop and the base branch step (edited on purpose)
         self.assertEqual(self.pr().count("refs/remotes/origin/*/integration"), 1)
+
+    def test_workflow_runs_cleanup_for_cleanup_heads(self):  # plan test
+        self.assertIn("gates check cleanup --plan", self.text)
+        self.assertIn("gates check cleanup --plan", self.pr())
+        self.assertNotIn("check cleanup", self.gates)  # the matrix job never runs it (P3.3 WF1)
+        self.assertEqual(self.gates, GATES_JOB)
+
+    def test_cleanup_step_order(self):  # WF10
+        names = [st.get("name") for st in steps(self.pr())]
+        self.assertEqual(names[:2], [None, None])  # checkout and setup-python first
+        last = names.index("Check the cleanup of a cleanup head")
+        self.assertLess(names.index("Create the local base branch"), last)
+        self.assertLess(names.index("Check the streams of the head branch"), last)  # check streams is not replaced
+        self.assertIn("    if: github.event_name == 'pull_request'", code_lines(self.pr()))  # the job's only trigger
 
     def test_pr_job_passes_branch(self):  # WF7: a detached checkout has no branch; the gate must be told it
         for ln in code_lines(self.text):
@@ -656,6 +681,109 @@ class PullRequestJobTest(GitIsolatedTestCase):
         self.assertEqual(self.local(root), ["20260101-x/integration", "20260102-y/integration", "main"])  # main: the clone's own
         for name in ("20260101-x/integration", "20260102-y/integration"):
             self.assertEqual(git(root, "rev-parse", name), git(root, "rev-parse", "origin/" + name))
+
+
+class CleanupStepTest(GitIsolatedTestCase):
+    """The cleanup step and the base branch step of the pull-request job (Task P3.3, rows WF3-WF9; decisions D-Q4, D-Q5 (i),
+    D-Q7), run as ``sh -c`` runs them with ``python`` the interpreter of this run."""
+
+    CLEANUP = "Check the cleanup of a cleanup head"
+    BASE = "Create the local base branch"
+
+    @classmethod
+    def setUpClass(cls):
+        job = job_text(read_text(os.path.join(REPO, WORKFLOW)), "pull-request")
+        cls.cleanup = PullRequestJobTest.step_script(job, cls.CLEANUP)
+        cls.base = PullRequestJobTest.step_script(job, cls.BASE)
+
+    def setUp(self):
+        super().setUp()
+        self.bin = os.path.join(self.tmp, "bin")
+        os.mkdir(self.bin)
+        shim = os.path.join(self.bin, "python")
+        with open(shim, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\nexec "%s" "$@"\n' % sys.executable)
+        os.chmod(shim, 0o755)
+        self.repo = make_repo(self.work)
+
+    def run_step(self, script, cwd, **env):
+        full = dict(os.environ, PYTHONPATH=REPO, PATH=self.bin + os.pathsep + os.environ.get("PATH", ""))
+        full.update(env)
+        p = subprocess.run(["sh", "-c", script], cwd=cwd, env=full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT)
+        return p.returncode, p.stdout.decode("utf-8")
+
+    def head(self, ref):
+        return self.run_step(self.cleanup, self.repo, HEAD_REF=ref)
+
+    def test_cleanup_step_in_pull_request_job_only(self):  # WF1
+        text = read_text(os.path.join(REPO, WORKFLOW))
+        code = "\n".join(code_lines(text))
+        self.assertEqual(code.count("check cleanup"), 2)  # the step and its program-close echo, both in one job
+        self.assertEqual("\n".join(code_lines(job_text(text, "pull-request"))).count("check cleanup"), 2)
+
+    def test_cleanup_step_runs_for_cleanup_heads(self):  # WF4: the slug is the tail after cleanup/
+        self.assertEqual(self.head("cleanup/fx"), (1, "FAIL cleanup.merge: plan fx has no final merge on the base branch\n"))
+
+    def test_cleanup_step_skipped_for_other_heads(self):  # WF5 (D-Q7 (a): an exact, case-sensitive match)
+        for ref in ("feat/x", "block/p3", "cleanup", "cleanup-fx", "xcleanup/fx", "feat/cleanup/fx", "Cleanup/fx",
+                    "20261101-x/integration", ""):
+            with self.subTest(ref=ref):
+                self.assertEqual(self.head(ref), (0, ""))
+
+    def test_cleanup_step_slug_forms(self):  # WF6
+        bad = "FAIL cleanup.input: --plan must match [a-z0-9][a-z0-9-]*\n"
+        for ref, want in (("cleanup/fx", None), ("cleanup/2026-10-31-x", None), ("cleanup/a/b", bad), ("cleanup/-x", bad),
+                          ("cleanup/FX", bad), ("cleanup/café", bad), ("cleanup/", bad)):
+            with self.subTest(ref=ref):
+                code, out = self.head(ref)
+                if want is None:
+                    self.assertEqual((code, out.split(":")[0]), (1, "FAIL cleanup.merge"))
+                else:
+                    self.assertEqual((code, out), (1, want))
+        code, out = self.head("cleanup/" + "a" * 300)
+        self.assertEqual(code, 1)
+        self.assertIn(out.split(":")[0], ("FAIL cleanup.merge", "FAIL cleanup.input"))
+
+    def test_cleanup_step_hostile_head_refs(self):  # WF7: no shell interpretation of any git-legal name
+        tails = ["$(touch PWNED)", "a;touch PWNED", "a`touch PWNED`", "a'b", 'a"b', "a|b", "a&b", "a>b", "a#b", "a{b", "a%b",
+                 "$(id)"]
+        for tail in tails:
+            with self.subTest(tail=tail):
+                code, out = self.head("cleanup/" + tail)
+                self.assertFalse(os.path.exists(os.path.join(self.repo, "PWNED")))
+                self.assertFalse(os.path.exists(os.path.join(self.repo, "b")))
+                self.assertEqual((code, out), (1, "FAIL cleanup.input: --plan must match [a-z0-9][a-z0-9-]*\n"))
+        self.assertNotIn("${{", self.cleanup)  # head_ref and base_ref only in env: lines (WorkflowTest pins the lines)
+
+    def test_cleanup_step_program_close_head(self):  # WF9, D-Q4 (a): a tail that names a program is checked by hand
+        code, out = self.head("cleanup/20261101-x")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("program close: "), out)
+        self.assertEqual(self.head("cleanup/20261301-x")[0], 1)  # not a calendar date: not a program name, a plan slug
+        self.assertEqual(self.head("cleanup/2026-10-31-x")[0], 1)
+
+    def test_cleanup_step_needs_local_base_branch(self):  # WF8, EN8: a detached checkout has no local base branch
+        src = self.repo
+        remote = os.path.join(self.tmp, "remote.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(src, "checkout", "-q", "-b", "20261101-x/integration")
+        commit_all(src, "integration tip")
+        git(src, "checkout", "-q", "main")
+        git(src, "push", "-q", remote, "--all")
+        dst = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", remote, dst)
+        git(dst, "checkout", "-q", "--detach")
+        git(dst, "branch", "-q", "-D", "main")
+        self.assertEqual(git(dst, "for-each-ref", "--format=%(refname:short)", "refs/heads"), "")
+        code, out = self.run_step(self.base, dst, BASE_REF="main")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("branch 'main' set up to track"), out)
+        self.assertEqual(git(dst, "rev-parse", "main"), git(dst, "rev-parse", "origin/main"))
+        self.assertEqual(self.run_step(self.base, dst, BASE_REF="main"), (0, ""))  # a second run changes nothing
+        self.assertEqual(self.run_step(self.base, dst, BASE_REF="20261101-x/integration")[0], 0)
+        self.assertEqual(self.run_step(self.base, dst, BASE_REF="20261101-x/integration"), (0, ""))
+        self.assertEqual(self.run_step(self.base, dst, BASE_REF="nosuch")[0], 128)
 
 
 if __name__ == "__main__":
