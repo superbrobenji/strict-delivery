@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-dt8k
+status: open
+source: "P4.1 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/g8/P4.1-review-1.md R1-2"
+severity: LOW
+class: row HQ11 (1000 pending questions through ask) tested with 12; no decision authorises the reduction
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: P4.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 0b322343a03c332912028f033a53e1afd1b8feac
+    by: stream-a14
+review_round: 1
+caused_by_change: true
+dimension: HQ11 question count

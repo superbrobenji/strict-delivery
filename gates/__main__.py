@@ -4,6 +4,7 @@ import sys
 from typing import Callable, Dict, List
 
 GATES: Dict[str, str] = {"checkpoint": "gates.gate_checkpoint", "cites": "gates.gate_cites", "claims": "gates.gate_claims",
+                         "cleanup": "gates.gate_cleanup",
                          "decisions": "gates.gate_decisions",
                          "dispatch": "gates.gate_dispatch",
                          "register": "gates.gate_register",
@@ -45,6 +46,11 @@ def _claims(args: List[str]) -> int:
     return claims_cli.main(args)
 
 
+def _continue(args: List[str]) -> int:
+    from gates.tools import continue_cli
+    return continue_cli.main(args)
+
+
 def _decisions(args: List[str]) -> int:
     from gates.tools import decisions_cli
     return decisions_cli.main(args)
@@ -58,6 +64,11 @@ def _findings(args: List[str]) -> int:
 def _program(args: List[str]) -> int:
     from gates.tools import program_cli
     return program_cli.main(args)
+
+
+def _questions(args: List[str]) -> int:
+    from gates.tools import questions_cli
+    return questions_cli.main(args)
 
 
 def _loopstats(args: List[str]) -> int:
@@ -121,9 +132,10 @@ def _hook(args: List[str]) -> int:
     return rc
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "claims": _claims, "decisions": _decisions,
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "claims": _claims, "continue": _continue, "decisions": _decisions,
                                                    "findings": _findings, "githook": _githook, "githooks": _githooks, "hook": _hook,
-                                                   "index": _index, "loopstats": _loopstats, "program": _program, "run_all": _run_all}
+                                                   "index": _index, "loopstats": _loopstats, "program": _program, "questions": _questions,
+                                                   "run_all": _run_all}
 
 
 def main(argv: List[str]) -> int:

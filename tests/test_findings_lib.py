@@ -11,7 +11,7 @@ from gates.lib.findings import (RESOLVED, SEVERITIES, STATUSES, TRANSITIONS, epi
                                 is_resolved, may_delete, transition_errors, validate)
 from gates.lib.result import GateError
 from gates.lib.store import Record
-from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms,
+from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, minimal_config, root_forms,
                            write_record)
 
 F1 = "F-20261031-k3f9"
@@ -702,25 +702,113 @@ class ResolutionTests(Base):
         for bad in ({"status": None}, {"status": ["closed"]}, {}, None, [], "closed"):
             self.assertIs(is_resolved(bad), False, repr(bad))
 
-    def test_may_delete(self):  # OQ-5, D2-D5
-        make_repo(self.work)  # the root check runs first (Q-1bfin-2)
-        self.assertIs(may_delete(CLOSED, self.work, self.cfg, [grant(DA)]), True)
-        self.assertIs(may_delete(mk("merged"), self.work, self.cfg, [grant(DA)]), True)
-        for name, decs in (("none", []), ("open", [grant(DA, "open")]), ("withdrawn", [grant(DA, "withdrawn")]),
-                           ("other plan", [grant(DA, plan="other")]),
-                           ("not a grant", [rec(dec(DA, "answered", plan="p"))]),
-                           ("invalid grant", [rec(dec(DA, "answered", **{"class": "merge-grant", "plan": "p",
-                                                                         "answer": None}))])):
-            with self.subTest(name):
-                self.assertIs(may_delete(CLOSED, self.work, self.cfg, decs), False)
-        self.assertIs(may_delete(FINDING, self.work, self.cfg, [grant(DA)]), False)  # unresolved
+    # P3.2 rewrote the old grant cases of test_may_delete on purpose: a resolved row is deletable when the plan named by
+    # its resolved_by has a final merge (Q-15 (a); rows MD1-MD14), never by an answered merge-grant decision.
+    def fx(self, name, final="yes", squash=False):
+        """A repository ``<tmp>/name`` (controller mode) whose plan ``p`` merged by pull request 12; its ledger has a
+        ``final=<final>`` line (``None``: no ledger)."""
+        path = os.path.join(self.tmp, name)
+        os.mkdir(path)
+        make_repo(path, {**minimal_config(), "merge": {"mode": "controller"}})
+        for k, v in (("color.ui", "always"), ("color.diff", "always"), ("core.abbrev", "7")):
+            git(path, "config", k, v)
+        git(path, "checkout", "-q", "-b", "t")
+        write_record(path, PLAN_STATE + "/p/x.yml", {"a": 1})
+        head = commit_all(path, "work")
+        git(path, "checkout", "-q", "main")
+        if squash:
+            git(path, "merge", "-q", "--squash", "t")
+            git(path, "commit", "-q", "-m", "squash")
+        else:
+            git(path, "merge", "-q", "--no-ff", "-m", "merge", "t")
+        merge = git(path, "rev-parse", "HEAD")
+        if final is not None:
+            line = ("MERGED pr=12 head=%s merge=%s merged_by=u at=2026-11-02T06:23:42Z final=%s approval=chat pr=12 "
+                    "head=%s words=approve PR 12\n" % (head, merge, final, head))
+            os.makedirs(os.path.join(path, PLAN_STATE, "p"), exist_ok=True)
+            with open(os.path.join(path, PLAN_STATE, "p", "ledger.md"), "w", encoding="utf-8") as fh:
+                fh.write("<!-- schema: ledger/1 -->\n" + line)
+            commit_all(path, "ledger")
+        return path
+
+    def md_cfg(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["merge"] = {"mode": "controller"}
+        return cfg
+
+    def test_may_delete_unresolved_row(self):  # MD1
+        root = self.fx("final")
+        self.assertIs(may_delete(FINDING, root, self.md_cfg(), []), False)
         for st in STATUSES:  # F-1b3r-1: an unresolved row that carries resolved_by must still be refused
             if st not in RESOLVED:
                 with self.subTest("unresolved " + st):
-                    self.assertIs(may_delete({**mk(st), "resolved_by": "p"}, self.work, self.cfg, [grant(DA)]), False)
-        self.assertIs(may_delete(drop(CLOSED, "resolved_by"), self.work, self.cfg, [grant(DA)]), False)
-        self.assertIs(may_delete({**CLOSED, "resolved_by": 5}, self.work, self.cfg, [grant(DA)]), False)
-        self.assertIs(may_delete(CLOSED, self.work, self.cfg, [Record(DA, "x", "a.yml")]), False)
+                    self.assertIs(may_delete({**mk(st), "resolved_by": "p"}, root, self.md_cfg(), []), False)
+
+    def test_may_delete_needs_final_merge(self):  # MD2, MD3, plan test (spec §7.2)
+        final, nonfinal = self.fx("final"), self.fx("nonfinal", final="no")
+        for row in (CLOSED, mk("merged")):
+            self.assertIs(may_delete(row, final, self.md_cfg(), []), True)
+            self.assertIs(may_delete(row, nonfinal, self.md_cfg(), []), False)
+
+    def test_may_delete_squash_final_refused(self):  # MD4
+        self.assertIs(may_delete(CLOSED, self.fx("squash", squash=True), self.md_cfg(), []), False)
+
+    def test_may_delete_no_ledger(self):  # MD5
+        self.assertIs(may_delete(CLOSED, self.fx("noledger", final=None), self.md_cfg(), []), False)
+
+    def test_may_delete_resolved_by_forms(self):  # MD6, D-Q9 (a): a refusal, never a raise
+        root = self.fx("final")
+        class S(str):
+            pass
+        for bad in ("P", "a/b", "a b", "..", "", None, 5, S("p"), "p\0", "a" * 256, "p\n", ["p"]):
+            with self.subTest(repr(bad)):
+                self.assertIs(may_delete({**CLOSED, "resolved_by": bad}, root, self.md_cfg(), []), False)
+        self.assertIs(may_delete(drop(CLOSED, "resolved_by"), root, self.md_cfg(), []), False)
+        self.assertIs(may_delete({**CLOSED, "resolved_by": "other"}, root, self.md_cfg(), []), False)  # MD14
+
+    def test_may_delete_ignores_grant_decisions(self):  # MD7: the old grant rule is gone
+        root = self.fx("nonfinal", final="no")
+        for decs in ([grant(DA)], [grant(DA, "open")], [grant(DA, plan="other")], [Record(DA, "x", "a.yml")]):
+            self.assertIs(may_delete(CLOSED, root, self.md_cfg(), decs), False)
+
+    def test_may_delete_ignores_decision_records(self):  # MD8
+        final = self.fx("final")
+        for decs in ([], None, [grant(DA)], [Record(DA, "x", "a.yml")], "garbage", 5, [None]):
+            self.assertIs(may_delete(CLOSED, final, self.md_cfg(), decs), True, repr(decs))
+
+    def test_may_delete_row_forms(self):  # MD9
+        root = self.fx("final")
+        for row in (None, [], "x", 1, {}, {"resolved_by": "p"}):
+            self.assertIs(may_delete(row, root, self.md_cfg(), []), False, repr(row))
+
+    def test_may_delete_ignores_q_es_fields(self):  # MD11
+        final = self.fx("final")
+        extra = {"review_round": 2, "caused_by_change": "x", "dimension": "y"}
+        self.assertIs(may_delete({**CLOSED, **extra}, final, self.md_cfg(), []), True)
+        self.assertIs(may_delete({**FINDING, **extra}, final, self.md_cfg(), []), False)
+
+    def test_may_delete_gets_unmigrated_base_row(self):  # MD12
+        final = self.fx("final")
+        old = {**CLOSED, "schema": "finding/1"}
+        self.assertIs(may_delete(old, final, self.md_cfg(), []), True)
+        self.assertIs(may_delete(drop(old, "schema"), final, self.md_cfg(), []), True)
+
+    def test_may_delete_on_main_before_cleanup_pr(self):  # MD13
+        root = self.fx("final", final="no")  # main holds only non-final lines until the cleanup branch adds the final one
+        self.assertIs(may_delete(CLOSED, root, self.md_cfg(), []), False)
+        head, merge = git(root, "rev-parse", "HEAD^1^2"), git(root, "rev-parse", "HEAD^1")
+        git(root, "checkout", "-q", "-b", "cleanup/p")
+        write_record(root, PLAN_STATE + "/p/ledger.md", {"x": 1})
+        with open(os.path.join(root, PLAN_STATE, "p", "ledger.md"), "w", encoding="utf-8") as fh:
+            fh.write("<!-- schema: ledger/1 -->\nMERGED pr=12 head=%s merge=%s merged_by=u at=2026-11-02T06:23:42Z final=yes "
+                     "approval=chat pr=12 head=%s words=approve PR 12\n" % (head, merge, head))
+        commit_all(root, "final line")
+        self.assertIs(may_delete(CLOSED, root, self.md_cfg(), []), True)
+
+    def test_may_delete_hostile_cfg_is_a_refusal(self):  # D-Q9: a ledger or cfg that cannot be read is False
+        root = self.fx("final")
+        self.assertIs(may_delete(CLOSED, root, {}, []), False)
+        self.assertIs(may_delete(CLOSED, root, {**self.md_cfg(), "merge": {"mode": "x"}}, []), False)
 
 
 
@@ -730,7 +818,8 @@ class RootGuardTests(Base):
 
     def setUp(self):
         super().setUp()
-        self.top = make_repo(self.work)
+        self.top = ResolutionTests.fx(self, "top")  # P3.2: a repository whose plan p has a final merge
+        self.cfg = ResolutionTests.md_cfg(self)
 
     def test_subdirectory_root_refused_everywhere(self):
         forms = root_forms(self.tmp, self.top)
@@ -745,7 +834,9 @@ class RootGuardTests(Base):
             if verdict == "ok":
                 with self.subTest(form=name):
                     self.assertEqual(evidence_errors(CLOSED, path, self.cfg, [], frozenset()), want)
-                    self.assertIs(may_delete(CLOSED, path, self.cfg, [grant(DA)]), True)
+                    # P3.2: True where the repository has the final merge; the nested form is an unrelated repository
+                    # with no history, so its ledger cannot be read and the answer is the refusal False
+                    self.assertIs(may_delete(CLOSED, path, self.cfg, [grant(DA)]), name != "nested")
 
     def test_root_check_comes_before_rows_that_return_early(self):  # O5
         sub = os.path.join(self.top, "sub")

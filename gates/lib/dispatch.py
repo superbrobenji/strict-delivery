@@ -16,7 +16,7 @@ import re
 from typing import Mapping, Optional
 
 from gates.lib import gitinfo
-from gates.lib.result import GateError
+from gates.lib.result import GateError, safe_text
 
 HEADINGS: tuple = ("## Role", "## Brief", "## Findings", "## Claims", "## Budget: tokens=<n> minutes=<n>", "## Model",
                    "## Report", "## Strict block", "## Task")
@@ -324,4 +324,108 @@ def _severity_errors(findings_ids: list, root: str, cfg: dict) -> list:
             out.append("finding %s names no finding record" % fid)
         elif any(row.get("severity") not in ("LOW", "MEDIUM") for row in rows):
             out.append("finding %s is not LOW or MEDIUM" % fid)
+    return out
+
+
+# ---------------------------------------------------------------- live programs (plan Task P4.3)
+
+PROGRAM_PREFIX = "program: "
+STREAM_PREFIX = "stream: "
+_QUOTE_MAX = 60
+
+
+def _quote(v: str, limit: int = _QUOTE_MAX) -> str:
+    """``v`` as one line of printable ASCII (``safe_text`` escapes; a non-ASCII character is escaped by code point, so
+    the bytes do not depend on the interpreter's Unicode database), cut to ``limit`` characters."""
+    cut = v[:limit] + ("..." if len(v) > limit else "")
+    return "'%s'" % safe_text(cut).encode("ascii", "backslashreplace").decode("ascii")
+
+
+def required(root: str, cfg: dict) -> bool:
+    """True when the profile is ``standard`` or ``strict``, or any program is live (spec section 12: wherever a program
+    is live, ``gate_dispatch`` runs, whatever the profile). It never fails open (D-Q1): a profile that is not exactly
+    ``light``, or a repository ``live_programs`` cannot read, returns True; only a ``cfg`` that is not a dict or a
+    ``root`` that is not a string raises ``ValueError``."""
+    if type(cfg) is not dict:
+        raise ValueError("cfg must be a dict")
+    if type(root) is not str:
+        raise ValueError("root must be a string")
+    profile = cfg.get("profile")
+    if type(profile) is not str or profile != "light":
+        return True
+    from gates.lib import programs      # lazy: programs imports checkpoints, which imports this module
+    try:
+        return bool(programs.live_programs(root, cfg))
+    except GateError:
+        return True
+
+
+def _lines_of(brief: str, prefix: str) -> list:
+    return [ln[len(prefix):] for ln in brief.split("\n") if ln.startswith(prefix)]
+
+
+def _one_line(lines: list, prefix: str, kind: str, problem) -> tuple:
+    """``(value or None, reason or "")`` for the one ``prefix`` line of a Brief."""
+    key = prefix.rstrip(": ")
+    if not lines:
+        return None, "## Brief holds no line '%s<%s>' (at the start of the line)" % (prefix, kind)
+    if len(lines) > 1:
+        return None, "## Brief holds %d '%s' lines, not one" % (len(lines), prefix)
+    v = lines[0]
+    why = problem(v)
+    if why:
+        return None, "the '%s' line is not a %s name: %s" % (key, kind, _quote(v))
+    return v, ""
+
+
+def program_errors(sections: dict, role: str, root: str, cfg: dict, program_live: bool) -> list:
+    """``[(suffix, reason)]`` for the lines ``dispatch.program`` and ``dispatch.stream`` (plan Task P4.3): the caller's
+    ``program_live`` against ``live_programs``; for a ``program_controller`` or ``stream_controller`` the one
+    ``program: <p>`` line of ``## Brief`` naming a live program; for a ``stream_controller`` the one ``stream: <s>``
+    line naming a stream of that program's ``streams.yml`` on its integration branch. A ``GateError`` of
+    ``live_programs`` escapes (D-Q3); one of ``load_program`` becomes a ``stream`` pair; a ``stream`` pair
+    ``stream not checked`` follows a failed program line (D-Q4)."""
+    if type(program_live) is not bool:
+        raise ValueError("program_live must be a bool")
+    if type(sections) is not dict:
+        raise ValueError("sections must be a dict")
+    if type(role) is not str:
+        raise ValueError("role must be a string")
+    if type(cfg) is not dict:
+        raise ValueError("cfg must be a dict")
+    if type(root) is not str:
+        raise ValueError("root must be a string")
+    brief = sections.get("Brief", "")
+    if type(brief) is not str:
+        raise ValueError("sections['Brief'] must be a string")
+    from gates.lib import programs      # lazy: programs imports checkpoints, which imports this module
+    live = programs.live_programs(root, cfg)
+    out = []
+    if program_live != bool(live):
+        out.append(("program", "program_live is %s in the input, but %s in git (%d live program(s))"
+                    % ("true" if program_live else "false", "false" if program_live else "true", len(live))))
+    if role not in ("program_controller", "stream_controller"):
+        return out
+    prog, why = _one_line(_lines_of(brief, PROGRAM_PREFIX), PROGRAM_PREFIX, "program", programs.program_problem)
+    if prog is not None and prog not in live:
+        why = "the program %s is not live (no integration branch holds its streams.yml)" % _quote(prog)
+        prog = None
+    if prog is None:
+        out.append(("program", why))
+    if role != "stream_controller":
+        return out
+    if prog is None:
+        out.append(("stream", "stream not checked: the program line failed"))
+        return out
+    sid, why = _one_line(_lines_of(brief, STREAM_PREFIX), STREAM_PREFIX, "stream", programs.stream_problem)
+    if sid is None:
+        out.append(("stream", why))
+        return out
+    try:
+        program = programs.load_program(root, cfg, prog, "refs/heads/%s/integration" % prog)
+    except GateError as e:
+        out.append(("stream", "the program files of %s cannot be read: %s" % (prog, _quote(str(e), 240))))
+        return out
+    if programs._stream_row(program.streams, sid) is None:
+        out.append(("stream", "the stream %s is not a stream of %s's streams.yml" % (_quote(sid), prog)))
     return out
