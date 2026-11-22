@@ -447,8 +447,8 @@ class WorkflowTest(unittest.TestCase):
             code = gates_main.main(["check", "schema", "--root", REPO])
         self.assertEqual(code, 0, out.getvalue())
 
-    def test_workflow_triggers(self):  # W2: both events, no filter that skips a branch
-        self.assertEqual(top_block(self.text, "on"), ["  push:", "  pull_request:"])
+    def test_workflow_triggers(self):  # W2: pull_request plus push to main only (owner answer 2026-11-22), nothing looser
+        self.assertEqual(top_block(self.text, "on"), ["  push:", "    branches: [main]", "  pull_request:"])
 
     def test_workflow_matrix(self):  # W3, W4, W5 (W3 scoped to the matrix job, edited on purpose)
         self.assertEqual(oses(self.text), [["ubuntu-24.04", "macos-15"]])
@@ -470,10 +470,20 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(steps(self.gates)[0]["fetch-depth"], "0")
         self.assertEqual(sum("fetch-depth" in ln for ln in code_lines(self.gates)), 1)
 
-    def test_workflow_names_no_branch(self):  # W8: no branch name literal
-        self.assertNotIn("origin/main", self.text)
+    def test_workflow_names_no_branch(self):  # W8: no branch name literal outside the on: block (W2 pins that block exactly)
+        lines, skip = [], False
+        for ln in self.text.splitlines():
+            if ln == "on:":
+                skip = True
+            elif skip and ln and not ln[0].isspace():
+                skip = False
+            if not skip:
+                lines.append(ln)
+        outside = "\n".join(lines)
+        self.assertNotIn("origin/main", outside)
         for word in ("main", "master", "develop", "trunk"):
-            self.assertIsNone(re.search(r"\b%s\b" % word, self.text), word)
+            self.assertIsNone(re.search(r"\b%s\b" % word, outside), word)
+        self.assertEqual(len(re.findall(r"\bmain\b", self.text)), 1)  # the W2 line only
 
     def test_workflow_base_expression(self):  # W8, W9
         run = [st["run"] for st in steps(self.text) if st.get("run", "").startswith("python -m gates run_all")]
