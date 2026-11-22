@@ -745,7 +745,7 @@ class PlanTests(FsCase):
         self.writable_cleanup(p)
         self.me("x.yml: cannot read (Permission denied)", self.p1, [Write("x.yml", "a\n", "file")])
 
-    def test_plan_symlink_conflicts(self):  # PL25, PL26, PL27, PL51
+    def test_plan_symlink_conflict(self):  # PL25, PL26, PL27, PL51
         self.put_file("real.yml", H + "\nold\n")
         os.symlink("real.yml", self.path("x.yml"))
         os.symlink("nowhere", self.path("y.yml"))
@@ -796,6 +796,21 @@ class PlanTests(FsCase):
             return real(reg if p == cm else p, *a, **k)
         with mock.patch("os.lstat", side_effect=fake2):
             self.assertEqual(self.p1([Write("CLAUDE.md", "x\n", "claude-block")]), ([], ["CLAUDE.md: " + NOT_MANAGED]))
+
+    def test_plan_open_is_nonblocking(self):  # PL29/PL31, R1-1: the only open of a target carries O_NONBLOCK
+        self.put_file("w.yml", H + "\nold\n")
+        target, flags = self.path("w.yml"), []
+        real = os.open
+
+        def spy(p, fl, *a, **k):
+            if p == target:
+                flags.append(fl)
+            return real(p, fl, *a, **k)
+        with mock.patch("os.open", side_effect=spy):
+            self.p1([Write("w.yml", H + "\nnew\n", "file")])
+        self.assertEqual(len(flags), 1)
+        self.assertTrue(flags[0] & os.O_NONBLOCK)
+        self.assertEqual(flags[0] & (os.O_WRONLY | os.O_RDWR), 0)
 
     def test_plan_big_file(self):  # PL32
         self.put_file("w.yml", H + "\n" + "x" * (5 * 1024 * 1024))
