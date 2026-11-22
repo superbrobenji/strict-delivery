@@ -457,3 +457,17 @@ def resolve(path: str, values: dict, cfg: Optional[dict] = None) -> Optional[str
     if type(values) is not dict:
         raise ValueError("values must be a dict")
     return _substitute(path, values, _paths_of(cfg))
+
+
+# ---------------------------------------------------------------- enforcement
+
+_PROFILES = ("light", "standard", "strict")
+
+
+def enforced(cfg: dict) -> bool:
+    """True when ``cfg["profile"]`` is ``strict`` (spec 12: context read receipts are enforced on strict only). A cfg
+    that is not a dict, or whose ``profile`` is not an exact ``str`` among light, standard, strict (one
+    ``config.load`` would have refused), is a ``ValueError``: it fails closed (decision D-Q1 (b))."""
+    if type(cfg) is not dict or type(cfg.get("profile")) is not str or cfg["profile"] not in _PROFILES:
+        raise ValueError("cfg: profile must be one of %s" % ", ".join(_PROFILES))
+    return cfg["profile"] == "strict"
