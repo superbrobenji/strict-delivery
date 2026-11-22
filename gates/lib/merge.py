@@ -1,7 +1,7 @@
 """Merge-policy checks of one ``MERGED`` line against git (Task P2.1 part i; specified under Task P3.1).
 
-``merged_errors`` is the only public name here: Task P3.1 adds ``MODES`` and ``agent_may_merge`` beside it. Standard
-library only, and no Unicode property or case method is read.
+The public names are ``MODES``, ``agent_may_merge`` and ``merged_errors``. Standard library only,
+and no Unicode property or case method is read.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from gates.lib.result import GateError, GitNotFound
 
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 _HEX40 = re.compile(r"[0-9a-f]{40}")
-_MODES = ("host", "controller")
+MODES = ("host", "controller")
 _APPROVALS = ("host", "chat")
 _MAX_PR = 10 ** 600  # a pr is at most 600 digits (Task P1.2, decision D-Q26); no str() of a longer number is made
 
@@ -82,6 +82,17 @@ def _merge_problem(root: str, base: str, merge: str) -> tuple:
     return "", parents
 
 
+def agent_may_merge(cfg: dict) -> bool:
+    """``True`` when ``cfg["merge"]["mode"]`` is ``controller`` (an agent may run ``gh pr merge``), ``False`` for
+    ``host`` (Task P3.1; decision D-Q1 (b)). Pure: no file, git or environment read. A cfg that is not a dict, or
+    whose ``merge.mode`` is missing, not a string or not in ``MODES`` is a GateError, so a caller that treats an
+    exception as a refusal (Block 3's Bash hook) fails closed; ``config.load`` supplies the ``host`` default."""
+    mode = _cfg_text(cfg, "merge", "mode")
+    if mode not in MODES:
+        raise GateError("cfg: merge.mode must be one of host, controller")
+    return mode == "controller"
+
+
 def merged_errors(root: str, cfg: dict, plan: str, line: dict) -> List[tuple]:
     """``(suffix, reason)`` for one ``MERGED`` line of plan slug ``plan`` (Task P3.1's specification, built by Task
     P2.1; decisions D-A17, D-A18, D-A23). The suffix is ``<rule>.<pr>``; the rules run in this order:
@@ -108,7 +119,7 @@ def merged_errors(root: str, cfg: dict, plan: str, line: dict) -> List[tuple]:
     base = _cfg_text(cfg, "base_branch")
     mode = _cfg_text(cfg, "merge", "mode")
     plan_state = _cfg_text(cfg, "paths", "plan_state")
-    if mode not in _MODES:
+    if mode not in MODES:
         raise GateError("cfg: merge.mode must be one of host, controller")
     if type(plan) is not str or not _SLUG.fullmatch(plan):
         raise ValueError("merged_errors: plan must be a plan slug of a-z, 0-9 and '-'")
