@@ -1222,7 +1222,7 @@ class Files(Base):
         self.put(".gitignore", b".strict-delivery/state/decisions/in-force.md\n")
         self.put(rel, b"x\n")
         self.ctx(every=[E(rel)])
-        self.assertEqual(git(self.fx, "check-ignore", rel), rel)
+        self.assertEqual(git(self.fx, "check-ignore", "--", rel), rel)
         want = self.real + "/" + rel
         self.assertEqual(self.go(), ("FAIL context.read.%s: not read in this session\n" % want, 1))
         self.rows((want, NEW))

@@ -769,7 +769,7 @@ class Values(GitIsolatedTestCase):
     def test_values_from_linked_root(self):  # V6
         self.program()
         linked = os.path.join(self.tmp, "linked")
-        git(self.root, "worktree", "add", "-q", linked, "-b", "other")
+        git(self.root, "worktree", "add", "-q", "-b", "other", "--", linked)
         self.assertEqual(values_for(linked, self.cfg, "program", program=self.P)["integration"],
                          os.path.realpath(self.wt + "/" + self.P + "/integration"))
 
@@ -1006,7 +1006,7 @@ class Load(GitIsolatedTestCase):
         git(self.root, "add", "-A")
         git(self.root, "commit", "-qm", "ctx")
         linked = os.path.join(self.tmp, "linked")
-        git(self.root, "worktree", "add", "-q", linked, "-b", "other")
+        git(self.root, "worktree", "add", "-q", "-b", "other", "--", linked)
         self.assertEqual(load(linked, self.cfg), {"schema": CTX_TAG})
         os.unlink(os.path.join(linked, ".strict-delivery/context.yml"))
         write(os.path.join(linked, ".strict-delivery/context.yml"), (b"schema: " + CTX_TAGB + b"\nevery: []\n"))
