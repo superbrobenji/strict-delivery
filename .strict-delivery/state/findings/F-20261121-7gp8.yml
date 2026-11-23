@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-7gp8
+status: open
+source: "6E.2 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/records/6E.2-review-1.md F-1"
+severity: LOW
+class: "test assertion pins a defect: tests/test_gate_evidence.py:1246-1252 test_transcript_reason_backslash_escaped_twice asserts the doubly escaped transcript reason as the contract"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6E.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f3b481bd79c1c779362a21301eb2231f6772840c
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: transcript reason escaping
