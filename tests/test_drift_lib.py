@@ -1387,14 +1387,16 @@ class Arguments(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_no_resources_left(self):
-        "R8"
-        tmp = tempfile.gettempdir()
-        before = sorted(os.listdir(tmp))
-        for r in (row("i"), row("a", "merged")):
-            se(r, stream(r["stream"]))
-        with self.assertRaises(GateError):
-            se(row("a"), stream("a"), name="20261107-n")
-        self.assertEqual(sorted(os.listdir(tmp)), before)
+        "R8: judged on a private temp directory (in-process tempfile and child processes via TMPDIR), never the shared system one"
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(G["root"])) as private:
+            with mock.patch.object(tempfile, "tempdir", private), mock.patch.dict(os.environ, {"TMPDIR": private}):
+                self.assertEqual(tempfile.gettempdir(), private)
+                self.assertEqual(os.listdir(private), [])
+                for r in (row("i"), row("a", "merged")):
+                    se(r, stream(r["stream"]))
+                with self.assertRaises(GateError):
+                    se(row("a"), stream("a"), name="20261107-n")
+                self.assertEqual(sorted(os.listdir(private)), [])
 
 
 def est(used, estimate, pct=150, sid="a"):
