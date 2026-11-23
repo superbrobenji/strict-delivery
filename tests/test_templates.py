@@ -104,6 +104,24 @@ def job_lines(text, name):
     return out
 
 
+IF_PR = "        if: github.event_name == 'pull_request'"
+
+
+def split_steps(lines):
+    """The steps of a job's ``steps:`` list: a step starts at a ``      - `` line, together with the ``      #``
+    comment lines directly before it; the lines after belong to it up to the next step."""
+    steps, pending = [], []
+    for line in lines:
+        if line.startswith("      #"):
+            pending.append(line)
+        elif line.startswith("      - "):
+            steps.append(pending + [line])
+            pending = []
+        else:
+            steps[-1].append(line)
+    return steps
+
+
 def on_block(text):
     lines = text.split("\n")
     i = lines.index("on:")
@@ -1023,12 +1041,28 @@ class TestCiWorkflow(TplCase):
 
     def test_ci_workflow_jobs(self):  # CW6
         jobs = re.findall(r"(?m)^  ([a-z-]+):$", wf().split("\njobs:\n")[1])
-        self.assertEqual(jobs, ["gates", "pull-request"])
-        self.assertIn("  pull-request:\n    if: github.event_name == 'pull_request'\n", wf())
+        self.assertEqual(jobs, ["gates"])  # A3: one job; the pull-request steps are steps of it
+        self.assertNotIn("\n    if:", wf())  # no job-level `if:`
+
+    def test_ci_workflow_one_job_one_fetch_line(self):  # A3, PO4 stands
+        for pin in ("v0.1.0", SHA40):
+            with self.subTest(pin=pin):
+                text = wf(pin=pin)
+                lines = text.split("\n")
+                self.assertEqual(len(re.findall(r"(?m)^  [a-z-]+:$", text.split("\njobs:\n")[1])), 1)
+                self.assertEqual([x for x in lines if "git fetch" in x],
+                                 ["          git fetch --depth 1 https://github.com/o/n " + pin])
+                self.assertEqual(text.count("https://github.com/"), 1)
+                self.assertEqual(pin_of(text), pin)
+                dup = text.replace("          git fetch --depth 1 https://github.com/o/n " + pin + "\n",
+                                   "          git fetch --depth 1 https://github.com/o/n " + pin + "\n"
+                                   "          git fetch --depth 1 https://github.com/o/n " + pin + "\n")
+                self.assertEqual(len([x for x in dup.split("\n") if "git fetch" in x]), 2)
+                self.assertIsNone(pin_of(dup))  # contradiction: two lines give None
 
     def test_ci_runner_label_matches_this_repo(self):  # CW7, CW8, D-Q5
         labels = re.findall(r"(?m)^\s+runs-on: (.*)$", wf())
-        self.assertEqual(labels, ["ubuntu-24.04", "ubuntu-24.04"])
+        self.assertEqual(labels, ["ubuntu-24.04"])
         self.assertIn("ubuntu-24.04", runner_labels(read(WF_PATH)))
         self.assertNotIn("latest", wf())
 
@@ -1073,7 +1107,7 @@ class TestCiWorkflow(TplCase):
         self.assertFalse(actions_match(wf(), repo, label="ubuntu-latest"))
 
     def test_ci_workflow_python_39(self):  # CW17
-        self.assertEqual(re.findall(r"(?m)^\s+python-version: (.*)$", wf()), ['"3.9"', '"3.9"'])
+        self.assertEqual(re.findall(r"(?m)^\s+python-version: (.*)$", wf()), ['"3.9"'])
 
     def test_ci_workflow_full_history(self):  # CW18
         text = wf()
@@ -1103,11 +1137,8 @@ class TestCiWorkflow(TplCase):
         a, b = wf(pin="v0.1.0").split("\n"), wf(pin=SHA40).split("\n")
         self.assertEqual(len(a), len(b))
         diff = [(x, y) for x, y in zip(a, b) if x != y]
-        self.assertEqual(diff, [
-            ("          git fetch --depth 1 https://github.com/o/n v0.1.0",
-             "          git fetch --depth 1 https://github.com/o/n " + SHA40),
-            ('          git fetch --depth 1 "https://github.com/o/n" v0.1.0',
-             '          git fetch --depth 1 "https://github.com/o/n" ' + SHA40)])  # one line in each of the two jobs
+        self.assertEqual(diff, [("          git fetch --depth 1 https://github.com/o/n v0.1.0",
+                                 "          git fetch --depth 1 https://github.com/o/n " + SHA40)])
 
     def test_ci_workflow_runs_index_then_run_all(self):  # CW25, CW27, CW29
         gates = job_lines(wf(), "gates")
@@ -1117,11 +1148,17 @@ class TestCiWorkflow(TplCase):
         for line in (idx, run_all):
             self.assertEqual(gates.count(line), 1)
             self.assertEqual(gates[gates.index(line) - 1], "        working-directory: ${{ runner.temp }}/strict-delivery")
+        checkout = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1"
         names = [x for x in gates if x.startswith("      - ")]
-        self.assertEqual(names, ["      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1",
+        self.assertEqual(names, [checkout,
                                  "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0",
                                  "      - name: Fetch the framework", "      - name: Index the generated files",
-                                 "      - name: Create the local base branch", "      - name: Run the gates"])
+                                 "      - name: Create the local base branch", "      - name: Run the gates",
+                                 checkout,  # A3: the pull-request steps follow `Run the gates`
+                                 "      - name: Create the local integration branches",
+                                 "      - name: Create the local base branch",
+                                 "      - name: Check the streams of the head branch",
+                                 "      - name: Check the cleanup of a cleanup head"])
 
     def test_ci_workflow_base_expression_matches_this_repo(self):  # CW26, CW28
         text, repo = wf(), read(WF_PATH)
@@ -1147,40 +1184,83 @@ class TestCiWorkflow(TplCase):
         self.assertLess(gates.index("      - name: Fetch the framework"), i)
         self.assertLess(i, gates.index("      - name: Run the gates"))
         self.assertLess(gates.index("          python-version: \"3.9\""), i)
-        self.assertEqual(gates.count(step[0]), 1)
-        pr = job_lines(wf(), "pull-request")
-        k = pr.index(step[0])
-        self.assertEqual(pr[k:k + 5], [step[0]] + step[2:])  # the pull-request job keeps its own, without the `if`
+        self.assertEqual(gates.count(step[0]), 2)  # A3: the pull-request steps keep a copy, after `Run the gates`
+        k = gates.index(step[0], i + 1)
+        self.assertEqual(gates[k:k + 6], step)  # the same six lines, the `if:` line included
+        self.assertGreater(k, gates.index("      - name: Run the gates"))
 
-    def test_ci_workflow_pull_request_steps(self):  # CW30, CW34-CW36, A2 drift of the job against this repository
+    def test_ci_workflow_pull_request_steps_order_and_if(self):  # A3, CW30, CW35
+        gates = job_lines(wf(), "gates")
+        steps = split_steps(gates[gates.index("    steps:") + 1:])
+        names = [[x for x in s if x.startswith("      - ")][0] for s in steps]
+        checkout = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1"
+        self.assertEqual(names, [
+            checkout, "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0",
+            "      - name: Fetch the framework", "      - name: Index the generated files",
+            "      - name: Create the local base branch", "      - name: Run the gates",
+            checkout, "      - name: Create the local integration branches", "      - name: Create the local base branch",
+            "      - name: Check the streams of the head branch", "      - name: Check the cleanup of a cleanup head"])
+        for i, s in enumerate(steps):
+            body = [x for x in s if not x.startswith("      #")]
+            with self.subTest(step=body[0]):
+                ifs = [x for x in body if x.lstrip().startswith("if:")]
+                if i == 4 or i >= 6:  # the base-branch step of A2 and the five pull-request steps
+                    self.assertEqual(ifs, [IF_PR])
+                    self.assertEqual(body[1], IF_PR)  # directly after the step head
+                else:
+                    self.assertEqual(ifs, [])
+        self.assertEqual([x for x in steps[6] if not x.startswith("      #")],
+                         [checkout, IF_PR, "        with:", "          ref: ${{ github.event.pull_request.head.sha }}",
+                          "          fetch-depth: 0"])
+        self.assertEqual(wf().count("if: github.event_name == 'pull_request'"), 6)
+        # the framework is fetched once: the second checkout replaces the workspace, not $RUNNER_TEMP
+        self.assertEqual(sum(1 for s in steps if any("git fetch" in x for x in s)), 1)
+
+    def test_ci_workflow_pull_request_steps(self):  # CW30, CW34-CW36, A3 drift against this repository's job :41-78
+        WD = "        working-directory: ${{ runner.temp }}/strict-delivery"
         repo = job_lines(read(WF_PATH), "pull-request")
-        tpl = job_lines(wf(), "pull-request")
-        rset, tset = set(repo), set(tpl)
-        self.assertEqual([x for x in repo if x not in tset], [
-            '          python-version: "3.13"',
-            '        run: python -m gates check streams --branch "$HEAD_REF"',
+        self.assertEqual(repo[:4], ["  pull-request:", "    if: github.event_name == 'pull_request'",
+                                    "    runs-on: ubuntu-24.04", "    steps:"])
+        rsteps = split_steps(repo[4:])
+        gates = job_lines(wf(), "gates")
+        tsteps = split_steps(gates[gates.index("    steps:") + 1:])[6:]
+        self.assertEqual(len(rsteps), 6)  # checkout, setup-python, integration, base, streams, cleanup
+        self.assertEqual(len(tsteps), 5)  # no second setup-python and no second fetch in the template
+        self.assertEqual(rsteps[1], ["      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0",
+                                     "        with:", '          python-version: "3.13"'])
+        # checkout, integration branches, base branch: this repository's lines plus the step-level `if:`
+        for r, t in ((rsteps[0], tsteps[0]), (rsteps[2], tsteps[1]), (rsteps[3], tsteps[2])):
+            self.assertEqual([x for x in t if not x.startswith("      #")], r[:1] + [IF_PR] + r[1:])
+        self.assertEqual(tsteps[0][0], "      # A pull request is also checked at its head sha, with every integration "
+                                       "branch of a program present.")
+        self.assertEqual(rsteps[2], [
+            "      - name: Create the local integration branches", "        run: |",
+            "          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/*/integration'); do",
+            '            name="${ref#origin/}"', '            git branch "$name" "$ref"', "          done"])
+        self.assertEqual(rsteps[4], ["      - name: Check the streams of the head branch", "        env:",
+                                     "          HEAD_REF: ${{ github.head_ref }}",
+                                     '        run: python -m gates check streams --branch "$HEAD_REF"'])
+        self.assertEqual(tsteps[3], ["      - name: Check the streams of the head branch", IF_PR, WD, "        env:",
+                                     "          HEAD_REF: ${{ github.head_ref }}",
+                                     '        run: python3 -m gates check streams --root "$GITHUB_WORKSPACE" '
+                                     '--branch "$HEAD_REF"'])
+        program = "      # A tail that names a program is a program close, checked by hand with --program and --decision."
+        head = "      - name: Check the cleanup of a cleanup head"
+        env = ["        env:", "          HEAD_REF: ${{ github.head_ref }}", "        run: |",
+               '          case "$HEAD_REF" in', "            cleanup/*) ;;", "            *) exit 0 ;;", "          esac",
+               '          PLAN="${HEAD_REF#cleanup/}"']
+        tail = ['            echo "program close: check it by hand with check cleanup --program NAME --decision DEC"',
+                "            exit 0", "          fi"]
+        probe = ("if %s -c 'import sys; from gates.lib import programs; sys.exit(0 if "
+                 "programs.program_problem(sys.argv[1]) == \"\" else 1)' \"$PLAN\"; then")
+        self.assertEqual(rsteps[5], [
             "      # Task P3.3: a cleanup/<plan> head is also judged by check cleanup; any other head skips the step.",
-            "          if python -c 'import sys; from gates.lib import programs; sys.exit(0 if "
-            "programs.program_problem(sys.argv[1]) == \"\" else 1)' \"$PLAN\"; then",
+            program, head] + env + ["          " + probe % "python"] + tail + [
             '          python -m gates check cleanup --plan="$PLAN"'])
-        self.assertEqual([x for x in tpl if x not in rset], [
-            '          python-version: "3.9"', "      - name: Fetch the framework",
-            '          git init "$RUNNER_TEMP/strict-delivery"', '          cd "$RUNNER_TEMP/strict-delivery"',
-            '          git fetch --depth 1 "https://github.com/o/n" v0.1.0', "          git checkout --detach FETCH_HEAD",
-            "        working-directory: ${{ runner.temp }}/strict-delivery",
-            '        run: python3 -m gates check streams --root "$GITHUB_WORKSPACE" --branch "$HEAD_REF"',
+        self.assertEqual(tsteps[4], [
             "      # A cleanup/<plan> head is also judged by check cleanup; any other head skips the step.",
-            "        working-directory: ${{ runner.temp }}/strict-delivery",
-            "          if python3 -c 'import sys; from gates.lib import programs; sys.exit(0 if "
-            "programs.program_problem(sys.argv[1]) == \"\" else 1)' \"$PLAN\"; then",
+            program, head, IF_PR, WD] + env + ["          " + probe % "python3"] + tail + [
             '          python3 -m gates check cleanup --root "$GITHUB_WORKSPACE" --plan="$PLAN"'])
-        generic = "        run: |"  # the template's extra framework step also opens a `run: |` block
-        self.assertEqual([x for x in repo if x in tset and x != generic],
-                         [x for x in tpl if x in rset and x != generic])  # shared lines, same order
-        self.assertIn("    if: github.event_name == 'pull_request'", tpl)
-        self.assertIn("          for ref in $(git for-each-ref --format='%(refname:short)' "
-                      "'refs/remotes/origin/*/integration'); do", tpl)
-        self.assertIn("      - name: Check the streams of the head branch", tpl)
 
     def test_ci_workflow_head_ref_via_env(self):  # CW31
         text = wf()
@@ -1194,7 +1274,7 @@ class TestCiWorkflow(TplCase):
                                        r"if \[|git branch|git rev-parse")
 
     def test_ci_workflow_cleanup_step(self):  # CW32, CW33
-        pr = "\n".join(job_lines(wf(), "pull-request"))
+        pr = "\n".join(job_lines(wf(), "gates"))
         self.assertIn("      - name: Check the cleanup of a cleanup head\n", pr)
         self.assertIn('          case "$HEAD_REF" in\n            cleanup/*) ;;\n            *) exit 0 ;;\n'
                       '          esac\n          PLAN="${HEAD_REF#cleanup/}"\n', pr)
@@ -1241,7 +1321,7 @@ class TestCiWorkflow(TplCase):
         for v in ("o/n", "O/N", "a-b/c.d_e", "o/n.git", "A1/.x", "x/..y"):
             with self.subTest(v=v):
                 self.assertIn("git fetch --depth 1 https://github.com/%s v0.1.0\n" % v, wf(repo=v))
-        self.assertEqual(wf().count("github.com/o/n"), 2)
+        self.assertEqual(wf().count("github.com/o/n"), 1)
 
     def test_ci_workflow_pin_shapes(self):  # CW39, D-Q3
         class S(str):
@@ -1377,8 +1457,8 @@ class TestVersionRows(unittest.TestCase):
         for limit in INT_LIMITS:
             with int_limit(limit):
                 self.assertEqual(ci_pin(n + ".0.0", None), "v" + n + ".0.0")
-                self.assertEqual(ci_workflow(cfg(), "v%s.0.0" % n, "o/n").count("v%s.0.0" % n), 2)
-                self.assertEqual(ci_workflow(cfg(), SHA40, "o/" + n).count("github.com/o/" + n), 2)
+                self.assertEqual(ci_workflow(cfg(), "v%s.0.0" % n, "o/n").count("v%s.0.0" % n), 1)
+                self.assertEqual(ci_workflow(cfg(), SHA40, "o/" + n).count("github.com/o/" + n), 1)
                 self.assertEqual(ci_workflow(cfg(base=n + ".x"), SHA40, "o/n").count("[%s.x]" % n), 1)
 
     def test_templates_no_unicode_database_read(self):  # VR5
