@@ -999,6 +999,96 @@ class ReceiptsDir(Base):
             self.assertEqual((p.returncode, err), (0, b""), err)
         self.assertEqual(len(load(self.root, self.cfg, SID)), 20)
 
+    def rival_between_open_and_check(self, name, rival):
+        """F-20261123-rrw3: the open of the directory ``name`` has failed ENOENT (it is absent); ``rival()`` then runs
+        just before the first ``_kind`` of ``name``, as a second process would between the open and the check."""
+        real_kind = receipts._kind
+        st = {"fired": 0}
+
+        def kind(n, dir_fd):
+            if n == name and not st["fired"]:
+                st["fired"] += 1
+                rival()
+            return real_kind(n, dir_fd)
+        return st, mock.patch.object(receipts, "_kind", kind)
+
+    def test_dir_made_by_rival_between_open_and_check(self):  # RD9, F-20261123-rrw3
+        st, patch = self.rival_between_open_and_check("receipts", lambda: os.mkdir(self.rdir, 0o700))
+        with patch:
+            self.rec()
+        self.assertEqual(st["fired"], 1)
+        self.assertEqual(self.rf_bytes(), (HDR + row_text(self.real + "/a.txt", blob(b"a"))).encode())
+
+    def test_created_subdirectory_made_by_rival_between_open_and_check(self):  # RD9, RD2, F-20261123-rrw3
+        cfg = copy.deepcopy(self.cfg)
+        cfg["paths"]["receipts"] = "a/b/c"
+        for name in ("a", "b", "c"):  # each component of the chain, in turn
+            root = os.path.join(self.tmp, "root-" + name)
+            os.mkdir(root)
+            self.put("a.txt", b"a", base=root)
+            parts = ["a", "b", "c"]
+            path = os.path.join(root, *parts[:parts.index(name) + 1])
+            st, patch = self.rival_between_open_and_check(name, lambda p=path: os.mkdir(p, 0o700))
+            with patch:
+                record(root, cfg, SID, "a.txt")
+            self.assertEqual(st["fired"], 1, name)
+            with open(os.path.join(root, "a/b/c", SID + ".yml"), "rb") as fh:
+                self.assertEqual(fh.read(), (HDR + row_text(os.path.realpath(root) + "/a.txt", blob(b"a"))).encode())
+
+    def test_read_path_dir_made_by_rival_between_open_and_check(self):  # F-20261123-rrw3 (create false)
+        st, patch = self.rival_between_open_and_check("receipts", lambda: os.mkdir(self.rdir, 0o700))
+        with patch:
+            self.assertEqual(load(self.root, self.cfg, SID), [])
+        self.assertEqual(st["fired"], 1)
+
+    def test_rival_link_or_file_between_open_and_check_refused(self):  # RD3, RD4, F-20261123-rrw3 (contradiction)
+        target = os.path.join(self.other(), "elsewhere")
+        os.mkdir(target)
+        with self.subTest("link"):
+            st, patch = self.rival_between_open_and_check("receipts", lambda: os.symlink(target, self.rdir))
+            with patch, self.assertRaisesRegex(GateError, "^\\.strict-delivery/receipts: is a symlink; directories must "
+                                                         "be real directories$"):
+                self.rec()
+            self.assertEqual((st["fired"], os.listdir(target)), (1, []))
+            os.unlink(self.rdir)
+        with self.subTest("file"):
+            st, patch = self.rival_between_open_and_check("receipts", lambda: open(self.rdir, "wb").close())
+            with patch, self.assertRaisesRegex(GateError, "^\\.strict-delivery/receipts: is not a directory$"):
+                self.rec()
+            self.assertEqual(st["fired"], 1)
+
+    @unittest.skipIf(os.geteuid() == 0, "uid 0 opens anything")
+    def test_unreadable_existing_dir_is_refused_not_retried(self):  # F-20261123-rrw3 (only ENOENT is retried)
+        os.makedirs(self.rdir)
+        os.chmod(self.rdir, 0)
+        self.addCleanup(os.chmod, self.rdir, 0o700)
+        with open_hook("receipts", lambda: None, directory=True) as hk, self.assertRaisesRegex(
+                GateError, "^\\.strict-delivery/receipts: cannot use the receipts directory \\(Permission denied\\)$"):
+            self.rec()
+        self.assertEqual(hk["seen"], 1)  # one open: no second attempt
+
+    def test_missing_dir_with_failed_check_is_refused_not_retried(self):  # F-20261123-rrw3 (only "dir" is retried)
+        with open_hook("receipts", lambda: None, directory=True) as hk, mock.patch.object(
+                receipts, "_kind", lambda n, d: "other"), self.assertRaisesRegex(
+                GateError, "^\\.strict-delivery/receipts: cannot use the receipts directory "
+                           "\\(No such file or directory\\)$"):
+            self.rec()
+        self.assertEqual(hk["seen"], 1)  # one open: no second attempt
+        self.nothing_created()
+
+    def test_second_miss_after_rival_is_an_error_not_a_loop(self):  # F-20261123-rrw3 (the retry is once)
+        real_open = os.open
+
+        def op(n, flags, *a, **k):
+            if n == "receipts" and "dir_fd" in k:
+                raise FileNotFoundError(errno.ENOENT, "No such file or directory")
+            return real_open(n, flags, *a, **k)
+        st, patch = self.rival_between_open_and_check("receipts", lambda: os.mkdir(self.rdir, 0o700))
+        with patch, mock.patch.object(receipts.os, "open", op), self.assertRaisesRegex(
+                GateError, "^\\.strict-delivery/receipts: cannot use the receipts directory \\(No such file or directory\\)$"):
+            self.rec()
+        self.assertEqual(st["fired"], 1)
+
     def test_record_recreates_directory(self):  # RD11
         self.rec()
         os.unlink(self.rf)

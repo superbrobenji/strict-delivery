@@ -90,6 +90,8 @@ def _step(parent: int, name: str, shown: str, create: bool, mode: int, what: str
             except OSError as e:
                 raise GateError("%s: %s (%s)" % (shown, what, e.strerror or type(e).__name__)) from None
             continue
+        if kind == "dir" and isinstance(err, FileNotFoundError) and attempt == 0:
+            continue  # a rival made it between the open and the check: opened (and checked) by the second attempt
         raise GateError("%s: %s (%s)" % (shown, what, err.strerror or type(err).__name__)) from None
     raise AssertionError("unreachable")  # pragma: no cover
 
