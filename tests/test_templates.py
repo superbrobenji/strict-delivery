@@ -355,6 +355,10 @@ class TestRender(TplCase):
         self.tpl({"t.txt": "${{ unclosed\n"})
         self.assertEqual(render("t.txt", {}), "${{ unclosed\n")
 
+    def test_render_github_expression_ends_at_first_closer(self):  # D-Q2: a `{{k` inside an expression is not scanned
+        self.tpl({"t.txt": "${{ a {{k}} }}\n"})
+        self.assertEqual(render("t.txt", {}), "${{ a {{k}} }}\n")
+
     def test_render_empty_template(self):  # RN26
         self.tpl({"t.txt": ""})
         with self.assertRaisesRegex(GateError, "empty template"):
@@ -513,6 +517,36 @@ class TestRender(TplCase):
                 with self.assertRaises(GateError):
                     render(name, {"x": "1"})
         self.assertEqual(len(os.listdir("/dev/fd")), start)
+
+    def test_render_parent_is_a_regular_file(self):  # RN36 (a path component that is a file, not a directory)
+        self.tpl({"t.txt": "x\n"})
+        with self.assertRaisesRegex(GateError, r"^templates\.render: t\.txt/u: t\.txt: is not a directory$"):
+            render("t.txt/u", {})
+
+    def test_render_template_over_one_read_chunk(self):  # RN15: the read loop collects every 65536-byte chunk
+        self.tpl({"big.txt": "a" * 70000 + "{{k}}" + "b" * 70000 + "\n"})
+        self.assertEqual(render("big.txt", {"k": "Z"}), "a" * 70000 + "Z" + "b" * 70000 + "\n")
+
+    def test_render_read_error_is_a_gate_error(self):  # RN41: an OSError from the read itself
+        self.tpl({"t.txt": "x\n"})
+        with mock.patch.object(templates.os, "read", side_effect=OSError(5, "boom")):
+            with self.assertRaisesRegex(GateError, r"^templates\.render: t\.txt: cannot read \(boom\)$"):
+                render("t.txt", {})
+
+    def test_render_opens_read_only_without_following_or_blocking(self):  # RN40: the open flags
+        self.tpl({"t.txt": "x\n"})
+        real = os.open
+        flags_seen = []
+
+        def spy(path, flags, *args, **kw):
+            flags_seen.append(flags)
+            return real(path, flags, *args, **kw)
+        with mock.patch.object(templates.os, "open", side_effect=spy):
+            self.assertEqual(render("t.txt", {}), "x\n")
+        self.assertEqual(len(flags_seen), 1)
+        self.assertEqual(flags_seen[0] & os.O_ACCMODE, os.O_RDONLY)
+        self.assertNotEqual(flags_seen[0] & os.O_NOFOLLOW, 0)
+        self.assertNotEqual(flags_seen[0] & os.O_NONBLOCK, 0)
 
 
 class TestClaudeBlock(unittest.TestCase):
@@ -1008,6 +1042,14 @@ class TestCiWorkflow(TplCase):
             with self.subTest(v=repr(v)):
                 with self.assertRaisesRegex(GateError, "templates.ci_workflow: cfg: base_branch"):
                     ci_workflow(cfg(base=v), "v0.1.0", "o/n")
+
+    def test_ci_workflow_base_branch_error_shows_the_value(self):  # A1: the error names the offending value, quoted
+        for v, shown in (("a..b", "'a..b'"), ("a\nb", "'a\\nb'"), ("a b", "'a b'")):
+            with self.subTest(v=repr(v)):
+                with self.assertRaises(GateError) as cm:
+                    ci_workflow(cfg(base=v), "v0.1.0", "o/n")
+                self.assertEqual(str(cm.exception),
+                                 "templates.ci_workflow: cfg: base_branch %s is not a plain branch name" % shown)
 
     def test_ci_workflow_base_branch_accepted(self):  # A1
         for v in ("main", "trunk", "release/1.x", "a", "A9", "x-y", "x_y", "x.y", "feature/a/b", "v1.0", "locked"):
