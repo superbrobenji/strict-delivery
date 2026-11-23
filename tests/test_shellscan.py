@@ -3,6 +3,7 @@ Every expected value is written here from the input-domain table (task-3b.1-doma
 of task-3b.1-domain.md that it carries), never computed by the scanner."""
 import dataclasses
 import gc
+import signal
 import time
 import unittest
 
@@ -25,6 +26,149 @@ def NP(reason):
 
 class Sub(str):
     pass
+
+
+# CH6 (F6; r4 R4-3; r5 F5-2, F5-3): each shape is timed at n and CH6_SPAN * n units; a linear scanner gives a growth
+# ratio near CH6_SPAN (16), a quadratic one near CH6_SPAN ** 2 (256); the bound sits between them (fix round 5: the
+# span was 4 with bound 8, which a quadratic with a small constant passed by chance). No wall-clock bound.
+CH6_SPAN = 16
+CH6_BOUND = 64
+CH6_ROUNDS = 3
+
+
+def _fields(s):
+    return {"plain": s.plain, "reason": s.reason, "argv": s.argv, "assignments": s.assignments, "cd": s.cd,
+            "words": s.words}
+
+
+def _pw(argv, words, asg=(), cd=None):
+    exp = P(argv, asg, cd)
+    exp["words"] = tuple(words)
+    return exp
+
+
+def _npw(reason, words):
+    exp = NP(reason)
+    exp["words"] = tuple(words)
+    return exp
+
+
+def _scan(text):
+    return _fields(scan(text))
+
+
+def _token(text):
+    return token_in(text, "a")
+
+
+# (name, n, text of k units, call, expected result for k units written by hand). The path each shape enters in
+# gates/lib/shellscan.py is named; the fix-5 transcript holds a quadratic mutant per path, each failing this test.
+CH6_SHAPES = (
+    # _tokenize: the fast path (_WHOLE) and the blank branch; scan: the token loops; _chars on a fast word
+    ("fast", 20000, lambda k: "a " * k, _scan, lambda k: _pw(("a",) * k, ("a",) * k)),
+    # the _RUN slow path, then an escaped character, per unit (one word)
+    ("escaped", 2000, lambda k: "x " + "a\\ " * k, _scan, lambda k: _pw(("x", "a " * k), ("x", "a " * k))),
+    # a single-quoted part per word, and flush and _word_checks per word
+    ("quoted", 2000, lambda k: "x " + "'a' " * k, _scan, lambda k: _pw(("x",) + ("a",) * k, ("x",) + ("a",) * k)),
+    # the per-character loop of one single-quoted part
+    ("sq-word", 4000, lambda k: "x '" + "a" * k + "'", _scan, lambda k: _pw(("x", "a" * k), ("x", "a" * k))),
+    # a double-quoted part per word
+    ("dq", 2000, lambda k: "x " + '"a" ' * k, _scan, lambda k: _pw(("x",) + ("a",) * k, ("x",) + ("a",) * k)),
+    # the per-character loop of one double-quoted part; _word_checks per character
+    ("dq-word", 4000, lambda k: 'x "' + "a" * k + '"', _scan, lambda k: _pw(("x", "a" * k), ("x", "a" * k))),
+    # the four escapes inside double quotes (\" \\ \$ \`)
+    ("dq-escape", 1000, lambda k: 'x "' + '\\"\\\\\\$\\`' * k + '"', _scan,
+     lambda k: _pw(("x", '"\\$`' * k), ("x", '"\\$`' * k))),
+    # a line join inside double quotes
+    ("dq-join", 2000, lambda k: 'x "' + ".\\\n" * k + '"', _scan, lambda k: _pw(("x", "." * k), ("x", "." * k))),
+    # a $ and a backtick inside double quotes
+    ("dq-subst", 1000, lambda k: "x " + '"$a`b`" ' * k, _scan,
+     lambda k: _npw("expansion", ("x",) + ("$a`b`",) * k)),
+    # an unquoted $ and an unquoted backtick (the slow path's own branches), one word
+    ("subst", 2000, lambda k: "x " + "$`" * k, _scan, lambda k: _npw("expansion", ("x", "$`" * k))),
+    # a line join between words
+    ("join", 4000, lambda k: "x" + " \\\n" * k + " y", _scan, lambda k: _pw(("x", "y"), ("x", "y"))),
+    # an unquoted newline (an operator) per unit
+    ("newline", 2000, lambda k: "a\n" * k + "b", _scan, lambda k: _npw("operator newline", ("a", "\n") * k + ("b",))),
+    # an operator per unit; scan's operator loop
+    ("operator", 2000, lambda k: "a ; " * k + "b", _scan, lambda k: _npw("operator ;", ("a", ";") * k + ("b",))),
+    # the assignment value loop of _word_checks (a ':' before each value character)
+    ("value", 4000, lambda k: "TZ=" + "a:" * k + " git", _scan,
+     lambda k: _pw(("git",), ("TZ=" + "a:" * k, "git"), (("TZ", "a:" * k),))),
+    # the name loop of _assign_head
+    ("name", 4000, lambda k: "A" * k + "=1 git", _scan, lambda k: _npw("assignment", ("A" * k + "=1", "git"))),
+    # scan's leading-assignment loop and the assignment loop of the argv assembly
+    ("assignments", 6000, lambda k: "TZ=1 " * k + "git", _scan,
+     lambda k: _pw(("git",), ("TZ=1",) * k + ("git",), (("TZ", "1"),) * k)),
+    # the loop of _digits_assign and _chars on one long fast-path program word
+    ("digits", 8000, lambda k: "1" * k + " x", _scan, lambda k: _pw(("1" * k, "x"), ("1" * k, "x"))),
+    # the loop of _program_word
+    ("program", 4000, lambda k: "/" + "a/" * k + " x", _scan,
+     lambda k: _pw(("/" + "a/" * k, "x"), ("/" + "a/" * k, "x"))),
+    # the cd prefix: the segment loop of _cd_target
+    ("cd", 4000, lambda k: "cd /" + "a/" * k + " && git x", _scan,
+     lambda k: _pw(("git", "x"), ("cd", "/" + "a/" * k, "&&", "git", "x"), cd="/" + "a/" * k)),
+    # the occurrence loop of token_in (every occurrence has a token character beside it)
+    ("token_in", 8000, lambda k: "a" * k, _token, lambda k: False),
+)
+
+
+class _OverBudget(Exception):
+    pass
+
+
+def _over_budget(signum, frame):
+    raise _OverBudget()
+
+
+def _cpu(call, text, limit):
+    """CPU seconds of ``call(text)`` and its result; ``(None, None)`` when the call reaches ``limit`` CPU seconds (an
+    ITIMER_PROF signal stops it, so a quadratic run never runs long); ``limit`` 0 sets no limit."""
+    try:
+        signal.setitimer(signal.ITIMER_PROF, limit)
+        try:
+            t0 = time.process_time()
+            out = call(text)
+            took = time.process_time() - t0
+        finally:
+            signal.setitimer(signal.ITIMER_PROF, 0)
+    except _OverBudget:
+        return None, None
+    return took, out
+
+
+def ch6_growth(shape, check, n):
+    """Time one CH6 shape at base size n: CH6_ROUNDS rounds, each first n units then CH6_SPAN * n units (the sizes
+    alternate, so a change in machine load falls on both); CPU time of this process, the cyclic collector off while
+    timed (its cost follows the size of the whole test process, not the text). ``check(result, expected)`` runs on
+    every finished call. A large run stopped at CH6_BOUND times the smallest small run so far counts as infinite: its
+    ratio to the final smallest small run is above the bound too, so the stop never changes the verdict.
+    Returns (ratio, small, large)."""
+    name, _n, make, call, expect = shape
+    big = CH6_SPAN * n
+    texts = {n: make(n), big: make(big)}
+    took = {n: [], big: []}
+    enabled = gc.isenabled()
+    old = signal.signal(signal.SIGPROF, _over_budget)
+    try:
+        for _ in range(CH6_ROUNDS):
+            for size in (n, big):
+                limit = 0 if size == n else CH6_BOUND * min(took[n])
+                gc.disable()
+                t, out = _cpu(call, texts[size], limit)
+                if enabled:
+                    gc.enable()
+                if t is None:
+                    took[size].append(float("inf"))
+                    continue
+                took[size].append(t)
+                check(out, expect(size))
+    finally:
+        signal.setitimer(signal.ITIMER_PROF, 0)
+        signal.signal(signal.SIGPROF, old)
+        if enabled:
+            gc.enable()
+    return min(took[big]) / min(took[n]), took[n], took[big]
 
 
 class ScanCase(unittest.TestCase):
@@ -196,6 +340,12 @@ class GroupingTest(ScanCase):
         for m in r41 + r42 + old:
             self.check("x " + m, NP("character"))
             self.check("x " + m + " y", NP("character"))
+        # every R4-1 member followed by a line join and a second command, and at the end (row N15)
+        for m in r41:
+            self.check("git commit -m " + m + "\\\n git push --force", NP("character"))
+            self.check("p " + m + "\\\n\\\n q y", NP("character"))
+            self.check("p " + m + "\\\n\tq y", NP("character"))
+            self.check("p " + m + "\\\n", NP("character"))
         self.many([
             # R4-1 reproducers: a line join and a second command after the `}`, and the `}` at the end
             ("git commit -m x}\\\n git push --force", NP("character")),
@@ -786,39 +936,21 @@ class CharacterTest(ScanCase):
                 with self.assertRaises(TypeError):
                     scan(bad)
 
-    def test_long_text_linear(self):  # CH6 (F6; r4 R4-3): growth ratio per shape, best of five; no wall-clock bound
-        # CPU time of this process (not wall-clock time, which other processes stretch); the n and 4n rounds alternate,
-        # so a change in machine load falls on both sizes; the cyclic collector is
-        # off while a scan is timed (its cost follows the size of the whole test process, not the text).
-        # Shapes (each with its argv written by hand): the fast path (plain [0-9A-Za-z_] words), and two that go through
-        # the per-character path: one word of escaped blanks (the unquoted run, then an escape, per unit) and
-        # single-quoted words.
-        n = 25000
-        shapes = (
-            ("fast", lambda k: "a " * k, lambda k: ("a",) * k),
-            ("escaped", lambda k: "x " + "a\\ " * k, lambda k: ("x", "a " * k)),
-            ("quoted", lambda k: "x " + "'a' " * k, lambda k: ("x",) + ("a",) * k),
-        )
-        enabled = gc.isenabled()
-        for name, make, argv in shapes:
-            with self.subTest(shape=name):
-                texts = {n: make(n), 4 * n: make(4 * n)}
-                took = {n: [], 4 * n: []}
-                try:
-                    for _ in range(5):
-                        for size in (n, 4 * n):
-                            gc.disable()
-                            t0 = time.process_time()
-                            s = scan(texts[size])
-                            took[size].append(time.process_time() - t0)
-                            if enabled:
-                                gc.enable()
-                            self.assertEqual((s.plain, s.reason, s.assignments, s.cd), (True, "", (), None))
-                            self.assertEqual(s.argv, argv(size))
-                finally:
-                    if enabled:
-                        gc.enable()
-                self.assertLess(min(took[4 * n]) / min(took[n]), 8)
+    def test_long_text_linear(self):  # CH6 (F6; r4 R4-3; r5 F5-2, F5-3): growth ratio per shape; no wall-clock bound
+        # One shape per per-character or per-word path of the scanner (CH6_SHAPES), each result compared with the
+        # Scan written by hand at both sizes; ratio best-of-rounds large / best-of-rounds small below CH6_BOUND, first at
+        # the base size n // 8 (a quadratic with a large constant fails there, at little cost), then at n (a quadratic
+        # with a small constant, such as a copy of the rest of the text per word, shows only at large sizes).
+        self.assertGreaterEqual(len(CH6_SHAPES), 20)
+        for shape in CH6_SHAPES:
+            for base in (shape[1] // 8, shape[1]):
+                ratio = float("inf")
+                with self.subTest(shape=shape[0], base=base):
+                    ratio, small, large = ch6_growth(shape, self.assertEqual, base)
+                    self.assertGreater(min(small), 0)
+                    self.assertLess(ratio, CH6_BOUND, "small %r large %r" % (small, large))
+                if ratio >= CH6_BOUND:
+                    break
 
     def test_huge_numbers_are_text(self):  # V1
         d4300, d4301 = "7" * 4300, "7" * 4301
