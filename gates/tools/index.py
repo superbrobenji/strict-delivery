@@ -302,7 +302,8 @@ def _specs_and_plans(root: str, cfg: dict, progs: list) -> list:
     for path in named:
         if path not in done:  # one entry per path in a section: done > in progress > todo (PL10, D-5b-Q4)
             todo.pop(path, None)
-            doing[path] = "- " + safe_text(path)
+            if path not in doing:  # a plan keeps its suffixed line (plan :5330)
+                doing[path] = "- " + safe_text(path)
     if hist:
         for path in _deleted_md(root, spec_dir):
             if path not in named and path not in todo:
