@@ -371,6 +371,51 @@ def user_email(root: str) -> Optional[str]:
     return value or None
 
 
+def aliases(root: str) -> dict:
+    """The git aliases of ``root`` from every config source, as ``{name: value}`` (Task 3b.2, decision CD1): ``git config
+    -z --get-regexp '^alias\\.'`` prints ``alias.<name>\\n<value>\\0`` per entry; a record is split at its FIRST newline
+    (a record with none is a name with the value ``""``), names are kept as git prints them (lowercase), and of a
+    duplicated name the last value wins, as git resolves it. No alias gives ``{}`` (git's exit 1). Output that is not
+    UTF-8 is a GateError."""
+    _need_root(root)
+    _require_toplevel(root)
+    p = _run(root, "config --get-regexp alias", ["config", "-z", "--get-regexp", "^alias\\."], ok=(0, 1))
+    if p.returncode == 1:
+        if p.stdout or p.stderr:
+            raise GateError("git config --get-regexp alias failed (exit 1)")
+        return {}
+    out: dict = {}
+    for raw in p.stdout.split(b"\0"):
+        if not raw:
+            continue
+        record = _text(raw, "config")
+        key, _sep, value = record.partition("\n")
+        if not key.startswith("alias.") or key == "alias.":
+            raise GateError("git config --get-regexp alias: unexpected entry")
+        out[key[len("alias."):]] = value
+    return out
+
+
+def config_value(root: str, key: str) -> Optional[str]:
+    """The value git resolves for ``key`` (the last of several), or ``None`` when it is unset (Task 3b.2, decision CD1).
+    Read with ``--null``, so only the trailing NUL is removed: a value holding a newline comes back whole, and an empty
+    or valueless entry gives ``""``. A key that is not a ``str``, is empty, has no dot, starts with ``-`` or holds a NUL or
+    a newline is a GateError before git runs (git gives exit 1 for a bad key and for an unset one); an exit 1 that
+    printed to stderr is a GateError too, never read as unset."""
+    _need_root(root)
+    if (type(key) is not str or key == "" or "." not in key or key.startswith("-") or "\0" in key
+            or "\n" in key):
+        raise GateError("config key must be a string of the form section.name")
+    _require_toplevel(root)
+    p = _run(root, "config --get", ["config", "--null", "--get", "--", key], ok=(0, 1))
+    if p.returncode == 1:
+        if p.stdout or p.stderr:
+            raise GateError("git config --get failed (exit 1)")
+        return None
+    text = _text(p.stdout, "config")
+    return text[:-1] if text.endswith("\0") else text
+
+
 def unstaged_paths(root: str) -> list:
     """The tracked paths whose work-tree content differs from the index git is using (``GIT_INDEX_FILE`` inherited;
     a relative value resolves against ``root``, because the call runs with ``-C root``): git's own ``diff`` rule, so a

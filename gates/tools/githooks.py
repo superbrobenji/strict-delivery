@@ -142,6 +142,11 @@ def install(root: str, framework: str) -> list:
 
 def status(root: str, framework: str) -> Result:
     """``PASS githooks.<name>`` or ``FAIL githooks.<name>: missing | foreign | stale`` for each hook."""
+    return status_result(root, framework)
+
+
+def status_result(root: str, framework: str) -> Result:
+    """The ``Result`` of ``status`` (Task 3b.2): returned, never printed; a bad framework path or root is a GateError."""
     _check_framework(framework)
     hooks = gitinfo.hooks_dir(root)
     res = Result("githooks")
@@ -229,8 +234,10 @@ def _gates(root: str) -> Result:
                               for ln in res.lines])
 
 
-def _run_commands_test(root: str, cfg: dict) -> Line:
-    """Run ``commands.test`` in ``root`` (Q-B2plan-11 (a)): a string with ``sh -c``, a list as one argv."""
+def _run_commands_test(root: str, cfg: dict, capture: bool = False) -> Line:
+    """Run ``commands.test`` in ``root`` (Q-B2plan-11 (a)): a string with ``sh -c``, a list as one argv. The child
+    inherits stdout and stderr; with ``capture`` (the hook's result functions, decision Q5 (i) (b)) both go to a pipe
+    that is dropped, so nothing reaches the caller's stdout."""
     commands = cfg.get("commands")
     test = commands.get("test", _UNSET) if type(commands) is dict else _UNSET
     if test is _UNSET:
@@ -242,9 +249,11 @@ def _run_commands_test(root: str, cfg: dict) -> Line:
     else:
         return Line("FAIL", "githook.test", TEST_TYPE)
     env = {k: v for k, v in os.environ.items() if k not in gitinfo.CLEARED_ENV and k != "GIT_INDEX_FILE"}
-    sys.stdout.flush()  # run_all's lines come before the command's output
+    sink = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}
+    if not capture:
+        sys.stdout.flush()  # run_all's lines come before the command's output
     try:
-        p = subprocess.run(argv, cwd=root, env=env, stdin=subprocess.DEVNULL, check=False)
+        p = subprocess.run(argv, cwd=root, env=env, stdin=subprocess.DEVNULL, check=False, **sink)
     except (OSError, ValueError) as e:
         return Line("FAIL", "githook.test", "commands.test could not run: %s" % result._exc_text(e))
     if p.returncode != 0:
@@ -299,24 +308,52 @@ def _flagged_lines(root: str) -> list:
     return [Line("FAIL", "githook.flagged", "%s: %s" % (path, FLAGGED)) for path in gitinfo.flagged_paths(root)]
 
 
-def _pre_commit(root: str) -> int:
+def _pre_commit_core(root: str, emit, capture: bool) -> bool:
+    """The pre-commit checks; ``emit(Result)`` receives each block of lines in the order ``main`` prints them (so
+    ``main`` prints before the test command runs); True when every line passes."""
     unstaged = [Line("FAIL", "githook.unstaged", "%s: %s" % (path, UNSTAGED)) for path in gitinfo.unstaged_paths(root)]
     lines = _flagged_lines(root) + unstaged  # D-14: the flagged lines, then the unstaged lines, then no gate
     if lines:
-        return _report(Result("githook", lines))
+        emit(Result("githook", lines))
+        return False
     res = _gates(root)
-    sys.stdout.write(res.render(False))  # run_all's lines first, then any commands.test line
+    emit(res)  # run_all's lines first, then any commands.test line
     if not res.ok():
-        return 1
+        return False
     cfg = config.load(root)
     if cfg["profile"] != "strict":
-        return 0
-    return _report(Result("githook", [_run_commands_test(root, cfg)]))
+        return True
+    last = Result("githook", [_run_commands_test(root, cfg, capture)])
+    emit(last)
+    return last.ok()
+
+
+def _pre_commit(root: str) -> int:
+    return 0 if _pre_commit_core(root, lambda res: sys.stdout.write(res.render(False)), False) else 1
+
+
+def pre_commit_result(root: str) -> Result:
+    """The lines ``main pre-commit`` prints for ``root`` (run_all's lines, then the ``githook.test`` line on the strict
+    profile), returned and printed by nothing: the test command's own output is captured and dropped (decision Q5). A
+    GateError is raised, not turned into a line."""
+    blocks: List[Line] = []
+    _pre_commit_core(root, lambda res: blocks.extend(res.lines), True)
+    return Result("githook", blocks)
 
 
 def _pre_push(root: str, stdin: bytes) -> int:
     head = gitinfo.head_sha(root)
     updates = _updates(stdin)
+    return _report(_pre_push_core(root, head, updates))
+
+
+def pre_push_result(root: str, updates: list) -> Result:
+    """The lines ``main pre-push`` prints for ``root`` and the ``(local ref, local sha, remote ref)`` ``updates`` of
+    ``_updates`` (Task 3b.2, used by 3b.3). A GateError is raised."""
+    return _pre_push_core(root, gitinfo.head_sha(root), updates)
+
+
+def _pre_push_core(root: str, head: str, updates: list) -> Result:
     base = config.load(root)["base_branch"]
     changed = _staged_paths(root)
     changed += [p for p in gitinfo.unstaged_paths(root) if p not in changed]
@@ -329,8 +366,8 @@ def _pre_push(root: str, stdin: bytes) -> int:
                               "%s: pushes %s, not HEAD %s; check out the branch to push it" % (ref, sha, head)))
     lines += _base_lines(base, updates)  # D-Q4: after the flagged, dirty and push-sha lines
     if lines:
-        return _report(Result("githook", lines))
-    return _report(_gates(root))
+        return Result("githook", lines)
+    return _gates(root)
 
 
 def _report(res: Result) -> int:
