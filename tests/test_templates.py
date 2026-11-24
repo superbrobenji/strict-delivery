@@ -22,12 +22,12 @@ import unittest
 from unittest import mock
 
 from gates import gate_cites
-from gates.lib import config, managed, plugin, schema, templates, yamlsub
+from gates.lib import config, gitinfo, managed, plugin, schema, templates, yamlsub
 from gates.lib.result import GateError
 from gates.lib.templates import (TEMPLATES_DIR, ci_pin, ci_workflow, claude_block_body, gitignore_block_body, pin_of,
                                  render)
 from gates.tools import index
-from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, int_limit, make_repo
+from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo
 from tests.prose_check import FORBIDDEN, forbidden_hits
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,6 +147,15 @@ def evaluate(expr, event, base_ref, default):
 def base_expr(text):
     m = re.search(r"--base origin/\$\{\{ (.*) \}\}", text)
     return m.group(1)
+
+
+def origin_url(root):
+    """The ``origin`` URL of the repository at ``root``: an argument list, ``gitinfo.CLEARED_ENV`` cleared from a copy
+    of the environment, ``LC_ALL=C`` (plan :33)."""
+    env = {k: v for k, v in os.environ.items() if k not in gitinfo.CLEARED_ENV}
+    env["LC_ALL"] = "C"
+    return subprocess.run(["git", "-C", root, "remote", "get-url", "origin"], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, timeout=20, env=env).stdout.decode("utf-8").strip()
 
 
 class TplCase(unittest.TestCase):
@@ -354,6 +363,21 @@ class TestRender(TplCase):
                     render("t.txt", {"k": "v"})
         self.tpl({"t.txt": "${{ unclosed\n"})
         self.assertEqual(render("t.txt", {}), "${{ unclosed\n")
+
+    def test_render_placeholder_at_offset_zero_before_a_final_dollar(self):  # D-Q2 (b), F-20261124-8t7e
+        self.tpl({"t.txt": "{{k}}$"})
+        self.assertEqual(render("t.txt", {"k": "K"}), "K$\n")
+        self.tpl({"t.txt": "{{k}} a $"})
+        self.assertEqual(render("t.txt", {"k": "K"}), "K a $\n")
+
+    def test_render_unspaced_github_expression(self):  # D-Q2 (b), F-20261124-k4es
+        self.tpl({"t.txt": "a ${{github.event}} b ${{a.b}} c ${{a1 }} {{k}}\n"})
+        self.assertEqual(render("t.txt", {"k": "K"}), "a ${{github.event}} b ${{a.b}} c ${{a1 }} K\n")
+        for bad in ("${{key}}\n", "${{a1}}\n", "x ${{a_b}}\n"):
+            with self.subTest(text=bad):
+                self.tpl({"t.txt": bad})
+                with self.assertRaisesRegex(GateError, "not a placeholder"):
+                    render("t.txt", {"k": "v"})
 
     def test_render_github_expression_ends_at_first_closer(self):  # D-Q2: a `{{k` inside an expression is not scanned
         self.tpl({"t.txt": "${{ a {{k}} }}\n"})
@@ -587,6 +611,10 @@ class TestClaudeBlock(unittest.TestCase):
     def test_claude_block_path_markdown_chars(self):  # CB9, CD8
         with self.assertRaisesRegex(GateError, "paths.specs.*backtick"):
             claude_block_body(cfg(specs="a`b"))
+        for v in ("`docs", "docs`", "`", "`a`"):  # F-20261124-rtbm: first and last character
+            with self.subTest(v=v):
+                with self.assertRaisesRegex(GateError, "paths.specs.*backtick"):
+                    claude_block_body(cfg(specs=v))
         for v in ("a*b", "a_b", "a[b]", "a<b>", "a|b", "#a", "a\\b"):
             with self.subTest(v=v):
                 self.assertIn("`%s`" % v, claude_block_body(cfg(specs=v)))
@@ -1362,7 +1390,8 @@ class TestCiWorkflow(TplCase):
             pass
         bad = ["o", "", "o/", "/n", "o/n/x", "o//n", "o/..", "../n", "o/.", "-o/n", "o-/n", "o/n ", " o/n", "o /n",
                "o/n x", "o/n;rm -rf x", "o/n$(x)", "o/n\n", "o/n\x00", "https://github.com/o/n", "o/é", "o/n`x`",
-               "o/n&x", "o/n|x", "o/n'x", 'o/n"x', "o/n\\x", "１/n", "o\n/n", None, 1, S("o/n"), b"o/n"]
+               "o/n&x", "o/n|x", "o/n'x", 'o/n"x', "o/n\\x", "１/n", "o\n/n", "o/...", "o/....", None, 1, S("o/n"),
+               b"o/n"]
         for v in bad:
             with self.subTest(v=repr(v)):
                 with self.assertRaisesRegex(GateError, "templates.ci_workflow: repository"):
@@ -1449,8 +1478,7 @@ class TestForbiddenContent(TplCase):
             ROOT, ".claude-plugin", "plugin.json")))["repository"]).group(1)
         owners = ["superbrobenji", "benji", owner.lower()]
         try:
-            url = subprocess.run(["git", "-C", ROOT, "remote", "get-url", "origin"], stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, timeout=20).stdout.decode("utf-8").strip()
+            url = origin_url(ROOT)
             m = re.match(r"(?:https://github\.com/|git@github\.com:)([^/]+)/", url)
             if m:
                 owners.append(m.group(1).lower())
@@ -1465,6 +1493,20 @@ class TestForbiddenContent(TplCase):
             for text in self.rendered():
                 self.assertNotIn(tier.lower(), text.lower())
 
+
+
+class TestOriginUrl(GitIsolatedTestCase):
+    def test_origin_url_ignores_git_dir(self):  # F-20261124-w9db: the git call clears the environment (plan :33)
+        mine, other = os.path.join(self.tmp, "mine"), os.path.join(self.tmp, "other")
+        os.mkdir(mine)
+        os.mkdir(other)
+        make_repo(mine)
+        make_repo(other)
+        git(mine, "remote", "add", "origin", "https://github.com/zzmine/x")
+        git(other, "remote", "add", "origin", "https://github.com/zzother/x")
+        self.assertEqual(origin_url(mine), "https://github.com/zzmine/x")
+        with mock.patch.dict(os.environ, {"GIT_DIR": os.path.join(other, ".git"), "GIT_WORK_TREE": other}):
+            self.assertEqual(origin_url(mine), "https://github.com/zzmine/x")
 
 
 class TestCites(GitIsolatedTestCase):
