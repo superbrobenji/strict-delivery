@@ -905,6 +905,7 @@ class TestParserSites(unittest.TestCase):
             ("gates/gate_decisions.py", "gate_args"),
             ("gates/gate_dispatch.py", "gate_args"),  # Task 2c.3 (after F1): `--root`, `--prompts`, `--input`
             ("gates/gate_evidence.py", "gate_args"),  # Task 6E.2
+            ("gates/gate_index.py", "gate_args"),
             ("gates/gate_register.py", "gate_args"),
             ("gates/gate_schema.py", "gate_args"),
             ("gates/gate_streams.py", "gate_args"),
