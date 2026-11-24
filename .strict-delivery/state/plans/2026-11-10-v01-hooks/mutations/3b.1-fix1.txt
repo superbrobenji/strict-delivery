@@ -1,0 +1,200 @@
+3b.1 mutation transcript: tests/test_shellscan.py against gates/lib/shellscan.py (plan P:3356-3416)
+module tests.test_shellscan on /usr/bin/python3 and /opt/homebrew/bin/python3.13
+
+fix present (unmutated file):
+  PASS expected; python3: PASS (ran=34; OK) failing tests: -; killed: no
+  PASS expected; python3.13: PASS (ran=34; OK) failing tests: -; killed: no
+
+mutant [F1-revert F1 fix reverted: no command-word keyword check]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=126)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=126)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-b keyword check ignores quoting]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=90)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=90)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-c keyword check continues past the command word]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (errors=509)) failing tests: test_append_assignment_not_plain, test_assignments_split, test_brace_expansion_not_plain, test_cd_form_is_the_only_plain_compound, test_characters, test_comments, test_crlf, test_double_quoted_dollar_not_plain, test_equals_expansion_not_plain, test_expansions, test_first_construct_is_reason, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_heredoc_not_plain, test_huge_numbers_are_text, test_long_text_linear, test_plain_commit, test_quoted_separators_plain, test_quotes, test_redirections, test_reserved_words, test_reserved_words_in_command_position, test_scan_dataclass_shape, test_separators_not_plain, test_tilde_not_plain, test_trailing_newlines_dropped, test_unbalanced_quote_not_plain, test_unicode_version_independent, test_words_field; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (errors=509)) failing tests: test_append_assignment_not_plain, test_assignments_split, test_brace_expansion_not_plain, test_cd_form_is_the_only_plain_compound, test_characters, test_comments, test_crlf, test_double_quoted_dollar_not_plain, test_equals_expansion_not_plain, test_expansions, test_first_construct_is_reason, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_heredoc_not_plain, test_huge_numbers_are_text, test_long_text_linear, test_plain_commit, test_quoted_separators_plain, test_quotes, test_redirections, test_reserved_words, test_reserved_words_in_command_position, test_scan_dataclass_shape, test_separators_not_plain, test_tilde_not_plain, test_trailing_newlines_dropped, test_unbalanced_quote_not_plain, test_unicode_version_independent, test_words_field; killed: yes
+
+mutant [F1-d keyword check on the first word only when it is no assignment (skips A=1 prefix)]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=32)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=32)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-e keyword check ignores the cd prefix]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=32)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=32)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-f keyword reason text]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=126)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=126)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-g keyword position]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=2)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=2)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-h '-' dropped from the keyword set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-case keyword case dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-coproc keyword coproc dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-do keyword do dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-done keyword done dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-elif keyword elif dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-else keyword else dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-esac keyword esac dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-fi keyword fi dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-for keyword for dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-function keyword function dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-if keyword if dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-in keyword in dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-select keyword select dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-then keyword then dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-time keyword time dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=10)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=10)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-until keyword until dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-while keyword while dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-repeat keyword repeat dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-foreach keyword foreach dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-end keyword end dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-nocorrect keyword nocorrect dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-noglob keyword noglob dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-declare keyword declare dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-export keyword export dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-float keyword float dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-integer keyword integer dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-local keyword local dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-readonly keyword readonly dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [F1-w-typeset keyword typeset dropped from the set]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=4)) failing tests: test_reserved_words_in_command_position; killed: yes
+
+mutant [G11-revert G11 fix reverted: leading = not expanded]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=5)) failing tests: test_equals_expansion_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=5)) failing tests: test_equals_expansion_not_plain; killed: yes
+
+mutant [G11-b leading = ignores quoting]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=2)) failing tests: test_equals_expansion_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=2)) failing tests: test_equals_expansion_not_plain; killed: yes
+
+mutant [G11-c leading = reason text]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=5)) failing tests: test_equals_expansion_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=5)) failing tests: test_equals_expansion_not_plain; killed: yes
+
+mutant [F2-revert F2: cd word endswith cd]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=2)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=2)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+
+mutant [F2-b cd word startswith cd]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=1)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=1)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+
+mutant [F2-c cd word contains cd]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=3)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=3)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+
+mutant [F2-d cd word case-insensitive]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=2)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=2)) failing tests: test_cd_form_is_the_only_plain_compound; killed: yes
+
+mutant [I-80 invariant: leading += not reported]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=3)) failing tests: test_append_assignment_not_plain, test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=3)) failing tests: test_append_assignment_not_plain, test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+
+mutant [I-81 invariant: += scan continues past the program word]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=95)) failing tests: test_append_assignment_not_plain, test_cd_form_is_the_only_plain_compound, test_heredoc_not_plain, test_long_text_linear, test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=94)) failing tests: test_append_assignment_not_plain, test_cd_form_is_the_only_plain_compound, test_heredoc_not_plain, test_reserved_words_in_command_position; killed: yes
+
+mutant [I-82 invariant: += scan includes the cd prefix]:
+  FAIL expected; python3: FAIL (ran=34; FAILED (failures=32)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+  FAIL expected; python3.13: FAIL (ran=34; FAILED (failures=32)) failing tests: test_cd_form_is_the_only_plain_compound, test_reserved_words_in_command_position; killed: yes
+
+restored file:
+  PASS expected; python3: PASS (ran=34; OK) failing tests: -; killed: no
+  PASS expected; python3.13: PASS (ran=34; OK) failing tests: -; killed: no
+
+survivors: none

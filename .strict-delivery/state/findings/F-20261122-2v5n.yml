@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-2v5n
+status: open
+source: "3b.1 task review 5: .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-hooks4-report.md F5-2"
+severity: LOW
+class: "length, linear: slow-path shapes; members: double-quoted and every per-character path (tests/test_shellscan.py:785-789 times no double-quoted shape; mutant R5-dq-quadratic after shellscan.py:154 passes all 38 tests)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c02510869b179eee1d9756fd0502901abc6ed38e
+    by: stream-config-hooks
+review_round: 5
+caused_by_change: true
+dimension: length, linear (CH6)

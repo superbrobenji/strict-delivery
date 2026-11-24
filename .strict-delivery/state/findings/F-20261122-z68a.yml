@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-z68a
+status: open
+source: "PR-5a final review (review 1 of the PR): .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-5a.md FR-1"
+severity: MEDIUM
+class: "FIFO-by-name rows outside test_receipts_lib (tasks 5a.1 and 5a.3); members: tests/test_context_lib.py:524 (H6), :673 (SP21), :918 (L6); tests/test_gate_context.py:611 (IN4), :701 (IN8), :998; tests/test_context_cli.py:169 (C10), :317 (each needs a watchdog or a subprocess timeout)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c02510869b179eee1d9756fd0502901abc6ed38e
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: FIFO file state fails by name, never by a hang

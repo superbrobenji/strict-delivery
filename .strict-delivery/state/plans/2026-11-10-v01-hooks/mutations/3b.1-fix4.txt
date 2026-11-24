@@ -1,0 +1,298 @@
+3b.1 fix 4 mutation transcript (R4-1, R4-2, R4-3; owner answer 2026-11-17, Q-3b1R4-1 (a): every unquoted { and } refused)
+Runner: scratch mutate.py (copies gates/ and tests/ of the tree, applies one mutant to gates/lib/shellscan.py, runs
+`python -m unittest tests.test_shellscan` on /usr/bin/python3 (3.9.6) and /opt/homebrew/bin/python3.13 (3.13.18)).
+Reproducer probe: scratch claims.py, which imports gates.lib.shellscan from the named tree and prints scan() of each text.
+
+== Finding transcripts R4-1 and R4-2 (reproducers through scan, both interpreters) ==
+States: dc7c2df (the round-3 head, a detached scratch worktree), fix (this commit's worktree file), fix reverted
+(mutant R4-fix-revert: `{` and `}` put back in _U, the dc7c2df set), fix restored (the worktree file again).
+R4-1 text: "git commit -m x}\\\n git push --force"; R4-2 text: "git commit --no-verif{y.\\.y}".
+Expected: dc7c2df plain, fix not plain (character), reverted plain, restored not plain.
+
+[dc7c2df] 3.9.6 SCRATCH/base
+'git commit -m x}\\\n git push --force' plain=True reason='' argv=('git', 'commit', '-m', 'x}', 'git', 'push', '--force')
+'git commit --no-verif{y.\\.y}' plain=True reason='' argv=('git', 'commit', '--no-verif{y..y}')
+[dc7c2df] 3.13.18 SCRATCH/base
+'git commit -m x}\\\n git push --force' plain=True reason='' argv=('git', 'commit', '-m', 'x}', 'git', 'push', '--force')
+'git commit --no-verif{y.\\.y}' plain=True reason='' argv=('git', 'commit', '--no-verif{y..y}')
+[fix] 3.9.6 WORKTREE
+'git commit -m x}\\\n git push --force' plain=False reason='character' argv=()
+'git commit --no-verif{y.\\.y}' plain=False reason='character' argv=()
+[fix] 3.13.18 WORKTREE
+'git commit -m x}\\\n git push --force' plain=False reason='character' argv=()
+'git commit --no-verif{y.\\.y}' plain=False reason='character' argv=()
+[fix-reverted(R4-fix-revert)] 3.9.6 SCRATCH/m/R4-fix-revert
+'git commit -m x}\\\n git push --force' plain=True reason='' argv=('git', 'commit', '-m', 'x}', 'git', 'push', '--force')
+'git commit --no-verif{y.\\.y}' plain=True reason='' argv=('git', 'commit', '--no-verif{y..y}')
+[fix-reverted(R4-fix-revert)] 3.13.18 SCRATCH/m/R4-fix-revert
+'git commit -m x}\\\n git push --force' plain=True reason='' argv=('git', 'commit', '-m', 'x}', 'git', 'push', '--force')
+'git commit --no-verif{y.\\.y}' plain=True reason='' argv=('git', 'commit', '--no-verif{y..y}')
+[fix-restored] 3.9.6 WORKTREE
+'git commit -m x}\\\n git push --force' plain=False reason='character' argv=()
+'git commit --no-verif{y.\\.y}' plain=False reason='character' argv=()
+[fix-restored] 3.13.18 WORKTREE
+'git commit -m x}\\\n git push --force' plain=False reason='character' argv=()
+'git commit --no-verif{y.\\.y}' plain=False reason='character' argv=()
+
+Real-shell probe (scratch probe.sh: `p` prints its argv; zsh -f and /bin/bash --norc):
+  zsh -f:  `p commit --no-verif{y.\.y}` -> P[commit]P[--no-verify]; `p c{o.'.'o}mmit` -> P[commit];
+           eval 'p commit -m x}\<newline> q push --force' -> P[commit]P[-m]P[x] then Q[push]Q[--force] (two commands);
+           'HEAD@{1}' "HEAD@{1}" HEAD@\{1\} a\} a'}' '{a,b}' -> each literal.
+  bash:    --no-verif{y..y}, c{o..o}mmit literal; the eval is one command with x} q push --force; the quoted forms literal.
+
+== Finding transcript R4-3 (CH6 slow-path shape) ==
+Mutant R4-3-slow is the review-4 mutant (`state["tail"] = state.get("tail", ()) + (stop,)` after the slow-path
+_RUN append). With the dc7c2df test (mutant R4-3-slow-oldtest, run on the dc7c2df tree) it SURVIVES on both
+interpreters; with the new test (mutant R4-3-slow) it is KILLED on both (ratios 16.1 on 3.9.6, 18.8 on 3.13.18, bound
+8). Fix present PASS and fix restored PASS are the unmutated runs at the top and bottom of the run below. Two more
+slow-path quadratic mutants (per escape: R4-3-escape; per single-quoted part: R4-3-quoted) are killed on both too.
+Unmutated ratios (scratch ratio.py, best of 5, n = 25000): 3.9.6 fast 3.84, escaped 4.20, quoted 4.25; 3.13.18 fast
+4.76, escaped 4.18, quoted 4.45.
+
+== Obsolete mutants of 3b.1-fix3.txt (code deleted in this round) ==
+- N11-brace-first (`elif first[0] == "{" or first[0] == "}":` -> `elif False:`): the first-character brace check
+  is deleted by the owner answer; its cases are now covered by _U (mutants R4-open-in-U, R4-close-in-U, R4-fix-revert).
+- 3b.1-fix3.txt held no `_brace_pos` mutant; `_brace_pos` and its call are deleted, so no mutant of them can apply.
+Re-run: the other 27 fix-3 mutants, N11-U-set adapted to the r4 _U line (its old string held `{}`).
+
+== Mutation run (one run; 38 mutants: 11 new, 27 re-run from fix 3) ==
+3b.1 fix 4 mutation transcript: tests/test_shellscan.py against gates/lib/shellscan.py
+module tests.test_shellscan on /usr/bin/python3 and /opt/homebrew/bin/python3.13; each mutant on a scratch copy
+
+fix present (unmutated file) [worktree file]:
+  PASS expected; python3: PASS (ran=38; OK) failing tests: -; killed: no
+  PASS expected; python3.13: PASS (ran=38; OK) failing tests: -; killed: no
+
+diff: - '_U = _NAME_REST | frozenset("-./:@+,%^=~#")'
+      + '_U = _NAME_REST | frozenset("-./:@+,%^=~{}#")'
+mutant [R4-fix-revert R4-1/R4-2 fix reverted: { and } back in U (the dc7c2df set; _brace_pos stays deleted)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=118)) failing tests: test_brace_not_plain, test_cd_target_absolute, test_characters, test_first_construct_is_reason, test_reserved_words, test_words_field, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=118)) failing tests: test_brace_not_plain, test_cd_target_absolute, test_characters, test_first_construct_is_reason, test_reserved_words, test_words_field, test_zsh_sweep; killed: yes
+
+diff: - '_U = _NAME_REST | frozenset("-./:@+,%^=~#")'
+      + '_U = _NAME_REST | frozenset("-./:@+,%^=~{#")'
+mutant [R4-open-in-U { back in U]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=11)) failing tests: test_brace_not_plain, test_characters, test_first_construct_is_reason; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=11)) failing tests: test_brace_not_plain, test_characters, test_first_construct_is_reason; killed: yes
+
+diff: - '_U = _NAME_REST | frozenset("-./:@+,%^=~#")'
+      + '_U = _NAME_REST | frozenset("-./:@+,%^=~}#")'
+mutant [R4-close-in-U } back in U (R4-1 class)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=33)) failing tests: test_brace_not_plain, test_cd_target_absolute, test_characters, test_first_construct_is_reason; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=33)) failing tests: test_brace_not_plain, test_cd_target_absolute, test_characters, test_first_construct_is_reason; killed: yes
+
+diff: - '    if unquoted and flat in ("{", "}"):\n'
+      + '    if False:\n'
+mutant [N2-grouping-removed lone-brace grouping check removed]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=13)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_grouping_and_substitution_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=13)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_grouping_and_substitution_not_plain; killed: yes
+
+diff: - '    if unquoted and flat in ("{", "}"):\n'
+      + '    if unquoted and flat in ("{",):\n'
+mutant [N2-grouping-open-only lone-brace grouping: only {]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=5)) failing tests: test_brace_not_plain, test_first_construct_is_reason, test_grouping_and_substitution_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=5)) failing tests: test_brace_not_plain, test_first_construct_is_reason, test_grouping_and_substitution_not_plain; killed: yes
+
+diff: - '    if unquoted and flat in ("{", "}"):\n'
+      + '    if unquoted and flat in ("}",):\n'
+mutant [N2-grouping-close-only lone-brace grouping: only }]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=8)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_grouping_and_substitution_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=8)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_grouping_and_substitution_not_plain; killed: yes
+
+diff: - '    if unquoted and flat in ("{", "}"):\n'
+      + '    if flat in ("{", "}"):\n'
+mutant [N2-grouping-quoted lone-brace grouping also for a quoted { or }]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=6)) failing tests: test_brace_not_plain, test_grouping_and_substitution_not_plain, test_reserved_words, test_words_field; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=6)) failing tests: test_brace_not_plain, test_grouping_and_substitution_not_plain, test_reserved_words, test_words_field; killed: yes
+
+diff: - '                state["cur"].extend([(text[k], False, k) for k in range(i, stop)])\n'
+      + '                state["cur"].extend([(text[k], False, k) for k in range(i, stop)])\n                state["tail"] = state.get("tail", ()) + (stop,)\n'
+mutant [R4-3-slow R4-3: review-4 mutant, a tuple rebuilt per unquoted run (slow path), new test]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 16.121866482153223); killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 18.760001645249055); killed: yes
+
+diff: - '                state["cur"].extend([(text[k], False, k) for k in range(i, stop)])\n'
+      + '                state["cur"].extend([(text[k], False, k) for k in range(i, stop)])\n                state["tail"] = state.get("tail", ()) + (stop,)\n'
+mutant [R4-3-slow-oldtest R4-3: the same mutant on dc7c2df with the dc7c2df test (the old CH6 test) [tree dc7c2df]]:
+  PASS expected; python3: PASS (ran=38; OK) failing tests: -; killed: no
+  PASS expected; python3.13: PASS (ran=38; OK) failing tests: -; killed: no
+
+diff: - '                state["cur"].append((text[i + 1], True, i + 1))\n'
+      + '                state["cur"].append((text[i + 1], True, i + 1))\n                state["tail"] = state.get("tail", ()) + (i,)\n'
+mutant [R4-3-escape R4-3: a tuple rebuilt per escape (slow path)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 17.253343569048628); killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 17.089921244632823); killed: yes
+
+diff: - '            for k in range(i + 1, stop):\n                state["cur"].append((text[k], True, k))\n'
+      + '            for k in range(i + 1, stop):\n                state["cur"].append((text[k], True, k))\n            state["tail"] = state.get("tail", ()) + (stop,)\n'
+mutant [R4-3-quoted R4-3: a tuple rebuilt per single-quoted part]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 17.076846083421543); killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 17.448500386491236); killed: yes
+
+diff: - '        if head[0] not in _ALLOW:\n'
+      + '        if False:\n'
+mutant [F5-revert F5 fix reverted: any leading NAME= allowed (no allow-list)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=30)) failing tests: test_assignment_allow_list, test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_first_construct_is_reason, test_words_field, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=30)) failing tests: test_assignment_allow_list, test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_first_construct_is_reason, test_words_field, test_zsh_sweep; killed: yes
+
+diff: - '_unquoted(toks[0]) and _cd_target(target):'
+      + '_unquoted(toks[0]) and target != "" and not target.startswith("-"):'
+mutant [F7-revert F7 fix reverted: cd target only non-empty and not '-'-leading (ede19ef condition)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=16)) failing tests: test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_words_field; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=16)) failing tests: test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_words_field; killed: yes
+
+diff: - '                toks.append(("w", None, i, whole.group()))\n'
+      + '                toks.append(("w", None, i, whole.group()))\n                state["seen"] = state.get("seen", ()) + (whole.group(),)\n'
+mutant [F6-quadratic F6: quadratic scanner (the tuple of the words so far rebuilt per fast-path word)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 16.64596043589551); killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 14.032325090919638); killed: yes
+
+diff: - '                toks.append(("w", None, i, whole.group()))\n'
+      + '                toks.append(("w", None, i, whole.group()))\n                state["tail"] = text[i:]\n'
+mutant [F6-quadratic-slice F6 (measured, see notes): a copy of the rest of the text per fast-path word]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 8.118627005260768); killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=1)) failing tests: test_long_text_linear (ratios 8.886498370696078); killed: yes
+
+diff: - '            elif ch not in _U:\n'
+      + '            elif False:\n'
+mutant [N11-char character outside U never reported]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=180)) failing tests: test_brace_not_plain, test_cd_target_absolute, test_characters, test_first_construct_is_reason, test_glob_not_plain, test_reserved_words, test_unicode_version_independent, test_words_field, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=180)) failing tests: test_brace_not_plain, test_cd_target_absolute, test_characters, test_first_construct_is_reason, test_glob_not_plain, test_reserved_words, test_unicode_version_independent, test_words_field, test_zsh_sweep; killed: yes
+
+diff: - '_U = _NAME_REST | frozenset("-./:@+,%^=~#")'
+      + '_U = _NAME_REST | frozenset("-./:@+,%^=~#!")'
+mutant [N11-U-set U gains '!' (adapted: the r4 _U line)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=6)) failing tests: test_characters, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=6)) failing tests: test_characters, test_zsh_sweep; killed: yes
+
+diff: - '        elif first[0] == "~" or first[0] == "=":'
+      + '        elif first[0] == "=":'
+mutant [N4-tilde-first tilde at a word's start not reported]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=7)) failing tests: test_tilde_not_plain, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=7)) failing tests: test_tilde_not_plain, test_zsh_sweep; killed: yes
+
+diff: - '        elif first[0] == "~" or first[0] == "=":'
+      + '        elif first[0] == "~":'
+mutant [N4-equals-first = at a word's start not reported]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=10)) failing tests: test_command_word, test_equals_expansion_not_plain, test_first_construct_is_reason, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=10)) failing tests: test_command_word, test_equals_expansion_not_plain, test_first_construct_is_reason, test_zsh_sweep; killed: yes
+
+diff: - '(prev[0] == "=" or prev[0] == ":")'
+      + '(prev[0] == ":")'
+mutant [N4-tilde-eq tilde after an unquoted = not reported]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=2)) failing tests: test_tilde_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=2)) failing tests: test_tilde_not_plain; killed: yes
+
+diff: - '(prev[0] == "=" or prev[0] == ":")'
+      + '(prev[0] == "=")'
+mutant [N4-tilde-colon tilde after an unquoted : not reported]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=1)) failing tests: test_tilde_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=1)) failing tests: test_tilde_not_plain; killed: yes
+
+diff: - 'and not prev[1] and (prev[0]'
+      + 'and (prev[0]'
+mutant [N4-tilde-quoted tilde after a quoted = or : reported too]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=2)) failing tests: test_tilde_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=2)) failing tests: test_tilde_not_plain; killed: yes
+
+diff: - 'if prev is not None and prev[0] in _TOKEN_CLASS and ch in _TOKEN_CLASS and p != prev[2] + 1:'
+      + 'if prev is not None and ch in _TOKEN_CLASS and p != prev[2] + 1:'
+mutant [N10-prev-class rule Q: the first character need not be a token character]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=9)) failing tests: test_assignment_allow_list, test_assignments_split, test_brace_not_plain, test_glob_not_plain, test_quoting_splits_token; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=9)) failing tests: test_assignment_allow_list, test_assignments_split, test_brace_not_plain, test_glob_not_plain, test_quoting_splits_token; killed: yes
+
+diff: - 'if prev is not None and prev[0] in _TOKEN_CLASS and ch in _TOKEN_CLASS and p != prev[2] + 1:'
+      + 'if prev is not None and prev[0] in _TOKEN_CLASS and p != prev[2] + 1:'
+mutant [N10-cur-class rule Q: the second character need not be a token character]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=28)) failing tests: test_brace_not_plain, test_equals_expansion_not_plain, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_long_text_linear, test_quotes, test_quoting_splits_token, test_tilde_not_plain; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=28)) failing tests: test_brace_not_plain, test_equals_expansion_not_plain, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_long_text_linear, test_quotes, test_quoting_splits_token, test_tilde_not_plain; killed: yes
+
+diff: - 'if prev is not None and prev[0] in _TOKEN_CLASS and ch in _TOKEN_CLASS and p != prev[2] + 1:'
+      + 'if prev is not None and prev[0] in _TOKEN_CLASS and ch in _TOKEN_CLASS and False:'
+mutant [N10-adjacent rule Q never fires (adjacency not checked)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=17)) failing tests: test_first_construct_is_reason, test_quoting_splits_token, test_words_field; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=17)) failing tests: test_first_construct_is_reason, test_quoting_splits_token, test_words_field; killed: yes
+
+diff: - '        if ch not in _PROGRAM or p != at:'
+      + '        if p != at:'
+mutant [N8-set program word: any character]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=74)) failing tests: test_assignments_split, test_brace_not_plain, test_characters, test_command_word, test_comments, test_first_construct_is_reason, test_glob_not_plain, test_unicode_version_independent, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=74)) failing tests: test_assignments_split, test_brace_not_plain, test_characters, test_command_word, test_comments, test_first_construct_is_reason, test_glob_not_plain, test_unicode_version_independent, test_zsh_sweep; killed: yes
+
+diff: - '        if ch not in _PROGRAM or p != at:'
+      + '        if ch not in _PROGRAM:'
+mutant [N8-adjacent program word: positions not checked (quoting, escapes, line joins pass)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=130)) failing tests: test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_command_word, test_first_construct_is_reason, test_quotes; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=130)) failing tests: test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_command_word, test_first_construct_is_reason, test_quotes; killed: yes
+
+diff: - '    if not chars or chars[0][0] == "-":'
+      + '    if not chars:'
+mutant [N8-dash program word may start with -]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=6)) failing tests: test_command_word; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=6)) failing tests: test_command_word; killed: yes
+
+diff: - '    if not chars or chars[0][0] == "-":'
+      + '    if chars and chars[0][0] == "-":'
+mutant [N8-empty an empty quoted program word passes]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=8)) failing tests: test_command_word, test_quotes; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=8)) failing tests: test_command_word, test_quotes; killed: yes
+
+diff: - '            if not _program_word(tok):'
+      + '            if False:'
+mutant [N8-call program word never checked]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=235)) failing tests: test_assignments_split, test_brace_not_plain, test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_characters, test_command_word, test_comments, test_first_construct_is_reason, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_quotes, test_reserved_words, test_unicode_version_independent, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=235)) failing tests: test_assignments_split, test_brace_not_plain, test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_characters, test_command_word, test_comments, test_first_construct_is_reason, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_quotes, test_reserved_words, test_unicode_version_independent, test_zsh_sweep; killed: yes
+
+diff: - '_PROGRAM = _NAME_REST | frozenset("./-")'
+      + '_PROGRAM = _NAME_REST | frozenset("./-%")'
+mutant [N8-PROGRAM-set program-word set gains %]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=14)) failing tests: test_command_word, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=14)) failing tests: test_command_word, test_zsh_sweep; killed: yes
+
+diff: - '_PROGRAM_RANK = 1'
+      + '_PROGRAM_RANK = 2'
+mutant [prec-rank command word ranked with the other catch-alls]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=18)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_unicode_version_independent; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=18)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_unicode_version_independent; killed: yes
+
+diff: - 'key=lambda f: (f[0], f[1])'
+      + 'key=lambda f: f[0]'
+mutant [prec-key precedence by position only (list order breaks ties)]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=18)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_unicode_version_independent; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=18)) failing tests: test_brace_not_plain, test_command_word, test_first_construct_is_reason, test_unicode_version_independent; killed: yes
+
+diff: - '    if target[:1] != "/":\n        return False\n'
+      + ''
+mutant [N12-absolute cd target need not start with /]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=8)) failing tests: test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_words_field; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=8)) failing tests: test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_words_field; killed: yes
+
+diff: - '        if seg == "." or seg == "..":'
+      + '        if seg == "..":'
+mutant [N12-dot cd target: a . segment allowed]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=2)) failing tests: test_cd_target_absolute; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=2)) failing tests: test_cd_target_absolute; killed: yes
+
+diff: - '        if seg == "." or seg == "..":'
+      + '        if seg == ".":'
+mutant [N12-dotdot cd target: a .. segment allowed]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=4)) failing tests: test_cd_target_absolute; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=4)) failing tests: test_cd_target_absolute; killed: yes
+
+diff: - '"LC_ALL", "TZ"))'
+      + '"LC_ALL", "TZ", "PATH"))'
+mutant [N9-ALLOW-set ALLOW gains PATH]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=1)) failing tests: test_assignment_allow_list; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=1)) failing tests: test_assignment_allow_list; killed: yes
+
+diff: - '            _word_checks(tok, found)\n'
+      + '            pass\n'
+mutant [word-checks-call per-word checks never run]:
+  FAIL expected; python3: FAIL (ran=38; FAILED (failures=275)) failing tests: test_brace_not_plain, test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_characters, test_command_word, test_comments, test_equals_expansion_not_plain, test_first_construct_is_reason, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_quoting_splits_token, test_reserved_words, test_tilde_not_plain, test_unicode_version_independent, test_words_field, test_zsh_sweep; killed: yes
+  FAIL expected; python3.13: FAIL (ran=38; FAILED (failures=275)) failing tests: test_brace_not_plain, test_cd_form_is_the_only_plain_compound, test_cd_target_absolute, test_characters, test_command_word, test_comments, test_equals_expansion_not_plain, test_first_construct_is_reason, test_glob_not_plain, test_grouping_and_substitution_not_plain, test_quoting_splits_token, test_reserved_words, test_tilde_not_plain, test_unicode_version_independent, test_words_field, test_zsh_sweep; killed: yes
+
+fix restored (unmutated file, re-run) [worktree file]:
+  PASS expected; python3: PASS (ran=38; OK) failing tests: -; killed: no
+  PASS expected; python3.13: PASS (ran=38; OK) failing tests: -; killed: no
+
+mutants: 38 (37 expected killed, 1 demonstration); not as expected: none; baseline PASS before and after: True

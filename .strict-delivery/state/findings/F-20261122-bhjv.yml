@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-bhjv
+status: open
+source: "PR-5a review 2: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-2.md R2-2"
+severity: LOW
+class: "stale plan line cites after the +2-line plan edit; members: :3598 -> :3600, :3684 -> :3686, 5147 -> :5149 in the changed test comments"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e8eededcb25965347c0bdd286858937790717f57
+    by: stream-config-hooks
+review_round: 2
+caused_by_change: true
+dimension: plan line cites in test comments

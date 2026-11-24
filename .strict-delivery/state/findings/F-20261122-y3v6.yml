@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-y3v6
+status: open
+source: "5a.3 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/5a3-review-1.md R1-4"
+severity: LOW
+class: "gate contract: reason text built from a caller value is escaped once, at render (spec design.md:642); members: the unknown-role message gate_context.py:102 (the gate's own); the kind and path messages from context.py are pre-existing (U-1)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 760b9865b726be9c45742d7d94e1cad536a52e5f
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: "gate contract: line escaping (spec 13)"
