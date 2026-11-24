@@ -1347,6 +1347,36 @@ class PromptPathTest(unittest.TestCase):
                 dispatch.prompt_path("x" if cfg else "nosuch", cfg, "/pd", "/r")
 
 
+class ProjectPromptNonStrRoleTest(unittest.TestCase):
+    def test_project_prompt_non_str_role_runs_no_method(self):      # FU5 (F-20261122-8gnv)
+        calls = []
+
+        def spy(name):
+            def m(self, *a):
+                calls.append(name)
+                return getattr(str, name)(self, *a) if isinstance(self, str) else getattr(object, name)(self, *a)
+            return m
+
+        class H(str):
+            __str__, __repr__, __format__ = spy("__str__"), spy("__repr__"), spy("__format__")
+            __eq__, __ne__, __hash__, __len__ = spy("__eq__"), spy("__ne__"), spy("__hash__"), spy("__len__")
+
+        class O:
+            __str__, __repr__, __format__ = spy("__str__"), spy("__repr__"), spy("__format__")
+            __eq__, __ne__, __hash__ = spy("__eq__"), spy("__ne__"), spy("__hash__")
+        cfg = {"roles": {"x": dict(ENTRY)}}
+        for name, make, tname in (("O", O, "O"), ("H", lambda: H("x"), "H"), ("int", lambda: 1, "int"),
+                                  ("None", lambda: None, "NoneType")):
+            with self.subTest(name):
+                role = make()
+                del calls[:]
+                want = "%s is no framework role and no project role" % tname
+                with self.assertRaises(ValueError) as e:
+                    dispatch._project_prompt(role, cfg)
+                self.assertEqual((str(e.exception), calls), (want, []))
+                self.assertEqual((dispatch.project_block_errors("b", role, cfg, "/nonexistent"), calls), ([want], []))
+
+
 class RoleOfProjectTest(unittest.TestCase):
     def test_role_of_project_role_exact(self):                      # DR9, DR10
         roles = SPEC_ROLES + ("doc_writer",)
