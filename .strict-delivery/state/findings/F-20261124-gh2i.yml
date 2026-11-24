@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-gh2i
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-4c-3.md FR-5
+severity: LOW
+class: "input-domain: an absent target in a directory with write+search but no read permission (root 0o300; parent 0o300, 0o311) for every write kind: plan gives an action, apply refuses cannot write (Permission denied); d33a279 wrote (AP6, PS8)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 52c5ab1e449b901545e7aa90bfacc96eb12211f9
+    by: stream-config-hooks
+review_round: 7
+caused_by_change: true
+dimension: directory permissions under the descriptor walk
