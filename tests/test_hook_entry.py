@@ -409,6 +409,26 @@ class HandlerTest(EntryCase):
                 if kept is not None:
                     self.assertEqual(err if bo else out, kept)
 
+    def test_usage_broken_stderr_exit(self):   # F10d (A1-A3 with fd 2 a real broken pipe, and closed at start)
+        launcher = os.path.join(self.tmp, "closefd_usage.py")
+        with open(launcher, "w", encoding="utf-8") as fh:
+            fh.write("import os, sys\nos.close(2)\nos.execv(sys.executable, [sys.executable] + sys.argv[1:])\n")
+        for args in ([], ["Bogus"], ["PreToolUse", "x"]):
+            base = [sys.executable, "-m", "gates", "hook"] + args
+            with self.subTest(args=args, how="real broken pipe"):
+                r, w = os.pipe()
+                os.close(r)
+                try:
+                    p = subprocess.run(base, cwd=FW, check=False, env=self.env(), stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=w)
+                finally:
+                    os.close(w)
+                self.assertEqual((p.returncode, p.stdout), (2, b""))
+            with self.subTest(args=args, how="closed at start"):
+                p = subprocess.run([sys.executable, launcher] + base[1:], cwd=FW, check=False, env=self.env(),
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertEqual((p.returncode, p.stdout), (2, b""))
+
     def test_closed_fd_exit(self):   # F10c, V9: the process starts with fd 1 (or fd 2) closed
         launcher = os.path.join(self.tmp, "closefd.py")
         with open(launcher, "w", encoding="utf-8") as fh:

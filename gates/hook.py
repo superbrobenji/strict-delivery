@@ -104,7 +104,11 @@ def _silence(stream: object) -> None:
 
 def main(argv: List[str]) -> int:
     if type(argv) is not list or len(argv) != 1 or type(argv[0]) is not str or argv[0] not in hookio.EVENTS:
-        sys.stderr.write(USAGE + "\n")
+        stream = sys.stderr
+        try:
+            _write(stream, USAGE + "\n")
+        except BaseException:
+            _silence(stream)
         return 2
     event = argv[0]
     try:

@@ -298,6 +298,22 @@ class AllowedSession(Fixture):
         tops, fails = worktrees.allowed(hand_ctx(self.main), self.main, CFG, None)   # a work-tree file, not committed
         self.assertEqual((tops, fails), (frozenset({real(self.main), real(self.status_wt), real(self.int_wt)}), []))
 
+    def test_unreadable_status_page_adds_a_fail(self):   # W5c-u: gitinfo.show fails with a git error
+        self.make_program()
+        base = frozenset({real(self.main), real(self.int_wt)})
+        bad = os.path.join(self.tmp, "fakebin-status")   # a git that fails only the call naming the status page
+        os.mkdir(bad)
+        with open(os.path.join(bad, "git"), "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\nfor a in "$@"; do\n  case "$a" in *status.md) echo "fatal: broken" >&2; exit 128;; esac\n'
+                     'done\nexec "%s" "$@"\n' % shutil.which("git"))
+        os.chmod(os.path.join(bad, "git"), 0o755)
+        with mock.patch.dict(os.environ, {"PATH": bad + os.pathsep + os.environ["PATH"]}):
+            tops, fails = worktrees.allowed(hand_ctx(self.main), self.main, CFG, None)
+        self.assertEqual(tops, base)
+        self.assertEqual(len(fails), 1, fails)
+        self.assertTrue(fails[0].startswith("program %s: status page unreadable (" % PROG), fails[0])
+        self.assertNotIn("\n", fails[0])
+
     def test_allowed_programs_error(self):   # W6
         for name, cfg in (("no paths.programs", {"paths": {}}), ("cfg not a dict", None), ("empty programs dir", {"paths": {"programs": ""}})):
             with self.subTest(name):
