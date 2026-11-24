@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-vmks
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c2-review-1.md R1-6
+severity: LOW
+class: DS23 601-digit assertion checks a prefix only
+siblings: []
+cites:
+  - file: tests/test_hook_agent.py
+    lines: "1"
+    sha: 7c53f2135d068934bf90b8422319502d18d03d74
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7c53f2135d068934bf90b8422319502d18d03d74
+    by: stream-hooks-1
+review_round: 1
+caused_by_change: true
+dimension: "PC1 numeric text: exact message"

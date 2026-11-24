@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-wfhu
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c2-review-1.md R1-1
+severity: MEDIUM
+class: "bound_branch read more than once per dispatch: worktree-line path (pre_agent.py:115 and :186), and any other bound_branch call in pre_agent.py (search)"
+siblings: []
+cites:
+  - file: gates/hooks/pre_agent.py
+    lines: "115"
+    sha: 7c53f2135d068934bf90b8422319502d18d03d74
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7c53f2135d068934bf90b8422319502d18d03d74
+    by: stream-hooks-1
+review_round: 1
+caused_by_change: true
+dimension: "worktree line: branch read once (F-B3p-20)"
