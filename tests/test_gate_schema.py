@@ -763,11 +763,21 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                         "gates: checkpoint, cites, claims, cleanup, decisions, dispatch, register, schema, streams\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, claims, continue, decisions, findings, githook, githooks, hook, index, loopstats, program, questions, run_all\n")
+                         "gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, register, schema, streams\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, claims, context, continue, decisions, findings, githook, githooks, hook, index, loopstats, program, questions, receipt, run_all\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)
         self.assertEqual(out.getvalue().splitlines()[:2], ["PASS schema.kinds", "PASS schema.config"])
+
+    def test_context_commands_registered(self):  # R2.1 D3: Rq-5-1 (context and receipt rows), literals from the plan
+        self.assertEqual(gates_main.GATES, {
+            "checkpoint": "gates.gate_checkpoint", "cites": "gates.gate_cites", "claims": "gates.gate_claims",
+            "cleanup": "gates.gate_cleanup", "context": "gates.gate_context", "decisions": "gates.gate_decisions",
+            "dispatch": "gates.gate_dispatch", "register": "gates.gate_register", "schema": "gates.gate_schema",
+            "streams": "gates.gate_streams"})
+        self.assertEqual(sorted(gates_main.COMMANDS), [
+            "check", "claims", "context", "continue", "decisions", "findings", "githook", "githooks", "hook", "index",
+            "loopstats", "program", "questions", "receipt", "run_all"])
 
 
 
@@ -874,7 +884,7 @@ class CitesDispatchTest(GitIsolatedTestCase):
     def test_json_flag_position(self):  # D8
         code, out, err = self.run_main(["check", "--json", "cites"])
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("gates: checkpoint, cites, claims, cleanup, decisions, dispatch, register, schema, streams\n", err)
+        self.assertIn("gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, register, schema, streams\n", err)
 
 
 HEAD = ["PASS schema.kinds", "PASS schema.config"]
