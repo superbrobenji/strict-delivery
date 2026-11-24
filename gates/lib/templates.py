@@ -27,6 +27,8 @@ _OWNER = re.compile(r"[A-Za-z0-9-]+")
 _REPO_NAME = re.compile(r"[A-Za-z0-9._-]+")
 _SLUG = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+")
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+_YAML_WORD = re.compile(r"y|yes|n|no|true|false|on|off|null", re.IGNORECASE | re.ASCII)  # A4 (i)
+_YAML_NUMBER = re.compile(r"[0-9][0-9a-fA-FxXoO_.+-]*")  # A4 (ii)
 _FETCH_PREFIX = "git fetch --depth 1 https://github.com/"
 _BREAKS = frozenset("\n\r\x00\x0b\x0c\x1c\x1d\x1e\x85  ")
 _FILE_REFUSED = ("\r", "\x00", "﻿", "\t")
@@ -233,6 +235,9 @@ def _check_base(base: object) -> str:
         raise GateError("templates.ci_workflow: cfg: base_branch must be a str")
     if (_BRANCH.fullmatch(base) is None or ".." in base or "//" in base or base.endswith(("/", ".", ".lock"))):
         raise GateError("templates.ci_workflow: cfg: base_branch %s is not a plain branch name" % _shown(base))
+    if _YAML_WORD.fullmatch(base) is not None or _YAML_NUMBER.fullmatch(base) is not None:
+        raise GateError("templates.ci_workflow: cfg: base_branch %s would be read by YAML as a boolean, null, number "
+                        "or date" % _shown(base))
     return base
 
 

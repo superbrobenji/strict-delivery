@@ -1091,6 +1091,34 @@ class TestCiWorkflow(TplCase):
             with self.subTest(v=v):
                 self.assertIn("    branches: [%s]\n" % v, wf(base=v))
 
+    def test_ci_workflow_base_branch_yaml_non_string_refused(self):  # A4: BB-Y1, BB-Y2, BB-Y3, BB-Y5
+        bools = ["true", "True", "TRUE", "false", "yes", "Yes", "no", "y", "Y", "n", "on", "ON", "off", "null",
+                 "Null", "NULL", "tRuE", "nO"]
+        numbers = ["123", "0", "1e3", "1E3", "0x1f", "0o17", "0b101", "017", "1.5", "1_000", "1.2.3", "10-1",
+                   "0X1F", "0O17", "0xAB", "1e3.0"]  # beyond the table rows, inside condition (ii): X, O, A-F, e
+        dates = ["2024-01-01", "2024-1-1"]
+        over = ["123abc", "1a"]  # BB-Y5: over-refused on purpose (fail closed)
+        for v in bools + numbers + dates + over:
+            with self.subTest(v=v):
+                with self.assertRaises(GateError) as cm:
+                    ci_workflow(cfg(base=v), "v0.1.0", "o/n")
+                self.assertEqual(str(cm.exception), "templates.ci_workflow: cfg: base_branch %r would be read by YAML "
+                                                    "as a boolean, null, number or date" % v)
+
+    def test_ci_workflow_base_branch_yaml_near_misses_accepted(self):  # A4: BB-Y4
+        for v in ("main", "trunk", "yes-please", "nope", "true1", "release/1.2", "v1.2.3", "1-beta", "on-call",
+                  "nullx", "y2"):
+            with self.subTest(v=v):
+                text = wf(base=v)
+                self.assertIn("    branches: [%s]\n" % v, text)
+                with tempfile.TemporaryDirectory() as td:
+                    path = os.path.join(td, "w.yml")
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(text)
+                    doc = yamlsub.load(path, "w.yml")
+                self.assertEqual(doc["on"]["push"]["branches"], [v])
+                self.assertIs(type(doc["on"]["push"]["branches"][0]), str)
+
     def test_ci_workflow_base_branch_types(self):  # A1
         class S(str):
             pass
@@ -1550,7 +1578,8 @@ class TestVersionRows(unittest.TestCase):
                 self.assertEqual(ci_pin(n + ".0.0", None), "v" + n + ".0.0")
                 self.assertEqual(ci_workflow(cfg(), "v%s.0.0" % n, "o/n").count("v%s.0.0" % n), 1)
                 self.assertEqual(ci_workflow(cfg(), SHA40, "o/" + n).count("github.com/o/" + n), 1)
-                self.assertEqual(ci_workflow(cfg(base=n + ".x"), SHA40, "o/n").count("[%s.x]" % n), 1)
+                # A4 refuses a base that starts with a digit and is all number characters, so the digits follow a `v`
+                self.assertEqual(ci_workflow(cfg(base="v" + n + ".x"), SHA40, "o/n").count("[v%s.x]" % n), 1)
 
     def test_templates_no_unicode_database_read(self):  # VR5
         c = chr(0xA7C0)
