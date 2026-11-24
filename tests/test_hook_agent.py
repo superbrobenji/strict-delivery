@@ -1468,11 +1468,19 @@ class Fix1(Base):
                 with open(path, encoding="utf-8") as fh:
                     self.assertEqual(fh.read(), text, name)             # never moved or rewritten
         os.rename(path, path + ".real")
+        target_text = STATE_OK % SHA_A            # a valid state: only the symlink makes the file unreadable
+        write(path + ".real", target_text)
         os.symlink(path + ".real", path)
-        self.set_config(profile="strict")
-        p = self.hk(tin(real_prompt("implementer", brief="symlink")))
-        self.assertEqual(p.returncode, 2)
-        self.assertIn("FAIL hook.agent.session: the session state file", p.stderr)
+        for profile, deny in (("strict", True), ("light", False)):     # HS4 symlink: both profiles, bytes unchanged
+            self.set_config(profile=profile)
+            p = self.hk(tin(real_prompt("implementer", brief="symlink")) if deny else {"prompt": "x"})
+            self.assertEqual(p.returncode, 2 if deny else 0, (profile, p.stderr))
+            if deny:
+                self.assertIn("FAIL hook.agent.session: the session state file", p.stderr)
+            self.assertTrue(os.path.islink(path), profile)
+            self.assertEqual(os.readlink(path), path + ".real", profile)
+            with open(path + ".real", encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), target_text, profile)      # never moved or rewritten
 
     def test_stop_lock_held(self):   # SS12 (the lock is held by another process: exit 0, nothing changed)
         import fcntl
@@ -1523,6 +1531,27 @@ class Fix1(Base):
             self.assertEqual(p.returncode, 2)
             self.assertTrue(p.stderr.startswith("FAIL hook.agent.config: "), p.stderr)
 
+    def test_limits_digit_edge_role_keys(self):   # HN13 (F-20261124-dq53): max_children.<role> at 600 and 601 digits
+        # the dispatcher's own role key (only `controller` may dispatch without a live program; the other controller
+        # roles are covered below as keys with a session dispatcher): 600 digits load and the dispatch passes
+        self.set_config(limits={"max_children": {"controller": 10 ** 599}})
+        seed_ctl(self, "controller", 1, "P-ctl")
+        self.sub("a1", "P-ctl")
+        p = self.hk(tin(real_prompt("implementer", brief="d600")), agent_id="a1")
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        for role in dispatch.ROLES + ("session",):                   # every key the gate accepts, 600 digits and 601 digits
+            self.set_config(limits={"max_children": {role: 10 ** 599}})
+            p = self.hk(tin(real_prompt("implementer", brief="s600-" + role)))
+            self.assertEqual((p.returncode, p.stderr), (0, ""), role)
+            self.set_config(limits={"max_children": {role: 10 ** 600}})
+            p = self.hk(tin(real_prompt("implementer", brief="s601-" + role)))
+            self.assertEqual(p.returncode, 2, role)
+            self.assertTrue(p.stderr.startswith("FAIL hook.agent.config: "), (role, p.stderr))
+        self.set_config(limits={"max_children": {"controller": 10 ** 600}})     # 601 digits with a controller dispatcher
+        p = self.hk(tin(real_prompt("implementer", brief="d601")), agent_id="a1")
+        self.assertEqual(p.returncode, 2)
+        self.assertTrue(p.stderr.startswith("FAIL hook.agent.config: "), p.stderr)
+
     def test_gate_result_shapes_denied(self):   # HR5 HR6
         from gates.lib.result import GateError
         empty, other = Result("dispatch"), Result("other")
@@ -1566,8 +1595,8 @@ class Fix1(Base):
             self.assertIn(b"    worktree: /w\xf0\x9f\xab\xa0\xe2\xb0\xaf\n", fh.read())
 
     def test_stop_oversize_and_surrogate_first_entry(self):   # SS5 through subagent_stop
-        self.seed((session.prompt_sha("A" * 4194000), "controller", 1, "session", "", ""),
-                  (session.prompt_sha("A"), "controller", 1, "session", "", ""))
+        self.seed((session.prompt_sha("A" * 4194400), "controller", 1, "session", "", ""),   # equals the oversize text's SHA:
+                  (session.prompt_sha("A"), "controller", 1, "session", "", ""))              # only the size limit stops a match
         big = os.path.join(self.tmp, "big.jsonl")
         write(big, user_line("A" * 4194400) + "\n")
         sur = os.path.join(self.tmp, "sur.jsonl")
@@ -1576,6 +1605,22 @@ class Fix1(Base):
             p = self.stop(path)
             self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
             self.assertEqual(len(self.recs()), 2, path)
+        small = os.path.join(self.tmp, "small.jsonl")                  # control: the seeded SHA matches a transcript within the limit
+        write(small, user_line("A" * 4194000) + "\n")
+        self.seed((session.prompt_sha("A" * 4194000), "controller", 1, "session", "", ""))
+        self.assertEqual(self.stop(small).returncode, 0)
+        self.assertEqual(len(self.recs()), 2)
+
+    def test_write_failure_on_exit_every_profile(self):   # HS6 (Q5, F-20261124-vbkd): denied whatever `required`
+        err = session.SessionUnavailable("disk full")
+        want = ["FAIL hook.agent.session: disk full" + WAY]
+        for name, profile, agent in (("gate required", "strict", None), ("not required, no program", "light", None),
+                                     ("not required, unknown dispatcher", "light", "zz")):
+            self.set_config(profile=profile)
+            with mock.patch("gates.lib.session._write", side_effect=err):
+                out, _ = self.seen(self.hand(cfg=config.load(self.R), agent_id=agent, tool_input=tin("P")))
+            self.assertEqual(out.deny, want, name)
+            self.assertEqual(self.recs(), [], name)            # nothing was recorded
 
 
 if __name__ == "__main__":

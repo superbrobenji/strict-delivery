@@ -13,7 +13,7 @@ import tempfile
 from typing import Optional
 
 from gates import gate_dispatch
-from gates.lib import dispatch, gitinfo, programs, session, transcript, worktrees
+from gates.lib import dispatch, programs, session, transcript, worktrees
 from gates.lib.hookio import HookContext, Outcome
 from gates.lib.result import GateError, run_check, safe_text
 
