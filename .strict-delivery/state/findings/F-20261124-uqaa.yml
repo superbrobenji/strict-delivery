@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-uqaa
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-7.md B2
+severity: LOW
+class: "test literals the update from main made stale: every schema-count or schema-list literal in tests/; members: tests/test_evidence_lib.py:155 SC2 (18, should be 20); fixed in 479a98c"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 479a98c77adbd3b7de3e71660f4ab4c44d84e7c2
+    by: stream-config-hooks
+review_round: 3
+caused_by_change: true
+dimension: "update from main: test literals as the exact union"

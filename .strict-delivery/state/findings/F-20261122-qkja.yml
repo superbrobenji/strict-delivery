@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-qkja
+status: open
+source: "PR-5a final review (review 1 of the PR): .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-5a.md FR-4"
+severity: LOW
+class: "repository-state dependence: tests that require per-effort files of a live plan in REPO; members: tests/test_context_lib.py:1045-1050 test_repository_context_files_exist (plan :5147 asks 'resolves', not 'exists')"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c02510869b179eee1d9756fd0502901abc6ed38e
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: tests depending on this repository's per-effort state

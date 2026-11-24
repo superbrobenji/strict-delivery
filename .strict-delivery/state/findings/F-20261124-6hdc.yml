@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-6hdc
+status: open
+source: 5b.1 task re-review 2 (records/5b.1-review-2.md, Unrelated U1; blamed to 9aebeae, the task change)
+severity: LOW
+class: "output-consistency: an in-progress plan line loses its plan :5330 suffix when a handoff spec also names the plan path: (block <b>) of its own handoff, (program <p>, stream <s>, block <b>)"
+siblings: []
+cites:
+  - file: gates/tools/index.py
+    lines: 303-305
+    sha: f4ef878
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bc82ef7e4ac20c4418a54467795ea554d480a6f1
+    by: stream-records
+review_round: 2
+caused_by_change: true
+dimension: output-consistency

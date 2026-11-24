@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-ndkg
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-5a-3.md FR-2
+severity: LOW
+class: "a production condition with no killing test; members: gates/lib/receipts.py:134 the 'dir' member of _read_by_descriptor's open-failure branch (mutant M08 survives; an unreadable directory at the hashed path then gives 'cannot read file (Permission denied)' instead of 'is not a regular file', CS-F3, D-Q4 (a))"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.2-f
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: cd9049ff279d1153a36de52f9da8baabe6145e45
+    by: stream-config-hooks
+review_round: 5
+caused_by_change: true
+dimension: "test coverage: every changed condition has a killing test"

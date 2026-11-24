@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261123-rf62
+status: open
+source: "PR-5a review 6b: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-6b.md F-A"
+severity: LOW
+class: "length, linear: slow-path shapes: M5-cd (_cd_target segment loop, '_junk = target[1:]') survives on 3.9 at shape cd base 4000 (killed on 3.13); member of F-20261122-2v5n's class"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 6966e56a8d9814902a681057f8c1a5991c74f5d7
+    by: stream-config-hooks
+review_round: 2
+caused_by_change: false
+dimension: length, linear (CH6)

@@ -1,0 +1,93 @@
+kind: context
+version: 1
+format: yaml
+files:
+  - path: context
+fields:
+  schema:
+    type: str
+  every:
+    type: list
+    required: false
+    items:
+      type: map
+      fields:
+        path:
+          type: str
+        lines:
+          type: str
+          required: false
+        why:
+          type: str
+  kinds:
+    type: map
+    required: false
+    fields:
+      plan:
+        type: list
+        required: false
+        items:
+          type: map
+          fields:
+            path:
+              type: str
+            lines:
+              type: str
+              required: false
+            why:
+              type: str
+      program:
+        type: list
+        required: false
+        items:
+          type: map
+          fields:
+            path:
+              type: str
+            lines:
+              type: str
+              required: false
+            why:
+              type: str
+      program-controller:
+        type: list
+        required: false
+        items:
+          type: map
+          fields:
+            path:
+              type: str
+            lines:
+              type: str
+              required: false
+            why:
+              type: str
+      stream-block:
+        type: list
+        required: false
+        items:
+          type: map
+          fields:
+            path:
+              type: str
+            lines:
+              type: str
+              required: false
+            why:
+              type: str
+      sync:
+        type: list
+        required: false
+        items:
+          type: map
+          fields:
+            path:
+              type: str
+            lines:
+              type: str
+              required: false
+            why:
+              type: str
+  roles:
+    type: any-map
+    required: false
