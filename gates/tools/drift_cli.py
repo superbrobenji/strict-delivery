@@ -22,7 +22,7 @@ def _why(e: BaseException) -> str:
 def _over(root: str, cfg: dict, p: str, pct: int) -> list:
     prog, rows, bad = gate_drift.load(root, cfg, p)
     if bad:
-        raise GateError("%s: %s" % (p, safe_text(bad[0])))
+        raise GateError("%s: %s" % (p, gate_drift.raw(bad[0])))   # raw: main's _why escapes it once (spec section 13)
     return [line for line in (drift.over_estimate(row, pct) for row in rows) if line is not None]
 
 

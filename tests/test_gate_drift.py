@@ -299,6 +299,21 @@ class Host(Gate):
                 self.assertNotIn("PASS drift.host", out)
                 self.assertEqual(code, 1)
 
+    def test_host_gh_text_escaped_once(self):  # H2, L10: drift._shown text reaches the line escaped once (F-20261124-nu2d)
+        self.insync()
+        out, code = self.run_host(Runner(done("", 1, "a\\b ࡰ \U0001e030\nmore")))
+        self.assertEqual(out.splitlines()[-1], "FAIL drift.host.%s: gh exited 1: a\\\\b \\u0870 \\U0001e030" % P)
+        self.assertEqual(code, 1)
+        out, code = self.run_host(Runner(raises=OSError("bad\\path ࡰ")))
+        self.assertEqual(out.splitlines()[-1], "FAIL drift.host.%s: gh could not run: OSError: bad\\\\path \\u0870" % P)
+
+    def test_host_gh_text_cap_80(self):  # H2: the cap counts characters of the output (escaped)
+        self.insync()
+        out, code = self.run_host(Runner(done("", 1, "\\" * 100)))
+        self.assertEqual(out.splitlines()[-1], "FAIL drift.host.%s: gh exited 1: %s" % (P, "\\\\" * 40))
+        out, code = self.run_host(Runner(done("", 1, "x" * 79 + "ࡰ")))
+        self.assertEqual(out.splitlines()[-1], "FAIL drift.host.%s: gh exited 1: %s" % (P, "x" * 79))
+
     def test_host_per_stream_line(self):  # H3
         self.insync()
         merged = json.dumps([{"number": 3, "state": "MERGED", "headRefOid": "a" * 40, "mergeCommit": {"oid": "b" * 40}}])
@@ -312,6 +327,11 @@ class Host(Gate):
         out, code = self.run_host(Runner(done("[]")))
         self.assertEqual(out.splitlines()[-1], "FAIL drift.host.%s.a: no PR of %s/a/main is MERGED with the merge commit %s found on main"
                          % (P, P, sha))
+
+    def test_host_suffix_text_escaped_once(self):  # H10, L10 (F-20261124-nu2d)
+        self.insync()
+        with mock.patch("gates.gate_drift.drift.host_errors", return_value=[("ho\\stࡰ", "x")]):
+            self.assertEqual(self.g("--host")[0], "FAIL drift.input: host_errors gave suffix ho\\\\st\\u0870\n")
 
     def test_host_unknown_suffix_is_input(self):  # H10: a suffix host_errors never gives is a named input failure
         self.insync()

@@ -9,7 +9,7 @@ from unittest import mock
 from gates import __main__ as entry
 from gates.tools import drift_cli
 from tests.drift_fx import P, P2, PD, Fx, mkrow, page, snapshot, streams_text
-from tests.helpers import GitIsolatedTestCase, git, minimal_config, root_forms, write_record
+from tests.helpers import INT_LIMITS, GitIsolatedTestCase, git, int_limit, minimal_config, root_forms, write_record
 
 OVER = "over a used=16 estimate=10 limit=150%\n"
 
@@ -141,6 +141,31 @@ class Report(Cli):
         self.prog(P, ("a",), rows=[mkrow(P, "a", status="Running", used="-1")])
         self.assertEqual(self.rep(), ("", "drift: %s: stream a: status 'Running' is not one of ready, running, blocked, checkpoint, "
                                           "merged, closed\n" % P, 1))
+
+    def test_report_status_text_escaped_once(self):  # R10, S15, V2a (F-20261124-hu7f): stderr text is escaped once
+        for cell, shown in (("x\\y", "x\\\\y"), ("ࡰ", "\\u0870"), ("Ꟁ", "\\ua7c0"), ("\U0001e030", "\\U0001e030"),
+                            ("x\\yࡰ", "x\\\\y\\u0870")):
+            with self.subTest(cell=shown):
+                self.prog(P, ("a",), rows=[mkrow(P, "a", status=cell, used="-1")])
+                self.assertEqual(self.rep(), ("", "drift: %s: stream a: status '%s' is not one of ready, running, blocked, "
+                                                  "checkpoint, merged, closed\n" % (P, shown), 1))
+
+    def test_report_numeric_text_4300_4301_digits(self):  # V1a, V1b: refused before int(), same on both interpreters
+        for limit in INT_LIMITS:
+            for digits in (4300, 4301):
+                for key in ("used", "estimate"):
+                    with self.subTest(limit=limit, digits=digits, key=key), int_limit(limit):
+                        self.prog(P, ("a",), rows=[mkrow(P, "a", **{key: "9" * digits})])
+                        out, err, code = self.rep()
+                        self.assertEqual((out, code), ("", 1))
+                        self.assertEqual(err, "drift: %s: stream a: %s '%s' is not a non-negative decimal integer\n"
+                                         % (P, key, "9" * digits))
+                with self.subTest(limit=limit, digits=digits, key="pct"), int_limit(limit):
+                    self.over()
+                    self.config("9" * digits)
+                    out, err, code = self.rep()
+                    self.assertEqual((out, code), ("", 1))
+                    self.assertEqual(err, "drift: .strict-delivery/config.yml: integer too large (line 5)\n")
 
     def test_report_ignores_status(self):  # R11
         self.prog(P, ("a", "b"), rows=[mkrow(P, "a", status="merged", used="99"), mkrow(P, "b", status="closed", used="99")])

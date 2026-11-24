@@ -261,7 +261,9 @@ class Status(Gate):
                 self.assertEqual(len(line), 1, out)
                 self.assertTrue(line[0].endswith("', the handoff says '5c'"), line)
                 self.assertNotIn(ch if shown != ch else "\0", line[0])   # an unprintable character never leaves raw
-                self.assertIn(shown.lstrip("\\"), line[0])
+                # the whole text typed by hand: the escape has ONE backslash (rows S15, V2a, V2b; F-20261124-jwse)
+                self.assertEqual(line[0], "FAIL drift.handoff.%s.a: block: the status row says '%s', the handoff says '5c'"
+                                 % (P, shown))
                 git(self.root, "branch", "-q", "-D", P + "/integration")
 
 
@@ -292,6 +294,26 @@ class ProgramLines(Gate):
         self.assertEqual(code, 1)
         path = self.worktree("int", P + "/integration")
         self.assertEqual(self.run_main(gate_drift.main, ["--root", path])[0], out)
+
+    def test_status_cell_text_escaped_once(self):  # C2, S15, V2a: a status cell with U+0870 prints one backslash
+        self.sbranch(P, "a")
+        self.prog(P, ("a",), rows=[mkrow(P, "a", status="ࡰ")])
+        out, code = self.g()
+        want = ("FAIL drift.status.%s: stream a: status '\\u0870' is not one of ready, running, blocked, checkpoint, merged, closed"
+                % P)
+        self.assertIn(want, out.splitlines())
+        self.assertEqual(code, 1)
+
+    def test_base_checkout_path_escaped_once(self):  # B3, L10: the checkout path goes through Result.render only
+        self.insync()
+        bare = self.remote()
+        self.advance_remote(bare)
+        git(self.root, "fetch", "-q", "origin")
+        with mock.patch("gates.lib.drift.gitinfo.main_worktree", return_value="/p\\q ࡰ"):
+            out, code = self.g()
+        want = ("FAIL drift.base: update main from the remote: git -C /p\\\\q \\u0870 fetch origin, then git -C /p\\\\q \\u0870 "
+                "merge --ff-only origin/main")
+        self.assertEqual(out.splitlines()[0], want)
 
     def test_base_is_local_only(self):  # B5
         self.insync()
@@ -444,6 +466,13 @@ class StreamLines(Gate):
         out, code = self.stream_lines(lambda root, cfg, prog, row, st: [("behind." + st["id"], "w")], ("b", "a"),
                                       rows=[mkrow(P, "a"), mkrow(P, "b")])
         self.assertEqual([l for l in out.splitlines() if "behind" in l], ["FAIL drift.behind.%s.a: w" % P, "FAIL drift.behind.%s.b: w" % P])
+
+    def test_suffix_text_escaped_once(self):  # L7, B14, L10 (F-20261124-nu2d): an input failure shows a suffix escaped once
+        self.insync()
+        out, code = self.stream_lines(lambda *a: [("br\\ࡰ", "x")])
+        self.assertEqual(out, "FAIL drift.input: stream_errors gave suffix br\\\\\\u0870\n")
+        with mock.patch("gates.gate_drift.drift.base_errors", return_value=[("ba\\seࡰ", "x")]):
+            self.assertEqual(self.g()[0], "FAIL drift.input: a drift check gave suffix ba\\\\se\\u0870, not base\n")
 
     def test_unknown_suffix_is_input(self):  # L7
         for suffix in ("base", "nodot", "", "branch", "branch.zz", "integration." + P, "host.a", "estimate.a"):

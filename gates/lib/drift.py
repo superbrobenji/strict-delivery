@@ -15,7 +15,7 @@ import subprocess
 from typing import Optional
 
 from gates.lib import checkpoints, gitinfo, programs
-from gates.lib.result import GateError, GitNotFound, safe_text
+from gates.lib.result import GateError, GitNotFound, _exact, safe_text
 
 _HEADS = "refs/heads/"
 _HEX40 = re.compile(r"[0-9a-f]{40}")
@@ -29,7 +29,18 @@ _GH_STATES = ("OPEN", "CLOSED", "MERGED")
 
 
 def _shown(x: object) -> str:
-    return safe_text(x)[:80]
+    """The raw text of ``x``, cut after the last whole character whose escaped form (``safe_text``) still fits in 80
+    characters of output. It is NOT escaped here: every reason and every GateError text leaves through ``Result.render``
+    or ``drift_cli._why``, which escape it exactly once (spec section 13: "each id and reason escaped exactly once, by
+    ``Result.render`` (``safe_text``)"), so no raw non-printable character can leave by any path."""
+    text = _exact(x) if issubclass(type(x), str) else _exact(str(x))
+    out, width = [], 0
+    for c in text:
+        width += len(safe_text(c))
+        if width > 80:
+            break
+        out.append(c)
+    return "".join(out)
 
 
 # ---------------------------------------------------------------- git readers
@@ -91,7 +102,7 @@ def merged_at(root: str, base: str, tip: str) -> Optional[str]:
 def _remote_of(root: str, branch: str) -> str:
     p = gitinfo._run(root, "config", ["config", "--get", "branch.%s.remote" % branch], ok=(0, 1))
     name = gitinfo._text(p.stdout, "config").strip() if p.returncode == 0 else ""
-    return safe_text(name) if name else "<remote>"
+    return name if name else "<remote>"
 
 
 def base_errors(root: str, cfg: dict) -> list:
@@ -111,7 +122,7 @@ def base_errors(root: str, cfg: dict) -> list:
     except GateError as e:
         return [("base", "the upstream of %s cannot be compared with it: %s" % (_shown(bb), _shown(str(e))))]
     try:
-        checkout = safe_text(gitinfo.main_worktree(root))
+        checkout = gitinfo.main_worktree(root)
     except GitNotFound:
         raise
     except GateError:

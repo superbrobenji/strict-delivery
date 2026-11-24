@@ -14,7 +14,7 @@ from __future__ import annotations
 import sys
 
 from gates.lib import config, drift, gitinfo, programs
-from gates.lib.result import GateError, Result, gate_args, repo_root, run_gate, safe_text
+from gates.lib.result import GateError, Result, _exact, gate_args, repo_root, run_gate
 
 PRODUCES: tuple = ()
 
@@ -54,7 +54,7 @@ def selected(root: str, cfg: dict, named) -> list:
     for name in out:
         if name not in live:
             raise GateError("program %s is not live: no local branch %s/integration whose tip holds streams.yml"
-                            % (safe_text(name), safe_text(name)))
+                            % (name, name))
     return out
 
 
@@ -66,9 +66,15 @@ def load(root: str, cfg: dict, p: str):
     return prog, rows, programs.status_errors(rows, prog.streams, cfg=cfg, request_ids=ids)
 
 
+def raw(x: object) -> str:
+    """The exact text of ``x``, NOT escaped: a GateError text leaves through ``run_check`` (``Result.render``) or
+    ``drift_cli._why``, which escape it exactly once (spec section 13); no str subclass method runs (Q-1C0FIN2-R1)."""
+    return _exact(x) if issubclass(type(x), str) else _exact(str(x))
+
+
 def _suffix(suffix: object, want: str) -> None:
     if suffix != want:
-        raise GateError("a drift check gave suffix %s, not %s" % (safe_text(suffix), safe_text(want)))
+        raise GateError("a drift check gave suffix %s, not %s" % (raw(suffix), want))
 
 
 def _program_level(res: Result, errs: list, id_: str, want: str) -> None:
@@ -86,7 +92,7 @@ def _streams(res: Result, root: str, cfg: dict, p: str, prog, rows: list) -> Non
         for suffix, reason in drift.stream_errors(root, cfg, prog, by[st["id"]], st):
             cat, dot, sid = suffix.partition(".")
             if cat not in found or dot != "." or sid != st["id"]:
-                raise GateError("stream_errors gave suffix %s" % safe_text(suffix))
+                raise GateError("stream_errors gave suffix %s" % raw(suffix))
             found[cat].append((sid, reason))
     for c in CHECKS:
         for sid, reason in found[c]:
@@ -101,7 +107,7 @@ def _host(res: Result, root: str, cfg: dict, p: str, prog) -> None:
     for suffix, reason in errs:
         cat, dot, sid = suffix.partition(".")
         if cat != "host" or (dot == "." and sid not in ids):
-            raise GateError("host_errors gave suffix %s" % safe_text(suffix))
+            raise GateError("host_errors gave suffix %s" % raw(suffix))
         res.fail("drift.host.%s%s" % (p, dot + sid), reason)
     if not errs:
         res.passed("drift.host." + p)
