@@ -33,7 +33,7 @@ def cfg() -> dict:
     """``config.load`` of a fixture repository whose config is ``minimal_config()`` (built once, copied per call)."""
     if not _CFG:
         with tempfile.TemporaryDirectory() as d:
-            make_repo(d, minimal_config())
+            make_repo(d, {**minimal_config(), "profile": "light"})  # light presets nothing; strict presets block.max_tasks 3
             _CFG.update(config.load(d))
     return copy.deepcopy(_CFG)
 
@@ -2235,12 +2235,25 @@ class CapErrors(unittest.TestCase):
 
     def test_cap_end_to_end_with_config_load(self):  # CE16: config.load of a fixture, hand-typed texts
         with tempfile.TemporaryDirectory() as d:
-            make_repo(d, {**minimal_config(), "block": {"max_tasks": 3}, "rulings": {"max_per_block": 1}})
+            make_repo(d, {**minimal_config(), "profile": "light", "block": {"max_tasks": 3}, "rulings": {"max_per_block": 1}})
             c = config.load(d)
         text = LH + "".join(L6("1a", "1a.%d" % i) + "\n" for i in range(1, 5)) + R0 + "\n" + R0 + "\n"
         errs = cap_errors(H6(rulings=2), checkpoint_lines(text), PLAN_FOUR, c, ledger_rulings(text, "1a"))
         self.assertEqual(errs, ["block: 4 tasks in ledger exceed block.max_tasks 3", "block: 4 tasks in plan exceed block.max_tasks 3",
                                 "rulings: 2 Ruling lines in the ledger exceed rulings.max_per_block 1"])
+
+    def test_cap_strict_profile_preset_and_project_refusal(self):  # seam with 4a.2: strict presets block.max_tasks 3
+        with tempfile.TemporaryDirectory() as d:
+            make_repo(d, minimal_config())
+            c = config.load(d)
+        self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, c, 0),
+                         ["block: 4 tasks in ledger exceed block.max_tasks 3", "block: 4 tasks in plan exceed block.max_tasks 3"])
+        with tempfile.TemporaryDirectory() as d:
+            make_repo(d, {**minimal_config(), "block": {"max_tasks": 3}})
+            with self.assertRaises(GateError) as cm:
+                config.load(d)
+        self.assertEqual(str(cm.exception), ".strict-delivery/config.yml: block.max_tasks: preset by profile strict; "
+                         "change it under overrides with the authorising decision")
 
     def test_cap_real_plan_block(self):  # CE17
         text = slurp(os.path.join(REPO, "docs", "strict-delivery", "plans", "2026-10-31-strict-delivery-framework.md"))
