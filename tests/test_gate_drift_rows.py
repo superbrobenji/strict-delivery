@@ -315,6 +315,21 @@ class ProgramLines(Gate):
                 "merge --ff-only origin/main")
         self.assertEqual(out.splitlines()[0], want)
 
+    def test_base_remote_name_escaped_once(self):  # B3, L10, V2a (F-20261124-8gz5): git accepts U+0870, U+0085, U+200B, U+1E030
+        self.insync()
+        bare = self.remote()
+        self.advance_remote(bare)
+        cur = "origin"
+        for name, shown in (("ࡰ", "\\u0870"), ("a\u0085b", "a\\x85b"), ("a​b", "a\\u200bb"),
+                            ("\U0001e030", "\\U0001e030"), ("a-b", "a-b")):
+            with self.subTest(remote=shown):
+                git(self.root, "remote", "rename", cur, name)
+                cur = name
+                git(self.root, "fetch", "-q", name)
+                want = ("FAIL drift.base: update main from the remote: git -C %s fetch %s, then git -C %s merge --ff-only %s/main"
+                        % (self.root, shown, self.root, shown))
+                self.assertEqual(self.lines()[0], want)
+
     def test_base_is_local_only(self):  # B5
         self.insync()
         bare = self.remote()
