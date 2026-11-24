@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-wtu5
+status: open
+source: 3a.2 fix-round task review 4 at 8b900df (runtime/3a2-fix-r5-review.md, finding 1)
+severity: LOW
+class: "status page shape (3a.2 C, gates/lib/worktrees.py:129-131, row W5c): the unreadable (git error) member has no test; a mutant replacing the branch with a bare return survives test_worktrees on both interpreters"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 8b900df65ffff6d96efb0223b7ffb57ce7071123
+    by: stream-runtime
+review_round: 4
+caused_by_change: false
+dimension: status page shape
