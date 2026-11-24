@@ -213,6 +213,14 @@ class TestStep1(Base):
         self.assertEqual(git(self.root, "rev-list", "--count", "HEAD"), before)
         self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
 
+    def test_no_flag_skips_owner_word(self):  # AP11: the owner's word is the command file's rule; init has no such flag
+        self.put_answers()
+        before = snapshot(self.root)
+        for flag in ("--yes", "-y", "--force", "--no-confirm", "--confirm", "--non-interactive", "--assume-yes"):
+            code, out, _ = self.run_init("apply", "--root", self.root, "--answers", self.ans, flag)
+            self.assertEqual((code, out), (2, ""), flag)
+            self.assertEqual(snapshot(self.root), before, flag)
+
     def test_written_config_passes_gate_schema(self):  # CF13
         from gates import gate_schema
         self.cmd("apply")
