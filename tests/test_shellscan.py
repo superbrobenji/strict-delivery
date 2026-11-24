@@ -4,8 +4,10 @@ of task-3b.1-domain.md that it carries), never computed by the scanner."""
 import dataclasses
 import gc
 import signal
+import sys
 import time
 import unittest
+from unittest import mock
 
 import gates.lib.shellscan as shellscan
 from gates.lib.shellscan import Scan, scan, token_in
@@ -34,6 +36,14 @@ class Sub(str):
 CH6_SPAN = 16
 CH6_BOUND = 64
 CH6_ROUNDS = 3
+# F-20261124-mi4c: a CPU clock can be coarse (Linux CI: one call of a small text reads 0), so every sample times
+# `reps` back-to-back calls, `reps` found per (shape, base) on the small text: doubled from 1 until a sample reads
+# CH6_FLOOR CPU seconds, then doubled once more (a later sample must not fall under one clock tick), at most
+# CH6_MAX_REPS before the calibration. A sample starts on a tick: the clock is read until it changes, at most
+# CH6_SPIN reads (a clock that never changes does not hang the run).
+CH6_FLOOR = 0.01
+CH6_MAX_REPS = 2 ** 16
+CH6_SPIN = 200000
 
 
 def _fields(s):
@@ -121,14 +131,26 @@ def _over_budget(signum, frame):
     raise _OverBudget()
 
 
-def _cpu(call, text, limit):
-    """CPU seconds of ``call(text)`` and its result; ``(None, None)`` when the call reaches ``limit`` CPU seconds (an
-    ITIMER_PROF signal stops it, so a quadratic run never runs long); ``limit`` 0 sets no limit."""
+def _align():
+    """Read the CPU clock until it changes (at most CH6_SPIN reads), so a sample starts on a tick of a coarse clock and
+    a reading of one tick or more means at least one tick of CPU time."""
+    first = time.process_time()
+    for _ in range(CH6_SPIN):
+        if time.process_time() != first:
+            return
+
+
+def _cpu(call, text, limit, reps=1):
+    """CPU seconds of ``reps`` back-to-back calls ``call(text)`` and the last result; ``(None, None)`` when the calls
+    reach ``limit`` CPU seconds (an ITIMER_PROF signal stops them, so a quadratic run never runs long); ``limit`` 0 sets
+    no limit (the caller passes a limit above 0)."""
+    _align()
     try:
         signal.setitimer(signal.ITIMER_PROF, limit)
         try:
             t0 = time.process_time()
-            out = call(text)
+            for _ in range(reps):
+                out = call(text)
             took = time.process_time() - t0
         finally:
             signal.setitimer(signal.ITIMER_PROF, 0)
@@ -142,7 +164,10 @@ def ch6_growth(shape, check, n):
     alternate, so a change in machine load falls on both); CPU time of this process, the cyclic collector off while
     timed (its cost follows the size of the whole test process, not the text). ``check(result, expected)`` runs on
     every finished call. A large run stopped at CH6_BOUND times the smallest small run so far counts as infinite: its
-    ratio to the final smallest small run is above the bound too, so the stop never changes the verdict.
+    ratio to the final smallest small run is above the bound too, so the stop never changes the verdict. Every sample
+    times ``reps`` calls (see CH6_FLOOR), the same ``reps`` for both sizes, so the ratio compares one call with one call;
+    a clock that does not reach CH6_FLOOR within CH6_MAX_REPS calls, or a small sample that reads 0, is an
+    AssertionError naming the shape, the base and the clock, never a division by 0 or a limit of 0.
     Returns (ratio, small, large)."""
     name, _n, make, call, expect = shape
     big = CH6_SPAN * n
@@ -150,17 +175,34 @@ def ch6_growth(shape, check, n):
     took = {n: [], big: []}
     enabled = gc.isenabled()
     old = signal.signal(signal.SIGPROF, _over_budget)
+    clock = time.get_clock_info("process_time")
     try:
+        reps = 1
+        while True:
+            gc.disable()
+            t, _out = _cpu(call, texts[n], 0, reps)
+            if enabled:
+                gc.enable()
+            if t >= CH6_FLOOR:
+                break
+            reps *= 2
+            if reps > CH6_MAX_REPS:
+                raise AssertionError("CH6 shape %s base %d: the CPU clock did not advance to %g s in a sample of %d "
+                                     "calls (clock %r)" % (name, n, CH6_FLOOR, reps, clock))
+        reps *= 2
         for _ in range(CH6_ROUNDS):
             for size in (n, big):
-                limit = 0 if size == n else CH6_BOUND * min(took[n])
+                limit = 0 if size == n else CH6_BOUND * min(took[n])  # above 0: a small sample of 0 is refused below
                 gc.disable()
-                t, out = _cpu(call, texts[size], limit)
+                t, out = _cpu(call, texts[size], limit, reps)
                 if enabled:
                     gc.enable()
                 if t is None:
                     took[size].append(float("inf"))
                     continue
+                if size == n and not t > 0:
+                    raise AssertionError("CH6 shape %s base %d: a small sample of %d calls read 0 CPU seconds "
+                                         "(clock %r)" % (name, n, reps, clock))
                 took[size].append(t)
                 check(out, expect(size))
     finally:
@@ -974,6 +1016,101 @@ class CharacterTest(ScanCase):
                      ".upper(", ".casefold(", "unicodedata", "re.I", "IGNORECASE", "\\s", "\\w", "\\d"):
             with self.subTest(name=name):
                 self.assertNotIn(name, source)
+
+
+def _quantised(tick_ns):
+    """A process_time derived from the real one that advances only in steps of ``tick_ns`` (a coarse CPU clock)."""
+    real_ns = time.process_time_ns
+
+    def clock():
+        return (real_ns() // tick_ns) * tick_ns / 1e9
+    return clock
+
+
+def _loop_shape(name, n, call, expect):
+    return (name, n, lambda k: "a" * k, call, expect)
+
+
+def _quadratic(text):
+    total = 0
+    for _ in text:
+        for _ in text:
+            total += 1
+    return total
+
+
+class Ch6GrowthTest(unittest.TestCase):
+    """ch6_growth on a CPU clock that is coarse, constant or frozen (F-20261124-mi4c) and the invariants of the timing
+    loop: sizes alternate per round, the collector is off while timed, every finished result is checked, a stopped
+    large run counts as infinite and the timer and handler are restored."""
+
+    def test_coarse_clock_linear_shape(self):  # a one-call difference reads 0; reps rise until a sample reads CH6_FLOOR
+        shape = CH6_SHAPES[0]
+        self.assertEqual(shape[0], "fast")
+        with mock.patch.object(time, "process_time", _quantised(10 ** 7)):
+            ratio, small, large = ch6_growth(shape, self.assertEqual, shape[1] // 8)
+        self.assertGreaterEqual(min(small), CH6_FLOOR, small)
+        self.assertLess(ratio, CH6_BOUND, "small %r large %r" % (small, large))
+
+    def test_coarse_clock_quadratic_shape(self):  # the coarse clock does not hide a quadratic shape
+        shape = _loop_shape("quad", 40, _quadratic, lambda k: k * k)
+        with mock.patch.object(time, "process_time", _quantised(10 ** 7)), mock.patch.object(
+                sys.modules[__name__], "CH6_ROUNDS", 1):
+            ratio, small, large = ch6_growth(shape, self.assertEqual, shape[1])
+        self.assertGreaterEqual(ratio, CH6_BOUND, "small %r large %r" % (small, large))
+        self.assertEqual(large, [float("inf")])  # stopped at the limit, which is above 0
+        self.assertEqual(signal.getitimer(signal.ITIMER_PROF), (0.0, 0.0))
+
+    def test_constant_clock_is_a_named_error(self):  # the clock never advances: no division, no hang
+        shape = _loop_shape("const", 100, len, lambda k: k)
+        with mock.patch.object(time, "process_time", lambda: 1.0):
+            with self.assertRaises(AssertionError) as cm:
+                ch6_growth(shape, self.assertEqual, 100)
+        msg = str(cm.exception)
+        for part in ("const", "base 100", "131072", repr(time.get_clock_info("process_time"))):
+            self.assertIn(part, msg)
+
+    def test_clock_frozen_after_calibration_is_a_named_error(self):  # a small sample of 0 is never divided by
+        shape_calls = []
+
+        def call(text):
+            shape_calls.append(1)
+            return len(text)
+
+        def clock():
+            return 0.001 * min(len(shape_calls), 100)
+        shape = _loop_shape("frozen", 100, call, lambda k: k)
+        with mock.patch.object(time, "process_time", clock):
+            with self.assertRaises(AssertionError) as cm:
+                ch6_growth(shape, self.assertEqual, 100)
+        msg = str(cm.exception)
+        for part in ("frozen", "base 100", "read 0", repr(time.get_clock_info("process_time"))):
+            self.assertIn(part, msg)
+
+    def test_invariants_of_the_timing_loop(self):
+        sizes, gcs, checked = [], [], []
+
+        def call(text):
+            sizes.append(len(text))
+            gcs.append(gc.isenabled())
+            return sum(1 for _ in text)
+
+        def check(got, expected):
+            checked.append((got, expected))
+            self.assertEqual(got, expected)
+        shape = _loop_shape("inv", 50, call, lambda k: k)
+        old = signal.getsignal(signal.SIGPROF)
+        was = gc.isenabled()
+        ch6_growth(shape, check, 50)
+        order = [s for i, s in enumerate(sizes) if i == 0 or s != sizes[i - 1]]
+        self.assertEqual(order, [50, 800] * CH6_ROUNDS)  # sizes alternate, small first, every round
+        self.assertEqual(set(gcs), {False})  # the collector is off while timed
+        self.assertEqual(gc.isenabled(), was)
+        self.assertEqual(checked, [(50, 50), (800, 800)] * CH6_ROUNDS)  # every finished sample, last result
+        self.assertEqual(signal.getitimer(signal.ITIMER_PROF), (0.0, 0.0))
+        self.assertIs(signal.getsignal(signal.SIGPROF), old)
+        with self.assertRaises(AssertionError):  # a wrong result is refused
+            ch6_growth(_loop_shape("wrong", 50, lambda t: sum(1 for _ in t) + 1, lambda k: k), self.assertEqual, 50)
 
 
 class TokenInTest(unittest.TestCase):
