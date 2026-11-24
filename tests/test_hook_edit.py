@@ -1332,6 +1332,30 @@ class ReviewOneTest(Base):
         self.assertEqual(self.edit(self.repo + "/docs/x.md", env=env).stdout, "")
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "fresh-data")))
 
+    def test_unusable_applies_to_leaves_store_unchanged(self):   # npuq (b): found is non-empty, ids are empty
+        for n, bad in enumerate(("src/*", 5, ["src/[z-a].py"])):
+            with self.subTest(applies_to=bad):
+                repo = self.newrepo("npuq-b%d" % n)
+                write_record(repo, D + "/" + DEC1 + ".yml", dec(DEC1, applies_to=bad))
+                p = self.edit(repo + "/src/a.py", root=repo)
+                lines = ctx_lines(p)
+                self.assertEqual(len(lines), 1)
+                self.assertTrue(lines[0].startswith("FAIL hook.edit.decisions-load: %s: applies_to" % DEC1), lines)
+                self.assertEqual(os.listdir(self.data), [])
+
+    def test_not_in_force_leaves_store_unchanged(self):   # npuq (c): superseded and every other not-in-force record
+        cases = {"superseded": [dec(DEC1), dec(DEC2, supersedes=DEC1, applies_to=["docs/*"])],
+                 "open": [dec(DEC1, status="open")], "withdrawn": [dec(DEC1, status="withdrawn")],
+                 "one-off": [dec(DEC1, effect="one-off")], "merge-grant": [dec(DEC1, **{"class": "merge-grant"})]}
+        for name, rows in cases.items():
+            with self.subTest(case=name):
+                repo = self.newrepo("npuq-c-" + name)
+                for row in rows:
+                    write_record(repo, D + "/" + row["id"] + ".yml", row)
+                p = self.edit(repo + "/src/a.py", root=repo)
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+                self.assertEqual(os.listdir(self.data), [])
+
     def test_long_id_5000_characters(self):   # n5zc HC9
         long_id = "DEC-" + "a" * 4996
         self.assertEqual(len(long_id), 5000)
