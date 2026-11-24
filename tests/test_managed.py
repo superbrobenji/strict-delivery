@@ -1247,6 +1247,83 @@ class ApplyTests(FsCase):
         self.assertEqual(out(self.read("CLAUDE.md")), out(t))
         self.assertEqual(self.read("CLAUDE.md"), lines("# T", B, "n", E, "tail"))
 
+    def test_apply_block_final_newline_rule(self):  # R3-4: the end line's newline is part of the outside text (PB8, PD5)
+        # PD5/PB8: "the text outside the markers is byte-identical"; a block at EOF without a final newline keeps none,
+        # and a block with one keeps it; AP28/D-Q6 (B): an action whose outside text differs is refused.
+        refused = "apply refused: CLAUDE.md: " + NOT_MANAGED
+        with_nl = lines("x", bv("0.0.1"), "old", E)
+        no_nl = with_nl[:-1]
+        self.assertEqual((no_nl[-len(E):], with_nl[-1]), (E, "\n"))
+        for current, new in ((no_nl, lines("x", B, "n", E)),  # EOF without newline replaced by one with it
+                             (with_nl, lines("x", B, "n", E)[:-1])):  # and the converse
+            with self.subTest(current=current, new=new):
+                self.put_file("CLAUDE.md", current)
+                self.me(refused, apply, self.r, [("CLAUDE.md", new)])
+                self.assertEqual(self.read("CLAUDE.md"), current)
+        # PL45/PB4: a block is appended with a final newline after its end marker; the same text without it is refused
+        self.put_file("CLAUDE.md", "mine\n")
+        self.me(refused, apply, self.r, [("CLAUDE.md", lines("mine", B, "c", E)[:-1])])
+        self.assertEqual(self.read("CLAUDE.md"), "mine\n")
+        self.assertEqual(apply(self.r, [("CLAUDE.md", lines("mine", B, "c", E))]), ["CLAUDE.md"])
+        # controls: the same ending on both sides is accepted
+        self.put_file("CLAUDE.md", no_nl)
+        self.assertEqual(apply(self.r, [("CLAUDE.md", lines("x", B, "n", E)[:-1])]), ["CLAUDE.md"])
+        self.assertEqual(self.read("CLAUDE.md"), lines("x", B, "n", E)[:-1])
+
+    def test_plan_absent_parent_not_created_under_race(self):  # R3-2: "`plan` writes nothing" (P:4468, PL65)
+        # the parent is present at lstat and gone when the descriptor walk opens it: absent, and still nothing created
+        self.put_file("a/b/c.yml", H + "\nold\n")
+        patch, st = self.race_at_open((os.path.basename(self.r),), lambda: os.rename(self.path("a"), self.path("a.gone")))
+        with patch:
+            res = plan(self.r, [Write("a/b/c.yml", H + "\nnew\n", "file")], "0.1.0")
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([("a/b/c.yml", H + "\nnew\n")], []))
+        self.assertFalse(os.path.lexists(self.path("a")))
+        self.assertEqual(sorted(n for n in os.listdir(self.r) if n not in (".git", ".strict-delivery")), ["a.gone"])
+        # a deeper component gone: the present part is not extended either
+        self.put_file("p/q/c.yml", H + "\nold\n")
+        patch, st = self.race_at_open(("q",), lambda: os.rename(self.path("p/q"), self.path("p/q.gone")))
+        with patch:
+            res = plan(self.r, [Write("p/q/c.yml", H + "\nnew\n", "file")], "0.1.0")
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([("p/q/c.yml", H + "\nnew\n")], []))
+        self.assertEqual(sorted(os.listdir(self.path("p"))), ["q.gone"])
+
+    def test_apply_existing_mode_read_through_descriptor(self):  # R3-1 (A2, Note A2-1): below the root only descriptors
+        outside = self.outside_dir("b.yml")
+        os.chmod(os.path.join(outside, "b.yml"), 0o640)
+        self.put_file("a/b.yml", H + "\nold\n", mode=0o600)
+        real = managed._open_parents
+
+        def walk_then_swap(root, parents, create):
+            d = real(root, parents, create)
+            if create:  # _write's walk only: the swap comes after the descriptor is held
+                self.swap_to_link("a", outside)
+            return d
+        with mock.patch.object(managed, "_open_parents", side_effect=walk_then_swap):
+            self.assertEqual(apply(self.r, [("a/b.yml", H + "\nnew\n")]), ["a/b.yml"])
+        self.assertEqual(self.read("a.real/b.yml"), H + "\nnew\n")
+        self.assertEqual(stat.S_IMODE(os.lstat(self.path("a.real/b.yml")).st_mode), 0o600)  # the held directory's file
+        self.assertEqual(self.outside_state(outside), ((H + "\nSECRET\n").encode(), 0o640))
+        self.assertEqual(self.temp_files(), [])
+
+    def test_apply_stat_by_descriptor(self):  # R3-1, class member list: os.stat is the only apply-side lookup by name
+        self.put_file("a/b.yml", H + "\nold\n")
+        calls = []
+        real = os.stat
+
+        def spy(*a, **k):
+            calls.append((a, k))
+            return real(*a, **k)
+        with mock.patch("os.stat", side_effect=spy):
+            apply(self.r, [("a/b.yml", H + "\nnew\n")])
+        calls = [c for c in calls if c[0] != (self.r,)]  # the root itself is checked by name (_check_root)
+        self.assertEqual(len(calls), 1)
+        (a, k), = calls
+        self.assertEqual(a, ("b.yml",))
+        self.assertIsInstance(k.get("dir_fd"), int)
+        self.assertIs(k.get("follow_symlinks"), False)
+
     def test_apply_readonly_dir(self):  # AP20, AP21
         self.needs_unprivileged()
         os.mkdir(self.path("d"))
