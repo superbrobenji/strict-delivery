@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-k4es
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4c2-review-1.md F4
+severity: LOW
+class: "render scan: unspaced GitHub expressions whose body starts with a key (${{github.event}}): no test of fullmatch against match; mutant o9 survives on both"
+siblings: []
+cites:
+  - file: gates/lib/templates.py
+    lines: "97"
+    sha: f9d40b9
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f9d40b91684bf842b1a4e6ed23db560dbd4a76b7
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: render scan
