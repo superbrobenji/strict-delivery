@@ -533,6 +533,13 @@ class TestRender(TplCase):
             with self.assertRaisesRegex(GateError, r"^templates\.render: t\.txt: cannot read \(boom\)$"):
                 render("t.txt", {})
 
+    def test_render_refusal_names_the_line(self):  # RN20: the line number of both scan refusals
+        self.tpl({"a.txt": "a\nb\n{{Bad}}\n", "b.txt": "a\nb\n${{key}}\n"})
+        with self.assertRaisesRegex(GateError, r"^templates\.render: a\.txt: line 3: `\{\{` is not a placeholder$"):
+            render("a.txt", {})
+        with self.assertRaisesRegex(GateError, r"^templates\.render: b\.txt: line 3: `\$\{\{key\}\}` is not a placeholder$"):
+            render("b.txt", {})
+
     def test_render_opens_read_only_without_following_or_blocking(self):  # RN40: the open flags
         self.tpl({"t.txt": "x\n"})
         real = os.open
