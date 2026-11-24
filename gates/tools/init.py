@@ -42,10 +42,11 @@ _STATUS_ARGS = ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=
 class InitError(GateError):
     """A refusal with the id of the ``FAIL`` line it prints."""
 
-    def __init__(self, ident: str, reason: str) -> None:
+    def __init__(self, ident: str, reason: str, parts: Optional[list] = None) -> None:
         super().__init__(reason)
         self.ident = ident
         self.reason = reason
+        self.parts = list(parts) if parts is not None else [reason]  # one FAIL line each, escaped once when printed
 
 
 def _input(reason: object) -> InitError:
@@ -82,15 +83,15 @@ def _check_root(root: object) -> str:
         real = os.path.realpath(root)
         fw = os.path.realpath(plugin.framework_dir())
     except ValueError:
-        raise _input("%s: unusable path" % safe_text(root)) from None
+        raise _input("%s: unusable path" % root) from None
     if real == fw or real.startswith(fw.rstrip(os.sep) + os.sep):
-        raise _input("%s is the framework's own directory; pass the target repository's top level" % safe_text(root))
+        raise _input("%s is the framework's own directory; pass the target repository's top level" % root)
     try:
         top = gitinfo.toplevel(root)
     except GateError as e:
-        raise _input("%s: %s" % (safe_text(root), e)) from None
+        raise _input("%s: %s" % (root, e)) from None
     if top != real:
-        raise _input("%s: not the repository top level (%s)" % (safe_text(root), safe_text(top)))
+        raise _input("%s: not the repository top level (%s)" % (root, top))
     return real
 
 
@@ -115,7 +116,13 @@ def _read_settings(root: str):
         return ("absent",)
     if state[0] == "conflict":
         reason = state[1]
-        return ("bad", "exists and is not a regular UTF-8 file" if reason == managed._NOT_MANAGED else reason)
+        if reason == managed._NOT_MANAGED:  # a directory, FIFO or socket, or a regular file that is not UTF-8
+            try:
+                regular = stat.S_ISREG(os.lstat(os.path.join(root, SETTINGS)).st_mode)
+            except OSError:
+                regular = False
+            return ("bad", "is not valid UTF-8" if regular else "exists and is not a regular file")
+        return ("bad", reason)
     try:
         data = json.loads(state[1], object_pairs_hook=plugin._pairs, parse_constant=plugin._constant,
                           parse_int=plugin._integer, parse_float=plugin._float)
@@ -266,7 +273,7 @@ def _model_errors(models: object) -> list:
         return ["models: must be a mapping"]
     for key in models:
         if key != "tiers":
-            errs.append("models.%s: unknown key" % safe_text(key))
+            errs.append("models.%s: unknown key" % key)
     if "tiers" not in models:
         return errs + ["models.tiers: required key is missing"]
     tiers = models["tiers"]
@@ -274,7 +281,7 @@ def _model_errors(models: object) -> list:
         return errs + ["models.tiers: must be a non-empty mapping"]
     for key, value in tiers.items():
         if key not in TIERS:
-            errs.append("models.tiers.%s: unknown key" % safe_text(key))
+            errs.append("models.tiers.%s: unknown key" % key)
         elif not _line_ok(value):
             errs.append("models.tiers.%s: must be one line of printable characters" % key)
     return errs
@@ -285,15 +292,15 @@ def _validated(answers: object, cfg: dict, initialised: bool) -> dict:
         raise InitError("init.answers", "answers: must be a mapping")
     try:
         sch = schema.load_schema(_ANSWERS_SCHEMA)
-    except GateError as e:
+    except (GateError, schema.SchemaError) as e:
         raise _input(e) from None
     errs = _answer_errors(answers, sch)
     if errs:
-        raise InitError("init.answers", "\n".join(errs))
+        raise InitError("init.answers", "; ".join(errs), errs)
     if initialised:
         errs = _config_differences(answers, cfg)
         if errs:
-            raise InitError("init.answers", "\n".join(errs))
+            raise InitError("init.answers", "; ".join(errs), errs)
     return answers
 
 
@@ -302,8 +309,7 @@ def _config_differences(answers: dict, cfg: dict) -> list:
     errs = []
 
     def differ(key: str, got: object, have: object) -> None:
-        errs.append("%s: differs from the config (answer %s, config %s)" % (key, safe_text(json.dumps(got)),
-                                                                            safe_text(json.dumps(have))))
+        errs.append("%s: differs from the config (answer %s, config %s)" % (key, json.dumps(got), json.dumps(have)))
     if answers["profile"] != cfg["profile"]:
         differ("profile", answers["profile"], cfg["profile"])
     if answers["merge_mode"] != cfg["merge"]["mode"]:
@@ -326,8 +332,7 @@ def load_answers(path: str) -> dict:
     try:
         data = yamlsub.load(path, path)
     except yamlsub.YamlError as e:
-        raise InitError("init.answers", "%s: %s%s" % (safe_text(path), e.reason, " (line %d)" % e.line if e.line else "")
-                        ) from None
+        raise InitError("init.answers", "%s%s" % (e.reason, " (line %d)" % e.line if e.line else "")) from None
     if type(data) is not dict:
         raise InitError("init.answers", "top level: must be a mapping")
     for key in ("commands", "subagents"):  # D-Q1 (a): the subset cannot write an empty mapping
@@ -335,11 +340,11 @@ def load_answers(path: str) -> dict:
             data[key] = {}
     try:
         sch = schema.load_schema(_ANSWERS_SCHEMA)
-    except GateError as e:
+    except (GateError, schema.SchemaError) as e:
         raise _input(e) from None
     errs = _answer_errors(data, sch)
     if errs:
-        raise InitError("init.answers", "\n".join(errs))
+        raise InitError("init.answers", "; ".join(errs), errs)
     return data
 
 
@@ -405,8 +410,8 @@ def _plan_block(root: str, kind: str, body: str, version: str, notes: list, writ
             found = managed.find_block(state[1], managed._KIND_STYLE[kind])
         except GateError:
             found = None  # malformed: managed.plan reports it as a conflict
-        if found is not None:
-            if found.kind == kind and found.version == version and found.body == body:
+        if found is not None and found.kind == kind:  # another kind: managed.plan reports it as malformed
+            if found.version == version and found.body == body:
                 return
             notes.append("%s: present at version %s; run /strict-delivery:upgrade" % (path, found.version))
             return
@@ -419,7 +424,7 @@ def _plan_hooks(root: str, answers: dict, conflicts: list, notes: list, extra: _
     extra.hooks_dir = hooks
     value = githooks._hooks_path(root)
     if value is not None:
-        conflicts.append("core.hooksPath is set (%s); unset it to install the hooks" % safe_text(value))
+        conflicts.append("core.hooksPath is set (%s); unset it to install the hooks" % value)
         return
     if os.path.lexists(hooks) and not (os.path.isdir(hooks) and not os.path.islink(hooks)) and \
             not os.path.isdir(hooks):
@@ -488,7 +493,9 @@ def _build(root: str, answers: dict) -> tuple:
         if set_write is not None:
             writes.append(set_write)
         actions, m_conflicts = managed.plan(root, writes, version)
-        conflicts = m_conflicts + dir_conflicts + set_conflicts
+        # write order: config, directories, blocks, CI, settings, hooks (PL3)
+        config_c = [c for c in m_conflicts if c.startswith(config.CONFIG_PATH + ": ")]
+        conflicts = config_c + dir_conflicts + [c for c in m_conflicts if c not in config_c] + set_conflicts
         if answers["git_hooks"]:
             _plan_hooks(root, answers, conflicts, notes, extra)
     except InitError:
@@ -519,16 +526,22 @@ def plan_init(root: str, answers: dict) -> InitPlan:
 
 
 # ----------------------------------------------------------------------------------------------------- output
-def _lines(text: str) -> list:
+def _lines_kept(text: str) -> list:
+    """Lines split on ``"\\n"`` only, each keeping its newline, so a last line without one differs from the same line
+    with one (PO5); difflib invents no ``\\ No newline`` marker."""
     parts = text.split("\n")
-    if parts and parts[-1] == "":
-        parts.pop()
-    return parts
+    out = [p + "\n" for p in parts[:-1]]
+    if parts[-1] != "":
+        out.append(parts[-1])
+    return out
 
 
 def _diff_text(path: str, old: str, new: str) -> str:
     out = []
-    for line in difflib.unified_diff(_lines(old), _lines(new), "a/" + path, "b/" + path, lineterm=""):
+    for i, line in enumerate(difflib.unified_diff(_lines_kept(old), _lines_kept(new), "a/" + path, "b/" + path,
+                                                  lineterm="")):
+        if i >= 2 and line[:1] in (" ", "+", "-"):
+            line = line[:-1] if line.endswith("\n") else line
         out.append(safe_text(line) + "\n")
     return "".join(out)
 
@@ -557,8 +570,8 @@ def _show_plan(plan: InitPlan, extra: _Extra) -> None:
         _out("note: %s\n" % safe_text(n))
 
 
-def _fail(ident: str, reason: str) -> None:
-    for part in reason.split("\n"):
+def _fail(ident: str, parts: list) -> None:
+    for part in parts:
         _out("FAIL %s: %s\n" % (ident, safe_text(part)))
 
 
@@ -614,14 +627,13 @@ def _run(sub: str, ns) -> int:
         answers = load_answers(ns.answers[0])
         plan, extra = _build(real, answers)
     except InitError as e:
-        _fail(e.ident, e.reason)
+        _fail(e.ident, e.parts)
         return 1
     except GateError as e:
-        _fail("init.input", str(e))
+        _fail("init.input", [str(e)])
         return 1
     if plan.conflicts:
-        for c in plan.conflicts:
-            _fail("init.conflict", c)
+        _fail("init.conflict", plan.conflicts)
         return 1
     if sub == "plan":
         _show_plan(plan, extra)
@@ -632,7 +644,7 @@ def _run(sub: str, ns) -> int:
     try:
         _apply(real, plan, extra, written)
     except (GateError, OSError) as e:
-        _fail("init.write", str(e) if isinstance(e, GateError) else "%s: %s" % (type(e).__name__, e.strerror))
+        _fail("init.write", [str(e) if isinstance(e, GateError) else "%s: %s" % (type(e).__name__, e.strerror)])
         _out("written: %s\n" % safe_text(", ".join(written)))
         return 1
     if not written:
@@ -640,16 +652,14 @@ def _run(sub: str, ns) -> int:
     try:
         _out(_status(real))
     except GateError as e:
-        _fail("init.status", str(e))
+        _fail("init.status", [str(e)])
         return 1
     return 0
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list) -> int:
     """``python3 -m gates.tools.init``: 2 on a usage error, 1 on a refusal or conflict, 0 otherwise."""
-    if argv is None:
-        args = list(sys.argv[1:])
-    elif type(argv) is list and all(type(a) is str for a in argv):
+    if type(argv) is list and all(type(a) is str for a in argv):
         args = list(argv)
     else:
         sys.stderr.write("init: argv must be a list of str\n")
@@ -670,4 +680,4 @@ def main(argv: Optional[list] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
