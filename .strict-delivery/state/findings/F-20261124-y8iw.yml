@@ -3,7 +3,7 @@ id: F-20261124-y8iw
 status: open
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-11.md F1
 severity: LOW
-class: "CH6 calibration failure message names the calls of its last sample: tests/test_shellscan.py:189-191 prints reps after the doubling (131072) though the last sample ran 65536; the pin at :1071 asserts the wrong number"
+class: "CH6 calibration failure message names the calls of its last sample: tests/test_shellscan.py:189-191 prints reps after the doubling (131072) though the last sample ran 65536; the pin at :1071 asserts the wrong number; ESCALATE at 3b.1 r8 (loopstats): registered against the follow-up task 3b.2 (the bash area owns tests/test_shellscan.py, plan :3302)"
 siblings: []
 cites:
   - file: tests/test_shellscan.py
