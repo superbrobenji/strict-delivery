@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-vyet
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c1-review-1.md R1-4
+severity: LOW
+class: "no-match edit leaves the session store untouched: untested"
+siblings: []
+cites:
+  - file: gates/hooks/pre_edit.py
+    lines: "190"
+    sha: bc32f50613d258334c1d0235e83bfc2001130690
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bc32f50613d258334c1d0235e83bfc2001130690
+    by: stream-hooks-1
+review_round: 1
+caused_by_change: true
+dimension: "surfacing: no match"
