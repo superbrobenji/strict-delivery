@@ -2530,6 +2530,15 @@ class WorktreesSameRepo(Fx):
         out = self.wt({"path": "../clone", "branch": "block/p1", "head": self.c1[:7], "porcelain": ""})
         self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../clone: not a worktree of this repository")
 
+    def test_worktree_unborn_linked_entry(self):  # fix round 1, F-20261124-cqac: HEAD has no commit, same repository
+        self.build()
+        orph = os.path.join(self.tmp, "orph")
+        git(self.root, "worktree", "add", "-q", "--orphan", "-b", "orph", orph)
+        self.assertEqual(git(orph, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+                         git(self.root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        out = self.wt({"path": "../orph", "branch": "orph", "head": self.c1[:7], "porcelain": ""})
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../orph: HEAD has no commit")
+
     def test_worktree_kinds_keep_old_reasons(self):  # WT6
         self.build()
         os.mkdir(os.path.join(self.tmp, "plain"))
@@ -2562,11 +2571,35 @@ class WorktreesSameRepo(Fx):
 
 
 class SourceAndGroups(FullFx):
-    def test_gate_source_no_unbounded_int_format(self):  # V1c: the new code formats no integer: %d and str() stay at their P1.3 counts
+    def test_gate_source_no_unbounded_int_format(self):  # V1c (fix round 1, F-20261124-iwe7)
+        """Rule: an integer reaches output only through the ``%d`` strings of Tasks P1.3 and P3.1 (their operands are line
+        numbers, test counts and file line counts, each bounded by ``checkpoint_lines`` or the file size). So the set of
+        string constants holding ``%d`` must equal that hand-written set; no f-string and no ``.format`` call exists; and
+        every ``str(...)`` call takes the caught exception ``e`` (never a count). A new formatted integer, in any function,
+        fails; an unrelated edit does not."""
         with open(os.path.join(REPO, "gates", "gate_checkpoint.py"), encoding="utf-8") as fh:
-            src = fh.read()
-        self.assertEqual(src.count("%d"), 10)
-        self.assertEqual(src.count("str("), 7)  # the four of P1.3/P3.1 and three ``str(e)`` of a caught error (cap, records, base)
+            tree = ast.parse(fh.read())
+        want = {
+            "line %d: last CHECKPOINT is not green (tests=%d/%d gates=%s)",
+            "block: ledger line %d has %s, handoff has %s",
+            "next: ledger line %d has %s, handoff next_task is %s",
+            "ledger line %d names %s, handoff names %s: not the same commit",
+            "ledger_from: %s is not %d (the line after the last CHECKPOINT line, %d)",
+            "%s: lines %s: the file has %d lines",
+            "%s: lines %s: need start <= end <= %d (the file's line count)",
+        }
+        got = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and "%d" in node.value:
+                got.add(node.value)
+            self.assertNotIsInstance(node, ast.JoinedStr, "an f-string")
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+                    self.fail(".format at line %d" % node.lineno)
+                if isinstance(node.func, ast.Name) and node.func.id in ("str", "repr", "format"):
+                    ok = node.func.id == "str" and len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == "e"
+                    self.assertTrue(ok, "%s(...) of something but an exception at line %d" % (node.func.id, node.lineno))
+        self.assertEqual(got, want)
 
     def test_gate_source_has_no_unicode_table_calls(self):  # V2b
         with open(os.path.join(REPO, "gates", "gate_checkpoint.py"), encoding="utf-8") as fh:
@@ -2574,24 +2607,50 @@ class SourceAndGroups(FullFx):
         for banned in (".lower()", ".isprintable", "unicodedata", ".splitlines", "\\w", "BaseException", "except:"):
             self.assertNotIn(banned, src, banned)
 
-    def test_gate_exception_groups_propagate(self):  # V3
+    def test_gate_exception_groups_propagate(self):  # V3 (fix round 1, F-20261124-iwe7)
+        """A ``BaseExceptionGroup`` raised at any call the new code makes leaves ``main`` unchanged (``run_check`` catches
+        ``Exception`` only). An ``ExceptionGroup`` is an ``Exception``: ``run_check`` turns it into the one line
+        ``FAIL checkpoint.input: ...``, and it never becomes a reason on ``cap``, ``records``, ``base``, ``files`` or ``last``."""
         if not hasattr(builtins, "BaseExceptionGroup"):
             self.skipTest("no BaseExceptionGroup on this interpreter")
         self.build()
-        group = lambda *a, **k: (_ for _ in ()).throw(builtins.BaseExceptionGroup("x", [KeyboardInterrupt()]))
-        for target in ("gates.lib.gitinfo.tracked_files", "gates.lib.checkpoints.cap_errors", "gates.lib.checkpoints.last_line_errors",
-                       "gates.lib.checkpoints.record_errors", "gates.lib.worktrees.same_repository"):
-            with self.subTest(target=target), mock.patch(target, side_effect=group):
+        real = {"is_ancestor": gitinfo.is_ancestor, "commit_exists": gitinfo.commit_exists}
+
+        def raiser(make, only_in=None, name=None):
+            def side(*a, **k):
+                if only_in is not None:  # raise only below the named function; the other gate lines call these too
+                    f = sys._getframe(1)
+                    while f is not None and f.f_code.co_name != only_in:
+                        f = f.f_back
+                    if f is None:
+                        return real[name](*a, **k)
+                raise make()
+            return side
+        bgroup = lambda: builtins.BaseExceptionGroup("x", [KeyboardInterrupt()])
+        egroup = lambda: builtins.ExceptionGroup("x", [ValueError("y")])
+        targets = [("gates.lib.gitinfo.tracked_files", None, None), ("gates.lib.checkpoints.cap_errors", None, None),
+                   ("gates.lib.checkpoints.last_line_errors", None, None), ("gates.lib.checkpoints.record_errors", None, None),
+                   ("gates.lib.worktrees.same_repository", None, None),
+                   ("gates.lib.gitinfo.is_ancestor", "_base", "is_ancestor"), ("gates.lib.gitinfo.commit_exists", "_base", "commit_exists")]
+        for target, only_in, name in targets:
+            with self.subTest(target=target, kind="BaseExceptionGroup"), mock.patch(target, side_effect=raiser(bgroup, only_in, name)):
                 with self.assertRaises(builtins.BaseExceptionGroup):
                     self.chk()
+            with self.subTest(target=target, kind="ExceptionGroup"), mock.patch(target, side_effect=raiser(egroup, only_in, name)):
+                out, code = self.chk()
+                self.assertTrue(out.startswith("FAIL checkpoint.input: "), out)
+                self.assertEqual((out.count("\n"), code), (1, 1))
         # the program path: local_branches and records_at
         git(self.root, "branch", "p/integration")
         self.rewrite(program="p", stream="records")
         self.push()
         for target in ("gates.lib.gitinfo.local_branches", "gates.lib.checkpoints.records_at"):
-            with self.subTest(target=target), mock.patch(target, side_effect=group):
+            with self.subTest(target=target, kind="BaseExceptionGroup"), mock.patch(target, side_effect=raiser(bgroup)):
                 with self.assertRaises(builtins.BaseExceptionGroup):
                     self.chk()
+            with self.subTest(target=target, kind="ExceptionGroup"), mock.patch(target, side_effect=raiser(egroup)):
+                out, _ = self.chk()
+                self.assertTrue(out.startswith("FAIL checkpoint.input: ") and out.count("\n") == 1, out)
 
 
 class Registration(unittest.TestCase):
