@@ -188,8 +188,8 @@ def questions(root: str) -> dict:
     current = None
     try:
         state = _read_settings(real)
-    except InitError as e:
-        state = ("bad", e.reason)
+    except InitError as e:  # QS11: the problem's reason does not repeat the source it names
+        state = ("bad", e.reason[len(SETTINGS) + 2:] if e.reason.startswith(SETTINGS + ": ") else e.reason)
     if state[0] == "bad":
         problems.append({"source": SETTINGS, "reason": state[1]})
     elif state[0] == "ok":
@@ -418,6 +418,11 @@ def _plan_block(root: str, kind: str, body: str, version: str, notes: list, writ
     writes.append(managed.Write(path, body, kind))
 
 
+def _hooks_dir_blocked(hooks: str) -> bool:
+    """CD17: the hooks directory exists as a link or as anything but a directory (``lstat``, never followed)."""
+    return os.path.lexists(hooks) and (os.path.islink(hooks) or not os.path.isdir(hooks))
+
+
 def _plan_hooks(root: str, answers: dict, conflicts: list, notes: list, extra: _Extra) -> None:
     fw = githooks.framework_dir()
     hooks = gitinfo.hooks_dir(root)
@@ -426,7 +431,7 @@ def _plan_hooks(root: str, answers: dict, conflicts: list, notes: list, extra: _
     if value is not None:
         conflicts.append("core.hooksPath is set (%s); unset it to install the hooks" % value)
         return
-    if os.path.lexists(hooks) and (os.path.islink(hooks) or not os.path.isdir(hooks)):  # CD17: lstat, a link is a conflict
+    if _hooks_dir_blocked(hooks):
         conflicts.append("%s: exists and is not a directory" % hooks)
         return
     try:
@@ -495,6 +500,7 @@ def _build(root: str, answers: dict) -> tuple:
         # write order: config, directories, blocks, CI, settings, hooks (PL3)
         config_c = [c for c in m_conflicts if c.startswith(config.CONFIG_PATH + ": ")]
         conflicts = config_c + dir_conflicts + [c for c in m_conflicts if c not in config_c] + set_conflicts
+        conflicts = list(dict.fromkeys(conflicts))  # PO2: one line per conflict, first place kept
         if answers["git_hooks"]:
             _plan_hooks(root, answers, conflicts, notes, extra)
     except InitError:
@@ -549,8 +555,12 @@ def _out(text: str) -> None:
     sys.stdout.write(text)
 
 
+def _idle(extra: _Extra) -> bool:
+    return not (extra.actions or extra.dirs or extra.hooks)
+
+
 def _show_plan(plan: InitPlan, extra: _Extra) -> None:
-    if not (extra.actions or extra.dirs or extra.hooks):
+    if _idle(extra):
         _out("no changes\n")
         for n in plan.notes:
             _out("note: %s\n" % safe_text(n))
@@ -577,24 +587,41 @@ def _fail(ident: str, parts: list) -> None:
 # ------------------------------------------------------------------------------------------------------- apply
 def _apply(root: str, plan: InitPlan, extra: _Extra, written: list) -> list:
     def group(paths: tuple) -> None:
-        acts = [a for a in extra.actions if a[0] in paths]
-        if acts:
-            written.extend(managed.apply(root, acts))
+        for act in [a for a in extra.actions if a[0] in paths]:  # one at a time: ``written`` keeps every file written
+            written.extend(managed.apply(root, [act]))
+
+    def failed(path: str, verb: str, e: OSError) -> GateError:
+        return GateError("%s: %s (%s)" % (path, verb, e.strerror or type(e).__name__))
     group((config.CONFIG_PATH,))
     for d in extra.dirs:
         path = os.path.join(root, d)
+        _, conflicts = _dir_plan(root, [d])  # H4: a component may have turned into a link since the plan
+        if conflicts:
+            raise GateError(conflicts[0])
         if os.path.lexists(path):
             continue
-        os.mkdir(path)
+        try:
+            os.mkdir(path)
+        except OSError as e:
+            raise failed(d, "cannot create", e) from None
         written.append(d + "/")
     group(("CLAUDE.md", ".gitignore"))
     group((CI_PATH,))
     group((SETTINGS,))
     fw = githooks.framework_dir()
     for name in extra.hooks:
-        os.makedirs(extra.hooks_dir, exist_ok=True)
-        githooks._write(os.path.join(extra.hooks_dir, name), githooks.shim(name, fw))
-        written.append(os.path.join(extra.hooks_dir, name))
+        hook = os.path.join(extra.hooks_dir, name)
+        if _hooks_dir_blocked(extra.hooks_dir):  # H4: the hooks directory may have turned into a link
+            raise GateError("%s: exists and is not a directory" % extra.hooks_dir)
+        try:
+            os.makedirs(extra.hooks_dir, exist_ok=True)
+        except OSError as e:
+            raise failed(extra.hooks_dir, "cannot create", e) from None
+        try:
+            githooks._write(hook, githooks.shim(name, fw))
+        except OSError as e:
+            raise failed(hook, "cannot write", e) from None
+        written.append(hook)
     return written
 
 
@@ -637,6 +664,8 @@ def _run(sub: str, ns) -> int:
     if sub == "plan":
         _show_plan(plan, extra)
         return 0
+    if _idle(extra):
+        _out("no changes\n")  # PO6, IN3; a note of D-Q5 (a) follows it, as on ``plan`` (PO7)
     for n in plan.notes:
         _out("note: %s\n" % safe_text(n))
     written: list = []
@@ -646,8 +675,6 @@ def _run(sub: str, ns) -> int:
         _fail("init.write", [str(e) if isinstance(e, GateError) else "%s: %s" % (type(e).__name__, e.strerror)])
         _out("written: %s\n" % safe_text(", ".join(written)))
         return 1
-    if not written:
-        _out("no changes\n")
     try:
         _out(_status(real))
     except GateError as e:

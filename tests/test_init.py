@@ -596,11 +596,11 @@ class TestPieces(Base):
         kinds = [c[0] + ":" + (c[1] if isinstance(c[1], str) else ",".join(c[1])) for c in calls]
         flat = [k for k in kinds if not k.startswith("mkdir:.git")]
         self.assertEqual([k for k in flat if not k.startswith("mkdir:")],
-                         ["apply:.strict-delivery/config.yml", "apply:CLAUDE.md,.gitignore",
+                         ["apply:.strict-delivery/config.yml", "apply:CLAUDE.md", "apply:.gitignore",
                           "apply:.github/workflows/strict-delivery.yml", "apply:.claude/settings.json",
                           "hook:pre-commit", "hook:pre-push"])
-        self.assertLess(flat.index("apply:CLAUDE.md,.gitignore"), flat.index("apply:.github/workflows/strict-delivery.yml"))
-        self.assertLess(flat.index("mkdir:.strict-delivery/state"), flat.index("apply:CLAUDE.md,.gitignore"))
+        self.assertLess(flat.index("apply:.gitignore"), flat.index("apply:.github/workflows/strict-delivery.yml"))
+        self.assertLess(flat.index("mkdir:.strict-delivery/state"), flat.index("apply:CLAUDE.md"))
 
     def test_failure_part_way(self):  # AP4 (b), AP5
         real = managed.apply
@@ -1552,7 +1552,7 @@ class TestStateDirs(More):
         self.addCleanup(os.chmod, os.path.join(self.root, ".strict-delivery"), 0o755)
         code, out, _ = self.cmd("apply")
         self.assertEqual(code, 1)
-        self.assertIn("FAIL init.write: PermissionError: Permission denied\nwritten: \n", out)
+        self.assertIn("FAIL init.write: .strict-delivery/state: cannot create (Permission denied)\nwritten: \n", out)
         self.assertEqual([n for n in os.listdir(os.path.join(self.root, ".strict-delivery")) if n.startswith(".sd")], [])
 
 
@@ -1874,7 +1874,7 @@ class TestHookRows(More):
         self.addCleanup(os.chmod, os.path.join(ro, ".git", "hooks"), 0o755)
         code, out, _ = self.run_init("apply", "--root", ro, "--answers", self.ans)
         self.assertEqual(code, 1)
-        self.assertIn("FAIL init.write: PermissionError: Permission denied\nwritten: ", out)
+        self.assertIn("FAIL init.write: %s: cannot write (Permission denied)\nwritten: " % os.path.join(ro, ".git", "hooks", "pre-commit"), out)
         self.assertTrue(os.path.exists(os.path.join(ro, "CLAUDE.md")))
         self.assertEqual([n for n in os.listdir(os.path.join(ro, ".git", "hooks")) if n.startswith(".sd")], [])
 
@@ -2184,6 +2184,346 @@ class TestPlanApplyRows(More):
             src = fh.read()
         for bad in ("isdigit", "isdecimal", "isalnum", "isnumeric", "casefold", "unicodedata", "except*"):
             self.assertNotIn(bad, src)
+
+
+HELP_BODY = {
+    "plan": "usage: init plan [-h] [--root ROOT] [--answers ANSWERS]\n\noptional arguments:\n"
+            "  -h, --help         show this help message and exit\n  --root ROOT\n  --answers ANSWERS\n",
+    "apply": "usage: init apply [-h] [--root ROOT] [--answers ANSWERS]\n\noptional arguments:\n"
+             "  -h, --help         show this help message and exit\n  --root ROOT\n  --answers ANSWERS\n",
+    "questions": "usage: init questions [-h] [--root ROOT] [--answers ANSWERS] [--json]\n\noptional arguments:\n"
+                 "  -h, --help         show this help message and exit\n  --root ROOT\n  --answers ANSWERS\n  --json\n",
+}
+STATE_KEYS = ("decisions", "findings", "claims", "plan_state", "programs", "playbooks")
+TOP = "top level is not an object"
+ENV_NOT_OBJ = "env is not an object"
+
+
+class TestReview1(More):
+    """Round 1 of the 4d.1 review: findings F-20261124-x78m azfq 4vka i5nc 9vua 6b3i rda6 zs4z 4xja."""
+
+    # --- R1-1 (x78m): ST11 -------------------------------------------------------------------------------------
+    def test_settings_shape_conflicts(self):  # ST11
+        for text, want in (("[]", TOP), ('"x"', TOP), ("5", TOP), ("null", TOP), ("true", TOP),
+                           ('{"env": null}', ENV_NOT_OBJ), ('{"env": []}', ENV_NOT_OBJ),
+                           ('{"env": "x"}', ENV_NOT_OBJ), ('{"env": 5}', ENV_NOT_OBJ)):
+            self.write(".claude/settings.json", text)
+            before = snapshot(self.root)
+            for sub in ("plan", "apply"):
+                code, out, _ = self.cmd(sub, git_hooks=False)
+                self.assertEqual((code, out), (1, "FAIL init.conflict: .claude/settings.json: %s\n" % want),
+                                 (sub, text))
+            self.assertEqual(snapshot(self.root), before, text)
+
+    # --- R1-2 (azfq) and R1-3 (4vka): QS11/ST19 through questions ----------------------------------------------
+    def test_questions_settings_unusable_states(self):  # QS11, ST19
+        src = ".claude/settings.json"
+        cases = (
+            (b"{", "is not valid JSON"),
+            (b'{"env": {}, "env": {}}', "duplicate key 'env'"),
+            (b'{"a": NaN}', "the constant NaN is not allowed"),
+            (b"\xef\xbb\xbf{}", "is not valid JSON"),
+            (b'{"a": %s}' % (b"1" * 4301), "an integer of more than 4300 digits is not allowed"),
+        )
+        p = os.path.join(self.root, ".claude", "settings.json")
+        for lim in helpers.INT_LIMITS:
+            with helpers.int_limit(lim):
+                for data, reason in cases:
+                    self.write(".claude/settings.json", data, "wb")
+                    q = init.questions(self.root)
+                    self.assertEqual((q["subagents"], q["problems"]),
+                                     ({"current": None}, [{"source": src, "reason": reason}]), (lim, data[:20]))
+        self.write(".claude/settings.json", b"{}", "wb")
+        os.chmod(p, 0)
+        self.addCleanup(os.chmod, p, 0o644)
+        q = init.questions(self.root)
+        self.assertEqual((q["subagents"], q["problems"]),
+                         ({"current": None}, [{"source": src, "reason": "cannot read (Permission denied)"}]))
+        os.chmod(p, 0o644)
+        self.write(".claude/settings.json", json.dumps({"env": {ENV_D: "5"}}))
+        q = init.questions(self.root)
+        self.assertEqual((q["subagents"], q["problems"]), ({"current": {ENV_D: "5"}}, []))
+
+    def test_questions_detect_reasons_repeat_no_path(self):  # R1-3 class: detect problems
+        p = os.path.join(self.root, "package.json")
+        self.write("package.json", b'{"scripts": {}}', "wb")
+        os.chmod(p, 0)
+        self.addCleanup(os.chmod, p, 0o644)
+        q = init.questions(self.root)
+        self.assertEqual(q["problems"], [{"source": "package.json", "reason": "Permission denied"}])
+
+    # --- R1-4 (i5nc): one line per conflict --------------------------------------------------------------------
+    def test_conflicts_listed_once(self):  # PL3, PO2
+        os.symlink(self.tmp, os.path.join(self.root, ".strict-delivery"))
+        want = [".strict-delivery/config.yml: parent .strict-delivery is not a directory", ".strict-delivery: is a symlink"]
+        self.assertEqual(init.plan_init(self.root, answers()).conflicts, want)
+        code, out, _ = self.cmd("plan")
+        self.assertEqual((code, out), (1, "".join("FAIL init.conflict: %s\n" % c for c in want)))
+
+    def test_conflicts_listed_once_file_parent(self):  # PL3, PO2 (non-directory branch)
+        self.write(".strict-delivery/state", "f")
+        self.init_config()
+        want = [".strict-delivery/state: exists and is not a directory"]
+        self.assertEqual(init.plan_init(self.root, answers()).conflicts, want)
+        code, out, _ = self.cmd("apply")
+        self.assertEqual((code, out), (1, "FAIL init.conflict: .strict-delivery/state: exists and is not a directory\n"))
+
+    def test_conflicts_two_distinct_children_kept(self):  # PL3: distinct conflicts are all kept
+        self.init_config()
+        os.makedirs(os.path.join(self.root, ".strict-delivery", "state"))
+        self.write(".strict-delivery/state/decisions", "f")
+        os.symlink(self.tmp, os.path.join(self.root, ".strict-delivery", "state", "claims"))
+        self.assertEqual(init.plan_init(self.root, answers()).conflicts,
+                         [".strict-delivery/state/decisions: exists and is not a directory",
+                          ".strict-delivery/state/claims: is a symlink"])
+
+    # --- R1-5 (9vua): init.write names the path ---------------------------------------------------------------
+    def test_mkdir_failure_names_path(self):  # AP4 (a)
+        self.init_config()
+        os.chmod(os.path.join(self.root, ".strict-delivery"), 0o555)
+        self.addCleanup(os.chmod, os.path.join(self.root, ".strict-delivery"), 0o755)
+        code, out, _ = self.cmd("apply")
+        self.assertEqual((code, out), (1, "FAIL init.write: .strict-delivery/state: cannot create (Permission denied)\n"
+                                          "written: \n"))
+
+    def test_hooks_dir_create_failure_names_path(self):  # AP4 (c)
+        r = self.repo("nohooks", commit=False, flags=("--template=",))
+        self.put_answers()
+        hooks = os.path.join(r, ".git", "hooks")
+        os.chmod(os.path.join(r, ".git"), 0o555)
+        self.addCleanup(os.chmod, os.path.join(r, ".git"), 0o755)
+        code, out, _ = self.run_init("apply", "--root", r, "--answers", self.ans)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: %s: cannot create (Permission denied)\nwritten: " % hooks, out)
+
+    def test_hook_write_failure_names_path(self):  # AP4 (c), HK12
+        hook = os.path.join(self.root, ".git", "hooks", "pre-commit")
+        os.makedirs(os.path.dirname(hook), exist_ok=True)
+        os.chmod(os.path.dirname(hook), 0o555)
+        self.addCleanup(os.chmod, os.path.dirname(hook), 0o755)
+        code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: %s: cannot write (Permission denied)\nwritten: " % hook, out)
+        os.chmod(os.path.dirname(hook), 0o755)
+        for err, reason in ((OSError(28, "No space left on device"), "No space left on device"), (OSError("boom"), "OSError")):
+            with mock.patch.object(githooks, "_write", side_effect=err):
+                code, out, _ = self.cmd("apply")
+            self.assertEqual(code, 1)
+            self.assertIn("FAIL init.write: %s: cannot write (%s)\nwritten: " % (hook, reason), out)
+
+    # --- R1-6 (6b3i): written: lists every file written ---------------------------------------------------------
+    def test_written_lists_files_of_a_failed_group(self):  # AP4 (b), CD18
+        real = managed._write
+
+        def fail_gitignore(root, path, text):
+            if path == ".gitignore":
+                raise OSError(13, "Permission denied")
+            return real(root, path, text)
+        with mock.patch.object(managed, "_write", fail_gitignore):
+            code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 1)
+        dirs = ", ".join(".strict-delivery/%s/" % d for d in ("state", "state/decisions", "state/findings", "state/claims",
+                                                              "state/plans", "state/programs", "playbooks"))
+        self.assertEqual(out, "FAIL init.write: .gitignore: cannot write (Permission denied)\n"
+                              "written: .strict-delivery/config.yml, %s, CLAUDE.md\n" % dirs)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "CLAUDE.md")))
+
+    # --- R1-7 (rda6): notes after no changes -------------------------------------------------------------------
+    def stale_block(self):
+        self.assertEqual(self.cmd("apply")[0], 0)
+        text = self.read("CLAUDE.md")
+        version = plugin.version(plugin.framework_dir())
+        self.assertIn(version, text)
+        self.write("CLAUDE.md", text.replace(version, "90.0.0"))
+        return "note: CLAUDE.md: present at version 90.0.0; run /strict-delivery:upgrade\n"
+
+    def test_plan_no_changes_then_notes(self):  # PO6, PO7, D-Q5 (a)
+        note = self.stale_block()
+        before = snapshot(self.root)
+        self.assertEqual(self.cmd("plan"), (0, "no changes\n" + note, ""))
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_apply_no_changes_then_notes(self):  # PO6, PO7, D-Q5 (a)
+        note = self.stale_block()
+        before = snapshot(self.root)
+        code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("no changes\n" + note + "?? "), out)
+        self.assertEqual(out.count("note:"), 1)
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_second_run_prints_exactly_no_changes(self):  # PO6, IN3: no note, nothing else
+        self.assertEqual(self.cmd("apply")[0], 0)
+        self.assertEqual(self.cmd("plan"), (0, "no changes\n", ""))
+
+    # --- R1-8 (zs4z): VR8 --help text ---------------------------------------------------------------------------
+    def test_help_text_same_on_both(self):  # VR8
+        for sub, want in HELP_BODY.items():
+            code, out, err = self.run_init(sub, "--help")
+            # "options:" on 3.10+, "optional arguments:" on 3.9: _GateParser's, family-wide (tests/test_argparse_text.py)
+            text = err.replace("\noptions:\n", "\noptional arguments:\n")
+            self.assertEqual((code, out, text), (2, "", want), sub)
+
+    # --- R1-9 (4xja): H7 outside the root, and the other Amendment H cells --------------------------------------
+    def test_every_configured_path_outside_the_root_refused(self):  # H7: all 14 cfg["paths"] keys (the six state dirs and the rest)
+        keys = tuple(config.DEFAULTS["paths"])
+        self.assertEqual(len(keys), 14)
+        for key in keys:
+            for value in ("../escape", "/abs/escape", "a/../../escape", "a//b"):
+                self.init_config(paths={key: value})
+                before = snapshot(self.root)
+                for sub in ("plan", "apply"):
+                    code, out, _ = self.cmd(sub)
+                    self.assertEqual(code, 1, (key, value, sub))
+                    self.assertTrue(out.startswith("FAIL init.config: "), (key, value, out))
+                    self.assertIn("paths.%s" % key, out)
+                self.assertEqual(snapshot(self.root), before, (key, value))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "escape")))
+
+    def test_block_files_each_kind(self):  # H1-H3: CLAUDE.md and .gitignore, a link, a directory, a FIFO
+        for name in ("CLAUDE.md", ".gitignore"):
+            p = os.path.join(self.root, name)
+            for setup, want in ((lambda: os.symlink(os.path.join(self.root, "README.md"), p), "is a symlink"),
+                                (lambda: os.mkdir(p), "exists and is not framework-managed"),
+                                (lambda: os.mkfifo(p), "exists and is not framework-managed")):
+                setup()
+                before = snapshot(self.root)
+                for sub in ("plan", "apply"):
+                    code, out, _ = helpers.within(lambda: self.cmd(sub))
+                    self.assertEqual((code, out), (1, "FAIL init.conflict: %s: %s\n" % (name, want)), (name, sub))
+                self.assertEqual(snapshot(self.root), before)
+                os.rmdir(p) if os.path.isdir(p) and not os.path.islink(p) else os.unlink(p)
+
+    def test_ci_parents_are_links(self):  # H4: .github and .github/workflows as links
+        for parent in (".github", ".github/workflows"):
+            os.makedirs(os.path.join(self.root, ".github"), exist_ok=True)
+            p = os.path.join(self.root, parent)
+            if parent == ".github":
+                os.rmdir(p)
+            else:
+                os.makedirs(os.path.join(self.root, ".github"), exist_ok=True)
+            os.symlink(self.tmp, p)
+            code, out, _ = self.cmd("plan", ci=True)
+            self.assertEqual(code, 1, parent)
+            self.assertIn("FAIL init.conflict: .github/workflows/strict-delivery.yml: parent %s is not a directory\n" % parent, out)
+            os.unlink(p)
+            if parent == ".github/workflows":
+                os.rmdir(os.path.join(self.root, ".github"))
+        self.assertEqual(os.listdir(self.tmp).count("strict-delivery.yml"), 0)
+
+    def test_answers_through_a_linked_parent(self):  # H4: the answers path is the owner's argument, read as given
+        real_dir = os.path.join(self.tmp, "real-answers")
+        os.mkdir(real_dir)
+        self.put_answers()
+        os.rename(self.ans, os.path.join(real_dir, "a.yml"))
+        os.symlink(real_dir, os.path.join(self.tmp, "linked"))
+        self.assertEqual(self.run_init("plan", "--root", self.root, "--answers",
+                                       os.path.join(self.tmp, "linked", "a.yml"))[0], 0)
+
+    def test_unusual_characters_in_a_configured_path(self):  # H6
+        self.init_config(paths={"decisions": "rec é/ü x"})
+        code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "rec é", "ü x")))
+
+    def test_state_dir_each_key_symlink_fifo_parent(self):  # H1, H3, H4 for each of the six paths
+        for key in STATE_KEYS:
+            parent = "rec_%s" % key
+            self.init_config(paths={key: parent + "/leaf"})
+            target = os.path.join(self.root, parent)
+            for label, setup, want in (
+                    ("link", lambda: (os.makedirs(target), os.symlink(self.tmp, os.path.join(target, "leaf"))),
+                     "%s/leaf: is a symlink" % parent),
+                    ("fifo", lambda: (os.makedirs(target), os.mkfifo(os.path.join(target, "leaf"))),
+                     "%s/leaf: exists and is not a directory" % parent),
+                    ("parentlink", lambda: os.symlink(self.tmp, target), "%s: is a symlink" % parent),
+                    ("parentfile", lambda: self.write(parent, "f"), "%s: exists and is not a directory" % parent)):
+                if os.path.lexists(target):
+                    if os.path.isdir(target) and not os.path.islink(target):
+                        shutil.rmtree(target)
+                    else:
+                        os.unlink(target)
+                setup()
+                before = snapshot(self.root)
+                for sub in ("plan", "apply"):
+                    code, out, _ = helpers.within(lambda: self.cmd(sub))
+                    self.assertEqual(code, 1, (key, label, sub))
+                    self.assertIn("FAIL init.conflict: %s\n" % want, out, (key, label))
+                self.assertEqual(snapshot(self.root), before, (key, label))
+                self.assertNotIn("leaf", os.listdir(self.tmp))
+
+    def test_state_dir_pairs_equal_or_nested(self):  # H5, DR8: every pair of the six keys
+        for i, a in enumerate(STATE_KEYS):
+            for b in STATE_KEYS[i + 1:]:
+                self.init_config(paths={a: "rec/x", b: "rec/x"})
+                code, out, _ = self.cmd("plan")
+                if (a, b) == ("decisions", "findings"):  # 4c.2: the two gitignore lines would be equal
+                    self.assertEqual(code, 1, (a, b, out))
+                    self.assertTrue(out.startswith("FAIL init.input: two ignore lines are equal: "), (a, b, out))
+                else:  # DR8: created once, no conflict
+                    self.assertEqual(code, 0, (a, b, out))
+                    self.assertEqual(out.count("mkdir rec/x/\n"), 1, (a, b, out))
+                self.init_config(paths={a: "rec/x", b: "rec/x/y"})
+                code, out, _ = self.cmd("plan")
+                self.assertEqual(code, 0, (a, b, out))
+                self.assertEqual(out.count("mkdir rec/x/y/\n"), 1, (a, b, out))
+
+    def test_hooks_dir_fifo_is_a_conflict(self):  # H3 (hooks directory)
+        r = self.repo("hfifo", commit=False, flags=("--template=",))
+        h = os.path.join(r, ".git", "hooks")
+        os.mkfifo(h)
+        self.put_answers()
+        before = snapshot(r)
+        code, out, _ = helpers.within(lambda: self.run_init("plan", "--root", r, "--answers", self.ans))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.conflict: %s: exists and is not a directory\n" % h, out)
+        self.assertEqual(helpers.within(lambda: self.run_init("apply", "--root", r, "--answers", self.ans))[0], 1)
+        self.assertEqual(snapshot(r), before)
+
+    def test_hook_files_fifo_dir_symlink_each(self):  # H1-H3 (each of the two hook files)
+        os.makedirs(os.path.join(self.root, ".git", "hooks"), exist_ok=True)
+        for name in ("pre-commit", "pre-push"):
+            p = os.path.join(self.root, ".git", "hooks", name)
+            for setup in (lambda: os.mkfifo(p), lambda: os.mkdir(p), lambda: os.symlink(self.tmp, p)):
+                setup()
+                code, out, _ = helpers.within(lambda: self.cmd("plan"))
+                self.assertEqual((code, out), (1, "FAIL init.conflict: githooks.%s: foreign\n" % name))
+                os.rmdir(p) if os.path.isdir(p) and not os.path.islink(p) else os.unlink(p)
+
+    def test_state_dir_swapped_to_link_after_plan(self):  # H4: a parent turns into a link between plan and write
+        outside = os.path.join(self.tmp, "outside")
+        os.mkdir(outside)
+        real = managed.apply
+
+        def swap(root, actions):
+            res = real(root, actions)
+            state = os.path.join(root, ".strict-delivery", "state")
+            if not os.path.lexists(state) and any(a[0] == ".strict-delivery/config.yml" for a in actions):
+                os.symlink(outside, state)
+            return res
+        with mock.patch.object(managed, "apply", swap):
+            code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: .strict-delivery/state: is a symlink\n", out)
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_hooks_dir_swapped_to_link_after_plan(self):  # H4: the hooks directory turns into a link
+        outside = os.path.join(self.tmp, "outside-hooks")
+        os.mkdir(outside)
+        hooks = os.path.join(self.root, ".git", "hooks")
+        real = managed.apply
+
+        def swap(root, actions):
+            res = real(root, actions)
+            if any(a[0] == "CLAUDE.md" for a in actions) and os.path.isdir(hooks) and not os.path.islink(hooks):
+                os.rename(hooks, hooks + ".old")
+                os.symlink(outside, hooks)
+            return res
+        with mock.patch.object(managed, "apply", swap):
+            code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: %s: exists and is not a directory\n" % hooks, out)
+        self.assertEqual(os.listdir(outside), [])
 
 
 if __name__ == "__main__":
