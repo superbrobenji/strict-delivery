@@ -354,5 +354,376 @@ class ResultFunctionsTest(Repo):
         self.assertTrue(out.endswith("noise-out\nPASS githook.test\n"), out)
 
 
+
+# ---- Part B: bashpolicy (rows PO, TR, GW, WD, EW, TX, CS, CP, CE, CG, CN, CC, CU, CR, V) ----
+from gates.lib import bashpolicy as bp  # noqa: E402
+from gates.lib import shellscan  # noqa: E402
+from gates.lib.result import Result  # noqa: E402
+
+
+def pol(root="/nonexistent-root", **kw):
+    d = dict(root=root, cfg={}, cfg_error=None, env={}, aliases={}, branch="feat", base="main", agent_key="session",
+             cwd=root, state_access=lambda: (frozenset(), [], None))
+    d.update(kw)
+    return bp.Policy(**d)
+
+
+def ids(lines):
+    return [ln.split(":", 1)[0][len("FAIL "):] for ln in lines]
+
+
+class Recorder:
+    def __init__(self, fails=()):
+        self.calls = []
+        self.fails = fails
+
+    def __call__(self, root):
+        self.calls.append(root)
+        res = Result("g")
+        res.passed("a.pass")
+        for gid, why in self.fails:
+            res.fail(gid, why)
+        return res
+
+
+class ConstantsTest(unittest.TestCase):
+    def test_words_constants(self):  # WD1-WD3
+        self.assertEqual((bp.COMMIT_WORDS, bp.PUSH_WORDS, bp.MERGE_WORDS), (("commit",), ("push",), ("merge", "pull")))
+        for t in (bp.COMMIT_WORDS, bp.PUSH_WORDS, bp.MERGE_WORDS):
+            self.assertIs(type(t), tuple)
+            self.assertTrue(all(type(w) is str for w in t))
+
+    def test_policy_fields(self):  # PO1
+        self.assertEqual([f.name for f in bp.dataclasses.fields(bp.Policy)],
+                         ["root", "cfg", "cfg_error", "env", "aliases", "branch", "base", "agent_key", "cwd",
+                          "state_access"])
+
+    def test_no_unicode_db_calls(self):  # V2d
+        with open(bp.__file__.replace(".pyc", ".py"), encoding="utf-8") as fh:
+            src = fh.read()
+        for banned in (".lower(", ".casefold(", ".isprintable(", "unicodedata"):
+            self.assertNotIn(banned, src)
+
+
+class TextRefusalsTest(unittest.TestCase):
+    def want(self, text, expected, agent=None):
+        self.assertEqual(ids(bp.text_refusals(text, agent)), expected, text)
+
+    def test_no_verify_forms(self):  # TX1-TX6, TX7, TX10
+        for t in ("git commit --no-verify -m m", "--no-veri", "--no-ver", "--no-v", "--no-verbose", "--no-valid",
+                  "git commit -m 'use --no-verify'", "echo --no-verify", "git push --no-verify", "--NO-VERIFY",
+                  "git commit\r--no-verify", "--no-verify\x00", "git commit\n--no-verify", "--no-verify=1",
+                  "foo=--no-verify", "--no-verify-x", "git commit --no\"\"-verify"):
+            self.want(t, ["hook.bash.bypass.no-verify"])
+
+    def test_no_verify_near_misses(self):  # TX3, TX4
+        for t in ("--no-edit", "--no-pager", "--no-color", "--no-ff", "x--no-verify", "a--no-v", "---no-verify"):
+            self.want(t, [])
+
+    def test_no_verify_unicode(self):  # TX9, V2b
+        for t in ("--no-verifyꟀ", "\U0001fae0--no-verify", "--no-verKify", "Ꟁ--no-verify"):
+            self.want(t, ["hook.bash.bypass.no-verify"])
+
+    def test_hookspath_forms(self):  # TX12-TX14, TX18, V2c
+        for t in ("git -c core.hooksPath=/dev/null commit", "git config core.HooksPath x", "CORE.HOOKSPATH",
+                  "xhookspath", "core.hooks\"\"Path"):
+            self.want(t, ["hook.bash.bypass.hooks-path"] + (["hook.bash.bypass.git-config-env"] if 0 else []))
+        for t in ("core.hooksDir", "hooks/pre-commit", ".git/hooks", "hooKspath", "hookſpath"):
+            self.want(t, [])
+
+    def test_git_config_env(self):  # TX16, TX19-TX23, TX25
+        for t in ("GIT_CONFIG_COUNT=1", "GIT_CONFIG_GLOBAL=x", "GIT_CONFIG_KEY_0=a", "export GIT_CONFIG_COUNT=1",
+                  "echo GIT_CONFIG_COUNT", "$GIT_CONFIG_GLOBAL", "\"GIT_CONFIG_\"", "MY_GIT_CONFIG_X", "git_config_count=1",
+                  "git --config-env=core.x=VAR status", "--CONFIG-ENV", "GIT_CONFIG_COUNT=" + "9" * 4301):
+            self.assertIn("hook.bash.git-config-env".replace("hook.bash.", "hook.bash.bypass."), ids(bp.text_refusals(t)), t)
+        for t in ("GIT_CONFIG", "GIT_CONFIGX"):
+            self.want(t, [])
+
+    def test_hookspath_and_config_env(self):  # TX16
+        self.want("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath", ["hook.bash.bypass.hooks-path",
+                                                                       "hook.bash.bypass.git-config-env"])
+
+    def test_home_moves(self):  # TX26-TX30, TX32, TX34-TX35
+        for t in ("HOME=/tmp git commit", "HOME=x", "a=1 HOME=x ls", "XDG_CONFIG_HOME=x git commit", "HOME= git commit",
+                  "HOME+=x", "export HOME=x", "export HOME", "export -n HOME", "export A=1 HOME=x",
+                  "export XDG_CONFIG_HOME", "unset HOME", "unset -v XDG_CONFIG_HOME", "unset A HOME",
+                  "declare HOME=x", "declare -x HOME", "typeset HOME=x", "readonly HOME", "local HOME=x",
+                  "declare -g XDG_CONFIG_HOME=x", "env -u HOME git commit", "env -u XDG_CONFIG_HOME ls",
+                  "env -i HOME=/x git commit", "env --unset=HOME ls", "env --unset HOME ls", "env -uHOME ls",
+                  "read HOME", "printf -v HOME x", "for HOME in a; do :; done", "mapfile HOME", "getopts a HOME",
+                  "echo \"HOME=x\"", "grep 'export HOME' notes", "home=x", "xdg_config_home=x"):
+            self.assertIn("hook.bash.bypass.home", ids(bp.text_refusals(t)), t)
+
+    def test_home_reads_allowed(self):  # TX31, TX33, TX37
+        for t in ("echo $HOME", "cd \"$HOME\"", "ls ${HOME}/x", "echo ~", "printf %s HOME", "MYHOME=x", "HOME_DIR=x",
+                  "HOMEBREW_PREFIX=x", "XDG_CONFIG_HOME2=x", "XDG_CONFIG_DIRS=x", "cd", "cd ~", "pushd ~/x"):
+            self.assertNotIn("hook.bash.bypass.home", ids(bp.text_refusals(t)), t)
+
+    def test_decide_agent_only(self):  # TX38-TX47
+        forms = ("python3 -m gates decisions decide X", "python3 -I -m gates decisions withdraw X",
+                 "cd x; python3 -m gates decisions decide", "sh -c 'python3 -m gates decisions decide'",
+                 "python3 -c \"from gates.tools import decisions_cli; decisions_cli.main(['decide'])\"",
+                 "DECISIONS decide", "Decision withdraw", "decisionsX decide", "echo decision; echo decide",
+                 "decisions decide.", "decisions DECIDE", "decisions deci\"\"de")
+        for t in forms:
+            self.want(t, ["hook.bash.decide"], "a1")
+            self.assertNotIn("hook.bash.decide", ids(bp.text_refusals(t)), t)
+            self.assertNotIn("hook.bash.decide", ids(bp.text_refusals(t, None)), t)
+        for t in ("python3 -m gates decisions ask X", "decisions list", "grep decide notes.md", "echo withdraw",
+                  "git commit -m \"decide\"", "decision decided", "decision undecide", "decision decide-all",
+                  "decision decide_x", "decision withdrawn", "decisionsꟀ decide x".replace("decisions", "decis")):
+            self.want(t, [], "a1")
+
+    def test_order_and_shape(self):  # TX49-TX53
+        out = bp.text_refusals("HOME=x git commit --no-verify -c core.hooksPath=/dev/null GIT_CONFIG_X decision decide",
+                               "a1")
+        self.assertEqual(ids(out), ["hook.bash.bypass.no-verify", "hook.bash.bypass.hooks-path",
+                                    "hook.bash.bypass.git-config-env", "hook.bash.bypass.home", "hook.bash.decide"])
+        self.assertIs(type(out), list)
+        self.assertEqual(bp.text_refusals(""), [])
+        self.assertEqual(bp.text_refusals("   \n"), [])
+        for t in (b"x", None):
+            with self.assertRaises(TypeError):
+                bp.text_refusals(t)
+        for line in out:
+            self.assertIn("!", line)  # the way out (ruling R2)
+        self.assertNotIn("\U0001fae0", "".join(bp.text_refusals("\U0001fae0 --no-verify")))
+
+    def test_long_text(self):  # TX53, V1c
+        self.assertEqual(bp.text_refusals("a " * 100000), [])
+
+
+class EffectiveWordsTest(unittest.TestCase):
+    def test_plain_and_none(self):  # EW1-EW3, EW16, EW17
+        for t, w in (("git commit -m m", {"commit"}), ("git push origin x", {"push"}), ("git pull", {"pull"}),
+                     ("git merge x", {"merge"}), ("GIT commit", {"commit"}), ("git commit && git commit", {"commit"}),
+                     ("git log -- commit/x", {"commit"}), ("git commit.txt", {"commit"}), ("git 'commit'", {"commit"}),
+                     ("git com\"\"mit -m x", {"commit"})):
+            self.assertEqual(bp.effective_words(t, {}), w, t)
+        for t in ("git status", "ls", "", "\n", "git commit-tree HEAD", "git recommit", "git commit_x", "git COMMIT",
+                  "grep commit notes.md", "echo commit", "echo git; commit".replace("git;", "xx;")):
+            self.assertEqual(bp.effective_words(t, {}), set(), t)
+
+    def test_aliases(self):  # EW6-EW14, EW19
+        al = {"ci": "commit", "x": "!git commit", "y": "!echo hi", "a": "b", "b": "commit", "c1": "c1", "pp": "pull --rebase",
+              "mg": "merge --no-ff", "gg": "-c a=b commit", "commit": "log"}
+        for t, w in (("git ci", {"commit"}), ("git ci --no-verify", {"commit"}), ("git CI", {"commit"}),
+                     ("git -C W ci", {"commit"}), ("ls && git ci -m m", {"commit"}), ("git status | git ci", {"commit"}),
+                     ("git x", {"commit", "push", "merge"}), ("git y", {"commit", "push", "merge"}),
+                     ("git a", {"commit"}), ("git pp", {"pull"}), ("git mg", {"merge"}), ("git gg", {"commit"}),
+                     ("echo ci", set()), ("ci", set()), ("git c1", set()), ("git commit", {"commit"})):
+            self.assertEqual(bp.effective_words(t, al), w, t)
+
+    def test_bad_aliases(self):  # EW14
+        self.assertEqual(bp.effective_words("git commit", {}), {"commit"})
+        for bad in (None, [], {1: "a"}, {"a": 1}):
+            with self.assertRaises(TypeError):
+                bp.effective_words("git commit", bad)
+        with self.assertRaises(TypeError):
+            bp.effective_words(None, {})
+
+
+class GitWriteTest(unittest.TestCase):
+    def test_members_and_options(self):  # GW1-GW6, GW9-GW12 (words only)
+        for sub in bp.GIT_WRITES:
+            self.assertTrue(bp.is_git_write(sub, []), sub)
+        for sub, args in (("branch", ["-c"]), ("branch", ["-D", "x"]), ("branch", ["--force"]), ("branch", ["--del", "x"]),
+                          ("branch", ["-fm", "a", "b"]), ("checkout", ["-b", "x"]), ("checkout", ["-B", "x"]),
+                          ("checkout", ["--force"]), ("checkout", ["-f"]), ("checkout", ["-bx"]),
+                          ("checkout", ["--track", "x"]), ("switch", ["-c", "x"]), ("switch", ["--create", "x"]),
+                          ("switch", ["--force-create", "x"]), ("switch", ["--discard-changes"]),
+                          ("switch", ["--orphan", "x"])):
+            self.assertTrue(bp.is_git_write(sub, args), (sub, args))
+        for sub, args in (("branch", []), ("branch", ["-a"]), ("branch", ["--list"]), ("branch", ["-v"]),
+                          ("branch", ["-F"]), ("branch", ["--FORCE"]), ("checkout", ["feat"]), ("checkout", ["--", "a.txt"]),
+                          ("checkout", ["HEAD", "--", "a.txt"]), ("switch", ["feat"]), ("status", []), ("log", ["-n"]),
+                          ("COMMIT", []), ("Commit", []), ("commit.", []), ("grep", ["push"])):
+            self.assertFalse(bp.is_git_write(sub, args), (sub, args))
+
+
+class TargetRootTest(Repo):
+    def test_target_root(self):  # TR1-TR5, TR11, TR16-TR17, TR20, TR22-TR23, TR28-TR29, TR33
+        w = self.repo("w")
+        sub = os.path.join(w, "sub")
+        os.mkdir(sub)
+        link = os.path.join(self.tmp, "link")
+        os.symlink(w, link)
+        other = self.repo("other")
+        real = os.path.realpath(w)
+        p = pol(cwd=sub, state_access=lambda: (frozenset({real}), [], None))
+        self.assertEqual(bp.target_root(shellscan.scan("git commit"), None, p), (real, []))
+        self.assertEqual(bp.target_root(shellscan.scan("git commit"), "..", p), (real, []))
+        self.assertEqual(bp.target_root(shellscan.scan("git commit"), link, p), (real, []))
+        self.assertEqual(bp.target_root(shellscan.scan("cd %s && git commit" % w), None, p), (real, []))
+        root, fails = bp.target_root(shellscan.scan("git commit"), other, p)
+        self.assertIsNone(root)
+        self.assertEqual(len(fails), 1)
+        self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
+                      % (os.path.realpath(other), real), fails[0])
+        root, fails = bp.target_root(shellscan.scan("git commit"), None, pol(cwd=w, state_access=lambda: (frozenset(), ["this agent has no bound worktree (x)"], None)))
+        self.assertIsNone(root)
+        self.assertIn("(allowed: none)", fails[0])
+        self.assertEqual(len(fails), 2)
+        self.assertIn("no bound worktree", fails[1])
+        for bad in (os.path.join(self.tmp, "missing"), os.path.join(w, "a.txt"), "", self.tmp):
+            root, fails = bp.target_root(shellscan.scan("git commit"), bad, p)
+            self.assertIsNone(root, bad)
+            self.assertTrue(fails and fails[0].startswith("FAIL hook.bash.target:"))
+        root, fails = bp.target_root(shellscan.scan("cd %s && git commit" % w), w, p)
+        self.assertEqual((root, len(fails)), (None, 1))
+
+
+class CommitRefusalsTest(Repo):
+    def run_lines(self, text, p=None, gates=None):
+        rec = gates or Recorder()
+        out = bp.commit_refusals(text, p or pol(), rec)
+        return out, rec
+
+    def test_compound(self):  # CS1-CS4, CS7-CS8
+        for text, reason in (("git add x && git commit -m m", "operator &&"), ("true; git commit -m m", "operator ;"),
+                             ("true || git commit -m m", "operator ||"), ("true | git commit -m m", "operator |"),
+                             ("true & git commit -m m", "operator &"), ("true\ngit commit -m m", "operator newline"),
+                             ("(git commit -m m)", "grouping"), ("echo $(git commit -m m)", "substitution"),
+                             ("git commit -m m > out", "redirection"), ("git commit -m $MSG", "expansion"),
+                             ("git commit -m é", "character"), ("git commit -m m # c", "comment")):
+            out, rec = self.run_lines(text)
+            self.assertEqual(len(out), 1, text)
+            self.assertTrue(out[0].startswith("FAIL hook.bash.compound: git commit runs as its own command (%s)" % reason),
+                            (text, out))
+            self.assertEqual(rec.calls, [])
+
+    def test_not_git_and_env(self):  # CP1-CP8, CP13-CP14
+        for text in ("echo git commit", "grep \"git commit\" docs", "nohup git commit", "xargs git commit",
+                     "sudo git commit", "GIT commit -m m", "/usr/bin/GIT commit", "git.exe commit",
+                     "env -S 'git commit'", "env -C /x git commit", "env --chdir=/x git commit", "env -0 git commit",
+                     "env -- git commit", "env -iu A git commit", "env --unset=A git commit", "env -uA git commit",
+                     "env A=1 -i git commit", "env env git commit", "env PATH=/x git commit", "env FOO=1 git commit"):
+            out, rec = self.run_lines(text)
+            self.assertIn("hook.bash.not-git", ids(out), text)
+            self.assertEqual(rec.calls, [], text)
+        for text in ("env git commit -m m", "/usr/bin/env git commit -m m", "env -i git commit -m m",
+                     "env -u FOO git commit", "env LANG=C git commit", "env -u B -i LC_ALL=C git commit",
+                     "./git commit", "/opt/x/git commit", "LANG=C env git commit", "TZ=UTC git commit"):
+            out, _ = self.run_lines(text)
+            self.assertNotIn("hook.bash.not-git", ids(out), text)
+        self.assertEqual(self.run_lines("GIT_INDEX_FILE=x")[0], [])
+
+    def test_assignments_and_inherited(self):  # CE1-CE3, CE7, CE9
+        for text in ("GIT_INDEX_FILE=x git commit -m m", "env GIT_INDEX_FILE=x git commit -m m",
+                     "env -i GIT_INDEX_FILE=x git commit", "GIT_INDEX_FILE= git commit"):
+            self.assertIn("hook.bash.index", ids(self.run_lines(text)[0]), text)
+        for text in ("GIT_DIR=x git commit", "GIT_WORK_TREE=x git commit", "GIT_COMMON_DIR= git commit",
+                     "GIT_OBJECT_DIRECTORY=x git commit", "env GIT_DIR=x git commit"):
+            self.assertIn("hook.bash.target", ids(self.run_lines(text)[0]), text)
+        self.assertNotIn("hook.bash.index", ids(self.run_lines("git commit -m \"GIT_INDEX_FILE=x\"")[0]))
+        for name in bp.INHERITED_GIT_ENV:
+            for value in ("/x", ""):
+                out, rec = self.run_lines("git commit -m m", pol(env={name: value}))
+                self.assertEqual(ids(out), ["hook.bash.target"], name)
+                self.assertIn(name, out[0])
+                self.assertEqual(rec.calls, [])
+
+    def test_global_options(self):  # CG1-CG10
+        for text in ("git --no-pager commit", "git -P commit", "git -C W commit", "git -C W --no-pager commit",
+                     "git commit --git-dir=x", "git commit -c HEAD"):
+            self.assertFalse([i for i in ids(self.run_lines(text)[0]) if i.startswith("hook.bash.global")], text)
+        for text, opt in (("git --no-pager -C W commit", "-C"), ("git -P -C W commit", "-C"), ("git -C a -C b commit", "-C"),
+                          ("git -CW commit", "-CW"), ("git -c a=b commit", "-c"), ("git --git-dir=x commit", "--git-dir"),
+                          ("git --git-dir x commit", "--git-dir"), ("git --work-tree=x commit", "--work-tree"),
+                          ("git --bare commit", "--bare"), ("git --exec-path commit", "--exec-path"),
+                          ("git -p commit", "-p"), ("git --version commit", "--version"), ("git --no-pager=x commit", "--no-pager"),
+                          ("git --namespace=x commit", "--namespace"), ("git --literal-pathspecs commit", "--literal-pathspecs")):
+            out, rec = self.run_lines(text)
+            self.assertIn("hook.bash.global-option." + opt, ids(out), text)
+            self.assertEqual(rec.calls, [])
+        self.assertIn("hook.bash.target", ids(self.run_lines("git -C a -C b commit")[0]))
+        out = self.run_lines("git --git-dir=x -C W -c a=b commit")[0]
+        self.assertEqual(sorted(i for i in ids(out) if i.startswith("hook.bash.global")),
+                         ["hook.bash.global-option.--git-dir", "hook.bash.global-option.-C",
+                          "hook.bash.global-option.-c"])  # -C after another option does not lead (CG2)
+        self.assertEqual(self.run_lines("git")[0], [])
+
+    def test_n_flag(self):  # CN1-CN17
+        for text in ("git commit -n -m m", "git commit -n", "git commit -an", "git commit -na", "git commit -ean",
+                     "git commit -nm x", "git commit -anm x", "git commit -nF f", "git commit -s -n", "git commit -qn",
+                     "git commit -vn", "git commit -no", "git commit -mn -n", "git commit -m x -n", "git commit -am x -n",
+                     "git commit -m x -an", "git commit -S -n", "git commit -Sn", "git commit -n1", "git commit -1n",
+                     "git commit -nn", "git commit -- -n", "git commit \"-n\"", "git commit '-n'",
+                     "git --no-pager commit -n", "git -C W commit -n"):
+            self.assertIn("hook.bash.bypass.n-flag", ids(self.run_lines(text)[0]), text)
+        for text in ("git commit -mn", "git commit -m n", "git commit -m -n", "git commit -mn -a", "git commit -Fn",
+                     "git commit -cn", "git commit -Cn", "git commit -tn", "git commit -amn", "git commit -F -n",
+                     "git commit -c n", "git commit -C n", "git commit -t n", "git commit -N", "git commit --n",
+                     "git commit --no", "git commit --message=-n", "git commit --message -n", "git commit --file -n",
+                     "git commit -m", "git commit -a -m", "git push -n", "git status -n", "git log -n 3",
+                     "git log --grep commit -n 1", "git commit-graph -n"):
+            self.assertNotIn("hook.bash.bypass.n-flag", ids(self.run_lines(text)[0]), text)
+        al = {"ci": "commit", "cn": "commit -n", "cv": "commit --no-verify"}
+        p = pol(aliases=al)
+        self.assertIn("hook.bash.bypass.n-flag", ids(self.run_lines("git ci -n", p)[0]))
+        self.assertIn("hook.bash.bypass.n-flag", ids(self.run_lines("git ci -an", p)[0]))
+        self.assertIn("hook.bash.bypass.n-flag", ids(self.run_lines("git cn", p)[0]))
+        self.assertIn("hook.bash.bypass.no-verify", ids(self.run_lines("git cv", p)[0]))
+        self.assertEqual(ids(self.run_lines("git cv", p)[0]).count("hook.bash.bypass.no-verify"), 1)
+
+    def test_commit_tree_is_not_commit(self):  # CS12, CP14
+        for text in ("git commit-tree HEAD", "git-commit -m m", "/usr/lib/git-core/git-commit"):
+            out, rec = self.run_lines(text)
+            self.assertEqual((out, rec.calls), ([], []))
+
+    def test_config_error(self):  # CC1, CC3, CC8
+        d = self.repo()
+        with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("two\n")
+        out, rec = self.run_lines("git commit -m m", pol(root=d, cfg=None, cfg_error="bad key\nx"))
+        self.assertEqual(out, ["FAIL hook.bash.config: bad key\\nx; no commit runs until the config loads"])
+        self.assertEqual(rec.calls, [])
+
+    def test_unstaged_then_gates(self):  # CU1-CU3, CU18, CR1, CR7-CR12, CR18
+        d = self.repo()
+        git(d, "config", "alias.ci", "commit")
+        p = pol(root=d, cwd=d, aliases=gitinfo.aliases(d))
+        out, rec = self.run_lines("git commit -m m", p)
+        self.assertEqual((out, rec.calls), ([], [d]))
+        out, rec = self.run_lines("git ci -m m", p, Recorder([("githook.test", "commands.test exited 3"),
+                                                              ("run_all.x", "bad\nz")]))
+        self.assertEqual(out, ["FAIL hook.bash.gates: githook.test: commands.test exited 3",
+                               "FAIL hook.bash.gates: run_all.x: bad\\nz"])
+        with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("two\n")
+        with open(os.path.join(d, "we ird\nname"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        git(d, "add", "we ird\nname")
+        git(d, "commit", "-q", "-m", "w")
+        with open(os.path.join(d, "we ird\nname"), "w", encoding="utf-8") as fh:
+            fh.write("y")
+        out, rec = self.run_lines("git commit -a -m m", p)
+        self.assertEqual(out, ["FAIL hook.bash.unstaged: a.txt: tracked file has unstaged changes; stage it or stash it, "
+                               "so the gates read the tree being committed",
+                               "FAIL hook.bash.unstaged: we ird\\nname: tracked file has unstaged changes; stage it or "
+                               "stash it, so the gates read the tree being committed"])
+        self.assertEqual(rec.calls, [])
+
+    def test_run_gates_errors(self):  # CR13 (Q5 (ii)), CU16
+        d = self.repo()
+
+        def boom(root):
+            raise GateError("gates broke\nhere")
+        self.assertEqual(bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), boom),
+                         ["FAIL hook.bash.gates: gates broke\\nhere"])
+        empty = lambda root: Result("g")  # noqa: E731
+        self.assertEqual(bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), empty), [])
+        out = bp.commit_refusals("git commit -m m", pol(root=os.path.join(d, "a.txt")), empty)
+        self.assertTrue(out and out[0].startswith("FAIL hook.bash.gates: "))
+
+    def test_which_step_wins(self):  # CR19
+        d = self.repo()
+        with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("two\n")
+        out, rec = self.run_lines("GIT_INDEX_FILE=x git commit -m m", pol(root=d, cwd=d))
+        self.assertEqual(ids(out), ["hook.bash.index"])
+        self.assertEqual(rec.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
