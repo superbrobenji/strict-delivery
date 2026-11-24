@@ -1715,10 +1715,14 @@ class InputShapeTest(ProjectCase):
         shapes += [("dispatch", {"max_prompt_chars": v}, "dispatch.max_prompt_chars: " + cap)
                    for v in (0, True, "5", 2.5, 10 ** 600)]
         shapes += [("roles", v, "roles must be a mapping") for v in (None, 5, True, "x", [])]
-        shapes += [("roles", {1: {}}, "roles: '1' is not a role id [a-z][a-z0-9_]*"),
+        shapes += [("roles", {1: {}}, "roles: a key must be a role id string"),    # 4b.2-followup FU2: was "'1' is not a role id ..."
                    ("roles", {"X": {}}, "roles: 'X' is not a role id [a-z][a-z0-9_]*"),
                    ("roles", {"a b": {}}, "roles: 'a b' is not a role id [a-z][a-z0-9_]*"),
-                   ("roles", {"x\n": {}}, "roles: 'x\\n' is not a role id [a-z][a-z0-9_]*")]
+                   ("roles", {"x\n": {}}, "roles: 'x\\n' is not a role id [a-z][a-z0-9_]*"),
+                   ("roles", {"\n": {}}, "roles: '\\n' is not a role id [a-z][a-z0-9_]*"),
+                   ("roles", {"": {}}, "roles: '' is not a role id [a-z][a-z0-9_]*"),
+                   ("roles", {"a-b": {}}, "roles: 'a-b' is not a role id [a-z][a-z0-9_]*"),
+                   ("roles", {"Ꟁ": {}}, "roles: '\\ua7c0' is not a role id [a-z][a-z0-9_]*")]   # FU3, V2
         for key, val, reason in shapes:
             with self.subTest(key, val=repr(val)[:30]):
                 self.assertEqual(self.injected(**{key: val}), ("FAIL dispatch.input: input: %s\n" % reason, 1))
@@ -1768,7 +1772,54 @@ class InputShapeTest(ProjectCase):
                     got = self.injected(**extra)
                     self.assertEqual((got, calls), (("FAIL dispatch.input: input: %s\n" % line, 1), []))
 
-    def test_library_role_text_is_raw(self):                       # R2-2 (review 2 U-1): D2 raw text, one escape at render
+    def test_roles_key_str_subclass_runs_no_method(self):          # FU1, FU2 (F-20261122-q5rk): no key method runs
+        calls = []
+
+        def spy(name):
+            def m(self, *a):
+                calls.append(name)
+                return getattr(str, name)(self, *a) if isinstance(self, str) else getattr(object, name)(self, *a)
+            return m
+
+        class H(str):
+            __str__, __repr__, __format__ = spy("__str__"), spy("__repr__"), spy("__format__")
+            __eq__, __ne__, __hash__, __len__ = spy("__eq__"), spy("__ne__"), spy("__hash__"), spy("__len__")
+
+        class O:
+            __str__, __repr__, __format__ = spy("__str__"), spy("__repr__"), spy("__format__")
+            __eq__, __ne__, __hash__ = spy("__eq__"), spy("__ne__"), spy("__hash__")
+        line = "FAIL dispatch.input: input: roles: a key must be a role id string\n"
+        for text in ("x", "doc_writer", "X"):
+            with self.subTest("H", text=text):
+                roles = {H(text): {}}
+                del calls[:]
+                self.assertEqual((self.injected(roles=roles), calls), ((line, 1), []))
+                for fn in (dispatch.project_ids, dispatch.roles_of):
+                    with self.assertRaises(ValueError) as e:
+                        fn({"roles": roles})
+                    self.assertEqual((str(e.exception), calls), ("roles: a key must be a role id string", []))
+        for name, make in (("O", O), ("1", lambda: 1), ("tuple", lambda: (1,)), ("None", lambda: None)):
+            with self.subTest(name):
+                roles = {make(): {}}
+                del calls[:]
+                self.assertEqual((self.injected(roles=roles), calls), ((line, 1), []))
+                with self.assertRaises(ValueError) as e:
+                    dispatch.project_ids({"roles": roles})
+                self.assertEqual((str(e.exception), calls), ("roles: a key must be a role id string", []))
+
+    def test_roles_key_long_digits_is_the_grammar_refusal(self):   # V1: no int() of the text
+        for n in (4300, 4301):
+            key = "1" * n
+            with self.subTest(n=n):
+                self.assertEqual(self.injected(roles={key: {}}),
+                                 ("FAIL dispatch.input: input: roles: '%s' is not a role id [a-z][a-z0-9_]*\n" % key, 1))
+                with self.assertRaises(ValueError) as e:
+                    dispatch.project_ids({"roles": {key: {}}})
+                self.assertEqual(str(e.exception), "roles: '%s' is not a role id [a-z][a-z0-9_]*" % key)
+                want = "%s is no framework role and no project role" % key
+                self.assertEqual(dispatch.project_block_errors("b", key, {}, "/nonexistent"), [want])
+
+    def test_library_role_text_is_raw(self):                     # R2-2 (review 2 U-1): D2 raw text, one escape at render
         # unreachable through the gate (the role is validated first), so the library messages are tested directly
         for role in ("x\n", "x\x00", "x\\n"):
             with self.subTest(role=role):
