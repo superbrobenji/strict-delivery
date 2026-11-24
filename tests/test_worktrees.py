@@ -2,6 +2,7 @@
 (``tests.helpers``); expected values are written by hand from the plan (P:3488-3489, rulings (3b), (3c)) and the table."""
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -204,6 +205,50 @@ class AllowedSession(Fixture):
                 for f in got_fails:
                     self.assertIn(PROG, f)
                     self.assertNotIn("\n", f)
+
+    def fake_git(self, refused):
+        """A directory holding a `git` that exits 129 `error: unknown option` when `refused` is an argument, else runs
+        the real git (an old git without that option)."""
+        real_git = shutil.which("git")
+        d = os.path.join(self.tmp, "fakebin%s" % refused.strip("-").replace("=", "_"))
+        os.mkdir(d)
+        path = os.path.join(d, "git")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\nfor a in "$@"; do\n  if [ "$a" = "%s" ]; then echo "error: unknown option" >&2; exit 129; fi\n'
+                     'done\nexec "%s" "$@"\n' % (refused, real_git))
+        os.chmod(path, 0o755)
+        return d
+
+    def test_old_git_fails_closed(self):   # V7 (F-20261124-5gfw)
+        self.make_program()
+        full = frozenset({real(self.main), real(self.status_wt), real(self.int_wt)})
+        self.assertEqual(worktrees.allowed(hand_ctx(self.main), self.main, CFG, None), (full, []))
+        old = self.fake_git("--porcelain")
+        with mock.patch.dict(os.environ, {"PATH": old + os.pathsep + os.environ["PATH"]}):
+            with self.subTest("worktree list --porcelain -z (git 2.36)"):
+                with self.assertRaises(GateError) as cm:
+                    worktrees.worktree_list(self.main)
+                self.assertIn("worktree list", str(cm.exception))
+                self.assertIn("129", str(cm.exception))
+                with self.assertRaises(GateError):
+                    worktrees.bound_branch(self.main)
+                tops, fails = worktrees.allowed(hand_ctx(self.main), self.main, CFG, None)
+                self.assertEqual(tops, frozenset({real(self.main)}))
+                self.assertEqual(len(fails), 1)
+                self.assertIn("worktrees cannot be listed", fails[0])
+            with self.subTest("the other call still works"):
+                self.assertIs(worktrees.same_repository(self.main, self.main), True)
+        new = self.fake_git("--path-format=absolute")
+        with mock.patch.dict(os.environ, {"PATH": new + os.pathsep + os.environ["PATH"]}):
+            with self.subTest("rev-parse --path-format=absolute (git 2.31)"):
+                self.assertIs(worktrees.same_repository(self.main, self.main), False)
+                self.assertIs(worktrees.same_repository(self.main, self.status_wt), False)
+            with self.subTest("allowed never widens"):
+                tops, fails = worktrees.allowed(hand_ctx(self.main), self.main, CFG, None)
+                self.assertLessEqual(tops, full)
+                self.assertIn(real(self.main), tops)
+            with self.subTest("the other call still works"):
+                self.assertEqual(len(worktrees.worktree_list(self.main)), 3)
 
     def test_missing_status_page_adds_a_fail(self):   # a live program whose tip holds no status.md: narrower set, one fail
         self.make_program()

@@ -48,7 +48,8 @@ def _decode(data: bytes, what: str) -> str:
 
 
 def worktree_list(root: str) -> list:
-    """``(path, branch_or_None)`` for every entry of ``git worktree list --porcelain -z``, main first, in git's order:
+    """Needs git 2.36 (``worktree list -z``); an older git exits 129 and this raises ``GateError`` (fail closed).
+    ``(path, branch_or_None)`` for every entry of ``git worktree list --porcelain -z``, main first, in git's order:
     ``refs/heads/`` stripped, ``None`` for a detached or bare entry; prunable and locked entries are included."""
     out = _decode(_git(root, ["worktree", "list", "--porcelain", "-z"]), "worktree list")
     entries: list = []
@@ -73,7 +74,8 @@ def bound_branch(top: str) -> Optional[str]:
 
 
 def same_repository(a: str, b: str) -> bool:
-    """Equal ``git rev-parse --path-format=absolute --git-common-dir`` for ``a`` and ``b``; ``False`` for anything
+    """Needs git 2.31 (``--path-format``); an older git fails the call and the answer is ``False``.
+    Equal ``git rev-parse --path-format=absolute --git-common-dir`` for ``a`` and ``b``; ``False`` for anything
     that is not a path of a repository (missing, no repository, not a ``str``)."""
     try:
         common = [_decode(_git(p, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "rev-parse")
