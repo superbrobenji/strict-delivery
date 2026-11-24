@@ -7,6 +7,7 @@ malformed block, two writes to one path); ``apply`` writes through a temporary f
 ``"\\n"`` only; every character class is an explicit ASCII range, never a Unicode-version-dependent call."""
 from __future__ import annotations
 
+import errno
 import os
 import re
 import stat
@@ -255,8 +256,10 @@ def _inspect(root: str, path: str):
         if not stat.S_ISREG(st.st_mode):
             return ("conflict", _NOT_MANAGED)
     try:
-        fd = os.open(cur, os.O_RDONLY | os.O_NONBLOCK)
+        fd = os.open(cur, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError as e:
+        if e.errno == errno.ELOOP:  # a symlink put in place after the lstat
+            return ("conflict", "is a symlink")
         raise ManagedError("%s: cannot read (%s)" % (path, e.strerror)) from None
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):

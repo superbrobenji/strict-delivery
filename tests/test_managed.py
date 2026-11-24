@@ -797,6 +797,59 @@ class PlanTests(FsCase):
         with mock.patch("os.lstat", side_effect=fake2):
             self.assertEqual(self.p1([Write("CLAUDE.md", "x\n", "claude-block")]), ([], ["CLAUDE.md: " + NOT_MANAGED]))
 
+    def swap_lstat(self, link, reg):
+        """``os.lstat`` reporting the regular file ``reg`` for the path ``link`` (a symlink put in place after the lstat)."""
+        real = os.lstat
+
+        def fake(p, *a, **k):
+            return real(reg if p == link else p, *a, **k)
+        return mock.patch("os.lstat", side_effect=fake)
+
+    def test_plan_symlink_swap_refused(self):  # VZ1-VZ4 (A1, F-20261124-vzgu)
+        reg = self.put_file("reg.yml", "x")
+        outside = os.path.join(self.tmp, "outside")
+        with open(outside, "w") as fh:
+            fh.write("SECRET\n")
+        outside_gen = os.path.join(self.tmp, "outside-gen")
+        with open(outside_gen, "w") as fh:
+            fh.write(H + "\nSECRET\n")
+        os.symlink(outside, self.path("CLAUDE.md"))  # VZ1
+        os.symlink(outside_gen, self.path("x.yml"))  # VZ2
+        os.symlink(outside, self.path(".gitignore"))  # VZ3
+        for p, k in (("CLAUDE.md", "claude-block"), ("x.yml", "file"), (".gitignore", "gitignore-block")):
+            with self.swap_lstat(self.path(p), reg):
+                self.assertEqual(self.p1([Write(p, "new\n", k)]), ([], ["%s: is a symlink" % p]))
+        os.mkdir(self.path("d"))
+        fifo = os.path.join(self.tmp, "outside-fifo")
+        os.mkfifo(fifo)
+        os.symlink("nowhere", self.path("dang.yml"))  # VZ4
+        os.symlink(self.path("d"), self.path("dir.yml"))
+        os.symlink(fifo, self.path("fifo.yml"))
+        real_open = os.open
+
+        def spy(p, *a, **k):
+            if p == fifo:
+                raise AssertionError("opened the FIFO")
+            return real_open(p, *a, **k)
+        for p in ("dang.yml", "dir.yml", "fifo.yml"):
+            with self.swap_lstat(self.path(p), reg), mock.patch("os.open", side_effect=spy):
+                self.assertEqual(self.p1([Write(p, "new\n", "file")]), ([], ["%s: is a symlink" % p]))
+        self.assertEqual(self.read("reg.yml"), "x")
+        with open(outside) as fh:
+            self.assertEqual(fh.read(), "SECRET\n")
+
+    def test_plan_open_error_not_symlink(self):  # VZ6: every other OSError of the open keeps PD12's message
+        self.put_file("x.yml", H + "\n")
+        target = self.path("x.yml")
+        real_open = os.open
+
+        def boom(p, *a, **k):
+            if p == target:
+                raise OSError(errno.EIO, "Input/output error")
+            return real_open(p, *a, **k)
+        with mock.patch("os.open", side_effect=boom):
+            self.me("x.yml: cannot read (Input/output error)", self.p1, [Write("x.yml", "a\n", "file")])
+
     def test_plan_open_is_nonblocking(self):  # PL29/PL31, R1-1: the only open of a target carries O_NONBLOCK
         self.put_file("w.yml", H + "\nold\n")
         target, flags = self.path("w.yml"), []
@@ -810,6 +863,7 @@ class PlanTests(FsCase):
             self.p1([Write("w.yml", H + "\nnew\n", "file")])
         self.assertEqual(len(flags), 1)
         self.assertTrue(flags[0] & os.O_NONBLOCK)
+        self.assertTrue(flags[0] & os.O_NOFOLLOW)  # VZ7
         self.assertEqual(flags[0] & (os.O_WRONLY | os.O_RDWR), 0)
 
     def test_plan_big_file(self):  # PL32
@@ -1077,6 +1131,27 @@ class ApplyTests(FsCase):
         self.me("ro/sub/x.yml: cannot write (Permission denied)", apply, self.r, [("ro/sub/x.yml", "b\n")])
         self.assertEqual(os.listdir(self.path("ro")), [])
 
+    def test_apply_symlink_swap_refused(self):  # VZ5 (A1, F-20261124-vzgu)
+        self.put_file("w.yml", H + "\nold\n")
+        acts, _ = plan(self.r, [Write("w.yml", H + "\nnew\n", "file")], "0.1.0")
+        reg = self.put_file("reg.yml", "x")
+        other = os.path.join(self.tmp, "elsewhere-gen")
+        with open(other, "w") as fh:
+            fh.write(H + "\nkeep\n")
+        os.unlink(self.path("w.yml"))
+        os.symlink(other, self.path("w.yml"))
+        real = os.lstat
+        link = self.path("w.yml")
+
+        def fake(p, *a, **k):
+            return real(reg if p == link else p, *a, **k)
+        with mock.patch("os.lstat", side_effect=fake):
+            self.me("apply refused: w.yml: is a symlink", apply, self.r, acts)
+        with open(other) as fh:
+            self.assertEqual(fh.read(), H + "\nkeep\n")
+        self.assertEqual(os.readlink(link), other)
+        self.assertEqual(self.read("reg.yml"), "x")
+
     def test_apply_refuses_state_changes(self):  # AP23-AP27, AP37
         self.put_file("w.yml", H + "\nold\n")
         acts, _ = plan(self.r, [Write("w.yml", H + "\nnew\n", "file")], "0.1.0")
@@ -1223,7 +1298,7 @@ class SourceTests(Base):
             return ast.parse(fh.read())
 
     def test_managed_imports(self):  # PV6
-        allowed = {"__future__", "os", "re", "stat", "tempfile", "dataclasses", "typing", "gates.lib.result"}
+        allowed = {"__future__", "errno", "os", "re", "stat", "tempfile", "dataclasses", "typing", "gates.lib.result"}
         for node in ast.walk(self.tree()):
             if isinstance(node, ast.Import):
                 for a in node.names:
