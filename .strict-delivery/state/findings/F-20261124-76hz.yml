@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-76hz
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-2.md R2-2
+severity: LOW
+class: "H4 swap after plan: members: context.yml swapped to a symlink, directory or FIFO; its parent .strict-delivery swapped to a symlink; a state directory replaced by a regular file"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 599381525d6f2fbf34a91a0f19b51068046a6b0d
+    by: stream-config
+review_round: 2
+caused_by_change: true
+dimension: H4 parent or target swapped after the check

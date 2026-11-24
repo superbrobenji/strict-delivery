@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-eji9
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-2.md R2-1
+severity: MEDIUM
+class: "H5 equal or nested configured paths with paths.context: members: a state directory (each of the six STATE_KEYS), .strict-delivery/state, a child of a planned file (CLAUDE.md, .gitignore, .claude/settings.json, the CI workflow), an ancestor directory .claude or .github"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 599381525d6f2fbf34a91a0f19b51068046a6b0d
+    by: stream-config
+review_round: 2
+caused_by_change: true
+dimension: H5 equal or nested configured paths

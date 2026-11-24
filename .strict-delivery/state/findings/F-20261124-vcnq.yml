@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-vcnq
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-2.md R2-3
+severity: LOW
+class: "apply recheck before the first write: members: the CLAUDE.md block and the .gitignore block (the managed.apply actions of one run)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 599381525d6f2fbf34a91a0f19b51068046a6b0d
+    by: stream-config
+review_round: 2
+caused_by_change: true
+dimension: AP3 recheck of every managed action before the first write
