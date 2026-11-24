@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-urap
+status: open
+source: PR-5c final review 1 (records/PR-5c-final-review.md, F2)
+severity: MEDIUM
+class: "upstream form of the base branch in the drift.base merge target (gates/lib/drift.py:102-105, :131-132 build <remote>/<base_branch>): same-name remote branch, renamed remote, differently named remote branch, local-branch upstream ."
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 3e4a9314cf6cdfaf4462f01f9e871270b6cbcc69
+    by: stream-records
+review_round: 4
+caused_by_change: true
+dimension: base branch upstream form

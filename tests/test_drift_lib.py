@@ -782,6 +782,128 @@ class Fresh(GitIsolatedTestCase):
         (_, reason), = drift.base_errors(wt, self.cfg)
         self.assertIn("git -C %s fetch origin" % self.root, reason)
 
+    # -- 5c.1 round 4 (F-20261124-sgrf, F-20261124-urap): rows B1-B11 of records/5c.1-fix-2.md
+    def ahead(self):
+        "A pair whose upstream origin/main is ahead of the local main (fetched)."
+        _, other = self.pair()
+        commit_file(other, "o.txt", "o\n")
+        git(other, "push", "-q", "origin", "main")
+        git(self.root, "fetch", "-q", "origin")
+
+    def cmd(self, path, remote="origin", name="main"):
+        return ("update %s from the remote: git -C %s fetch %s, then git -C %s merge --ff-only %s/%s"
+                % (name, path, remote, path, remote, name))
+
+    NOCO = "update main from the remote: no worktree has main checked out, so no update command is given"
+
+    def test_base_reason_names_linked_worktree(self):
+        "B2: the base branch checked out in a linked worktree only: that path, twice"
+        self.ahead()
+        git(self.root, "checkout", "-q", "-b", "elsewhere")
+        wt = os.path.join(self.tmp, "linked-main")
+        git(self.root, "worktree", "add", "-q", wt, "main")
+        self.assertEqual(drift.base_errors(self.root, self.cfg), [("base", self.cmd(wt))])
+        self.assertEqual(drift.base_errors(wt, self.cfg), [("base", self.cmd(wt))])
+
+    def test_base_reason_no_checkout_has_base(self):
+        "B3, B4: no worktree has the base branch (main checkout elsewhere, then detached): the no-checkout reason"
+        self.ahead()
+        wt = os.path.join(self.tmp, "linked-other")
+        git(self.root, "worktree", "add", "-q", "--detach", wt)
+        git(self.root, "checkout", "-q", "-b", "elsewhere")
+        with self.subTest("another branch"):
+            self.assertEqual(drift.base_errors(self.root, self.cfg), [("base", self.NOCO)])
+        git(self.root, "checkout", "-q", "--detach")
+        with self.subTest("detached"):
+            self.assertEqual(drift.base_errors(self.root, self.cfg), [("base", self.NOCO)])
+            self.assertEqual(drift.base_errors(wt, self.cfg), [("base", self.NOCO)])
+
+    def test_base_reason_linked_worktree_path_forms(self):
+        "B5: a linked worktree path as git lists it: a symlinked directory, a space, a newline"
+        self.ahead()
+        git(self.root, "checkout", "-q", "-b", "elsewhere")
+        real = os.path.join(self.tmp, "real")
+        os.mkdir(real)
+        os.symlink(real, os.path.join(self.tmp, "link"))
+        for label, rel in (("symlink", os.path.join("link", "wt")), ("space", "a b"), ("newline", "n\nl")):
+            wt = os.path.join(self.tmp, rel)
+            with self.subTest(label):
+                git(self.root, "worktree", "add", "-q", wt, "main")
+                listed = subprocess.run(["git", "-C", self.root, "worktree", "list", "--porcelain", "-z"],
+                                        stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
+                path = [f[len("worktree "):] for f in listed if f.startswith("worktree ")][-1]
+                self.assertTrue(path.endswith(rel.split(os.sep)[-1]), path)
+                self.assertEqual(drift.base_errors(self.root, self.cfg), [("base", self.cmd(path))])
+                git(self.root, "worktree", "remove", "--force", wt)
+
+    def test_base_reason_upstream_not_same_name(self):
+        "B8, B9: an upstream that is not <remote>/<base>: the upstream reason, no merge command"
+        self.ahead()
+        git(self.root, "branch", "up")
+        with self.subTest("origin/dev"):
+            git(self.root, "push", "-q", "origin", "origin/main:refs/heads/dev")
+            git(self.root, "fetch", "-q", "origin")
+            git(self.root, "branch", "-q", "--set-upstream-to=origin/dev", "main")
+            (_, reason), = drift.base_errors(self.root, self.cfg)
+            self.assertEqual(reason, "update main from its upstream origin/dev: it is not origin/main, "
+                                     "so no update command is given")
+            self.assertNotIn("--ff-only", reason)
+        with self.subTest("dot"):
+            commit_file(self.root, "u.txt", "u\n")
+            git(self.root, "branch", "-q", "-f", "up", "HEAD")
+            git(self.root, "reset", "-q", "--hard", "HEAD~1")
+            git(self.root, "config", "branch.main.remote", ".")
+            git(self.root, "config", "branch.main.merge", "refs/heads/up")
+            (_, reason), = drift.base_errors(self.root, self.cfg)
+            self.assertEqual(reason, "update main from its upstream up: it is not ./main, "
+                                     "so no update command is given")
+            self.assertNotIn("--ff-only", reason)
+
+    def test_base_no_remote_name_no_upstream(self):
+        "B8 siblings: no remote name, or a remote name that is no configured remote: git has no upstream, so []"
+        self.ahead()
+        git(self.root, "config", "branch.main.remote", "nonesuch")
+        self.assertEqual(drift.base_errors(self.root, self.cfg), [])
+        git(self.root, "config", "--unset", "branch.main.remote")
+        self.assertEqual(drift.base_errors(self.root, self.cfg), [])
+
+    def test_base_upstream_merge_differs_same_remote(self):
+        "B8 sibling: branch.main.merge names another branch of the configured remote (the same as origin/dev)"
+        self.ahead()
+        git(self.root, "push", "-q", "origin", "origin/main:refs/heads/dev")
+        git(self.root, "fetch", "-q", "origin")
+        git(self.root, "config", "branch.main.merge", "refs/heads/dev")
+        (_, reason), = drift.base_errors(self.root, self.cfg)
+        self.assertNotIn("--ff-only", reason)
+
+    def test_base_reason_skeleton_rows(self):
+        "B11: numeric and non-ASCII branch names, the interrupt and the group propagate"
+        self.ahead()
+        for n in (4300, 4301):
+            with self.subTest(digits=n), self.assertRaises(GateError) as e:
+                drift.base_errors(self.root, dict(self.cfg, base_branch="9" * n))
+            self.assertEqual(str(e.exception), "no local branch " + "9" * 80)
+        for name in ("9" * 40, "ࡰx"):
+            with self.subTest(name=name):
+                git(self.root, "branch", "-q", "-m", "main", name)
+                (_, reason), = drift.base_errors(self.root, dict(self.cfg, base_branch=name))
+                self.assertEqual(reason, "update %s from its upstream origin/main: it is not origin/%s, "
+                                         "so no update command is given" % (name, name))
+                git(self.root, "branch", "-q", "-m", name, "main")
+        git(self.root, "checkout", "-q", "-b", "elsewhere")
+        with mock.patch("gates.lib.worktrees.worktree_list", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                drift.base_errors(self.root, self.cfg)
+        group = getattr(builtins, "BaseExceptionGroup", None)
+        if group is not None:
+            with mock.patch("gates.lib.worktrees.worktree_list", side_effect=group("g", [KeyboardInterrupt()])):
+                with self.assertRaises(group):
+                    drift.base_errors(self.root, self.cfg)
+        with mock.patch("gates.lib.worktrees.worktree_list", side_effect=GateError("boom\n")):
+            (_, reason), = drift.base_errors(self.root, self.cfg)
+        self.assertEqual(reason, "update main from the remote: the worktrees cannot be listed: boom\n, "
+                                 "so no update command is given")
+
     def test_base_local_branch_absent(self):
         "U9"
         with self.assertRaises(GateError) as e:

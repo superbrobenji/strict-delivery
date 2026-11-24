@@ -14,7 +14,7 @@ import re
 import subprocess
 from typing import Optional
 
-from gates.lib import checkpoints, gitinfo, programs
+from gates.lib import checkpoints, gitinfo, programs, worktrees
 from gates.lib.result import GateError, GitNotFound, _exact, safe_text
 
 _HEADS = "refs/heads/"
@@ -121,15 +121,37 @@ def base_errors(root: str, cfg: dict) -> list:
         raise
     except GateError as e:
         return [("base", "the upstream of %s cannot be compared with it: %s" % (_shown(bb), _shown(str(e))))]
+    remote = _remote_of(root, bb)
+    if not _same_name_upstream(root, bb, remote):
+        # plan :5446 states the command only for <remote>/<base_branch>; any other upstream gets a named refusal
+        p = gitinfo._run(root, "rev-parse --abbrev-ref", ["rev-parse", "--abbrev-ref", bb + "@{upstream}"])
+        return [("base", "update %s from its upstream %s: it is not %s/%s, so no update command is given"
+                 % (_shown(bb), _shown(gitinfo._text(p.stdout, "rev-parse").strip()), _shown(remote), _shown(bb)))]
     try:
-        checkout = gitinfo.main_worktree(root)
+        listed = worktrees.worktree_list(root)
     except GitNotFound:
         raise
-    except GateError:
-        checkout = "<checkout that has %s>" % _shown(bb)
-    remote = _remote_of(root, bb)
-    return [("base", "update %s from the remote: git -C %s fetch %s, then git -C %s merge --ff-only %s/%s"
-             % (_shown(bb), checkout, remote, checkout, remote, _shown(bb)))]
+    except GateError as e:
+        return [("base", "update %s from the remote: the worktrees cannot be listed: %s, so no update command is given"
+                 % (_shown(bb), _shown(str(e))))]
+    for path, branch in listed:
+        if branch == bb:
+            return [("base", "update %s from the remote: git -C %s fetch %s, then git -C %s merge --ff-only %s/%s"
+                     % (_shown(bb), path, remote, path, remote, _shown(bb)))]
+    return [("base", "update %s from the remote: no worktree has %s checked out, so no update command is given"
+             % (_shown(bb), _shown(bb)))]
+
+
+def _same_name_upstream(root: str, bb: str, remote: str) -> bool:
+    """True when the upstream of ``bb`` is ``<remote>/<bb>``: ``branch.<bb>.remote`` is a configured remote (not ``.``,
+    not unset) and ``branch.<bb>.merge`` is ``refs/heads/<bb>`` (plan :5446; F-20261124-urap)."""
+    if remote == "<remote>" or remote == ".":
+        return False
+    names = gitinfo._text(gitinfo._run(root, "remote", ["remote"]).stdout, "remote").split("\n")
+    if remote not in names:
+        return False
+    p = gitinfo._run(root, "config", ["config", "--get", "branch.%s.merge" % bb], ok=(0, 1))
+    return p.returncode == 0 and gitinfo._text(p.stdout, "config").strip() == _HEADS + bb
 
 
 def integration_errors(root: str, cfg: dict, p: str) -> list:
