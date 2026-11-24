@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261124-tcyn
+status: in-progress
+source: 3a.2 fix-round task review 4 at 8b900df (runtime/3a2-fix-r5-review.md, finding 2)
+severity: LOW
+class: "output write failure (3a.2 A, gates/hook.py usage branch at main): an unknown event or bad argv with a real broken stderr exits 120 (the usage write is outside the protected write path); same on 8125df7"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 8b900df65ffff6d96efb0223b7ffb57ce7071123
+    by: stream-runtime
+  - status: planned
+    sha: 1531ff6f8ec895b4dd70ac93ad340fac069e44d4
+    by: stream-runtime
+  - status: in-progress
+    sha: 1531ff6f8ec895b4dd70ac93ad340fac069e44d4
+    by: stream-runtime
+review_round: 4
+caused_by_change: false
+dimension: output write failure
