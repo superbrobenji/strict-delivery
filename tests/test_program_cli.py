@@ -109,7 +109,7 @@ class Registration(unittest.TestCase):
 
     def test_program_registered(self):  # PG4, RG6, RG9
         self.assertIn("program", gates_main.COMMANDS)
-        self.assertEqual(producers.PRODUCER_MODULES[-1], "gates.tools.program_cli")
+        self.assertEqual(producers.PRODUCER_MODULES[-2], "gates.tools.program_cli")
         code, out, err = run("program")
         self.assertEqual((code, out), (2, ""))
         code, out, err = run("program", "bogus")

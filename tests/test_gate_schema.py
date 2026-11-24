@@ -582,6 +582,7 @@ class Generated(GateCase):
 
     def test_N4_absent_non_generated_path_file_fails(self):
         self.kinds("context")
+        os.remove(os.path.join(self.root, CTX))  # make_repo writes a valid context.yml; this test needs it absent
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:],
                          ["FAIL schema.context.%s: missing" % CTX])
         self.put(CTX, "schema: " + CTXTAG + "\nx: y\n")
@@ -589,6 +590,7 @@ class Generated(GateCase):
 
     def test_N4_dangling_symlink_path_file_is_a_read_failure_not_missing(self):
         self.kinds("context")
+        os.remove(os.path.join(self.root, CTX))  # make_repo writes a valid context.yml; this test needs the link in its place
         os.symlink("nowhere", os.path.join(self.root, CTX))
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:], [
             "FAIL schema.context.%s: %s: cannot read file (No such file or directory)" % (CTX, CTX)])
@@ -779,6 +781,13 @@ class Enabling(unittest.TestCase):
             "check", "claims", "context", "continue", "decisions", "findings", "githook", "githooks", "hook", "index",
             "loopstats", "program", "questions", "receipt", "run_all"])
 
+    def test_context_producer_listed(self):  # R2.1 D3: Rq-5-2
+        from gates import producers
+        self.assertEqual(producers.PRODUCER_MODULES, (
+            "gates.tools.index", "gates.tools.decisions_cli", "gates.tools.findings_cli", "gates.tools.claims_cli",
+            "gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context"))
+        self.assertEqual(producers.PRODUCER_MODULES.count("gates.gate_context"), 1)
+
 
 
 class CitesDispatchTest(GitIsolatedTestCase):
@@ -958,6 +967,7 @@ class FrontMatterKind(GateCase):
     def test_front_matter_kind_missing_path_file(self):  # GS7
         self.kinds("handoff", extra={"handoff": SCHEMA_TEXT["handoff"].replace(
             "  - dir: plan_state\n    glob: \"*/handoff.md\"\n", "  - path: context\n")})
+        os.remove(os.path.join(self.root, CTX))  # make_repo writes a valid context.yml; this test needs it absent
         self.assertEqual(self.lines(producers=["prod_handoff"]),
                          (HEAD + ["FAIL schema.handoff.%s: missing" % CTX], 1))
         self.put(CTX, HOK)

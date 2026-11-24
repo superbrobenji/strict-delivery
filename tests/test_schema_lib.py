@@ -782,7 +782,7 @@ class Producers(unittest.TestCase):
             return produced_kinds()
 
     def test_P1_union(self):
-        self.assertEqual(produced_kinds(), {"breakdown", "claim", "decision", "decision-index", "finding", "finding-index", "in-force", "merged-log",
+        self.assertEqual(produced_kinds(), {"breakdown", "claim", "context", "decision", "decision-index", "finding", "finding-index", "in-force", "merged-log",
                                            "overview", "request", "status", "streams", "sync-log"})  # Tasks 1c.3, 1d.1, 1d.2, 2c.1; P2.2: the program tool's six
         self.assertEqual(self.kinds([]), set())
         self.assertEqual(self.kinds(["prod_claim"]), {"claim"})
