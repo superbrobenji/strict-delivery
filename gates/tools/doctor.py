@@ -7,6 +7,7 @@ never ``index.regenerate``. Standard library only.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -20,6 +21,7 @@ from gates.tools import githooks, index
 
 WORKFLOW = ".github/workflows/strict-delivery.yml"
 SETTINGS = ".claude/settings.json"
+CONFIG = ".strict-delivery/config.yml"
 UNSET = "unset (Claude Code default)"
 NEITHER = "neither extra installed: this repository is gated only inside Claude sessions"
 NOT_FW = "%s is the framework's own directory; pass the target repository's top level"
@@ -27,6 +29,9 @@ FAILED_VERSION = "not checked: doctor.version failed"
 FAILED_INDEXES = "not checked: doctor.indexes failed"
 UPGRADE = "stale; run /strict-delivery:upgrade"
 SHOWN_MAX = 64
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 
 class _Unreadable(Exception):
@@ -39,38 +44,83 @@ def _why(e: BaseException) -> str:
 
 def _read(root: str, rel: str) -> Optional[str]:
     """The text of the regular file ``rel`` under ``root``; ``None`` when it is absent. Every component is
-    ``lstat``ed first (a symlink or a non-directory parent and a non-regular file are refused; a FIFO is never
-    opened); any OSError is a reason."""
+    ``lstat``ed (a symlink or a non-directory parent and a non-regular file are refused) and then opened from the
+    descriptor of the one before it with ``O_NOFOLLOW`` (a parent also ``O_DIRECTORY``, the file also ``O_NONBLOCK``)
+    and the file ``fstat``ed, so an object swapped in after its check is refused and never read outside the root and a
+    FIFO never blocks; any OSError is a reason."""
     parts = rel.split("/")
-    cur = root
-    for i, part in enumerate(parts):
-        cur = os.path.join(cur, part)
-        try:
-            st = os.lstat(cur)
-        except FileNotFoundError:
-            return None
-        except NotADirectoryError:
-            raise _Unreadable("parent %s is not a directory" % "/".join(parts[:i])) from None
-        except OSError as e:
-            raise _Unreadable("cannot be read (%s)" % (e.strerror or type(e).__name__)) from None
-        if i < len(parts) - 1:
-            if stat.S_ISLNK(st.st_mode):
-                raise _Unreadable("parent %s is a symlink" % "/".join(parts[:i + 1]))
-            if not stat.S_ISDIR(st.st_mode):
-                raise _Unreadable("parent %s is not a directory" % "/".join(parts[:i + 1]))
-        elif stat.S_ISLNK(st.st_mode):
-            raise _Unreadable("is a symlink")
-        elif not stat.S_ISREG(st.st_mode):
-            raise _Unreadable("is not a regular file")
     try:
-        with open(cur, "rb") as fh:
+        fd = os.open(root, os.O_RDONLY | _DIRECTORY)
+    except OSError as e:
+        raise _Unreadable("cannot be read (%s)" % (e.strerror or type(e).__name__)) from None
+    try:
+        for i, part in enumerate(parts):
+            shown = "/".join(parts[:i + 1])
+            last = i == len(parts) - 1
+            try:
+                st = os.lstat(part, dir_fd=fd)
+            except FileNotFoundError:
+                return None
+            except OSError as e:
+                raise _Unreadable("cannot be read (%s)" % (e.strerror or type(e).__name__)) from None
+            if stat.S_ISLNK(st.st_mode):
+                raise _Unreadable("is a symlink" if last else "parent %s is a symlink" % shown)
+            if last and not stat.S_ISREG(st.st_mode):
+                raise _Unreadable("is not a regular file")
+            if not last and not stat.S_ISDIR(st.st_mode):
+                raise _Unreadable("parent %s is not a directory" % shown)
+            flags = os.O_RDONLY | _NOFOLLOW | (_NONBLOCK if last else _DIRECTORY)
+            try:
+                nxt = os.open(part, flags, dir_fd=fd)
+            except OSError as e:
+                raise _Unreadable(_open_reason(e, part, fd, shown, last)) from None
+            os.close(fd)
+            fd = nxt
+        if not stat.S_ISREG(os.fstat(fd).st_mode):  # swapped to a FIFO or a directory after the lstat
+            raise _Unreadable("is not a regular file")
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
             data = fh.read()
     except OSError as e:
         raise _Unreadable("cannot be read (%s)" % (e.strerror or type(e).__name__)) from None
+    finally:
+        if fd >= 0:
+            os.close(fd)
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         raise _Unreadable("is not valid UTF-8") from None
+
+
+def _parents(root: str, rel: str) -> None:
+    """Refuse a symlink or a non-directory among the parents of ``rel`` (``config.load`` follows a symlinked parent and
+    would read outside the root); an absent parent is left to the reader's own reason."""
+    parts = rel.split("/")
+    for i in range(len(parts) - 1):
+        shown = "/".join(parts[:i + 1])
+        try:
+            st = os.lstat(os.path.join(root, shown))
+        except OSError:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            raise _Unreadable("parent %s is a symlink" % shown)
+        if not stat.S_ISDIR(st.st_mode):
+            raise _Unreadable("parent %s is not a directory" % shown)
+
+
+def _open_reason(e: OSError, name: str, fd: int, shown: str, last: bool) -> str:
+    """The reason an ``O_NOFOLLOW`` open failed: a symlink put in place after the ``lstat`` is named as one."""
+    link = e.errno in (errno.ELOOP, errno.EMLINK)
+    if not link and e.errno == errno.ENOTDIR:
+        try:
+            link = stat.S_ISLNK(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode)
+        except OSError:
+            link = False
+    if link:
+        return "is a symlink" if last else "parent %s is a symlink" % shown
+    if e.errno == errno.ENOTDIR:
+        return "parent %s is not a directory" % shown
+    return "cannot be read (%s)" % (e.strerror or type(e).__name__)
 
 
 def _fail(id_: str, reason: str) -> Line:
@@ -105,14 +155,22 @@ def _inside_framework(root: str) -> bool:
 def _has_header(path: str) -> bool:
     """True when ``path`` is a regular file whose line 2 is the shim header (the file is never opened before ``lstat``
     says it is regular)."""
+    fd = -1
     try:
         if not stat.S_ISREG(os.lstat(path).st_mode):
             return False
-        with open(path, "rb") as fh:
+        fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _NONBLOCK)  # a swap after the lstat: no symlink, no FIFO block
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
             fh.readline()
             line = fh.readline()
     except OSError:
         return False
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return line.rstrip(b"\n") == githooks.HEADER.encode("utf-8") and line.endswith(b"\n")
 
 
@@ -342,6 +400,11 @@ def _lines(root: object) -> list:
     try:
         if _inside_framework(root):
             lines.append(_fail("input", NOT_FW % root))
+            return lines
+        try:
+            _parents(root, CONFIG)
+        except _Unreadable as e:
+            lines.append(_fail("input", "%s: %s" % (CONFIG, e)))
             return lines
         cfg = config.load(root)
     except (GateError, ValueError, OSError) as e:

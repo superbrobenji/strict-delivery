@@ -40,6 +40,11 @@ WORDS = ["pull request not required", "administrators not enforced", "merge comm
          "squash merge allowed", "rebase merge allowed"]
 
 
+def put(path, data=b""):
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
 def clear(p):
     if os.path.islink(p):
         os.unlink(p)
@@ -431,10 +436,10 @@ class TestPythonInputVersion(Base):
         real = os.path.join(self.tmp, "real.yml")
         for name, make in (("dangling", lambda: os.symlink(os.path.join(self.tmp, "nope"), cfgp)),
                            ("directory", lambda: os.mkdir(cfgp)), ("fifo", lambda: os.mkfifo(cfgp)),
-                           ("nonutf8", lambda: open(cfgp, "wb").write(b"\xff\xfe")),
-                           ("empty", lambda: open(cfgp, "wb").close()),
-                           ("symlink", lambda: (open(real, "wb").write(good), os.symlink(real, cfgp))),
-                           ("bom", lambda: open(cfgp, "wb").write(b"\xef\xbb\xbf" + good))):
+                           ("nonutf8", lambda: put(cfgp, b"\xff\xfe")),
+                           ("empty", lambda: put(cfgp)),
+                           ("symlink", lambda: (put(real, good), os.symlink(real, cfgp))),
+                           ("bom", lambda: put(cfgp, b"\xef\xbb\xbf" + good))):
             if os.path.lexists(cfgp):
                 if os.path.isdir(cfgp) and not os.path.islink(cfgp):
                     os.rmdir(cfgp)
@@ -455,7 +460,7 @@ class TestPythonInputVersion(Base):
                 os.unlink(cfgp) if not os.path.isdir(cfgp) or os.path.islink(cfgp) else os.rmdir(cfgp)
             {"dangling": lambda: os.symlink(os.path.join(self.tmp, "nope"), cfgp),
              "directory": lambda: os.mkdir(cfgp), "fifo": lambda: os.mkfifo(cfgp),
-             "nonutf8": lambda: open(cfgp, "wb").write(b"\xff\xfe"), "empty": lambda: open(cfgp, "wb").close()}[name]()
+             "nonutf8": lambda: put(cfgp, b"\xff\xfe"), "empty": lambda: put(cfgp)}[name]()
             self.assertIn(frag, self.lines()[1], name)
 
     def test_doctor_version_equal_different_absent(self):  # VE1, VE2, VE3, VE4
@@ -662,9 +667,9 @@ class TestExtras(Base):
         cases = [("symlink", lambda: os.symlink(os.path.join(self.tmp, "x"), p), "is a symlink"),
                  ("directory", lambda: os.mkdir(p), "is not a regular file"),
                  ("fifo", lambda: os.mkfifo(p), "is not a regular file"),
-                 ("nonutf8", lambda: open(p, "wb").write(b"\xff\xfe"), "is not valid UTF-8")]
+                 ("nonutf8", lambda: put(p, b"\xff\xfe"), "is not valid UTF-8")]
         if os.geteuid() != 0:
-            cases.append(("mode000", lambda: (open(p, "w").close(), os.chmod(p, 0)), "cannot be read (Permission denied)"))
+            cases.append(("mode000", lambda: (put(p), os.chmod(p, 0)), "cannot be read (Permission denied)"))
         self.shims()
         for name, make, frag in cases:
             if os.path.lexists(p):
@@ -817,8 +822,8 @@ class TestBlocks(Base):
             for name, make, frag in (("symlink", lambda: os.symlink(os.path.join(self.tmp, "x"), p), "is a symlink"),
                                      ("dir", lambda: os.mkdir(p), "is not a regular file"),
                                      ("fifo", lambda: os.mkfifo(p), "is not a regular file"),
-                                     ("nonutf8", lambda: open(p, "wb").write(b"\xff"), "is not valid UTF-8"),
-                                     ("mode000", lambda: (open(p, "w").close(), os.chmod(p, 0)), "cannot be read (Permission denied)")):
+                                     ("nonutf8", lambda: put(p, b"\xff"), "is not valid UTF-8"),
+                                     ("mode000", lambda: (put(p), os.chmod(p, 0)), "cannot be read (Permission denied)")):
                 if os.path.lexists(p):
                     clear(p)
                 make()
@@ -1007,7 +1012,7 @@ class TestSubagents(Base):
         cases = [("symlink", lambda: os.symlink(os.path.join(self.tmp, "x"), p), "is a symlink"),
                  ("dir", lambda: os.mkdir(p), "is not a regular file"), ("fifo", lambda: os.mkfifo(p), "is not a regular file")]
         if os.geteuid() != 0:
-            cases.append(("mode000", lambda: (open(p, "w").close(), os.chmod(p, 0)), "cannot be read (Permission denied)"))
+            cases.append(("mode000", lambda: (put(p), os.chmod(p, 0)), "cannot be read (Permission denied)"))
         for name, make, frag in cases:
             if os.path.lexists(p):
                 clear(p)
@@ -1256,3 +1261,316 @@ class TestHardening(Base):
         os.chmod(path, 0o755)
         self.assertEqual(self.line("githooks.pre-commit"), "FAIL doctor.githooks.pre-commit: stale")
         self.assertIn("git hooks: installed", self.line("extras"))
+
+
+class TestRowsLate(Base):
+    """The rows the first part left: RT7, VE9, EX22, GH16, CI21, CI22, CB17, GI11, IX8, GT13, GT14, SA24, RG4, PR16."""
+
+    def test_doctor_submodule_root(self):  # RT7: a repository whose .git is a file; full run, hooks in .git/modules/<n>/hooks
+        lib = os.path.join(self.tmp, "lib")
+        os.mkdir(lib)
+        git(lib, "init", "-q", "-b", "main")
+        self.write("f", "x", root=lib)
+        git(lib, "config", "user.email", "f@example.invalid")
+        git(lib, "config", "user.name", "F")
+        commit_all(lib, "lib")
+        git(self.r, "-c", "protocol.file.allow=always", "submodule", "add", "-q", "--", lib, "sub")
+        sub = os.path.join(self.r, "sub")
+        self.assertTrue(os.path.isfile(os.path.join(sub, ".git")))
+        from tests.helpers import write_record
+        write_record(sub, ".strict-delivery/config.yml", dict(minimal_config(), framework_version=PV))
+        self.assertEqual(githooks.install(sub, githooks.framework_dir()), [])
+        lines = self.lines("--root", sub)
+        self.assertEqual([ln.split(":")[0].split(" ", 1)[1] for ln in lines[:4]],
+                         ["doctor.python", "doctor.input", "doctor.version", "doctor.extras"])
+        self.assertIn("PASS doctor.extras: git hooks: installed; CI: not installed", lines)
+        self.assertIn("PASS doctor.githooks.pre-commit", lines)
+        self.assertIn("PASS doctor.generated-tracked", lines)
+        self.assertIn("PASS doctor.registers", lines)
+
+    def test_doctor_version_manifest_unreadable(self):  # VE9
+        if os.geteuid() == 0:
+            self.skipTest("root")
+        m = os.path.join(self.fw, ".claude-plugin", "plugin.json")
+        os.chmod(m, 0)
+        self.addCleanup(os.chmod, m, 0o644)
+        self.assertEqual(self.lines()[2], "FAIL doctor.version: .claude-plugin/plugin.json: cannot be read (PermissionError)")
+
+    def test_doctor_extras_large_workflow(self):  # EX22 and CI22: 10 MB, header first, read once, linear
+        header = "# strict-delivery: generated by x; do not edit\n"
+        self.write(WF, header + "x\n" * (5 * 1024 * 1024))
+        self.assertEqual(self.line("extras"), "PASS doctor.extras: git hooks: not installed; CI: installed")
+        self.assertEqual(self.line("ci"), "FAIL doctor.ci: pin not found differs from v0.1.0")  # CI22
+
+    def test_doctor_githooks_big_and_unreadable(self):  # GH16
+        hooks = os.path.join(self.r, ".git", "hooks")
+        big = os.path.join(hooks, "pre-commit")
+        put(big, b"#!/bin/sh\n" + githooks.HEADER.encode() + b"\n" + b"x\n" * (5 * 1024 * 1024))
+        os.chmod(big, 0o755)
+        self.assertEqual(self.line("githooks.pre-commit"), "FAIL doctor.githooks.pre-commit: stale")
+        if os.geteuid() != 0:
+            put(big, b"#!/bin/sh\n" + githooks.HEADER.encode() + b"\n")
+            os.chmod(big, 0)
+            self.addCleanup(os.chmod, big, 0o644)
+            other = os.path.join(hooks, "pre-push")  # another shim keeps the hooks counted as installed
+            put(other, b"#!/bin/sh\n" + githooks.HEADER.encode() + b"\n")
+            os.chmod(other, 0o755)
+            self.assertIn("git hooks: installed", self.line("extras"))
+            self.assertEqual(self.line("githooks.pre-commit"), "FAIL doctor.githooks.pre-commit: foreign")
+
+    def test_doctor_ci_trigger_shape_stale(self):  # CI21: the on: block written another way is stale
+        text = self.managed_ci()
+        block = "on:\n  push:\n    branches: [main]\n  pull_request:\n"
+        self.assertIn(block, text)
+        for name, new in (("nofilter", "on:\n  push:\n  pull_request:\n"),
+                          ("quoted", 'on:\n  push:\n    branches: ["main"]\n  pull_request:\n'),
+                          ("two", "on:\n  push:\n    branches: [main, develop]\n  pull_request:\n")):
+            self.write(WF, text.replace(block, new))
+            with self.subTest(shape=name):
+                self.assertEqual(self.line("ci"), "FAIL doctor.ci: stale")
+
+    def test_doctor_claude_block_single_read(self):  # CB17
+        self.green()
+        with mock.patch.object(doctor, "_read", wraps=doctor._read) as rd:
+            self.assertEqual(self.line("claude-block"), "PASS doctor.claude-block")
+        self.assertEqual([c.args[1] for c in rd.call_args_list].count("CLAUDE.md"), 1)
+        self.assertEqual([c.args[1] for c in rd.call_args_list].count(".gitignore"), 1)
+
+    def test_doctor_gitignore_block_and_generated_keys_agree(self):  # GI11
+        self.set_cfg(paths={"decisions": "my dec/é", "index": "out dir/INDEX.md"})
+        keys = list(index.render(self.r, self.cfg()))
+        body = templates.gitignore_block_body(self.cfg())
+        for key in keys:
+            self.assertIn(key, body.split("\n"))
+        self.write(".gitignore", self.ignore())
+        self.assertEqual(self.line("gitignore-block"), "PASS doctor.gitignore-block")
+        self.write(keys[0], "x")
+        git(self.r, "add", "-f", "--", keys[0])
+        self.assertEqual(self.line("generated-tracked"), "FAIL doctor.generated-tracked: " + keys[0])
+        self.assertEqual(self.line("gitignore-block"), "PASS doctor.gitignore-block")
+
+    def test_doctor_registers_many_failures(self):  # RG4 at 1000
+        d = self.cfg()["paths"]["findings"]
+        for i in range(1000):
+            self.write("%s/F-20261031-%04d.yml" % (d, i), "not: valid\n")
+        ids = self.line("registers").split(": ", 1)[1].split(", ")
+        self.assertGreaterEqual(len(ids), 1000)
+        self.assertEqual(len(set(ids)), len(ids))
+        self.assertEqual(len([ln for ln in self.lines() if "doctor.registers" in ln]), 1)
+
+    def test_doctor_indexes_large(self):  # IX8: 2000 decisions
+        from tests.helpers import write_record
+        from tests.test_index import dec
+        d = self.cfg()["paths"]["decisions"]
+        sha = git(self.r, "rev-parse", "--short=7", "HEAD")
+        for i in range(2000):
+            c = "abcdefghjkmnpqrstuvwxyz23456789"  # the id alphabet: no 0, 1, l, o
+            r = dec("DEC-20261031-a%s%s%s" % (c[i // 961], c[i // 31 % 31], c[i % 31]), asked_at=sha,
+                    answered_at={"at": sha, "by": "who@example.invalid"})
+            write_record(self.r, "%s/%s.yml" % (d, r["id"]), r)
+        self.assertEqual(self.line("registers"), "PASS doctor.registers")
+        self.assertEqual(self.line("indexes"), "PASS doctor.indexes")
+
+    def test_doctor_generated_git_index_file(self):  # GT13
+        copy = os.path.join(self.tmp, "index-copy")
+        shutil.copy(os.path.join(self.r, ".git", "index"), copy)
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": copy}):
+            self.assertEqual(self.line("generated-tracked"), "PASS doctor.generated-tracked")
+        other = os.path.join(self.tmp, "other")
+        os.mkdir(other)
+        git(other, "init", "-q", "-b", "main")
+        key = list(index.render(self.r, self.cfg()))[0]
+        self.write(key, "x", root=other)
+        git(other, "add", "-f", "--", key)
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": os.path.join(other, ".git", "index")}):
+            self.assertEqual(self.line("generated-tracked"), "FAIL doctor.generated-tracked: " + key)
+        # the table expects a nonexistent file to make ls-files fail; measured: git reads it as an empty index
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": os.path.join(self.tmp, "nonexistent-index")}):
+            self.assertEqual(self.line("generated-tracked"), "PASS doctor.generated-tracked")
+
+    def test_doctor_generated_single_ls_files(self):  # GT14
+        from gates.lib import gitinfo
+        with mock.patch.object(gitinfo, "_run", wraps=gitinfo._run) as run:
+            self.lines()
+        calls = [c.args[2] for c in run.call_args_list if c.args[1] == "ls-files"]
+        self.assertEqual(calls, [["ls-files", "-z", "--stage"]])
+
+    def test_doctor_subagents_large_file(self):  # SA24
+        self.write(SETTINGS, '{"x": "%s", "env": {"%s": "2"}}' % ("a" * (10 * 1024 * 1024), DEPTH))
+        self.assertEqual(self.line("subagents"), "PASS doctor.subagents: %s=2; %s=%s" % (DEPTH, CONC, UNSET))
+
+    def test_doctor_protection_branch_passed_verbatim(self):  # PR16 (PR20: the table says 'not tested here': read_state owns any timeout)
+        self.origin()
+        for branch in ("develop", "release/1.0", "feature/a_b-c.d", "x" * 200):
+            self.set_cfg(base_branch=branch)
+            key = "api repos/o/n/branches/%s/protection" % branch
+            gh = FakeGh(self, {key: (j(PROT_OK), b"", 0), REPO: (j(REPO_OK), b"", 0)})
+            with self.subTest(branch=branch):
+                self.assertEqual(self.line("protection"), "PASS doctor.protection: o/n %s is protected" % branch)
+                self.assertIn(key, gh.log())
+        for branch in ("a b", "é", "Ꟁ", "a\nb"):  # refused by host.read_state with its own text; no gh call
+            self.set_cfg(base_branch=branch)
+            gh = FakeGh(self, {})
+            with self.subTest(branch=branch):
+                self.assertTrue(self.line("protection").startswith(
+                    "FAIL doctor.protection: cannot read o/n: branch: must hold only A-Z a-z 0-9 . _ / - "))
+                self.assertEqual(gh.log(), [])
+
+
+class TestConfigParent(Base):
+    def test_h4_config_parent_symlink_or_file_refused(self):  # H4 (HC1, HC2): config.load follows a symlinked parent (U2 class)
+        out = os.path.join(self.tmp, "out")
+        shutil.copytree(os.path.join(self.r, ".strict-delivery"), out)
+        shutil.rmtree(os.path.join(self.r, ".strict-delivery"))
+        os.symlink(out, os.path.join(self.r, ".strict-delivery"))
+        code, text, _ = self.run_doctor()
+        self.assertEqual((code, text.splitlines()), (1, [
+            "PASS doctor.python",
+            "FAIL doctor.input: .strict-delivery/config.yml: parent .strict-delivery is a symlink"]))
+        os.unlink(os.path.join(self.r, ".strict-delivery"))
+        self.write(".strict-delivery", "a file\n")
+        self.assertEqual(self.lines(), [
+            "PASS doctor.python",
+            "FAIL doctor.input: .strict-delivery/config.yml: parent .strict-delivery is not a directory"])
+
+
+class TestSwapAfterCheck(Base):
+    """H4, the second half: a path component swapped after the ``lstat`` that approved it. ``os.lstat`` is made to
+    report an approved object (a regular file or a directory) for the name while the real object is a symlink or a
+    FIFO; doctor must still refuse it and must not read outside the root or block (the race-at-open pattern of
+    tests/test_managed.py ``swap_lstat``)."""
+
+    def lie(self, mapping):
+        real = os.lstat
+
+        def fake(p, *a, **k):
+            return real(mapping.get(os.path.basename(p), p) if isinstance(p, str) else p, *a, **k)
+        return mock.patch("os.lstat", side_effect=fake)
+
+    @contextlib.contextmanager
+    def no_block(self, secs=20):  # a blocked open of a FIFO becomes an AssertionError instead of a hang
+        import signal
+
+        def boom(sig, frm):
+            raise AssertionError("blocked on a FIFO")
+        old = signal.signal(signal.SIGALRM, boom)
+        signal.alarm(secs)
+        try:
+            yield
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+
+    def outside(self):
+        d = os.path.join(self.tmp, "outside")
+        os.makedirs(os.path.join(d, "workflows"), exist_ok=True)
+        reg = os.path.join(self.tmp, "reg-file")
+        with open(reg, "w") as fh:
+            fh.write("x\n")
+        return d, reg
+
+    def test_final_component_swapped_to_a_symlink_refused(self):  # H4 (HS1): CLAUDE.md, .gitignore, settings, workflow
+        d, reg = self.outside()
+        self.write("CLAUDE.md", self.claude(), root=d)
+        self.write(".gitignore", self.ignore(), root=d)
+        self.write("settings.json", '{"env": {"%s": "abc"}}' % DEPTH, root=d)
+        self.write("workflows/strict-delivery.yml", "# strict-delivery: generated by x; do not edit\n", root=d)
+        os.makedirs(os.path.join(self.r, ".claude"))
+        os.makedirs(os.path.join(self.r, ".github", "workflows"))
+        for rel, src, id_ in (("CLAUDE.md", "CLAUDE.md", "claude-block"), (".gitignore", ".gitignore", "gitignore-block"),
+                              (SETTINGS, "settings.json", "subagents"), (WF, "workflows/strict-delivery.yml", "extras")):
+            os.symlink(os.path.join(d, src), os.path.join(self.r, rel))
+            with self.subTest(path=rel), self.lie({os.path.basename(rel): reg}):
+                self.assertEqual(self.line(id_), "FAIL doctor.%s: %s: is a symlink" % (id_, rel))
+
+    def test_final_component_swapped_to_a_fifo_never_blocks(self):  # H4, H3 (HS2)
+        d, reg = self.outside()
+        os.makedirs(os.path.join(self.r, ".claude"))
+        os.makedirs(os.path.join(self.r, ".github", "workflows"))
+        for rel, id_ in (("CLAUDE.md", "claude-block"), (".gitignore", "gitignore-block"), (SETTINGS, "subagents"),
+                         (WF, "extras")):
+            os.mkfifo(os.path.join(self.r, rel))
+            with self.subTest(path=rel), self.lie({os.path.basename(rel): reg}), self.no_block():
+                self.assertEqual(self.line(id_), "FAIL doctor.%s: %s: is not a regular file" % (id_, rel))
+
+    def test_parent_swapped_to_a_symlink_refused(self):  # H4 (HS3): .claude and .github/workflows
+        d, _ = self.outside()
+        real_dir = os.path.join(self.tmp, "real-dir")
+        os.mkdir(real_dir)
+        self.write("settings.json", '{"env": {"%s": "abc"}}' % DEPTH, root=d)
+        os.symlink(d, os.path.join(self.r, ".claude"))
+        with self.lie({".claude": real_dir}):
+            self.assertEqual(self.line("subagents"), "FAIL doctor.subagents: %s: parent .claude is a symlink" % SETTINGS)
+        self.write("workflows/strict-delivery.yml", "# strict-delivery: generated by x; do not edit\n", root=d)
+        os.makedirs(os.path.join(self.r, ".github"))
+        os.symlink(os.path.join(d, "workflows"), os.path.join(self.r, ".github", "workflows"))
+        with self.lie({"workflows": real_dir}):
+            self.assertEqual(self.line("extras"), "FAIL doctor.extras: %s: parent .github/workflows is a symlink" % WF)
+
+    def test_every_configured_state_path_in_every_file_state(self):  # H1, H2, H3, H7 for each configured path
+        keys = list(config.DEFAULTS["paths"])
+        for key in keys:  # H7: outside the root is refused at doctor.input
+            for value in ("../outside", "/abs/path"):
+                self.set_cfg(paths={key: value})
+                with self.subTest(key=key, value=value):
+                    lines = self.lines()
+                    self.assertEqual(len(lines), 2, lines)
+                    self.assertTrue(lines[1].startswith("FAIL doctor.input: "), lines)
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.mkdir(elsewhere)
+        for key in keys:
+            for kind in ("symlink", "fifo", "file", "dir"):
+                rel = "odd/" + key
+                self.set_cfg(paths={key: rel})
+                path = os.path.join(self.r, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                {"symlink": lambda: os.symlink(elsewhere, path), "fifo": lambda: os.mkfifo(path),
+                 "file": lambda: put(path, b"x\n"), "dir": lambda: os.mkdir(path)}[kind]()
+                with self.subTest(key=key, kind=kind), self.no_block():
+                    code, out, err = self.run_doctor()
+                    self.assertIn(code, (0, 1))
+                    self.assertEqual(err, "")
+                    self.assertTrue(all(ln.startswith(("PASS doctor.", "FAIL doctor.")) for ln in out.splitlines()), out)
+                    self.assertEqual(sum(1 for ln in out.splitlines() if " doctor.input" in ln), 1)
+                clear(path)
+
+    def test_h6_odd_names_in_a_register_directory(self):  # H6: a name that is not UTF-8, one with a newline and a NUL-free odd one
+        d = os.path.join(self.r, self.cfg()["paths"]["decisions"])
+        os.makedirs(d)
+        made = 0
+        for name in (b"DEC-\xff\xfe.yml", b"line\nbreak.yml", "é ü.yml".encode("utf-8")):
+            try:
+                put(os.path.join(os.fsencode(d), name), b"not: valid\n")
+                made += 1
+            except OSError:
+                pass  # the file system refuses the name
+        self.assertTrue(made >= 1)
+        code, out, err = self.run_doctor()
+        self.assertEqual((code, err), (1, ""))
+        self.assertTrue(all(ln.startswith(("PASS doctor.", "FAIL doctor.")) for ln in out.splitlines()), out)
+
+    def test_plugin_manifest_directory_and_fifo(self):  # H2, H3 for plugin.json (the framework side, never blocks)
+        m = os.path.join(self.fw, ".claude-plugin", "plugin.json")
+        for make in (lambda: os.mkdir(m), lambda: os.mkfifo(m)):
+            os.unlink(m) if os.path.isfile(m) or os.path.islink(m) else None
+            make()
+            with self.no_block():
+                got = self.lines()[2]
+            self.assertTrue(got.startswith("FAIL doctor.version: "), got)
+            clear(m)
+
+    def test_hook_shim_swapped_after_check_not_read(self):  # H4, H3 (HS4): a symlink or FIFO in place of a shim
+        d, reg = self.outside()
+        hooks = os.path.join(self.r, ".git", "hooks")
+        shim = os.path.join(d, "shim")
+        with open(shim, "wb") as fh:
+            fh.write(b"#!/bin/sh\n" + githooks.HEADER.encode() + b"\n")
+        for name in githooks.NAMES:
+            os.symlink(shim, os.path.join(hooks, name))
+        with self.lie({n: reg for n in githooks.NAMES}):
+            self.assertIn("neither extra installed", self.line("extras"))
+        for name in githooks.NAMES:
+            os.unlink(os.path.join(hooks, name))
+            os.mkfifo(os.path.join(hooks, name))
+        with self.lie({n: reg for n in githooks.NAMES}), self.no_block():
+            self.assertIn("neither extra installed", self.line("extras"))
