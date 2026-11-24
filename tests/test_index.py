@@ -905,7 +905,7 @@ class Writing(Base):
         for rel in (DEC_INDEX, F_INDEX, IN_FORCE, "a/b/c/INDEX.md"):
             self.assertTrue(stat.S_ISREG(os.lstat(os.path.join(self.work, rel)).st_mode), rel)
 
-    OTHER_ARCH = {**minimal_config(), "paths": {"architecture": "arch.md"}}  # so render does not read docs/
+    OTHER_ARCH = {**minimal_config(), "paths": {"architecture": "arch.md", "plans": "plans", "specs": "specs"}}  # so render does not read docs/ (nor H7-refuse the symlink)
 
     def test_W2_symlinked_parent_of_index_refused(self):
         self.build(cfg=self.OTHER_ARCH)
@@ -1839,6 +1839,257 @@ class Overview2(Ov):
         self.commit("bad")
         git(self.work, "checkout", "-q", "main")
         self.refused("refs/heads/%s/a/main:%s/a-plan/handoff.md" % (PNAME, PS))
+
+    # ---- 5b.3 A: the stream handoff entry at the stream branch tip (F-20261124-62ji)
+    TIP_HP = PS + "/a-plan/handoff.md"
+
+    def tip_fixture(self, kind, valid=None):
+        """A program with stream ``a`` whose tip holds the entry ``TIP_HP`` of ``kind``; the checkout is back on main."""
+        valid = valid if valid is not None else ho_text("1a", [SPECS + "/s.md"], plan="a-plan")
+        self.ov(files={SPECS + "/s.md": "s\n"})
+        self.program()
+        git(self.work, "checkout", "-q", "-b", PNAME + "/a/main")
+        if kind in ("regular", "executable"):
+            self.put(self.TIP_HP, valid)
+            if kind == "executable":
+                os.chmod(os.path.join(self.work, self.TIP_HP), 0o755)
+            self.commit("tip entry")
+        elif kind == "symlink":
+            self.put(PS + "/a-plan/real.md", valid)
+            os.symlink("real.md", os.path.join(self.work, self.TIP_HP))
+            self.commit("tip entry")
+        elif kind == "tree":
+            self.put(self.TIP_HP + "/real.md", valid)
+            self.commit("tip entry")
+        elif kind == "gitlink":
+            self.put(PS + "/a-plan/other.md", "x\n")
+            self.commit("folder")
+            git(self.work, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % ("a" * 40, self.TIP_HP))
+            git(self.work, "commit", "-q", "-m", "tip entry")
+        elif kind == "non-utf8":
+            self.put(self.TIP_HP, b"\xff\xfe\n")
+            self.commit("tip entry")
+        git(self.work, "checkout", "-q", "main")
+
+    def tip_mode(self):
+        out = git(self.work, "ls-tree", PNAME + "/a/main", self.TIP_HP)
+        return out.split(" ")[0] if out else None
+
+    def tip_refusal(self):
+        return "refs/heads/%s/a/main:%s: cannot be read as a UTF-8 regular file (not a regular file)" % (PNAME, self.TIP_HP)
+
+    def test_stream_tip_handoff_entry_kinds(self):  # T2-T5, T8, T12 (F-20261124-62ji)
+        for kind, mode in (("regular", "100644"), ("executable", "100755")):
+            with self.subTest(kind):
+                self.tip_fixture(kind)
+                self.assertEqual(self.tip_mode(), mode)
+                self.assertEqual(self.sec("### In progress"), ["- " + SPECS + "/s.md"])
+                self.assertEqual(self.sec("### Todo"), ["none"])
+        for kind, mode in (("symlink", "120000"), ("tree", "040000"), ("gitlink", "160000")):
+            with self.subTest(kind):  # the symlink target is a valid handoff: following it would give In progress (T12)
+                self.tip_fixture(kind)
+                self.assertEqual(self.tip_mode(), mode)
+                self.assertEqual(self.refused(self.tip_refusal()), self.tip_refusal())
+        with self.subTest("non-utf8"):
+            self.tip_fixture("non-utf8")
+            self.refused("not valid UTF-8")
+            self.refused(self.TIP_HP)
+
+    def test_stream_tip_handoff_folder_kinds(self):  # T7: the folder kinds stay at parity with the working tree
+        valid = ho_text("1a", [SPECS + "/s.md"], plan="a-plan")
+        for kind in ("absent", "symlink", "file", "gitlink"):
+            with self.subTest(kind):
+                self.ov(files={SPECS + "/s.md": "s\n"})
+                self.program()
+                git(self.work, "checkout", "-q", "-b", PNAME + "/a/main")
+                if kind == "absent":
+                    self.put(PS + "/other/x.md", "x\n")
+                elif kind == "symlink":
+                    self.put(PS + "/real/handoff.md", valid)
+                    os.symlink("real", os.path.join(self.work, PS, "a-plan"))
+                elif kind == "file":
+                    self.put(PS + "/a-plan", "x\n")
+                else:
+                    self.put(PS + "/other/x.md", "x\n")
+                self.commit("folder")
+                if kind == "gitlink":
+                    git(self.work, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % ("a" * 40, PS + "/a-plan"))
+                    git(self.work, "commit", "-q", "-m", "gitlink")
+                git(self.work, "checkout", "-q", "main")
+                self.assertEqual(self.sec("### Todo"), ["- " + SPECS + "/s.md"])
+                self.assertEqual(self.sec("### In progress"), ["none"])
+
+    def test_stream_tip_bad_entry_refuses_regenerate_and_main(self):  # T11
+        for kind in ("symlink", "tree", "gitlink"):
+            with self.subTest(kind):
+                self.tip_fixture(kind)
+                with self.assertRaises(GateError):
+                    index.regenerate(self.work, self.cfg)
+                self.assert_nothing_written()
+                out, err, code = run_main(["--root", self.work])
+                self.assertEqual((out, err, code), ("", "index: " + self.tip_refusal() + "\n", 1))
+                self.assert_nothing_written()
+
+    def test_stream_tip_handoff_digit_blocks(self):  # K1
+        raw = "---\nschema: handoff/1\nplan: a-plan\nblock: %s\nspec:\n- " + SPECS + "/s.md\n---\nbody\n"
+        for n in (4300, 4301):
+            for quoted in (False, True):
+                with self.subTest(digits=n, quoted=quoted):
+                    digits = "9" * n
+                    self.tip_fixture("regular", raw % ('"%s"' % digits if quoted else digits))
+                    if quoted:
+                        self.assertEqual(self.sec("### In progress"), ["- " + SPECS + "/s.md"])
+                    else:
+                        self.refused("refs/heads/%s/a/main:%s" % (PNAME, self.TIP_HP))
+
+    def test_stream_tip_kind_read_propagates_keyboard_interrupt(self):  # K3
+        self.tip_fixture("regular")
+        real = index.gitinfo.ls_tree_entries
+
+        def read(root, ref, directory):
+            if directory == PS + "/a-plan":  # the tip entry-kind read only (other callers list other folders)
+                raise KeyboardInterrupt
+            return real(root, ref, directory)
+        with mock.patch.object(index.gitinfo, "ls_tree_entries", read):
+            with self.assertRaises(KeyboardInterrupt):
+                self.render()
+        import inspect
+        src = inspect.getsource(index._specs_and_plans)
+        self.assertNotIn("except", src)
+        self.assertNotIn("BaseException", src)
+
+    # ---- 5b.3 B: overlapping configured directories (F-20261124-ekrx)
+    OVERLAP = "cfg: paths.plans and paths.specs must be different directories"
+
+    def with_paths(self, **paths):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["paths"].update(paths)
+        return cfg
+
+    def test_paths_plans_equal_to_specs_refused(self):  # D1, D5, D7 (PL35)
+        with self.subTest("equal"):
+            self.ov(files={"docs/x/p.md": "p\n", PS + "/p/handoff.md": ho_text("2a", ["docs/x/p.md"], plan="p")})
+            self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/x", specs="docs/x")))
+        with self.subTest("absent"):
+            self.ov()
+            self.assertEqual(self.refused(self.OVERLAP, lambda: index.render(
+                self.work, self.with_paths(plans="docs/n", specs="docs/n"))), self.OVERLAP)
+        with self.subTest("order"):
+            self.ov()
+            self.refused("cfg: paths.plans must be a normalised", lambda: index.render(
+                self.work, self.with_paths(plans="../x", specs="../x")))
+
+    def test_paths_plans_specs_same_directory_refused(self):  # D2, D5
+        with self.subTest("symlink"):
+            self.ov(files={"docs/x/p.md": "p\n"})
+            os.symlink("x", os.path.join(self.work, "docs", "y"))
+            self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/x", specs="docs/y")))
+            self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/y", specs="docs/x")))
+        with self.subTest("parent-symlink"):  # H4: ``y`` is a symlink to ``docs``, so ``y/x`` is the plans dir
+            self.ov(files={"docs/x/p.md": "p\n"})
+            os.symlink("docs", os.path.join(self.work, "y"))
+            self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/x", specs="y/x")))
+        with self.subTest("case"):
+            self.ov(files={"docs/x/p.md": "p\n"})
+            if not os.path.isdir(os.path.join(self.work, "docs", "X")):
+                self.skipTest("the file system is case sensitive")
+            self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/x", specs="docs/X")))
+
+    def test_paths_plans_specs_distinct_one_absent_accepted(self):  # D5
+        self.ov(files={"docs/x/p.md": "p\n"})
+        md = index.render(self.work, self.with_paths(plans="docs/x", specs="docs/absent"))[INDEX_MD]
+        self.assertIn("- docs/x/p.md", sect(md, "### Todo"))
+
+    def test_paths_nested_dirs_accepted(self):  # D3
+        self.ov(files={"docs/x/a.md": "p\n", "docs/x/sub/b.md": "p\n", "docs/z/c.md": "p\n"})
+        for plans, specs, want in (("docs/x", "docs/x/sub", ["- docs/x/a.md", "- docs/x/sub/b.md"]),
+                                   ("docs/x/sub", "docs/x", ["- docs/x/a.md", "- docs/x/sub/b.md"]),
+                                   ("docs/x", "docs/z", ["- docs/x/a.md", "- docs/z/c.md"])):
+            with self.subTest(plans=plans, specs=specs):
+                md = index.render(self.work, self.with_paths(plans=plans, specs=specs))[INDEX_MD]
+                self.assertEqual(sect(md, "### Todo"), want)
+
+    def test_paths_dir_symlink_inside_root_listed(self):  # H1: a symlinked dir that is not the other dir is listed
+        self.ov(files={"docs/x/p.md": "p\n", "docs/z/s.md": "s\n"})
+        os.symlink("z", os.path.join(self.work, "docs", "y"))
+        md = index.render(self.work, self.with_paths(plans="docs/x", specs="docs/y"))[INDEX_MD]
+        self.assertEqual(sect(md, "### Todo"), ["- docs/x/p.md", "- docs/y/s.md"])
+
+    def test_paths_dir_is_file_or_fifo(self):  # H2, H3
+        import signal
+        self.ov(files={"docs/f": "x\n", "docs/s/s.md": "s\n"})
+        md = index.render(self.work, self.with_paths(plans="docs/f", specs="docs/s"))[INDEX_MD]
+        self.assertEqual(sect(md, "### Todo"), ["- docs/s/s.md"])  # a regular file lists nothing
+        os.symlink("f", os.path.join(self.work, "docs", "g"))
+        self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/f", specs="docs/g")))
+        with self.subTest("fifo"):
+            os.mkfifo(os.path.join(self.work, "docs", "q"))
+            old = signal.signal(signal.SIGALRM, lambda *a: (_ for _ in ()).throw(AssertionError("render blocked")))
+            signal.alarm(20)
+            try:
+                md = index.render(self.work, self.with_paths(plans="docs/q", specs="docs/s"))[INDEX_MD]
+                self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/q", specs="docs/q")))
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old)
+            self.assertEqual(sect(md, "### Todo"), ["- docs/s/s.md"])
+
+    def test_paths_dir_resolving_outside_root_refused(self):  # H7
+        self.ov(files={"docs/x/p.md": "p\n"})
+        out = os.path.join(self.tmp, "outside")
+        os.makedirs(os.path.join(out, "sub"))
+        with open(os.path.join(out, "sub", "o.md"), "w") as fh:
+            fh.write("o\n")
+        os.symlink(out, os.path.join(self.work, "docs", "out"))
+        os.symlink(os.path.join(out, "sub"), os.path.join(self.work, "docs", "sub"))
+        for key, other, val in (("specs", "plans", "docs/out"), ("plans", "specs", "docs/out"),
+                                ("specs", "plans", "docs/out/sub"), ("specs", "plans", "docs/sub"),
+                                ("specs", "plans", "docs/out/absent")):
+            with self.subTest(key=key, value=val):
+                self.refused("cfg: paths.%s resolves outside the repository" % key, lambda: index.render(
+                    self.work, self.with_paths(**{key: val, other: "docs/x"})))
+
+    def test_overlap_check_runs_before_listing(self):  # H4
+        self.ov(files={"docs/x/p.md": "p\n"})
+        calls = []
+        real = os.listdir
+        with mock.patch.object(os, "listdir", lambda p: calls.append(p) or real(p)):
+            self.refused(self.OVERLAP, lambda: index.render(self.work, self.with_paths(plans="docs/x", specs="docs/x")))
+        self.assertEqual(calls, [])
+        with mock.patch.object(os, "listdir", lambda p: calls.append(p) or real(p)):
+            index.render(self.work, self.with_paths(plans="docs/x", specs="docs/z"))
+        self.assertTrue(calls)  # the patch sees the listings of a render that is accepted
+
+    def test_paths_plan_state_overlap_unchanged(self):  # D4
+        self.ov(files={PLANS + "/t.md": "p\n"})
+        md = index.render(self.work, self.with_paths(plan_state=PLANS))[INDEX_MD]
+        self.assertEqual(sect(md, "### Todo"), ["- " + PLANS + "/t.md"])
+
+    def test_paths_overlap_refuses_regenerate_and_main(self):  # D6
+        root = self.ov(cfg={"paths": {"plans": "docs/x", "specs": "docs/x"}}, files={"docs/x/p.md": "p\n"})
+        with self.assertRaises(GateError):
+            index.regenerate(root, self.cfg)
+        self.assert_nothing_written()
+        self.assertEqual(run_main(["--root", root]), ("", "index: " + self.OVERLAP + "\n", 1))
+        self.assert_nothing_written()
+        with self.subTest("newline name"):  # H6: config refuses it; render given it refuses without echoing the name
+            with self.assertRaises(GateError):
+                self.ov(cfg={"paths": {"plans": "docs/a\nb", "specs": "docs/a\nb"}})
+            self.ov()
+            msg = self.refused(self.OVERLAP, lambda: index.render(
+                self.work, self.with_paths(plans="docs/a\nb", specs="docs/a\nb")))
+            self.assertEqual(msg, self.OVERLAP)
+
+    def test_overlap_and_tip_unicode_same_on_both(self):  # K2
+        d = "docs/ࡰ"
+        self.ov()
+        self.assertEqual(self.refused(self.OVERLAP, lambda: index.render(
+            self.work, self.with_paths(plans=d, specs=d))), self.OVERLAP)
+        name = SPECS + "/Ꟁ.md"
+        self.tip_fixture("regular", ho_text("1a", [name], plan="a-plan"))
+        self.assertEqual(self.sec("### In progress"), ["- " + SPECS + "/\\ua7c0.md"])
+        self.tip_fixture("regular", ho_text("1a", [SPECS + "/a\nb.md"], plan="a-plan"))  # H6: a newline in a spec name
+        self.assertEqual(self.sec("### In progress"), ["- " + SPECS + "/a\\nb.md"])
 
     def test_spec_named_by_none_is_todo(self):  # SP3
         self.ov(files={SPECS + "/z.md": "s\n"})

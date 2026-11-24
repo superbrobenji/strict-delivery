@@ -238,12 +238,39 @@ def _program_streams(cfg: dict, prog: programs.Program) -> list:
     return out
 
 
+_TIP_REGULAR = ("100644", "100755")  # the git modes of a regular file (``gitinfo._REGULAR``)
+
+
+def _same_dir(root: str, a: str, b: str) -> bool:
+    """True when ``a`` and ``b`` (repo-relative) both exist and are one file system object (a symlink, a symlinked
+    parent or a case-folding file system; ``samefile`` stats and resolves every component, it opens nothing); an
+    absent one is not the same as anything. The check runs once, before either listing: a swap of a directory
+    after it is outside what a read-only render can defend, and no write follows."""
+    pa, pb = (os.path.join(root, *d.split("/")) for d in (a, b))
+    try:
+        return os.path.samefile(pa, pb)
+    except OSError:
+        return False
+
+
+def _inside_root(root: str, directory: str) -> bool:
+    """True when ``directory`` (repo-relative), with every symlink resolved, lies in the resolved ``root``."""
+    base = os.path.realpath(root)
+    real = os.path.realpath(os.path.join(root, *directory.split("/")))
+    return real == base or real.startswith(base.rstrip(os.sep) + os.sep)
+
+
 def _specs_and_plans(root: str, cfg: dict, progs: list) -> list:
     """The ``## Specs and plans`` lines (programs design 9: every state is derived)."""
     paths = cfg["paths"]
     plan_dir = _norm_dir(paths["plans"], "paths.plans")
     spec_dir = _norm_dir(paths["specs"], "paths.specs")
     plan_state = _norm_dir(paths["plan_state"], "paths.plan_state")
+    for key, directory in (("plans", plan_dir), ("specs", spec_dir)):
+        if not _inside_root(root, directory):
+            raise GateError("cfg: paths.%s resolves outside the repository" % key)
+    if plan_dir == spec_dir or _same_dir(root, plan_dir, spec_dir):  # one path would sit in two states
+        raise GateError("cfg: paths.plans and paths.specs must be different directories")
     hist = _has_commit(root)
     handoffs = _tree_handoffs(root, plan_state)
     named = {s for _, specs in handoffs.values() for s in specs}
@@ -269,7 +296,11 @@ def _specs_and_plans(root: str, cfg: dict, progs: list) -> list:
             if branch not in local:
                 continue
             hpath = "%s/%s/handoff.md" % (plan_state, splan[len(prefix):-3])
-            text = gitinfo.show(root, "refs/heads/" + branch, hpath)
+            ref = "refs/heads/" + branch
+            for mode, _, entry in gitinfo.ls_tree_entries(root, ref, posixpath.dirname(hpath)):
+                if entry == hpath and mode not in _TIP_REGULAR:  # a symlink, tree or gitlink is no handoff file
+                    raise GateError("%s:%s: cannot be read as a UTF-8 regular file (not a regular file)" % (ref, hpath))
+            text = gitinfo.show(root, ref, hpath)
             if text is not None:
                 named.update(_handoff(text, "refs/heads/%s:%s" % (branch, hpath))[1])
     todo, doing, done = {}, {}, {}
