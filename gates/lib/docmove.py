@@ -114,7 +114,13 @@ def _target_conflicts(top: str, moves: list, tracked: frozenset) -> list:
         except managed.ManagedError:
             out.append("%s: %s" % (dst, _PATH_MSG))
             continue
-        state = managed._inspect(top, dst)
+        try:
+            state = managed._inspect(top, dst)
+        except managed.ManagedError:  # a target that cannot be read (mode 000) still exists: a conflict, never opened
+            if not os.path.lexists(os.path.join(top, *dst.split("/"))):
+                raise
+            out.append("%s: exists" % dst)
+            continue
         if state[0] == "conflict" and (state[1].startswith("parent ") or state[1] == "is a symlink"):
             out.append("%s: %s" % (dst, state[1]))
         elif state[0] != "absent" or dst in tracked or os.path.lexists(os.path.join(top, *dst.split("/"))):

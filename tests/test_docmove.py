@@ -2,6 +2,7 @@
 Fixture repositories come only from tests/helpers.py; expected values are written by hand from the plan and the domain
 table (task-4d.2-domain.md, row ids in each test's comment). Nothing here reads the code under test back."""
 import copy
+import inspect
 import os
 import shutil
 import signal
@@ -231,6 +232,44 @@ class PlanMovesTest(Repo):
             with self.subTest(cfg=cfg):
                 self.assertEqual(self.pm({"paths": cfg})[1], want)
 
+    def test_pm_s23_case_pair(self):  # PM-S23: two tracked names that differ only by case are two moves (index only)
+        self.files([S + "a.md"])
+        self.cache(S + "A.md")
+        self.assertEqual(self.pm()[0], [(S + "A.md", D + "A.md"), (S + "a.md", D + "a.md")])
+        # the apply half (the second git mv fails on a case-insensitive file system) is the AM-F rows' part-way failure
+
+    def test_pm_t12_case_insensitive_target(self):  # PM-T12: only the file system decides whether A.md exists
+        probe = os.path.join(self.tmp, "CaseProbe")
+        with open(probe, "w") as fh:
+            fh.write("x")
+        insensitive = os.path.exists(os.path.join(self.tmp, "caseprobe"))
+        self.files([S + "A.md"])
+        self.put(D + "a.md")
+        got = self.pm()
+        self.assertEqual(got[0], [(S + "A.md", D + "A.md")])
+        self.assertEqual(got[1], [D + "A.md: exists"] if insensitive else [])
+
+    def test_pm_t6_target_mode_000(self):  # PM-T6, E1 (fix(lib)): a mode 000 file at the target is a conflict by existence, never opened
+        self.files([S + "t6.md"])
+        self.put(D + "t6.md", "x\n", 0o000)
+        if os.geteuid() == 0:
+            self.skipTest("root reads mode 000 files")
+        self.assertEqual(self.pm()[1], [D + "t6.md: exists"])
+        os.chmod(os.path.join(self.r, D + "t6.md"), 0o644)
+        d = os.path.join(self.r, D[:-1])  # an unreadable target PARENT hides the target: not an "exists", still refused
+        os.chmod(d, 0o000)
+        self.addCleanup(os.chmod, d, 0o755)
+        with self.assertRaisesRegex(GateError, r"^docs/strict-delivery/specs/t6\.md: cannot read \(Permission denied\)$"):
+            self.pm()
+
+    def test_pm_r6_index_file_inherited(self):  # PM-R6: GIT_INDEX_FILE is inherited; the moves come from that index
+        self.files([S + "a.md"])
+        alt = os.path.join(self.tmp, "alt-index")
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": alt}):
+            self.cache(S + "only.md")
+            self.assertEqual(self.pm()[0], [(S + "only.md", D + "only.md")])
+        self.assertEqual(self.pm()[0], [M1])
+
     def test_pm_r_repository_states(self):  # PM-R1 R2 R6 R7 R8, VR2 U+2C2F
         fresh = os.path.join(self.tmp, "unborn")
         os.mkdir(fresh)
@@ -377,6 +416,9 @@ class RewriteRulesTest(Rw):
         for text, line in (("x\r\na.md\n", 2), ("a\x0cb a.md", 1), ("a a.md", 1), ("a\u0085a.md", 1),
                            ("a\ra.md", 1), ("\n\n\na.md", 4)):  # N8
             self.assertEqual(notes_of(text), [n % line], text)
+        for text, line in (("a\x0cb\na.md", 2), ("a b\na.md", 2), ("x\na\x0cb a.md", 2),
+                           ("x\na b a.md\n", 2), ("\n\x0c \x0b\u0085\ra.md", 2)):  # N8, M22c: a newline too
+            self.assertEqual(notes_of(text), [n % line], text)
         self.assertEqual(notes_of(S + "new.md\n"), ["docs/x.md:1: mentions docs/superpowers; not rewritten"])  # N13, Q4
         moves = [M1, (PL + "a.md", DP + "a.md")]
         self.assertEqual(notes_of("a.md\n", moves), [n % 1])  # N9: one note per occurrence per distinct name
@@ -423,25 +465,40 @@ class RewriteRulesTest(Rw):
         raw = {"nul-start": b"\0" + P.encode(), "nul-mid": P.encode() + b"\0x", "ff": b"\xff " + P.encode() + b"\n",
                "latin1": b"\xe9 " + P.encode(), "trunc": P.encode() + b" \xe2\x82", "overlong": b"\xc0\xaf " + P.encode(),
                "surrogate": b"\xed\xa0\x80 " + P.encode(), "utf16": "﻿".encode("utf-16") + P.encode("utf-16"),
-               "png": b"\x89PNG\r\n\x1a\n\x00\x00" + os.urandom(64)}
+               "png": b"\x89PNG\r\n\x1a\n\x00\x00" + os.urandom(64),
+               "blob5mb": b"\xff" + os.urandom(5000000)}  # E10
         for k, v in raw.items():
             self.put("docs/bin-%s.dat" % k, v)
         commit_all(self.r, "bin")
         changes, notes, _ = docmove.rewrites(self.r, [M1], [])
         self.assertEqual(changes, [])
+        self.assertEqual([x for x in notes if "mentions" in x and "docs/bin-" in x], [])  # N15: skip note only
         self.assertEqual([x for x in notes if "not UTF-8" in x],
                          sorted("docs/bin-%s.dat: not UTF-8 text; not rewritten" % k for k in raw))
 
-    def test_rw_r14_many_occurrences(self):  # RW-R14 N14
+    def test_rw_r14_many_occurrences(self):  # RW-R14 N14: 100000 occurrences in one line; 100000 notes; 1000 files
         P, Q = S + "a.md", D + "a.md"
-        self.put("docs/many.md", " ".join([P] * 20000) + "\n")
-        self.put("docs/names.md", "a.md\n" * 20000)
+        self.put("docs/many.md", " ".join([P] * 100000) + "\n")
+        self.put("docs/names.md", "a.md\n" * 100000)
+        for i in range(1000):
+            self.put("docs/f%04d.md" % i, "see " + P + "\n")
         commit_all(self.r, "m")
         t0 = time.time()
         changes, notes, _ = docmove.rewrites(self.r, [M1], [])
         self.assertLess(time.time() - t0, 30)
-        self.assertEqual(dict(changes)["docs/many.md"], " ".join([Q] * 20000) + "\n")
-        self.assertEqual(len([n for n in notes if n.startswith("docs/names.md")]), 20000)
+        got = dict(changes)
+        self.assertEqual(got["docs/many.md"], " ".join([Q] * 100000) + "\n")
+        self.assertEqual(len([n for n in notes if n.startswith("docs/names.md")]), 100000)
+        self.assertEqual(sum(1 for i in range(1000) if got["docs/f%04d.md" % i] == "see " + Q + "\n"), 1000)
+
+    def test_rw_e11_very_long_line(self):  # RW-E11: one 50 MB line without a newline, no size cap
+        P, Q = S + "a.md", D + "a.md"
+        self.put("docs/long.md", "x" * 50000000 + " " + P)
+        commit_all(self.r, "m")
+        t0 = time.time()
+        changes, _, _ = docmove.rewrites(self.r, [M1], [])
+        self.assertLess(time.time() - t0, 30)
+        self.assertEqual(dict(changes)["docs/long.md"], "x" * 50000000 + " " + Q)
 
 
 class HolderKindsTest(Rw):
@@ -476,6 +533,45 @@ class HolderKindsTest(Rw):
         self.assertNotIn("docs/h-gone.md", " ".join(notes))
         self.put("docs/h-mod.md", "none\n")
         self.assertNotIn("docs/h-mod.md", dict(docmove.rewrites(self.r, [M1], [])[0]))  # F15: no cache
+
+    def test_vr1_d_note_line_numbers_under_int_limits(self):  # VR1 (d) RW-N3: a note line is a small int printed with %d
+        self.put("docs/n.md", "9" * 4301 + "\n" + "a.md " + "9" * 4301 + "\n")
+        commit_all(self.r, "n")
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                self.assertEqual(docmove.rewrites(self.r, [M1], [])[1], ["docs/n.md:2: mentions a.md; not rewritten"])
+
+    def test_rw_a9_dir_target_from_moves(self):  # RW-A9: rewrites has no cfg argument; the target comes from the moves
+        self.assertEqual(list(inspect.signature(docmove.rewrites).parameters), ["root", "moves", "state_dirs"])
+        self.put("docs/h.md", "see " + S + "dd/x.md and " + S + "dd\n")
+        commit_all(self.r, "h")
+        moves = [(S + "dd/x.md", "docs/elsewhere/x.md")]
+        self.assertEqual(docmove.rewrites(self.r, moves, [])[0], [("docs/h.md", "see docs/elsewhere/x.md and " + S + "dd\n")])
+
+    def test_rw_f_fifo_swapped_after_lstat(self):  # RW-F1 (E5 O_NONBLOCK + fstat), RW-F5; M21 (F-20261124-vzgu class)
+        self.put("docs/swap.md", S + "a.md\n")
+        commit_all(self.r, "s")
+        target = os.path.join(self.r, "docs", "swap.md")
+        reg = self.put("docs/other.md", "x\n")
+        os.remove(target)
+        os.mkfifo(target)  # the swap: lstat (below) still reports a regular file
+        real = os.lstat
+
+        def fake(p, *a, **k):
+            return real(reg if os.path.basename(p) == "swap.md" else p, *a, **k)
+
+        def hang(*_):
+            raise AssertionError("open of the swapped FIFO blocked")
+        old = signal.signal(signal.SIGALRM, hang)
+        signal.alarm(5)
+        try:
+            with mock.patch("os.lstat", side_effect=fake):
+                got = docmove.rewrites(self.r, [M1], [])
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+        self.assertIn("docs/swap.md: not a regular file; not read", got[1])
+        self.assertNotIn("docs/swap.md", dict(got[0]))
 
     def test_rw_f6_unreadable_refused(self):  # RW-F6
         if os.geteuid() == 0:
@@ -723,6 +819,57 @@ class ApplyTest(Repo):
                 docmove.apply_moves(self.r, [], [("m1.md", "q\n")])  # W5
         self.assertEqual([n for n in os.listdir(self.r) if n.startswith(".sd-managed-")], [])
         self.assertEqual(slurp(os.path.join(self.r, "m1.md")), "1\n")
+
+
+class ApplyRowsTest(ApplyTest):
+    def test_am_a3_more_shapes(self):  # AM-A3: shapes of moves and changes, with the wording of the errors
+        calls = self.trace()
+        for bad in ([("a", 1)], [(1, "b")], [None], [["a", "b"]], [("a", "b", "c")], {M1}, [("", "b")]):
+            with self.subTest(bad=bad), self.assertRaisesRegex(GateError, "^moves: "):
+                docmove.apply_moves(self.r, bad, [])
+        for bad in ([("../x", "t")], [("/x", "t")], [("a//b", "t")], [("a\x00", "t")], [("a/./b", "t")], [("", "t")]):
+            with self.subTest(bad=bad), self.assertRaisesRegex(GateError, "^changes: item 0 "):
+                docmove.apply_moves(self.r, [M1], bad)
+        with self.assertRaisesRegex(GateError, "^changes: must be a list$"):
+            docmove.apply_moves(self.r, [M1], None)
+        with self.assertRaisesRegex(GateError, r"^changes: two changes name the same path \(a\)$"):
+            docmove.apply_moves(self.r, [M1], [("a", "t"), ("a", "u")])
+        with self.assertRaisesRegex(GateError, "^changes: " + S + "a.md is the source of a move"):
+            docmove.apply_moves(self.r, [M1], [(S + "a.md", "t")])
+        self.assertEqual(calls(), [])
+
+    def test_am_g9_linked_worktree(self):  # AM-G9: a linked worktree top level is a root; its own tree moves
+        self.files([S + "a.md"])
+        self.put("docs/h.md", "see " + S + "a.md\n")
+        commit_all(self.r, "h")
+        wt = os.path.join(self.tmp, "wt")
+        git(self.r, "worktree", "add", "-q", "--detach", "--", wt)
+        moves = docmove.plan_moves(wt, CFG)[0]
+        changes = docmove.rewrites(wt, moves, [])[0]
+        self.assertIsNone(docmove.apply_moves(wt, moves, changes))
+        self.assertEqual(slurp(os.path.join(wt, D + "a.md")), "x\n")
+        self.assertFalse(os.path.exists(os.path.join(wt, S + "a.md")))
+        self.assertEqual(slurp(os.path.join(wt, "docs/h.md")), "see " + D + "a.md\n")
+        self.assertTrue(os.path.exists(os.path.join(self.r, S + "a.md")))  # the main work tree is untouched
+        self.assertEqual(slurp(os.path.join(self.r, "docs/h.md")), "see " + S + "a.md\n")
+
+    def test_am_w7_window_accepted(self):  # AM-W7: the plan's changes carry no old text; a stale text overwrites an edit
+        self.files([S + "a.md"])
+        self.put("docs/h.md", "see " + S + "a.md\n")
+        commit_all(self.r, "h")
+        moves = docmove.plan_moves(self.r, CFG)[0]
+        changes = docmove.rewrites(self.r, moves, [])[0]
+        self.put("docs/h.md", "user edit after the read\n")
+        self.assertIsNone(docmove.apply_moves(self.r, moves, changes))
+        self.assertEqual(slurp(os.path.join(self.r, "docs/h.md")), "see " + D + "a.md\n")
+
+    def test_am_h4_distinct_content_required(self):  # AM-H4: identical bytes may pair either way; both moves still land
+        self.files([S + "a.md", S + "b.md"])
+        moves = docmove.plan_moves(self.r, CFG)[0]
+        self.assertIsNone(docmove.apply_moves(self.r, moves, []))
+        for n in ("a.md", "b.md"):
+            self.assertEqual(slurp(os.path.join(self.r, D + n)), "x\n")
+            self.assertFalse(os.path.exists(os.path.join(self.r, S + n)))
 
 
 class VersionRowsTest(Repo):

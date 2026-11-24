@@ -232,6 +232,11 @@ class StateTest(GitIsolatedTestCase):
         prot = {"enforce_admins": {"enabled": False}, "required_pull_request_reviews": {}, "Extra": 1}
         FakeGh(self, self.rules(prot=prot))
         self.assertEqual(self.state(None), dict(zip(STATE_KEYS, (True, True, False, True, False, False))))
+        FakeGh(self, self.rules(prot={"enforce_admins": {"enabled": True}, "Required_Pull_Request_Reviews": {}}))
+        self.assertEqual(self.state(None), dict(zip(STATE_KEYS, (True, False, True, True, False, False))))  # V8: case
+        FakeGh(self, self.rules(prot={"Enforce_Admins": {"enabled": True}}))  # a missing key, as RS-J: refused
+        with self.assertRaisesRegex(HostError, "enforce_admins must be an object$"):
+            self.state(None)
         FakeGh(self, self.rules(prot={"enforce_admins": {"enabled": True, "url": "u"}}))
         self.assertEqual(self.state(None), dict(zip(STATE_KEYS, (True, False, True, True, False, False))))
         for combo in ((False, False, False), (True, True, False), (True, False, True), (True, True, True),
@@ -460,8 +465,8 @@ class RunTest(GitIsolatedTestCase):
         with self.assertRaisesRegex(HostError, r"^gh api -X PUT repos/o/n/branches/main/protection --input -: "
                                     r"gh: nope \(HTTP 403\) \(exit 1\)$"):
             host.run(self.work, PUT)
-        for bad in (None, [], ["gh"], ["sh", "api"], ["gh", "api", 1], "gh api"):
-            with self.assertRaises(GateError):
+        for bad in (None, [], ["gh"], ["sh", "api"], ["gh", "api", 1], "gh api"):  # X19: the guard's own message
+            with self.assertRaisesRegex(GateError, "^argv: must be a list of strings that starts with gh api$"):
                 host.run(self.work, bad)
         with self.assertRaises(GateError):
             host.run(os.path.join(self.work, "missing"), PUT)
