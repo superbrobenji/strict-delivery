@@ -1,7 +1,7 @@
 ---
 schema: handoff/1
 plan: docs/strict-delivery/plans/2026-10-31-strict-delivery-framework.md
-spec: docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md
+spec: [docs/strict-delivery/specs/2026-10-31-strict-delivery-framework-design.md]
 branch: block/b1c
 base: 3094724
 head: 228c872

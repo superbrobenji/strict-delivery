@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-cxdf
+status: open
+source: "6K.1 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/records/6K.1-review-1.md F-2"
+severity: LOW
+class: "record row shape: non-mapping Record.row of a finding (gates/lib/checkpoints.py:729 record_errors treats it as unresolved; a decision row None errors)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6K.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 080c3f1dde6e07d2e7fb82cb3123ae32dfcba574
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: "record_errors: record row shape"

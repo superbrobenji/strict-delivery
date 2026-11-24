@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261123-npq3
+status: open
+source: 6E.1 fix review (records/6E.1-review-5-fix.md, finding 1)
+severity: LOW
+class: "input-domain table test column vs test defs: task-6E.1-domain.md RN12 names test_run_pin_passes_no_timeout (0 defs; the test is test_run_pin_passes_exactly_these_arguments, tagged RN12); same pattern in 6E.1 (8), 6E.2 (38), 6E.3b (2) draft names"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6E.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f7e7ea2534c786d7be1fe36eef92129fd515ff40
+    by: stream-records
+review_round: 6
+caused_by_change: false
+dimension: table test column

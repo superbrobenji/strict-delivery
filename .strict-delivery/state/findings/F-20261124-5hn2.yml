@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-5hn2
+status: open
+source: 5b.2 task review 1 (records/5b.2-review-1.md, F1; found by the controller at the 98669eb merge gate)
+severity: HIGH
+class: "source-tree pins: a test that enumerates source files or sites must list the new gate: tests/test_argparse_text.py parser-site list (gates/gate_index.py gate_args); other pinned lists checked clean"
+siblings: []
+cites:
+  - file: tests/test_argparse_text.py
+    lines: 902-907
+    sha: edf31b1
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 98669ebd39f4d9c529b9b651ee4905ae5ddc07c7
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: source-tree pins
