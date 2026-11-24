@@ -8,6 +8,7 @@ import copy
 import errno
 import hashlib
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -1055,6 +1056,34 @@ class ReceiptsDir(Base):
             st, patch = self.rival_between_open_and_check("receipts", lambda: open(self.rdir, "wb").close())
             with patch, self.assertRaisesRegex(GateError, "^\\.strict-delivery/receipts: is not a directory$"):
                 self.rec()
+            self.assertEqual(st["fired"], 1)
+
+    def test_content_sha_dir_made_by_rival_between_open_and_check(self):  # F-20261124-cjyv (_read_by_descriptor)
+        path = self.real + "/rivaldir/f.txt"
+        st, patch = self.rival_between_open_and_check("rivaldir", lambda: os.mkdir(self.real + "/rivaldir", 0o700))
+        with patch, self.assertRaisesRegex(
+                GateError, "^" + re.escape(path) + ": cannot read file \\(No such file or directory\\)$"):
+            content_sha(path)
+        self.assertEqual(st["fired"], 1)  # the rival's directory was opened again: the error names the FILE
+        self.assertTrue(os.path.isdir(self.real + "/rivaldir"))
+
+    def test_content_sha_rival_link_or_file_at_directory_refused(self):  # F-20261124-cjyv (contradiction)
+        path = self.real + "/rivaldir/f.txt"
+        target = os.path.join(self.other(), "elsewhere")
+        os.mkdir(target)
+        self.put("f.txt", b"x", base=target)
+        with self.subTest("link"):
+            st, patch = self.rival_between_open_and_check("rivaldir", lambda: os.symlink(target, self.real + "/rivaldir"))
+            with patch, self.assertRaisesRegex(
+                    GateError, "^" + re.escape(self.real + "/rivaldir") + ": is a symlink; directories must be real directories$"):
+                content_sha(path)
+            self.assertEqual(st["fired"], 1)
+            os.unlink(self.real + "/rivaldir")
+        with self.subTest("file"):
+            st, patch = self.rival_between_open_and_check("rivaldir", lambda: open(self.real + "/rivaldir", "wb").close())
+            with patch, self.assertRaisesRegex(
+                    GateError, "^" + re.escape(self.real + "/rivaldir") + ": is not a directory$"):
+                content_sha(path)
             self.assertEqual(st["fired"], 1)
 
     @unittest.skipIf(os.geteuid() == 0, "uid 0 opens anything")
