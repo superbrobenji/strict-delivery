@@ -205,6 +205,37 @@ def _glob_problem(glob: str) -> str:
     return bracket_problem(glob)
 
 
+def _exclude_problem(entry: str, glob: str) -> str:
+    """Why an ``exclude`` entry is refused, or "" (owner answer 2026-11-21 (a), refined 2026-11-22 (a), legacy
+    pre-schema transcripts; D-X1..D-X3). An entry without "/" is a literal basename and always allowed; an entry with
+    "/" is a segment-wise pattern, so it obeys the glob grammar and needs as many segments as the glob."""
+    if entry == "":
+        return "an exclude entry must not be empty"
+    if "/" not in entry:
+        return ""
+    problem = _glob_problem(entry)
+    if problem:
+        return "exclude entry '%s': %s" % (entry, problem)
+    if len(entry.split("/")) != len(glob.split("/")):
+        return "exclude entry '%s': must have as many segments as the glob" % entry
+    return ""
+
+
+def _excluded(parts: list, exclude: list) -> bool:
+    """Whether the file whose path relative to the item's dir has segments ``parts`` is excluded: an entry without
+    "/" is a literal basename (==, never fnmatch); an entry with "/" matches segment by segment with ``fnmatchcase``
+    ("*" never crosses "/"), the same model as the glob (owner answer 2026-11-22 (a), D-X1, D-X2)."""
+    for entry in exclude:
+        if "/" not in entry:
+            if parts[-1] == entry:
+                return True
+            continue
+        pats = entry.split("/")
+        if len(pats) == len(parts) and all(fnmatch.fnmatchcase(s, p) for s, p in zip(parts, pats)):
+            return True
+    return False
+
+
 def _check_files(path: str, files: object) -> None:
     if type(files) is not list or not files:
         raise _err(path, "files", "must be a non-empty list")
@@ -228,6 +259,10 @@ def _check_files(path: str, files: object) -> None:
             ex = item.get("exclude", [])
             if type(ex) is not list or not all(type(x) is str for x in ex):
                 raise _err(path, where + ".exclude", "must be a list of strings")
+            for entry in ex:
+                problem = _exclude_problem(entry, item["glob"])
+                if problem:
+                    raise _err(path, where + ".exclude", problem)
 
 
 def _check_markdown(path: str, data: dict) -> None:
@@ -734,7 +769,8 @@ def entries_of(schema: Schema, root: str, cfg: dict) -> list:
             level = _real_directories(root, level)
         exclude = item.get("exclude", [])
         found = [d + "/" + name for d in level for name in _names(root, d)
-                 if fnmatch.fnmatchcase(name, segments[-1]) and name not in exclude]
+                 if fnmatch.fnmatchcase(name, segments[-1])
+                 and not _excluded((d + "/" + name)[len(directory) + 1:].split("/"), exclude)]
         out.extend((rel, True) for rel in sorted(found))
     return out
 

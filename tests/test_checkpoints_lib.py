@@ -1589,8 +1589,9 @@ class Repository(unittest.TestCase):
     def test_schema_files_load(self):  # GS2
         sch = schema.schemas()
         self.assertEqual(sorted(sch), ["breakdown", "claim", "config", "context", "decision", "decision-index", "finding", "finding-index", "handoff",
-                                       "in-force", "ledger", "merged-log", "overview", "receipt", "request", "status", "streams",
-                                       "sync-log"])  # Task P2.1 part i adds the five program schemas
+                                       "in-force", "ledger", "merged-log", "mutation-transcript", "overview", "receipt", "request",
+                                       "review-report", "status", "streams",
+                                       "sync-log"])  # Task P2.1 part i adds the five program schemas; 6E.1 the two evidence kinds
         for k in ("handoff", "ledger"):
             self.assertIn(k, schema.KNOWN_KINDS)
 

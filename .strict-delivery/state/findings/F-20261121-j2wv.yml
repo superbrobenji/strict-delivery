@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-j2wv
+status: open
+source: "6E.2 review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/records/6E.2-review-1.md U-1"
+severity: LOW
+class: "transcript_errors reason escaping: gates/lib/evidence.py:164,169,179 safe_text on pieces that Result.render escapes again: finding id, TEST text, RUN command (backslash, newline, other escaped characters)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6E.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f3b481bd79c1c779362a21301eb2231f6772840c
+    by: stream-records
+review_round: 3
+caused_by_change: true
+dimension: reason escaping

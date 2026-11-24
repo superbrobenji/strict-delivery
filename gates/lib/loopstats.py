@@ -4,9 +4,10 @@ Advisory statistics over the findings of one task. All arithmetic is in ``fracti
 except ``u``. ``report`` is the one entry that reads finding rows; ``trend``, ``geo_fit``, ``rule_n``,
 ``verdict`` and ``ev`` are pure functions of the series.
 
-``escape_cost`` is never read here: ``config/2`` declares it, but loopstats reads it only in the follow-up task
-"6E.3 escape_cost read after config/2", so a ``cfg`` holding the key is refused instead of being ignored
-(program-controller departure 2; table 6E.3 D7).
+``escape_cost`` (optional, ``config/2``) is read by ``report`` (the ``ev`` and ``escape_cost_set`` fields, through
+``ev``) and by ``small_signals`` (``ev_below_one``). A ``cfg`` holding a malformed ``escape_cost`` is refused (the
+controller ruling of plan Task 6E): ``config.load`` refuses it first on the CLI path; the local check is the library's
+own line of defence.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ FIX_ROUND_CAP = 5
 COUNTED = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 WEIGHTS = {"CRITICAL": 8, "HIGH": 4, "MEDIUM": 2, "LOW": 1}
 LOW_PLATEAU_RUN = 2
+MAX_COST_DIGITS = 600  # config/2's cap on an escape_cost value
 MAX_ROUNDS = 99  # bounds the exact convolution (table D1)
 _BISECTION_STEPS = 64
 
@@ -139,6 +141,24 @@ def _int(x: object) -> bool:
     return type(x) is int
 
 
+def _check_escape_cost(ec: object) -> None:
+    """Refuse an ``escape_cost`` that is not a mapping of exactly the four counted severities to ints in 0..10**600-1
+    (the rule of ``config/2``, written locally; compared as numbers, never through ``str()``)."""
+    if type(ec) is not dict:
+        raise GateError("escape_cost: must be a mapping")
+    for k in ec:
+        if k not in COUNTED:
+            raise GateError("escape_cost.%s: unknown key" % safe_text(k))
+    for k in COUNTED:
+        if k not in ec:
+            raise GateError("escape_cost.%s: required key is missing" % k)
+        v = ec[k]
+        if not _int(v) or v < 0:
+            raise GateError("escape_cost.%s: must be an integer of at least 0" % k)
+        if v >= 10 ** MAX_COST_DIGITS:
+            raise GateError("escape_cost.%s: must be an integer of at most %d digits" % (k, MAX_COST_DIGITS))
+
+
 def _check_args(rounds: object, narrowed: object, cfg: object) -> list:
     """The refusals that depend on no row; returns the distinct narrowings, ascending."""
     if not _int(rounds) or not 1 <= rounds <= MAX_ROUNDS:
@@ -150,8 +170,7 @@ def _check_args(rounds: object, narrowed: object, cfg: object) -> list:
             raise GateError("narrowing %s is outside 1..%d (the contract is narrowed after a review, not the last)"
                             % (safe_text(r), rounds - 1))
     if type(cfg) is dict and "escape_cost" in cfg:
-        raise GateError("escape_cost is set, but loopstats does not read it yet "
-                        "(follow-up task 6E.3 escape_cost read after config/2)")
+        _check_escape_cost(cfg["escape_cost"])
     return sorted(set(narrowed))
 
 
@@ -210,19 +229,24 @@ def report(rows: list, plan: str, task: str, rounds: int, narrowed: list, cfg: d
     t = trend(w)
     fit = geo_fit(w)
     word, reason = verdict(x, nu, len(distinct), w, low_run)
+    cost_set = type(cfg) is dict and "escape_cost" in cfg
     return {"plan": plan, "task": task, "rounds": rounds, "X": x, "W": w, "N": t["N"], "S": t["S"],
             "narrowed": distinct, "p": t["p"], "u": t["u"], "fit": fit, "nu": nu, "rule_n": rule_n(x, nu),
-            "ev": None, "verdict": word, "reason": reason, "low_run": low_run, "severities": severities,
+            "ev": ev(w, severities, cfg["escape_cost"] if cost_set else None),
+            "escape_cost_set": cost_set, "verdict": word, "reason": reason, "low_run": low_run, "severities": severities,
             "note": any(s in ("CRITICAL", "HIGH") for s, _ in by_round[-1])}
 
 
 def small_signals(rows: list, plan: str, task: str, rounds: int, narrowed: list, cfg: dict) -> dict:
     """``{rule_n, converging, ev_below_one}`` for the small re-review's conditions 6-8 (same refusals as report).
 
-    ``ev_below_one`` is ``None`` until loopstats reads ``escape_cost`` (``config/2`` declares it; the follow-up
-    task "6E.3 escape_cost read after config/2" reads it)."""
+    ``ev_below_one`` is ``ev(...)["value"] < 1``; ``None`` when ``escape_cost`` is unset, ``rounds < 3`` or there is
+    no fit (plan Task 6E.3, ``ev_below_one``)."""
     r = report(rows, plan, task, rounds, narrowed, cfg)
     converging = None
     if rounds >= 3:
         converging = r["p"] <= ALPHA and r["fit"] is not None and not r["fit"]["boundary"]
-    return {"rule_n": r["rule_n"], "converging": converging, "ev_below_one": None}
+    below = None
+    if rounds >= 3 and r["ev"] is not None:
+        below = r["ev"]["value"] < 1
+    return {"rule_n": r["rule_n"], "converging": converging, "ev_below_one": below}

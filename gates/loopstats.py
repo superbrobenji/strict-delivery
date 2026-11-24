@@ -67,10 +67,18 @@ def _number(flag: str, text: str) -> int:
 
 
 def _fmt(f: Fraction) -> str:
-    """A rational to 3 places, half to even."""
+    """A rational ``f >= 0`` to 3 places, half to even (every printed figure is non-negative: escape_cost is >= 0)."""
     n = round(f * 1000)
-    sign = "-" if n < 0 else ""
-    return "%s%d.%03d" % (sign, abs(n) // 1000, abs(n) % 1000)
+    return "%d.%03d" % (n // 1000, n % 1000)
+
+
+def _ev_text(r: dict) -> str:
+    """The text after ``EV `` (also the JSON ``ev``): unset wins over no fit."""
+    if not r["escape_cost_set"]:
+        return "unset: escape_cost not configured"
+    if r["ev"] is None:
+        return "n/a: no fit"
+    return "value=%s -> %s" % (_fmt(r["ev"]["value"]), r["ev"]["verdict"])
 
 
 def _csv(values: list) -> str:
@@ -95,7 +103,7 @@ def _lines(r: dict) -> list:
     task = safe_text(r["task"])
     narrowed = _csv(r["narrowed"]) if r["narrowed"] else "none"
     x, w = _csv(r["X"]), _csv(r["W"])
-    ev_line = "EV unset: escape_cost not configured"  # config/2 declares escape_cost; loopstats refuses it until follow-up 6E.3 reads it (D7)
+    ev_line = "EV " + _ev_text(r)
     out = [
         "LOOPSTATS plan=%s task=%s rounds=%d X=%s W=%s N=%d S=%d narrowed=%s"
         % (r["plan"], task, r["rounds"], x, w, r["N"], r["S"], narrowed),
@@ -114,7 +122,7 @@ def _lines(r: dict) -> list:
 def _json(r: dict, lines: list) -> str:
     wd = _words(r)
     note = None
-    ev_text = lines[3][len("EV "):]
+    ev_text = _ev_text(r)
     for ln in lines:
         if ln.startswith("NOTE "):
             note = ln[len("NOTE "):]
