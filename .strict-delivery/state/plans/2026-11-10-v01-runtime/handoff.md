@@ -1,5 +1,6 @@
 ---
 schema: handoff/1
+block: 3a
 ---
 # Stream runtime handoff (program 20261110-v01, sub-block 3a)
 
