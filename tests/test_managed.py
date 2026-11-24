@@ -3,6 +3,7 @@
 Row ids (BL, MK, FB, PB, HG, WR, PL, AP, PV) are those of the task's input-domain table. Expected values are literals
 written by hand; ``schema.validate_managed_block`` and ``OUT`` (a hand-written splitter) are the independent oracles."""
 import ast
+import contextlib
 import dataclasses
 import errno
 import os
@@ -559,6 +560,39 @@ class FsCase(GitIsolatedTestCase, Base):
     def writable_cleanup(self, p):
         self.addCleanup(os.chmod, p, 0o755)
 
+    def outside_dir(self, *names):
+        """A directory outside the root holding a generated file per name (what a swapped-in parent link points to)."""
+        d = os.path.join(self.tmp, "outside")
+        os.mkdir(d)
+        for n in names:
+            with open(os.path.join(d, n), "w") as fh:
+                fh.write(H + "\nSECRET\n")
+        return d
+
+    def swap_to_link(self, rel, outside):
+        """A real rename plus ``os.symlink``: the directory ``rel`` moves to ``rel.real`` and ``rel`` becomes a link."""
+        os.rename(self.path(rel), self.path(rel) + ".real")
+        os.symlink(outside, self.path(rel))
+
+    def race_at_open(self, names, action):
+        """Patch ``os.open``: before the first call whose path (or name, for a ``dir_fd`` call) has a basename in
+        ``names``, run ``action()`` once (the race point). Returns ``(patch, state)``; ``state["fired"]`` says it ran."""
+        real, state = os.open, {"fired": False}
+
+        def wrap(p, *a, **k):
+            if not state["fired"] and os.path.basename(p) in names:
+                state["fired"] = True
+                action()
+            return real(p, *a, **k)
+        return mock.patch("os.open", side_effect=wrap), state
+
+    def open_fds(self):
+        return len(os.listdir("/dev/fd"))
+
+    def temp_files(self):
+        """Every ``.sd-managed-`` file anywhere below the temp directory (root, swapped-away and outside directories)."""
+        return sorted(os.path.join(d, n) for d, _ds, fs in os.walk(self.tmp) for n in fs if n.startswith(".sd-managed-"))
+
 
 class WriteTests(FsCase):
     def test_write_fields_frozen(self):  # WR1
@@ -764,7 +798,7 @@ class PlanTests(FsCase):
         real_open = os.open
 
         def spy(p, *a, **k):
-            if p == fifo:
+            if p == fifo or p == "f.yml":  # by path, or by name from a parent's descriptor
                 raise AssertionError("opened the FIFO")
             return real_open(p, *a, **k)
         with mock.patch("os.open", side_effect=spy):
@@ -844,7 +878,7 @@ class PlanTests(FsCase):
         real_open = os.open
 
         def boom(p, *a, **k):
-            if p == target:
+            if p == target or (p == "x.yml" and k.get("dir_fd") is not None):  # by path or from a parent's descriptor
                 raise OSError(errno.EIO, "Input/output error")
             return real_open(p, *a, **k)
         with mock.patch("os.open", side_effect=boom):
@@ -856,7 +890,7 @@ class PlanTests(FsCase):
         real = os.open
 
         def spy(p, fl, *a, **k):
-            if p == target:
+            if p == target or (p == "w.yml" and k.get("dir_fd") is not None):  # by path or from a parent's descriptor
                 flags.append(fl)
             return real(p, fl, *a, **k)
         with mock.patch("os.open", side_effect=spy):
@@ -865,6 +899,82 @@ class PlanTests(FsCase):
         self.assertTrue(flags[0] & os.O_NONBLOCK)
         self.assertTrue(flags[0] & os.O_NOFOLLOW)  # VZ7
         self.assertEqual(flags[0] & (os.O_WRONLY | os.O_RDWR), 0)
+
+    def test_plan_parent_swap_refused(self):  # PS1, PS2 (A2, F-20261124-4fby): a real rename + symlink at the race point
+        outside = self.outside_dir("b.yml", "c.yml")
+        self.put_file("a/b.yml", H + "\nold\n")
+        patch, st = self.race_at_open(("a", "b.yml"), lambda: self.swap_to_link("a", outside))  # PS1
+        with patch:
+            res = self.p1([Write("a/b.yml", H + "\nnew\n", "file")])
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([], ["a/b.yml: parent a is not a directory"]))
+        self.assertEqual(self.read("a.real/b.yml"), H + "\nold\n")
+        self.put_file("p/q/c.yml", H + "\nold\n")  # PS2: a deeper parent
+        patch, st = self.race_at_open(("q", "c.yml"), lambda: self.swap_to_link("p/q", outside))
+        with patch:
+            res = self.p1([Write("p/q/c.yml", H + "\nnew\n", "file")])
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([], ["p/q/c.yml: parent p/q is not a directory"]))
+        with open(os.path.join(outside, "c.yml")) as fh:
+            self.assertEqual(fh.read(), H + "\nSECRET\n")
+        out2 = os.path.join(self.tmp, "outside2")  # the swap at the open of the last: the parent's descriptor is held,
+        os.mkdir(out2)  # so the file is read in the real directory, never through the new link
+        with open(os.path.join(out2, "n.yml"), "w") as fh:
+            fh.write("foreign\n")
+        self.put_file("m/n.yml", H + "\nold\n")
+        patch, st = self.race_at_open(("n.yml",), lambda: self.swap_to_link("m", out2))
+        with patch:
+            res = self.p1([Write("m/n.yml", H + "\nnew\n", "file")])
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([("m/n.yml", H + "\nnew\n")], []))
+
+    def test_plan_parent_swap_other_outcomes(self):  # A2 plan: ENOTDIR conflict, ENOENT absent (parent and last), EIO
+        self.put_file("a/b.yml", H + "\nold\n")  # a parent replaced by a regular file: ENOTDIR
+        patch, st = self.race_at_open(("a", "b.yml"), lambda: (os.rename(self.path("a"), self.path("a.real")),
+                                                               self.put_file("a", "file")))
+        with patch:
+            res = self.p1([Write("a/b.yml", H + "\nnew\n", "file")])
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([], ["a/b.yml: parent a is not a directory"]))
+        self.put_file("c/d.yml", H + "\nold\n")  # a parent removed: ENOENT is absent
+        patch, st = self.race_at_open(("c", "d.yml"), lambda: os.rename(self.path("c"), self.path("c.gone")))
+        with patch:
+            res = self.p1([Write("c/d.yml", H + "\nnew\n", "file")])
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([("c/d.yml", H + "\nnew\n")], []))
+        self.put_file("e/f.yml", H + "\nold\n")  # the last removed: ENOENT is absent
+        patch, st = self.race_at_open(("f.yml",), lambda: os.rename(self.path("e/f.yml"), self.path("e/f.gone")))
+        with patch:
+            res = self.p1([Write("e/f.yml", H + "\nnew\n", "file")])
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([("e/f.yml", H + "\nnew\n")], []))
+        self.put_file("g/h.yml", H + "\nold\n")  # any other OSError on a parent keeps PD12's text
+
+        def boom():
+            raise OSError(errno.EIO, "Input/output error")
+        patch, st = self.race_at_open(("g",), boom)
+        with patch:
+            self.me("g/h.yml: cannot read (Input/output error)", self.p1, [Write("g/h.yml", H + "\nnew\n", "file")])
+        self.assertTrue(st["fired"])
+
+    def test_plan_closes_descriptors(self):  # every descriptor of the walk is closed on every outcome
+        self.put_file("a/b.yml", H + "\nold\n")
+        self.put_file("a/c.yml", "foreign\n")
+        self.put_file("f", "file")
+        os.symlink("a", self.path("l"))
+        os.symlink("a/b.yml", self.path("a/s.yml"))
+        before = self.open_fds()
+        for p in ("a/b.yml", "a/c.yml", "a/s.yml", "a/new.yml", "n/x.yml", "f/x.yml", "l/b.yml", "z.yml"):
+            self.p1([Write(p, H + "\nnew\n", "file")])
+        real = os.open
+
+        def eio(p, *a, **k):
+            if os.path.basename(p) == "b.yml":
+                raise OSError(errno.EIO, "Input/output error")
+            return real(p, *a, **k)
+        with mock.patch("os.open", side_effect=eio):
+            self.me("a/b.yml: cannot read (Input/output error)", self.p1, [Write("a/b.yml", H + "\nnew\n", "file")])
+        self.assertEqual(self.open_fds(), before)
 
     def test_plan_big_file(self):  # PL32
         self.put_file("w.yml", H + "\n" + "x" * (5 * 1024 * 1024))
@@ -1006,8 +1116,8 @@ class ApplyTests(FsCase):
 
     def test_apply_never_mkdirs_through_link(self):  # AP9, M42: a parent turned into a dangling link after the check
         os.symlink("nowhere", self.path("a"))
-        with mock.patch.object(managed, "_recheck", return_value=None):
-            self.me("a/b.yml: cannot write (No such file or directory)", apply, self.r, [("a/b.yml", "t\n")])
+        with mock.patch.object(managed, "_recheck", return_value=None):  # A2: the named refusal, not ENOENT
+            self.me("apply refused: a/b.yml: parent a is not a directory", apply, self.r, [("a/b.yml", "t\n")])
         self.assertTrue(os.path.islink(self.path("a")))
         self.assertFalse(os.path.exists(os.path.join(self.r, "nowhere")))
 
@@ -1059,22 +1169,23 @@ class ApplyTests(FsCase):
         calls = []
         real = os.replace
 
-        def spy(src, dst):
-            calls.append((src, dst))
-            return real(src, dst)
+        def spy(src, dst, **k):  # by descriptor (A2): names in one directory, the descriptor of d
+            same = os.path.samestat(os.fstat(k["src_dir_fd"]), os.stat(self.path("d")))
+            calls.append((src, dst, k["src_dir_fd"] == k["dst_dir_fd"], same))
+            return real(src, dst, **k)
         with mock.patch("os.replace", side_effect=spy):
             apply(self.r, [("d/x.yml", "a\n")])
         self.assertEqual(len(calls), 1)
-        src, dst = calls[0]
-        self.assertEqual(dst, self.path("d/x.yml"))
-        self.assertEqual(os.path.dirname(src), os.path.dirname(dst))
-        self.assertTrue(os.path.basename(src).startswith(".sd-managed-"))
+        src, dst, one_dir, is_d = calls[0]
+        self.assertEqual((dst, one_dir, is_d), ("x.yml", True, True))
+        self.assertTrue(src.startswith(".sd-managed-"))
+        self.assertEqual(self.read("d/x.yml"), "a\n")
 
     def test_apply_fsyncs(self):  # AP12
         order = []
         real_sync, real_rep = os.fsync, os.replace
         with mock.patch("os.fsync", side_effect=lambda fd: (order.append("fsync"), real_sync(fd))[1]), \
-                mock.patch("os.replace", side_effect=lambda a, b: (order.append("replace"), real_rep(a, b))[1]):
+                mock.patch("os.replace", side_effect=lambda a, b, **k: (order.append("replace"), real_rep(a, b, **k))[1]):
             apply(self.r, [("x.yml", "a\n")])
         self.assertEqual(order, ["fsync", "replace"])
 
@@ -1151,6 +1262,172 @@ class ApplyTests(FsCase):
             self.assertEqual(fh.read(), H + "\nkeep\n")
         self.assertEqual(os.readlink(link), other)
         self.assertEqual(self.read("reg.yml"), "x")
+
+    def outside_state(self, outside):
+        p = os.path.join(outside, "b.yml")
+        with open(p, "rb") as fh:
+            return fh.read(), stat.S_IMODE(os.lstat(p).st_mode)
+
+    def test_apply_parent_swap_never_writes_outside(self):  # PS3, PS4 (A2, F-20261124-4fby)
+        outside = self.outside_dir("b.yml")
+        os.chmod(os.path.join(outside, "b.yml"), 0o640)
+        want = (("# strict-delivery: generated by x; do not edit\nSECRET\n").encode(), 0o640)
+        self.assertEqual(self.outside_state(outside), want)
+        self.put_file("a/b.yml", H + "\nold\n")  # PS3: swapped after the last re-check, before the write
+        real_write = managed._write
+
+        def swap_then_write(root, path, text):
+            if path == "a/b.yml":
+                self.swap_to_link("a", outside)
+            return real_write(root, path, text)
+        with mock.patch.object(managed, "_write", side_effect=swap_then_write):
+            self.me("apply refused: a/b.yml: parent a is not a directory; written before it: ok.yml", apply, self.r,
+                    [("ok.yml", "1\n"), ("a/b.yml", H + "\nnew\n")])
+        self.assertEqual(self.outside_state(outside), want)
+        self.assertEqual(self.read("a.real/b.yml"), H + "\nold\n")
+        self.assertEqual(self.read("ok.yml"), "1\n")
+        self.assertEqual(self.temp_files(), [])
+        real_mkdir = os.mkdir  # PS4: created by apply, then swapped before the file is written
+
+        def mk(p, *a, **k):
+            real_mkdir(p, *a, **k)
+            if os.path.basename(p) == "z":
+                self.swap_to_link("z", outside)
+        with mock.patch("os.mkdir", side_effect=mk):
+            self.me("apply refused: z/b.yml: parent z is not a directory", apply, self.r, [("z/b.yml", H + "\nnew\n")])
+        self.assertEqual(self.outside_state(outside), want)
+        self.assertEqual(os.listdir(self.path("z.real")), [])
+        self.assertEqual(self.temp_files(), [])
+
+    def test_apply_uses_descriptors(self):  # PS7: no path below the root is named after the root is opened
+        calls = []
+        with contextlib.ExitStack() as stack:
+            for n in ("open", "mkdir", "replace", "unlink", "chmod"):
+                def spy(*a, _n=n, _real=getattr(os, n), **k):
+                    calls.append((_n, a, k))
+                    return _real(*a, **k)
+                stack.enter_context(mock.patch("os." + n, side_effect=spy))
+            apply(self.r, [("a/b/c.yml", "t\n")])
+        self.assertEqual(self.read("a/b/c.yml"), "t\n")
+        self.assertEqual([c[1][0] for c in calls if c[0] == "mkdir"], ["a", "b"])
+        self.assertEqual([c[1][1] for c in calls if c[0] == "replace"], ["c.yml"])
+        self.assertEqual([c[1][0].startswith(".sd-managed-") for c in calls if c[0] == "replace"], [True])
+        self.assertEqual([c for c in calls if c[0] == "chmod"], [])
+        for name, a, k in calls:
+            if name == "open" and a[0] == self.r:
+                self.assertNotIn("dir_fd", k)
+                continue
+            self.assertNotIn("/", a[0], (name, a))
+            if name == "replace":
+                self.assertEqual(sorted(k), ["dst_dir_fd", "src_dir_fd"])
+                self.assertEqual(k["src_dir_fd"], k["dst_dir_fd"])
+                self.assertNotIn("/", a[1])
+            else:
+                self.assertIsInstance(k.get("dir_fd"), int, (name, a, k))
+        opened = {c[1][0] for c in calls if c[0] == "open" and c[1][0] != self.r}
+        self.assertEqual({n for n in opened if not n.startswith(".sd-managed-")}, {"a", "b"})
+        self.assertEqual(len(opened), 3)
+
+    def test_apply_temp_file_creation(self):  # A2: temp in the parent descriptor, O_EXCL | O_NOFOLLOW, 0o600, 100 tries
+        seen, real = [], os.open
+
+        def spy(p, fl, *a, **k):
+            if p.startswith(".sd-managed-"):
+                seen.append((p, fl, a, k.get("dir_fd") is not None))
+                if len(seen) <= 2:
+                    raise FileExistsError(errno.EEXIST, "File exists")
+            return real(p, fl, *a, **k)
+        with mock.patch("os.open", side_effect=spy):
+            self.assertEqual(apply(self.r, [("x.yml", "t\n")]), ["x.yml"])
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(len({s[0] for s in seen}), 3)  # a fresh random part each try
+        for p, fl, a, has_fd in seen:
+            self.assertEqual(fl, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW)
+            self.assertEqual((a, has_fd), ((0o600,), True))
+            self.assertRegex(p, r"\A\.sd-managed-[0-9a-f]+\Z")
+        seen.clear()
+
+        def always(p, fl, *a, **k):
+            if p.startswith(".sd-managed-"):
+                seen.append(p)
+                raise FileExistsError(errno.EEXIST, "File exists")
+            return real(p, fl, *a, **k)
+        with mock.patch("os.open", side_effect=always):
+            self.me("y.yml: cannot write (File exists)", apply, self.r, [("y.yml", "t\n")])
+        self.assertEqual(len(seen), 100)
+        self.assertFalse(os.path.exists(self.path("y.yml")))
+        self.assertEqual(self.temp_files(), [])
+
+    def test_apply_mode_is_the_links_not_the_targets(self):  # the existing mode is read with lstat semantics (AP14, A2)
+        victim = os.path.join(self.tmp, "victim")
+        with open(victim, "w") as fh:
+            fh.write("keep")
+        os.chmod(victim, 0o600)
+        os.symlink(victim, self.path("x.yml"))
+        link_mode = stat.S_IMODE(os.lstat(self.path("x.yml")).st_mode)
+        self.assertNotEqual(link_mode, 0o600)
+        with mock.patch.object(managed, "_recheck", return_value=None):  # the link appears after the re-check
+            self.assertEqual(apply(self.r, [("x.yml", "new\n")]), ["x.yml"])
+        self.assertEqual(stat.S_IMODE(os.lstat(self.path("x.yml")).st_mode), link_mode)
+        with open(victim) as fh:
+            self.assertEqual(fh.read(), "keep")
+
+    def test_apply_closes_descriptors(self):  # every descriptor is closed on success and on every failure path
+        outside = self.outside_dir("b.yml")
+        before = self.open_fds()
+        apply(self.r, [("a/b/c.yml", "t\n"), ("x.yml", "u\n")])
+        for exc in (OSError(errno.EIO, "boom"), KeyboardInterrupt()):
+            with mock.patch("os.replace", side_effect=exc):
+                with self.assertRaises((ManagedError, KeyboardInterrupt)):
+                    apply(self.r, [("a/b/d.yml", "t\n")])
+        real = managed._write
+        self.put_file("s/b.yml", H + "\nold\n")
+
+        def swap(root, path, text):
+            self.swap_to_link("s", outside)
+            return real(root, path, text)
+        with mock.patch.object(managed, "_write", side_effect=swap):
+            self.me("apply refused: s/b.yml: parent s is not a directory", apply, self.r, [("s/b.yml", H + "\nn\n")])
+        self.assertEqual(self.open_fds(), before)
+
+    def test_apply_accepts_plan_output_other_style_lines(self):  # ST-1, ST-2 (A2, F-20261124-kp45), AP6
+        # ST-1: a HASH example, no HTML block. Only a begin line is quoted: a COMPLETE quoted HASH block makes ``new``
+        # hold blocks of both styles, which A2 refuses (ST-4); that contradicts ST-1's fenced-gitignore-example (NEEDS_DECISION)
+        fence = lines("# Notes", "", "```", HB, "*.log", "```")
+        beginner = lines("# strict-delivery:beginner notes", "body")
+        html_line = lines("# ignore", "<!-- strict-delivery:begin schema=claude-block/1 version=0.1.0 -->", "*.log")  # ST-2
+        for path, kind, current, new in (
+                ("CLAUDE.md", "claude-block", fence, fence + lines(B, "x", E)),
+                ("CLAUDE.md", "claude-block", beginner, beginner + lines(B, "x", E)),
+                (".gitignore", "gitignore-block", html_line, html_line + lines(HB, "x", HE))):
+            self.put_file(path, current)
+            acts, conflicts = plan(self.r, [Write(path, "x\n", kind)], "0.1.0")
+            self.assertEqual((acts, conflicts), ([(path, new)], []))
+            self.assertEqual(apply(self.r, acts), [path])
+            self.assertEqual(self.read(path), new)
+            self.assertEqual(plan(self.r, [Write(path, "x\n", kind)], "0.1.0"), ([], []))
+
+    def test_apply_refuses_style_swap(self):  # ST-3, ST-4
+        cur = lines("# T", B, "b", E, "tail")  # ST-3: an HTML block in the file, a HASH block in the action
+        self.put_file("CLAUDE.md", cur)
+        self.me("apply refused: CLAUDE.md: " + NOT_MANAGED, apply, self.r, [("CLAUDE.md", lines("# T", HB, "b", HE, "tail"))])
+        self.assertEqual(self.read("CLAUDE.md"), cur)
+        curh = lines("# T", HB, "b", HE, "tail")  # the converse
+        self.put_file(".gitignore", curh)
+        self.me("apply refused: .gitignore: " + NOT_MANAGED, apply, self.r, [(".gitignore", lines("# T", B, "b", E, "tail"))])
+        self.assertEqual(self.read(".gitignore"), curh)
+        both = lines("# T", B, "b", E, HB, "b", HE)  # ST-4: blocks of both styles in the action
+        self.put_file("x.md", "x\n")
+        self.me("apply refused: x.md: " + NOT_MANAGED, apply, self.r, [("x.md", "x\n" + both)])
+        self.put_file("y.md", both)
+        self.me("apply refused: y.md: " + NOT_MANAGED, apply, self.r, [("y.md", both.replace("\nb\n", "\nc\n"))])
+        self.assertEqual(self.read("x.md"), "x\n")
+        self.assertEqual(self.read("y.md"), both)
+        for name, text in (("m1.md", lines("x", B, "b")), ("m2.md", lines("x", HB, "b"))):  # no style in ``new``: whole text
+            self.put_file(name, text)  # equal texts, but a malformed block of either style is never accepted
+            self.me("apply refused: %s: %s" % (name, NOT_MANAGED), apply, self.r, [(name, text)])
+        self.put_file("n.md", "plain\n")  # the whole-text rule: equal texts with no marker-like line
+        self.assertEqual(apply(self.r, [("n.md", "plain\n")]), ["n.md"])
 
     def test_apply_refuses_state_changes(self):  # AP23-AP27, AP37
         self.put_file("w.yml", H + "\nold\n")
@@ -1241,9 +1518,9 @@ class ApplyTests(FsCase):
             fh.write("keep")
         real = os.replace
 
-        def plant(src, dst):
-            os.symlink(target, dst)
-            return real(src, dst)
+        def plant(src, dst, **k):
+            os.symlink(target, dst, dir_fd=k["dst_dir_fd"])
+            return real(src, dst, **k)
         with mock.patch("os.replace", side_effect=plant):
             apply(self.r, [("x.yml", "new\n")])
         with open(target) as fh:
@@ -1280,7 +1557,7 @@ class ApplyTests(FsCase):
         self.put_file("w.yml", H + "\nold\n")
         script = os.path.join(self.tmp, "crash.py")
         with open(script, "w") as fh:
-            fh.write("import os, sys\nfrom gates.lib import managed\nos.replace = lambda a, b: os._exit(1)\n"
+            fh.write("import os, sys\nfrom gates.lib import managed\nos.replace = lambda a, b, **k: os._exit(1)\n"
                      "managed.apply(sys.argv[1], [('w.yml', sys.argv[2]), ('n.yml', 'x\\n')])\n")
         env = dict(os.environ, PYTHONPATH=ROOT)
         res = subprocess.run([sys.executable, script, self.r, H + "\nnew\n"], env=env, stdout=subprocess.PIPE,
