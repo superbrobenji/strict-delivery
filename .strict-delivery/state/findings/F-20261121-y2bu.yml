@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-y2bu
+status: open
+source: "PR-6E full suite on 3d036ff (par_suite): tests.test_argparse_text.TestParserSites.test_parser_sites_enumerated FAIL on 3.9 and 3.13"
+severity: LOW
+class: "parser-site enumeration: tests/test_argparse_text.py:902 list lacks the new gates/gate_evidence.py gate_args site (stale cross-stream literal, Q-A7-1)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6E.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 4b7cbe3243f03fa85befedfd26d0fc55bcfbc388
+    by: stream-records
+review_round: 3
+caused_by_change: true
+dimension: parser sites
