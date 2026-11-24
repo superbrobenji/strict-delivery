@@ -1,0 +1,22 @@
+{
+  "description": "strict-delivery hooks: session context, per-prompt reminder, tool checks and read receipts. Each entry runs python3 -m gates hook from the plugin directory.",
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && exec python3 -m gates hook SessionStart"}]}
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && exec python3 -m gates hook UserPromptSubmit"}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "Agent", "hooks": [{"type": "command", "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && exec python3 -m gates hook PreToolUse", "onFailure": "block"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && exec python3 -m gates hook PreToolUse", "onFailure": "block"}]},
+      {"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && exec python3 -m gates hook PreToolUse", "onFailure": "block"}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Read", "hooks": [{"type": "command", "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && exec python3 -m gates hook PostToolUse"}]}
+    ],
+    "SubagentStop": [
+      {"hooks": [{"type": "command", "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && exec python3 -m gates hook SubagentStop"}]}
+    ]
+  }
+}

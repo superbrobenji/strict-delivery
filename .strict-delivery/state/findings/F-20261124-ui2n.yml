@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261124-ui2n
+status: in-progress
+source: PR-runtime final review at c9c6e59 (runtime/PR-runtime-final-review.md, F2)
+severity: LOW
+class: "non-finite JSON number (3a.2 A hookio.py:87, C transcript.py:47, rows I7 T3): NaN, Infinity, -Infinity refused; 1e400, -1e400, an overflowing long float literal accepted as inf"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c9c6e5933ad1156785082392405c1b558a959827
+    by: stream-runtime
+  - status: planned
+    sha: 8b900df65ffff6d96efb0223b7ffb57ce7071123
+    by: stream-runtime
+  - status: in-progress
+    sha: 8b900df65ffff6d96efb0223b7ffb57ce7071123
+    by: stream-runtime
+review_round: 3
+caused_by_change: true
+dimension: non-finite JSON number
