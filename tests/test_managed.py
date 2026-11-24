@@ -586,6 +586,18 @@ class FsCase(GitIsolatedTestCase, Base):
             return real(p, *a, **k)
         return mock.patch("os.open", side_effect=wrap), state
 
+    def fail_parent_open(self, name, code, armed=None):
+        """Patch ``os.open``: a call with a ``dir_fd`` for the component ``name`` raises ``OSError(code)`` (the errno the
+        platform would give for a symlinked parent; the host's own errno is never relied on). With ``armed`` (a dict
+        holding ``on``), only while ``armed["on"]`` is true."""
+        real = os.open
+
+        def wrap(p, *a, **k):
+            if k.get("dir_fd") is not None and p == name and (armed is None or armed["on"]):
+                raise OSError(code, os.strerror(code))
+            return real(p, *a, **k)
+        return mock.patch("os.open", side_effect=wrap)
+
     def open_fds(self):
         return len(os.listdir("/dev/fd"))
 
@@ -957,6 +969,18 @@ class PlanTests(FsCase):
             self.me("g/h.yml: cannot read (Input/output error)", self.p1, [Write("g/h.yml", H + "\nnew\n", "file")])
         self.assertTrue(st["fired"])
 
+    def test_plan_parent_open_errno_conflict(self):  # A2 W5, W5b: ELOOP and ENOTDIR on a parent open are the conflict
+        self.put_file("a/b.yml", H + "\nold\n")
+        self.put_file("p/q/c.yml", H + "\nold\n")
+        for code in (errno.ELOOP, errno.ENOTDIR):
+            with self.subTest(code=errno.errorcode[code]):
+                with self.fail_parent_open("a", code):
+                    res = self.p1([Write("a/b.yml", H + "\nnew\n", "file")])
+                self.assertEqual(res, ([], ["a/b.yml: parent a is not a directory"]))
+                with self.fail_parent_open("q", code):  # a deeper parent
+                    res = self.p1([Write("p/q/c.yml", H + "\nnew\n", "file")])
+                self.assertEqual(res, ([], ["p/q/c.yml: parent p/q is not a directory"]))
+
     def test_plan_closes_descriptors(self):  # every descriptor of the walk is closed on every outcome
         self.put_file("a/b.yml", H + "\nold\n")
         self.put_file("a/c.yml", "foreign\n")
@@ -1298,6 +1322,27 @@ class ApplyTests(FsCase):
         self.assertEqual(self.outside_state(outside), want)
         self.assertEqual(os.listdir(self.path("z.real")), [])
         self.assertEqual(self.temp_files(), [])
+
+    def test_apply_parent_open_errno_refused(self):  # A2 W5, W5b: the write's own parent open, ELOOP and ENOTDIR
+        self.put_file("a/b.yml", H + "\nold\n")
+        self.put_file("p/q/c.yml", H + "\nold\n")
+        real_write, armed = managed._write, {"on": False}
+
+        def arm(root, path, text):  # the errno fires only inside _write, after both re-checks passed
+            armed["on"] = True
+            try:
+                return real_write(root, path, text)
+            finally:
+                armed["on"] = False
+        for code in (errno.ELOOP, errno.ENOTDIR):
+            for name, rel, want in (("a", "a/b.yml", "apply refused: a/b.yml: parent a is not a directory"),
+                                    ("q", "p/q/c.yml", "apply refused: p/q/c.yml: parent p/q is not a directory")):
+                with self.subTest(code=errno.errorcode[code], path=rel):
+                    with mock.patch.object(managed, "_write", side_effect=arm), \
+                            self.fail_parent_open(name, code, armed):
+                        self.me(want, apply, self.r, [(rel, H + "\nnew\n")])
+                    self.assertEqual(self.read(rel), H + "\nold\n")
+                    self.assertEqual(self.temp_files(), [])
 
     def test_apply_uses_descriptors(self):  # PS7: no path below the root is named after the root is opened
         calls = []
