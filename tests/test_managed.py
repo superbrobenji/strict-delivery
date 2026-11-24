@@ -1372,6 +1372,50 @@ class ApplyTests(FsCase):
         with open(victim) as fh:
             self.assertEqual(fh.read(), "keep")
 
+    def test_directory_without_read_permission_refused(self):  # PS8 (F-20261124-t4zd): search without read is refused
+        self.needs_unprivileged()
+        self.put_file("a/b.yml", H + "\nold\n")
+        for mode in (0o311, 0o300):  # a parent
+            os.chmod(self.path("a"), mode)
+            self.writable_cleanup(self.path("a"))
+            self.me("a/b.yml: cannot read (Permission denied)", plan, self.r, [Write("a/b.yml", H + "\nnew\n", "file")],
+                    "0.1.0")
+            self.me("a/b.yml: cannot read (Permission denied)", apply, self.r, [("a/b.yml", H + "\nnew\n")])
+        os.chmod(self.path("a"), 0o755)
+        self.put_file("b.yml", H + "\nold\n")
+        os.chmod(self.r, 0o300)  # the root
+        self.writable_cleanup(self.r)
+        self.me("b.yml: cannot read (Permission denied)", plan, self.r, [Write("b.yml", H + "\nnew\n", "file")], "0.1.0")
+        self.me("b.yml: cannot read (Permission denied)", apply, self.r, [("b.yml", H + "\nnew\n")])
+        os.chmod(self.r, 0o755)
+        self.assertEqual(self.read("a/b.yml"), H + "\nold\n")
+        self.assertEqual(self.read("b.yml"), H + "\nold\n")
+
+    def test_apply_refuses_both_styles_one_body_changed(self):  # ST-4, W8 (F-20261124-hhb2): only the both-styles rule refuses
+        cur = lines("# T", B, "b", E, HB, "b", HE)  # a path with no kind, the outside text equal in the HTML view
+        self.put_file("x.md", cur)
+        new = lines("# T", B, "c", E, HB, "b", HE)
+        self.me("apply refused: x.md: " + NOT_MANAGED, apply, self.r, [("x.md", new)])
+        self.assertEqual(self.read("x.md"), cur)
+
+    def test_outermost_parent_text_for_a_deeper_path(self):  # R1-3 (F-20261124-9ima): `a` swapped in a/b/c.yml is `a`
+        outside = self.outside_dir("c.yml")
+        self.put_file("a/b/c.yml", H + "\nold\n")
+        patch, st = self.race_at_open(("a", "c.yml"), lambda: self.swap_to_link("a", outside))
+        with patch:
+            res = plan(self.r, [Write("a/b/c.yml", H + "\nnew\n", "file")], "0.1.0")
+        self.assertTrue(st["fired"])
+        self.assertEqual(res, ([], ["a/b/c.yml: parent a is not a directory"]))
+        os.unlink(self.path("a"))
+        os.rename(self.path("a.real"), self.path("a"))
+        real_write = managed._write
+
+        def swap_then_write(root, path, text):
+            self.swap_to_link("a", outside)
+            return real_write(root, path, text)
+        with mock.patch.object(managed, "_write", side_effect=swap_then_write):
+            self.me("apply refused: a/b/c.yml: parent a is not a directory", apply, self.r, [("a/b/c.yml", H + "\nnew\n")])
+
     def test_apply_closes_descriptors(self):  # every descriptor is closed on success and on every failure path
         outside = self.outside_dir("b.yml")
         before = self.open_fds()
