@@ -195,7 +195,7 @@ class Status(Gate):
                     self.assertNotIn("drift.status.%s:" % P, out)
                 git(self.root, "branch", "-q", "-D", P + "/integration")
         # a request record whose id is not a str is left out of the ids a blockers cell may name
-        self.prog(P, ("a",))
+        self.prog(P, ("a",), requests={RID: request_text(RID, "open")})
         real_load = gate_drift.programs.load_program
 
         def load(root, cfg, name, ref):
@@ -203,8 +203,16 @@ class Status(Gate):
             prog.requests.append(type(request_stub)(7, {"id": 7, "status": "open"}, "x"))
             return prog
         request_stub = gate_drift.programs.store.Record(RID, {}, "x")
-        with mock.patch("gates.gate_drift.programs.load_program", side_effect=load):
+        real_status = gate_drift.programs.status_errors
+        seen = []
+
+        def spy(rows, streams, *, cfg, request_ids):
+            seen.append(list(request_ids))
+            return real_status(rows, streams, cfg=cfg, request_ids=request_ids)
+        with mock.patch("gates.gate_drift.programs.load_program", side_effect=load), \
+                mock.patch("gates.gate_drift.programs.status_errors", side_effect=spy):
             self.assertEqual(self.lines(), [BASE] + ok(P))
+        self.assertEqual(seen, [[RID]])
 
     def test_status_read_at_tip_not_working_tree(self):  # S11, S12
         self.insync()

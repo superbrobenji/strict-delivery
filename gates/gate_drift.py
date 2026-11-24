@@ -38,7 +38,6 @@ def root_of(ns) -> str:
         raise
     except GateError as e:
         raise GateError("%s; run /strict-delivery:init" % e) from None
-    gitinfo._require_toplevel(root)
     return root
 
 
