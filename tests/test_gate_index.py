@@ -833,6 +833,18 @@ class Writes(IndexCase):
             self.run_root()
             self.assertEqual(snapshot(self.root), before)
 
+    def test_fixture_repo_starts_no_auto_maintenance(self):  # X1, X2 (F-20261124-v9q9)
+        self.assertEqual(git(self.root, "config", "--get", "maintenance.auto"), "false")
+        self.assertEqual(git(self.root, "config", "--get", "gc.auto"), "0")
+        trace = os.path.join(self.tmp, "trace2.jsonl")
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "traced", env={"GIT_TRACE2_EVENT": trace})
+        with open(trace, encoding="utf-8") as fh:
+            events = [json.loads(line) for line in fh if line.strip()]
+        self.assertTrue(any(e.get("event") == "start" for e in events))  # the trace is live
+        for e in events:
+            if e.get("event") == "child_start":
+                self.assertFalse({"maintenance", "gc"} & set(e.get("argv", [])), e)
+
     def test_gate_creates_no_directory(self):  # O7
         self.run_root()
         self.assertFalse(os.path.exists(os.path.join(self.root, "docs")))
