@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-aimj
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4c2-review-1.md F2
+severity: LOW
+class: "ci_workflow repository shape: names made only of dots, length 3 or more (o/..., o/....): no test; mutant o4 (name in ('.', '..')) survives on both"
+siblings: []
+cites:
+  - file: gates/lib/templates.py
+    lines: "254"
+    sha: f9d40b9
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f9d40b91684bf842b1a4e6ed23db560dbd4a76b7
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: ci_workflow repository shape
