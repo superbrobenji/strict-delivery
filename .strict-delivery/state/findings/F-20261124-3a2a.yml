@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-3a2a
+status: open
+source: PR-runtime final review at c9c6e59 (runtime/PR-runtime-final-review.md, F1)
+severity: LOW
+class: "output write failure (3a.2 A, gates/hook.py:84-110, row F10): real EPIPE on stdout, real EPIPE on stderr exit 120 not 2/0; closed fd 1/2 handled; fake raising stream tested"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c9c6e5933ad1156785082392405c1b558a959827
+    by: stream-runtime
+review_round: 3
+caused_by_change: true
+dimension: output write failure

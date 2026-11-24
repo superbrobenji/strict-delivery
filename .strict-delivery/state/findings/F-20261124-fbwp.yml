@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-fbwp
+status: open
+source: PR-runtime final review at c9c6e59 (runtime/PR-runtime-final-review.md, F3)
+severity: LOW
+class: "status page shape (3a.2 C, worktrees.py:123, row W5): missing, unreadable, wrong cell count give a fail line; wrong or absent header gives none; header with zero rows correct"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c9c6e5933ad1156785082392405c1b558a959827
+    by: stream-runtime
+review_round: 3
+caused_by_change: true
+dimension: status page shape
