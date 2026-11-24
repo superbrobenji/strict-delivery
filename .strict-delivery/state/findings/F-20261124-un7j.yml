@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-un7j
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-5a-3.md FR-1
+severity: MEDIUM
+class: "concurrent creation of the receipt file: every O_CREAT open in gates; members: gates/lib/receipts.py:242 record's append open (ENOENT from a concurrent O_CREAT on macOS, _kind then 'reg', bare raise -> 'cannot append (No such file or directory)'; 50/2000 and 57/2000 appends lost)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: cd9049ff279d1153a36de52f9da8baabe6145e45
+    by: stream-config-hooks
+review_round: 5
+caused_by_change: true
+dimension: concurrent creation of the receipts directory

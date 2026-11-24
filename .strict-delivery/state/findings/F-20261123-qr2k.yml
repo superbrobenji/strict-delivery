@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261123-qr2k
+status: open
+source: "PR-5a final review 2: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-5a-2.md FR-2"
+severity: LOW
+class: "registered LOWs without a named follow-up task: F-20261122-q7y6 (N15 line-join members), F-20261122-2v5n (double-quoted slow-path timing shape), F-20261122-nvbn (timing kill margin); program controller direction: fixed in the PR-5a fix round"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: b0552a5a271bab63024620d7f147bc2cd873a372
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: registered LOWs not resolved
