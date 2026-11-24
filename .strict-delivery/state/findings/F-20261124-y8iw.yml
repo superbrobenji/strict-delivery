@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-y8iw
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-11.md F1
+severity: LOW
+class: "CH6 calibration failure message names the calls of its last sample: tests/test_shellscan.py:189-191 prints reps after the doubling (131072) though the last sample ran 65536; the pin at :1071 asserts the wrong number"
+siblings: []
+cites:
+  - file: tests/test_shellscan.py
+    lines: 186-191
+    sha: a85ad94587546f16a7876f827bf40b6195fd9102
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: a85ad94587546f16a7876f827bf40b6195fd9102
+    by: stream-config-hooks
+review_round: 8
+caused_by_change: true
+dimension: "length, linear (CH6): timer resolution"
