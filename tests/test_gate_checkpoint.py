@@ -2607,6 +2607,41 @@ class SourceAndGroups(FullFx):
         for banned in (".lower()", ".isprintable", "unicodedata", ".splitlines", "\\w", "BaseException", "except:"):
             self.assertNotIn(banned, src, banned)
 
+    def test_gate_unexpected_exception_is_input_not_a_reason(self):  # V3, both interpreters (fix round 1, F-20261124-iwe7)
+        """An exception the new code does not name (here a ``RuntimeError``; an ``ExceptionGroup`` is the 3.11+ form) at
+        any call it makes is not turned into a reason on ``cap``, ``base``, ``files``, ``last`` or ``worktrees``: ``run_check``
+        prints the single line ``FAIL checkpoint.input: RuntimeError: boom``."""
+        self.build()
+        exc = [RuntimeError("boom")]
+
+        def boom(*a, **k):
+            raise exc[0]
+        real = {"is_ancestor": gitinfo.is_ancestor, "commit_exists": gitinfo.commit_exists}
+
+        def below_base(name):
+            def side(*a, **k):
+                f = sys._getframe(1)
+                while f is not None and f.f_code.co_name != "_base":
+                    f = f.f_back
+                if f is None:
+                    return real[name](*a, **k)
+                raise exc[0]
+            return side
+        for target, side in (("gates.lib.gitinfo.tracked_files", boom), ("gates.lib.checkpoints.cap_errors", boom),
+                             ("gates.lib.checkpoints.last_line_errors", boom), ("gates.lib.checkpoints.record_errors", boom),
+                             ("gates.lib.worktrees.same_repository", boom),
+                             ("gates.lib.gitinfo.is_ancestor", below_base("is_ancestor")),
+                             ("gates.lib.gitinfo.commit_exists", below_base("commit_exists"))):
+            with self.subTest(target=target), mock.patch(target, side_effect=side):
+                out, code = self.chk()
+                self.assertEqual((out, code), ("FAIL checkpoint.input: RuntimeError: boom\n", 1))
+            # a BaseException that is not an Exception (the 3.9-safe stand-in of BaseExceptionGroup) leaves main unchanged
+            exc[0] = KeyboardInterrupt()
+            with self.subTest(target=target, kind="KeyboardInterrupt"), mock.patch(target, side_effect=side):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.chk()
+            exc[0] = RuntimeError("boom")
+
     def test_gate_exception_groups_propagate(self):  # V3 (fix round 1, F-20261124-iwe7)
         """A ``BaseExceptionGroup`` raised at any call the new code makes leaves ``main`` unchanged (``run_check`` catches
         ``Exception`` only). An ``ExceptionGroup`` is an ``Exception``: ``run_check`` turns it into the one line
