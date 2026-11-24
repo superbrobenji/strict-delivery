@@ -23,6 +23,7 @@ HASH = "hash"
 KINDS = {"claude-block": 1, "gitignore-block": 1}
 _KIND_FILE = {"claude-block": "CLAUDE.md", "gitignore-block": ".gitignore"}
 _KIND_STYLE = {"claude-block": HTML, "gitignore-block": HASH}
+_PATH_STYLE = {_KIND_FILE[k]: _KIND_STYLE[k] for k in KINDS}  # the path of a kind -> the style its block is parsed in
 
 _OPENER = {HTML: "<!-- ", HASH: "# "}
 _CLOSER = {HTML: " -->", HASH: ""}
@@ -411,14 +412,18 @@ def _marker_free(text: str) -> bool:
         return False
 
 
-def _accept(current: str, new: str) -> bool:
+def _accept(current: str, new: str, style: Optional[str] = None) -> bool:
     """May ``new`` replace ``current``? The header marks the file as generated; otherwise the text outside the block
-    must be the same (a block appended to a file without one may add one newline). The comment style is the one in
-    which ``new`` holds a well-formed block, and ``current`` is read in that style only (``plan`` reads the kind's own
-    style only); ``new`` with blocks of both styles is refused, and ``new`` with none leaves the whole-text rule."""
+    must be the same (a block appended to a file without one may add one newline). The comment style is the kind's
+    own when the path names a kind (``style`` is then ``HTML`` for CLAUDE.md and ``HASH`` for .gitignore, as ``plan``
+    parses only that style); for a path with no kind it is the one in which ``new`` holds a well-formed block, and
+    ``new`` with blocks of both styles is refused. ``current`` is read in that style only, and ``new`` with no block
+    of the style leaves the whole-text rule."""
     if is_generated(current):
         return True
     found = _well_formed(new)
+    if style is not None:
+        found = [f for f in found if f[0] == style]
     if len(found) > 1:
         return False
     if not found:
@@ -440,7 +445,7 @@ def _recheck(root: str, path: str, new: str) -> Optional[str]:
     state = _inspect(root, path)
     if state[0] == "conflict":
         return state[1]
-    if state[0] == "text" and not _accept(state[1], new):
+    if state[0] == "text" and not _accept(state[1], new, _PATH_STYLE.get(path)):
         return _NOT_MANAGED
     return None
 

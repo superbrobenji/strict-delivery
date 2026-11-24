@@ -1391,13 +1391,15 @@ class ApplyTests(FsCase):
         self.assertEqual(self.open_fds(), before)
 
     def test_apply_accepts_plan_output_other_style_lines(self):  # ST-1, ST-2 (A2, F-20261124-kp45), AP6
-        # ST-1: a HASH example, no HTML block. Only a begin line is quoted: a COMPLETE quoted HASH block makes ``new``
-        # hold blocks of both styles, which A2 refuses (ST-4); that contradicts ST-1's fenced-gitignore-example (NEEDS_DECISION)
-        fence = lines("# Notes", "", "```", HB, "*.log", "```")
+        fence = lines("# Notes", "", "```", HB, "*.log", HE, "```")  # ST-1: a COMPLETE HASH example, no HTML block
+        fence_begin = lines("# Notes", "", "```", HB, "*.log", "```")  # only a begin line quoted
+        html_pair = lines("# ignore", B, "*.log", E)  # ST-2: a COMPLETE HTML pair in the .gitignore
         beginner = lines("# strict-delivery:beginner notes", "body")
         html_line = lines("# ignore", "<!-- strict-delivery:begin schema=claude-block/1 version=0.1.0 -->", "*.log")  # ST-2
         for path, kind, current, new in (
                 ("CLAUDE.md", "claude-block", fence, fence + lines(B, "x", E)),
+                ("CLAUDE.md", "claude-block", fence_begin, fence_begin + lines(B, "x", E)),
+                (".gitignore", "gitignore-block", html_pair, html_pair + lines(HB, "x", HE)),
                 ("CLAUDE.md", "claude-block", beginner, beginner + lines(B, "x", E)),
                 (".gitignore", "gitignore-block", html_line, html_line + lines(HB, "x", HE))):
             self.put_file(path, current)
@@ -1416,7 +1418,12 @@ class ApplyTests(FsCase):
         self.put_file(".gitignore", curh)
         self.me("apply refused: .gitignore: " + NOT_MANAGED, apply, self.r, [(".gitignore", lines("# T", B, "b", E, "tail"))])
         self.assertEqual(self.read(".gitignore"), curh)
-        both = lines("# T", B, "b", E, HB, "b", HE)  # ST-4: blocks of both styles in the action
+        self.put_file("CLAUDE.md", "x\n")  # the style comes from the path: a CLAUDE.md action holding only a HASH block
+        self.me("apply refused: CLAUDE.md: " + NOT_MANAGED, apply, self.r, [("CLAUDE.md", "x\n" + lines(HB, "b", HE))])
+        self.put_file(".gitignore", "x\n")  # and a .gitignore action holding only an HTML block
+        self.me("apply refused: .gitignore: " + NOT_MANAGED, apply, self.r, [(".gitignore", "x\n" + lines(B, "b", E))])
+        self.assertEqual((self.read("CLAUDE.md"), self.read(".gitignore")), ("x\n", "x\n"))
+        both = lines("# T", B, "b", E, HB, "b", HE)  # ST-4: blocks of both styles, a path with no kind
         self.put_file("x.md", "x\n")
         self.me("apply refused: x.md: " + NOT_MANAGED, apply, self.r, [("x.md", "x\n" + both)])
         self.put_file("y.md", both)
