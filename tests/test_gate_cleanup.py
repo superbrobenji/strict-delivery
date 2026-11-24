@@ -1196,14 +1196,14 @@ class RegistryTests(Gx):
     def test_cleanup_registered(self):  # RG1
         self.assertEqual(gates_main.GATES["cleanup"], "gates.gate_cleanup")
         self.assertEqual(sorted(gates_main.GATES), ["checkpoint", "cites", "claims", "cleanup", "context", "decisions",
-                                                    "dispatch", "register", "schema", "streams"])
+                                                    "dispatch", "evidence", "register", "schema", "streams"])
 
     def test_check_usage_lists_cleanup(self):  # RG2
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.assertEqual(gates_main.main(["check"]), 2)
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\ngates: checkpoint, cites, claims, "
-                                         "cleanup, context, decisions, dispatch, register, schema, streams\n")
+                                         "cleanup, context, decisions, dispatch, evidence, register, schema, streams\n")
 
     def test_run_all_never_runs_cleanup(self):  # RG3
         for names in list(run_all.PROFILE_GATES.values()) + [run_all.BASE_GATES, run_all.LIVE_PROGRAM_GATES]:

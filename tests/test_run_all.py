@@ -189,6 +189,19 @@ class ConstantsTest(unittest.TestCase):
         self.assertNotIn("run_all", gates_main.GATES)
 
 
+class LazyEvidenceTest(unittest.TestCase):
+    def loaded(self, body):
+        src = "import sys\n" + body + "sys.stdout.write('LOADED=%s' % ('gates.gate_evidence' in sys.modules))\n"
+        p = subprocess.run([sys.executable, "-c", src], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return p.stdout.decode()
+
+    def test_gate_evidence_imported_lazily(self):  # R3 (Rq-6-1)
+        self.assertTrue(self.loaded("import gates.__main__\n").endswith("LOADED=False"))
+        self.assertTrue(self.loaded("import gates.run_all\n").endswith("LOADED=False"))
+        self.assertTrue(self.loaded("from gates import __main__ as m\nm.main(['check', 'evidence', '--bogus'])\n")
+                        .endswith("LOADED=True"))
+
+
 class ProfileTest(RunAllCase):
     def test_light_runs_profile_gates_in_order(self):  # P1
         self.all_pass()

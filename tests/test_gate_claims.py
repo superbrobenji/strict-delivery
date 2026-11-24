@@ -185,7 +185,7 @@ class ArgvTests(GateCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
             self.assertEqual(gates_main.main(["check", "nope"]), 2)
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                                         "gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, register, schema, streams\n")
+                                         "gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, evidence, register, schema, streams\n")
 
         def via_main(args):
             buf = io.StringIO()

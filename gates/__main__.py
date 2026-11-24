@@ -8,6 +8,7 @@ GATES: Dict[str, str] = {"checkpoint": "gates.gate_checkpoint", "cites": "gates.
                          "context": "gates.gate_context",
                          "decisions": "gates.gate_decisions",
                          "dispatch": "gates.gate_dispatch",
+                         "evidence": "gates.gate_evidence",
                          "register": "gates.gate_register",
                          "schema": "gates.gate_schema",
                          "streams": "gates.gate_streams"}  # gate name -> module defining check(args)
