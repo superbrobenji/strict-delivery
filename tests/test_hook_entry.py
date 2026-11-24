@@ -367,6 +367,89 @@ class HandlerTest(EntryCase):
                 p = self.run_h(event, patch={key(event, group): mod}, HOOKTEST_BREAK="1")
                 self.assertEqual(p.returncode, code)
 
+    def run_pipes(self, event, group, mod, break_out, break_err):
+        """The production entry with fd 1 and/or fd 2 a real OS pipe whose read end is closed before the hook writes;
+        the stream that is not broken is captured. Returns (returncode, stdout bytes or None, stderr bytes or None)."""
+        ends = []
+        fds = {}
+        for name, broken in (("stdout", break_out), ("stderr", break_err)):
+            if broken:
+                r, w = os.pipe()
+                os.close(r)
+                ends.append(w)
+                fds[name] = w
+            else:
+                fds[name] = subprocess.PIPE
+        try:
+            p = subprocess.run(hookrun.argv_for(event), input=json.dumps(payload(event, self.repo)).encode("utf-8"),
+                               cwd=FW, check=False, env=self.env({key(event, group): mod}),
+                               stdout=fds["stdout"], stderr=fds["stderr"])
+        finally:
+            for w in ends:
+                os.close(w)
+        return p.returncode, (None if break_out else p.stdout), (None if break_err else p.stderr)
+
+    def test_real_broken_pipe_exit(self):   # F10 (b), (c), (d), V9: never 120, no noise on the other stream
+        deny = b"FAIL a\nFAIL b\n"
+        cases = [   # part, event, group, module, exit code, fd 1 broken, fd 2 broken, expected bytes of the stream kept
+            ("b", "PreToolUse", "bash", "ok_context", 2, True, False, b""),
+            ("b", "PreToolUse", "bash", "ok_deny", 2, True, False, deny),
+            ("b", "SessionStart", None, "ok_text", 0, True, False, b""),
+            ("b", "UserPromptSubmit", None, "ok_text", 0, True, False, b""),
+            ("b", "SessionStart", None, "raises_gate", 0, True, False, b""),
+            ("b", "UserPromptSubmit", None, "raises_gate", 0, True, False, b""),
+            ("c", "PreToolUse", "bash", "raises_gate", 2, False, True, b""),
+            ("d", "PreToolUse", "bash", "raises_gate", 2, True, True, None),
+            ("d", "SessionStart", None, "ok_text", 0, True, True, None),
+        ]
+        for part, event, group, mod, code, bo, be, kept in cases:
+            with self.subTest(part=part, event=event, module=mod):
+                rc, out, err = self.run_pipes(event, group, mod, bo, be)
+                self.assertEqual(rc, code)
+                if kept is not None:
+                    self.assertEqual(err if bo else out, kept)
+
+    def test_usage_broken_stderr_exit(self):   # F10d (A1-A3 with fd 2 a real broken pipe, and closed at start)
+        launcher = os.path.join(self.tmp, "closefd_usage.py")
+        with open(launcher, "w", encoding="utf-8") as fh:
+            fh.write("import os, sys\nos.close(2)\nos.execv(sys.executable, [sys.executable] + sys.argv[1:])\n")
+        for args in ([], ["Bogus"], ["PreToolUse", "x"]):
+            base = [sys.executable, "-m", "gates", "hook"] + args
+            with self.subTest(args=args, how="real broken pipe"):
+                r, w = os.pipe()
+                os.close(r)
+                try:
+                    p = subprocess.run(base, cwd=FW, check=False, env=self.env(), stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=w)
+                finally:
+                    os.close(w)
+                self.assertEqual((p.returncode, p.stdout), (2, b""))
+            with self.subTest(args=args, how="closed at start"):
+                p = subprocess.run([sys.executable, launcher] + base[1:], cwd=FW, check=False, env=self.env(),
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertEqual((p.returncode, p.stdout), (2, b""))
+
+    def test_closed_fd_exit(self):   # F10c, V9: the process starts with fd 1 (or fd 2) closed
+        launcher = os.path.join(self.tmp, "closefd.py")
+        with open(launcher, "w", encoding="utf-8") as fh:
+            fh.write("import os, sys\nos.close(int(sys.argv[1]))\nos.execv(sys.executable, [sys.executable] + sys.argv[2:])\n")
+        cases = [   # fd closed, event, group, module, exit code, expected bytes of the other stream (None: unchecked)
+            (1, "PreToolUse", "bash", "ok_context", 2, b""),
+            (1, "PreToolUse", "bash", "raises_gate", 2, None),
+            (1, "SessionStart", None, "ok_text", 0, b""),
+            (2, "PreToolUse", "bash", "ok_context", 0, None),
+            (2, "PreToolUse", "bash", "raises_gate", 2, b""),
+            (2, "SessionStart", None, "ok_text", 0, b"t1\nt2\n"),
+        ]
+        for fd, event, group, mod, code, other in cases:
+            with self.subTest(fd=fd, event=event, module=mod):
+                argv = [sys.executable, launcher, str(fd)] + hookrun.argv_for(event)[1:]
+                p = subprocess.run(argv, cwd=FW, check=False, input=json.dumps(payload(event, self.repo)).encode("utf-8"),
+                                   env=self.env({key(event, group): mod}), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertEqual(p.returncode, code)
+                if other is not None:
+                    self.assertEqual(p.stderr if fd == 1 else p.stdout, other)
+
     def test_tool_groups_route(self):   # F11, V5: MultiEdit routes like Edit
         patch = {key("PreToolUse", "edit"): "ok_context"}
         for tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):

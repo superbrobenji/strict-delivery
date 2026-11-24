@@ -82,6 +82,9 @@ class FirstPromptShapes(TmpCase):
             ("T3 NaN", '{"type": "summary", "n": NaN}\n' + user("late"), None),
             ("T3 Infinity", '{"type": "summary", "n": Infinity}\n' + user("late"), None),
             ("T3 -Infinity", '{"type": "summary", "n": -Infinity}\n' + user("late"), None),
+            ("T3 1e400", '{"type": "summary", "n": 1e400}\n' + user("late"), None),
+            ("T3 -1e400", '{"type": "summary", "n": -1e400}\n' + user("late"), None),
+            ("T3 400-zero literal", '{"type": "summary", "n": 1' + "0" * 400 + '.0}\n' + user("late"), None),
             ("T3 not utf-8", b'\xff{"type": "summary"}\n' + user("late").encode("utf-8"), None),
             ("T3 lone surrogate bytes", b'\xed\xa0\x80\n' + user("late").encode("utf-8"), None),
             ("T3 duplicate keys nested", '{"type": "summary", "m": {"a": 1, "a": 2}}\n' + user("late"), None),
@@ -102,6 +105,12 @@ class FirstPromptShapes(TmpCase):
         for name, data, expected in cases:
             with self.subTest(name):
                 self.assertEqual(transcript.first_prompt(self.write(data)), expected)
+
+    def test_first_prompt_finite_floats(self):   # T3b, V8: finite float edges are parsed and skipped
+        for lit in ("1e-400", "1e308", "-0.0", "0." + "0" * 4299 + "1", "0." + "0" * 4300 + "1"):
+            with self.subTest(lit=lit[:12], digits=len(lit)):
+                path = self.write('{"type": "summary", "n": %s}\n' % lit + user("found"))
+                self.assertEqual(transcript.first_prompt(path), "found")
 
     def test_t8_escaped_form(self):   # T8: the escaped spelling returns the same text
         path = self.write('{"type": "user", "message": {"content": "a\\ud83e\\udee0b\\u2c2f"}}')

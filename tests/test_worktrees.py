@@ -259,6 +259,36 @@ class AllowedSession(Fixture):
         self.assertEqual(len(fails), 1)
         self.assertIn(PROG, fails[0])
 
+    def test_status_page_header_shapes(self):   # W5b
+        self.make_program()
+        base = frozenset({real(self.main), real(self.int_wt)})
+        cells = HEADER.split("\n")[0].split("|")[1:-1]
+        sep = HEADER.split("\n")[1] + "\n"
+        row = status_row("s1", self.status_wt)
+        page = os.path.join(self.int_wt, PROGRAMS, PROG, "status.md")
+
+        def write_page(text):
+            with open(page, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            commit_all(self.int_wt, "page")
+        bad = [
+            ("no header", "# status\n\n" + row),
+            ("renamed cell", "| " + " | ".join(["worktre" if c.strip() == "worktree" else c.strip() for c in cells]) + " |\n" + sep + row),
+            ("10 cells", "| " + " | ".join(c.strip() for c in cells[:10]) + " |\n" + sep + row),
+            ("12 cells", "| " + " | ".join([c.strip() for c in cells] + ["extra"]) + " |\n" + sep + row),
+            ("no separator", HEADER.split("\n")[0] + "\n" + row),
+            ("malformed separator", HEADER.split("\n")[0] + "\n| x |\n" + row),
+        ]
+        for name, text in bad:
+            with self.subTest(name):
+                write_page(text)
+                tops, fails = worktrees.allowed(hand_ctx(self.main), self.main, CFG, None)
+                self.assertEqual(tops, base)
+                self.assertEqual(fails, ["program %s: %s has no status table" % (PROG, "%s/%s/status.md" % (PROGRAMS, PROG))])
+        with self.subTest("right header and separator, zero rows"):
+            write_page("# status\n\n" + HEADER)
+            self.assertEqual(worktrees.allowed(hand_ctx(self.main), self.main, CFG, None), (base, []))
+
     def test_status_page_is_read_at_the_integration_tip(self):   # ruling (3b): not the main checkout's file
         self.make_program()
         stale = os.path.join(self.main, PROGRAMS, PROG)
@@ -267,6 +297,22 @@ class AllowedSession(Fixture):
             fh.write("# stale\n\n" + HEADER + status_row("s1", os.path.join(self.work, "never-made")))
         tops, fails = worktrees.allowed(hand_ctx(self.main), self.main, CFG, None)   # a work-tree file, not committed
         self.assertEqual((tops, fails), (frozenset({real(self.main), real(self.status_wt), real(self.int_wt)}), []))
+
+    def test_unreadable_status_page_adds_a_fail(self):   # W5c-u: gitinfo.show fails with a git error
+        self.make_program()
+        base = frozenset({real(self.main), real(self.int_wt)})
+        bad = os.path.join(self.tmp, "fakebin-status")   # a git that fails only the call naming the status page
+        os.mkdir(bad)
+        with open(os.path.join(bad, "git"), "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\nfor a in "$@"; do\n  case "$a" in *status.md) echo "fatal: broken" >&2; exit 128;; esac\n'
+                     'done\nexec "%s" "$@"\n' % shutil.which("git"))
+        os.chmod(os.path.join(bad, "git"), 0o755)
+        with mock.patch.dict(os.environ, {"PATH": bad + os.pathsep + os.environ["PATH"]}):
+            tops, fails = worktrees.allowed(hand_ctx(self.main), self.main, CFG, None)
+        self.assertEqual(tops, base)
+        self.assertEqual(len(fails), 1, fails)
+        self.assertTrue(fails[0].startswith("program %s: status page unreadable (" % PROG), fails[0])
+        self.assertNotIn("\n", fails[0])
 
     def test_allowed_programs_error(self):   # W6
         for name, cfg in (("no paths.programs", {"paths": {}}), ("cfg not a dict", None), ("empty programs dir", {"paths": {"programs": ""}})):

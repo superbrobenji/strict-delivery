@@ -87,9 +87,28 @@ def _write(stream: object, text: str) -> None:
         stream.flush()
 
 
+def _silence(stream: object) -> None:
+    """Point the file descriptor under ``stream``, whose write or flush just failed, at the null device: the text left
+    in its buffer is then flushed there at interpreter shutdown, and that flush cannot fail a second time (a failed
+    shutdown flush gives exit status 120 and an ``Exception ignored`` message on the other stream)."""
+    try:
+        fd = stream.fileno()
+        null = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(null, fd)
+        finally:
+            os.close(null)
+    except BaseException:
+        pass
+
+
 def main(argv: List[str]) -> int:
     if type(argv) is not list or len(argv) != 1 or type(argv[0]) is not str or argv[0] not in hookio.EVENTS:
-        sys.stderr.write(USAGE + "\n")
+        stream = sys.stderr
+        try:
+            _write(stream, USAGE + "\n")
+        except BaseException:
+            _silence(stream)
         return 2
     event = argv[0]
     try:
@@ -103,10 +122,14 @@ def main(argv: List[str]) -> int:
             stdout, stderr, code = line + "\n", "", 0
         else:
             stdout, stderr, code = "", "", 0
+    stream = None
     try:
-        _write(sys.stdout, stdout)
-        _write(sys.stderr, stderr)
+        stream = sys.stdout
+        _write(stream, stdout)
+        stream = sys.stderr
+        _write(stream, stderr)
     except BaseException:
+        _silence(stream)
         return 2 if event == "PreToolUse" else 0
     return code
 

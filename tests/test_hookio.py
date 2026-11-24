@@ -170,6 +170,26 @@ class ParseTest(unittest.TestCase):
                 self.assertEqual(str(cm.exception),
                                  "hook.input: input is not valid JSON: integer longer than 4300 digits")
 
+    def test_parse_overflow_floats_refused(self):   # I7, V8: an overflowing literal is refused like NaN, same text
+        literals = ("1e400", "-1e400", "1E400", "1e+400", "1" + "0" * 400 + ".0", "-1" + "0" * 400 + ".0")
+        for lit in literals:
+            for where, make in (("top", lambda t: raw_with(pl(), '"z": ' + t)),
+                                ("tool_input", lambda t: raw_tool_input(pl(), '{"x": ' + t + '}')),
+                                ("list", lambda t: raw_tool_input(pl(), '{"x": [1, ' + t + ']}'))):
+                with self.subTest(lit=lit[:12], where=where):
+                    with self.assertRaises(GateError) as cm:
+                        hookio.parse("PreToolUse", make(lit))
+                    self.assertEqual(str(cm.exception), "hook.input: input is not valid JSON: number is not finite")
+
+    def test_parse_finite_floats(self):   # I7b, V8: accepted, the value Python's float gives
+        table = [("1e308", 1e308), ("-1e308", -1e308), ("1.7976931348623157e308", 1.7976931348623157e308),
+                 ("1e-400", 0.0), ("-0.0", -0.0), ("0.5", 0.5),
+                 ("0." + "0" * 4299 + "1", 0.0), ("0." + "0" * 4300 + "1", 0.0)]   # 4300 and 4301 digits after the point
+        for text, value in table:
+            with self.subTest(len=len(text), text=text[:12]):
+                raw = hookio.parse("PreToolUse", raw_with(pl(), '"z": ' + text))
+                self.assertEqual(str(raw["z"]), str(value))
+
     def test_parse_extra_fields_kept(self):   # I12, I15
         p = pl("SessionStart", tool_name="Bash", brand_new_key={"x": 1})
         raw = hookio.parse("SessionStart", enc(p))
