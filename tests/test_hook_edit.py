@@ -378,7 +378,9 @@ class UnderTest(GitIsolatedTestCase):
         for p in (r + "/" + D + "-old/x.yml", r + "/.strict-delivery/state/decision/x", r + "/.strict-delivery/state/decisionsX/x",
                   r + "/.strict-delivery/state/Xdecisions/x", r + "/.strict-delivery/state", r + "/.strict-delivery/decisions/x.yml",
                   r + "/state/decisions/x.yml", r + "/.strict-delivery/x/state/decisions/y",
-                  r + "/decisions/state/.strict-delivery/x", r + "/.strict-delivery/state/decisions.yml"):
+                  r + "/decisions/state/.strict-delivery/x", r + "/.strict-delivery/state/decisions.yml",
+                  r + "/.strict-delivery-x/state/decisions/x", r + "/x.strict-delivery/state/decisions/x",
+                  r + "/.strict-delivery/state-x/decisions/x", r + "/.strict-delivery/xstate/decisions/x"):   # F-se42 (b)
             with self.subTest(p=p):
                 self.assertFalse(self.u(p))
 
@@ -1286,6 +1288,65 @@ class HandleTest(Base):
             with self.subTest(path=path):
                 self.assertEqual(self.edit(path).stderr, DENY(path))
         self.assertFalse(os.path.exists(os.path.join(self.data, "sessions")))
+
+
+class ReviewOneTest(Base):
+    """Fix round 1 (F-20261124-se42, jjq8, vyet, n5zc)."""
+
+    def test_sibling_prefix_of_root_not_surfaced(self):   # se42 (a): a sibling sharing the root's name prefix is outside
+        self.put(dec(DEC1, applies_to=["**"]), dec(DEC2, applies_to=["-x/*"]))
+        for name in ("repo-x", "repo-", "repo2"):
+            with self.subTest(sibling=name):
+                os.makedirs(os.path.join(self.work, name, "src"))
+                p = self.edit(os.path.join(self.work, name, "src", "a.py"))
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertEqual(ctx_lines(self.edit(self.src(), session="inside")), [IF(DEC1)])
+
+    def test_outside_root_with_malformed_record(self):   # jjq8
+        self.put(dec(DEC1, applies_to=["**"]))
+        with open(self.repo + "/" + D + "/" + DEC2 + ".yml", "w") as fh:
+            fh.write("id: [\n")
+        outside = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(outside)
+        for path in (outside + "/a.py", os.path.join(self.work, "repo-x", "a.py")):
+            p = self.edit(path)
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertEqual(os.listdir(self.data), [])
+
+    def test_no_match_leaves_store_unchanged(self):   # vyet
+        self.put(dec(DEC1, applies_to=["src/*"]))
+        p = self.edit(self.repo + "/docs/x.md")   # no match, no state yet: nothing created
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertEqual(os.listdir(self.data), [])
+        self.assertEqual(ctx_lines(self.edit(self.src())), [IF(DEC1)])
+        path = self.state_path()
+        def snap():
+            with open(path, "rb") as fh:
+                return (fh.read(), os.stat(path).st_mtime_ns, sorted(os.listdir(os.path.dirname(path))))
+        before = snap()
+        p = self.edit(self.repo + "/docs/x.md")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        after = snap()
+        self.assertEqual(before, after)
+        env = self.env(data=os.path.join(self.tmp, "fresh-data"))   # a store directory that does not exist yet stays absent
+        self.assertEqual(self.edit(self.repo + "/docs/x.md", env=env).stdout, "")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "fresh-data")))
+
+    def test_long_id_5000_characters(self):   # n5zc HC9
+        long_id = "DEC-" + "a" * 4996
+        self.assertEqual(len(long_id), 5000)
+        write_record(self.repo, D + "/" + DEC1 + ".yml", dec(long_id))
+        self.assertEqual(ctx_lines(self.edit(self.src())), [IF(long_id)])
+        self.assertEqual(ctx(self.edit(self.src())), "")
+        self.assertEqual(yamlsub.load(self.state_path(), "state")["surfaced"], [long_id])
+
+    def test_read_tool_with_decisions_path_silent(self):   # n5zc HD18 (the row's Bash member is wrong: Bash routes to pre_bash)
+        self.put(dec(DEC1))
+        for path in (self.repo + "/" + D + "/DEC1.yml", self.repo + "/" + D, self.src()):
+            with self.subTest(path=path):
+                p = self.edit(path, tool="Read")
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertEqual(os.listdir(self.data), [])
 
 
 if __name__ == "__main__":
