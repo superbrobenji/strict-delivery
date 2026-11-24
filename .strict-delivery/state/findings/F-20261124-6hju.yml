@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-6hju
+status: open
+source: PR-5b hook review 1 (records/PR-5b-hook-review-1.md, finding 2; update from main)
+severity: MEDIUM
+class: "cross-PR interaction: index.render state-file loads vs the session-start hook's regenerate expectations: HeaderTest.test_header_failures r=programs stale regenerate: PASS pin (S)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 3efb6144e9643516a75afdb650c5cb29b7bdf294
+    by: stream-records
+review_round: 4
+caused_by_change: false
+dimension: cross-PR interaction

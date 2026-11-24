@@ -96,6 +96,8 @@ def make_repo(tmp: str, config: Optional[dict] = None) -> str:
     git(tmp, "config", "user.email", "fixture@example.invalid")
     git(tmp, "config", "user.name", "Fixture")
     git(tmp, "config", "commit.gpgsign", "false")
+    git(tmp, "config", "maintenance.auto", "false")  # no detached auto-maintenance or auto-gc writing into .git while a test runs
+    git(tmp, "config", "gc.auto", "0")
     write_record(tmp, ".strict-delivery/config.yml", config if config is not None else minimal_config())
     commit_all(tmp, "fixture")
     return tmp

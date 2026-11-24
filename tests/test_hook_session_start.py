@@ -182,9 +182,12 @@ class Base(GitIsolatedTestCase):
 
     def program(self, name):
         git(self.repo, "checkout", "-q", "-b", name + "/integration")
-        rel = ".strict-delivery/state/programs/%s/streams.yml" % name
-        self.put(rel, "x: 1\n")
-        git(self.repo, "add", rel)   # only this file: other fixture files stay untracked in the work tree
+        base = ".strict-delivery/state/programs/%s/" % name
+        rels = [base + "streams.yml", base + "status.md", base + "sync-log.md", base + "merged.md"]
+        self.put(rels[0], "x: 1\n")
+        for r in rels[1:]:   # a well-formed program folder (programs design :186): load_program needs all four
+            self.put(r, "")
+        git(self.repo, "add", *rels)   # only these files: other fixture files stay untracked in the work tree
         git(self.repo, "commit", "-q", "-m", "program " + name)
         git(self.repo, "checkout", "-q", "main")
 
@@ -227,7 +230,7 @@ class HeaderTest(Base):
         with self.subTest(r="programs"):
             lines, _ = self.go(patch={"gates.lib.programs.live_programs": ["GateError", "boom"]})
             self.assertEqual(lines, [header(programs="unknown"), "FAIL hook.session-start.programs: boom",
-                                     "regenerate: PASS", load_line(), SKILL_LINE])
+                                     "FAIL hook.session-start.index: boom", load_line(), SKILL_LINE])
         with self.subTest(r="branch"):
             git(self.repo, "symbolic-ref", "HEAD", "refs/tags/zz")
             lines, _ = self.go()
@@ -411,18 +414,25 @@ class HandoffTest(Base):
                 with open(p, "wb") as fh:
                     fh.write(kind)
 
-        values = [("no front matter", b"just text\n"), ("yaml error", b"---\na: [\n---\nbody\n"),
-                  ("schema: skills missing", mk_text(drop=("skills",))),
-                  ("schema: empty skills (S12 empty list)", mk_text(skills=[])),
-                  ("schema: bad head", mk_text(head="zz")),
-                  ("rule: resume mismatch", mk_text(resume="Resume wrong.")),
-                  ("not utf-8", b"\xff\xfe\n"), ("directory", "dir"), ("symlink", "symlink"), ("fifo", "fifo")]
-        for name, value in values:
+        # Task 5b.1 index.render raises GateError naming the file for a handoff that does not load (plan :5352;
+        # table rows PL29, RN11), so the structural cases give the index FAIL line, not "regenerate: PASS" (plan :3476).
+        ixf = "FAIL hook.session-start.index: " + rel + ": "
+        notreg = ixf + "cannot be read as a UTF-8 regular file (not a regular file)"
+        ok = "regenerate: PASS"
+        values = [("no front matter", b"just text\n", ixf + "front matter: first line must be '---'"),
+                  ("yaml error", b"---\na: [\n---\nbody\n", ixf + "front matter: line 2: unterminated flow sequence"),
+                  ("schema: skills missing", mk_text(drop=("skills",)), ok),
+                  ("schema: empty skills (S12 empty list)", mk_text(skills=[]), ok),
+                  ("schema: bad head", mk_text(head="zz"), ok),
+                  ("rule: resume mismatch", mk_text(resume="Resume wrong."), ok),
+                  ("not utf-8", b"\xff\xfe\n", ixf + "cannot be read as a UTF-8 regular file (not valid UTF-8)"),
+                  ("directory", "dir", notreg), ("symlink", "symlink", notreg), ("fifo", "fifo", notreg)]
+        for name, value, second in values:
             with self.subTest(case=name):
                 replace_with(value)
                 lines, _ = self.go()
                 self.assertEqual(len(lines), 5, lines)
-                self.assertEqual(lines[:2], [header(), "regenerate: PASS"])
+                self.assertEqual(lines[:2], [header(), second])
                 self.assertTrue(lines[2].startswith("FAIL hook.session-start.handoff.%s: " % rel), lines[2])
                 self.assertEqual(lines[3:], [load_line(), SKILL_LINE])
 

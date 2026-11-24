@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-62ji
+status: open
+source: PR-5b final review 2 (records/PR-5b-final-review-2.md, F-A)
+severity: MEDIUM
+class: "stream-handoff entry kind at the stream branch tip read as absent (fail open vs plan :5335; working tree refuses): symlink, tree (directory), gitlink (gates/tools/index.py:272; sibling F-20261118-bc74)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e15bb062c9f3545ee63be9dfb9cd8e7d3b9722ce
+    by: stream-records
+review_round: 6
+caused_by_change: true
+dimension: repository state files render loads
