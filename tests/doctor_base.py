@@ -22,7 +22,9 @@ DEPTH = "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"
 CONC = "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
 UNSET = "unset (Claude Code default)"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ROOT_ID = ["doctor.python", "doctor.input", "doctor.version", "doctor.extras", "doctor.claude-block",
+CONTEXT = ".strict-delivery/context.yml"
+CONTEXT_OK = b"schema: context/1\n"  # hand-written valid context/1 row (plan :5102; gates/schemas/context.yml)
+ROOT_ID = ["doctor.python", "doctor.input", "doctor.context", "doctor.version", "doctor.extras", "doctor.claude-block",
            "doctor.gitignore-block", "doctor.registers", "doctor.indexes", "doctor.generated-tracked",
            "doctor.subagents", "doctor.merge-mode", "doctor.protection"]
 STATE_KEYS = ["protected", "pr_required", "admins", "merge_commit", "squash", "rebase"]
@@ -74,6 +76,7 @@ class Base(GitIsolatedTestCase):
         self.addCleanup(p.stop)
         self.gh = FakeGh(self, {})  # a fake first on PATH in every test: nothing can reach a real gh
         self.r = make_repo(self.work, dict(minimal_config(), framework_version=PV))
+        put(os.path.join(self.r, CONTEXT), CONTEXT_OK)  # an initialised repository holds a valid context.yml (Amendment C)
 
     def mkfw(self, version, repository="https://github.com/o/n", name="fw"):
         d = os.path.join(self.tmp, name)

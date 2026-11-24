@@ -15,7 +15,7 @@ import sys
 from typing import Optional
 
 from gates import gate_schema
-from gates.lib import config, dispatch, gitinfo, host, managed, plugin, schema, templates
+from gates.lib import config, context, dispatch, gitinfo, host, managed, plugin, schema, templates
 from gates.lib.result import GateError, Line, Result, gate_args, run_check, safe_text
 from gates.tools import githooks, index
 
@@ -144,6 +144,19 @@ def _python() -> Line:
     if sys.version_info >= (3, 9):
         return _pass("python")
     return _fail("python", "Python %d.%d is older than 3.9" % (sys.version_info[0], sys.version_info[1]))
+
+
+def _context(root: str, cfg: dict) -> Line:
+    """``doctor.context`` (plan :5102, Amendment C): the file at ``paths.context`` is opened the way every other file is
+    (a symlink, a non-regular file and non-UTF-8 are refused with doctor's file-state texts) and then validated by the
+    production loader ``context.load``, whose ``GateError`` text (also the missing-file text) is the reason."""
+    rel = cfg["paths"]["context"]
+    try:
+        _read(root, rel)
+    except _Unreadable as e:
+        return _fail("context", "%s: %s" % (rel, e))
+    context.load(root, cfg)  # an absent file raises its own "missing; run /strict-delivery:init"
+    return _pass("context")
 
 
 def _inside_framework(root: str) -> bool:
@@ -411,6 +424,7 @@ def _lines(root: object) -> list:
         lines.append(_fail("input", str(e) if isinstance(e, GateError) else "%s: %s" % (type(e).__name__, e)))
         return lines
     lines.append(_pass("input"))
+    _guarded(lines, "context", lambda: _context(root, cfg))
     fw = plugin.framework_dir()
     pv = None
     try:

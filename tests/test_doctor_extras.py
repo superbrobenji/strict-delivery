@@ -23,12 +23,12 @@ class TestExtras(Base):
         self.shims()
         self.assertEqual(self.line("extras"), "PASS doctor.extras: git hooks: installed; CI: not installed")
         ids = [ln.split(":")[0].split(" ")[1] for ln in self.lines()]
-        self.assertEqual(ids[3:6], ["doctor.extras", "doctor.githooks.pre-commit", "doctor.githooks.pre-push"])
+        self.assertEqual(ids[4:7], ["doctor.extras", "doctor.githooks.pre-commit", "doctor.githooks.pre-push"])
         self.assertEqual(self.line("githooks.pre-push"), "PASS doctor.githooks.pre-push")
         self.managed_ci()
         self.assertEqual(self.line("extras"), "PASS doctor.extras: git hooks: installed; CI: installed")
         ids = [ln.split(":")[0].split(" ")[1] for ln in self.lines()]
-        self.assertEqual(ids[3:7], ["doctor.extras", "doctor.githooks.pre-commit", "doctor.githooks.pre-push", "doctor.ci"])
+        self.assertEqual(ids[4:8], ["doctor.extras", "doctor.githooks.pre-commit", "doctor.githooks.pre-push", "doctor.ci"])
         self.assertEqual(self.line("ci"), "PASS doctor.ci")
         hooks = os.path.join(self.r, ".git", "hooks")
         os.unlink(os.path.join(hooks, "pre-push"))  # one hook of two
@@ -120,7 +120,7 @@ class TestExtras(Base):
         with mock.patch.object(githooks, "framework_dir", return_value="relative/path"):
             lines = self.lines()
         self.assertIn("FAIL doctor.githooks.framework: the framework path must be absolute and hold no control character", lines)
-        self.assertEqual(len(lines), 13)
+        self.assertEqual(len(lines), 14)
         with mock.patch.object(githooks, "framework_dir", return_value="/some/other/framework"):
             self.assertEqual(self.line("githooks.pre-commit"), "FAIL doctor.githooks.pre-commit: stale")
 

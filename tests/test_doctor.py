@@ -15,7 +15,7 @@ from gates.lib import config, plugin
 from gates.lib.result import GateError
 from gates.tools import doctor, githooks
 from tests.helpers import commit_all, git, int_limit, make_repo, minimal_config, root_forms, INT_LIMITS
-from tests.doctor_base import Base, DEPTH, PV, ROOT, ROOT_ID, SETTINGS, WF, clear, put, snap
+from tests.doctor_base import Base, CONTEXT, CONTEXT_OK, DEPTH, PV, ROOT, ROOT_ID, SETTINGS, WF, clear, put, snap
 
 
 # ---------------------------------------------------------------------------------------------------- argv
@@ -47,7 +47,7 @@ class TestArgv(Base):
         doc = json.loads(first[1])
         self.assertEqual(doc["gate"], "doctor")
         self.assertEqual([x["id"] for x in doc["lines"]], ROOT_ID)
-        self.assertEqual(doc["lines"][3]["reason"],
+        self.assertEqual(doc["lines"][4]["reason"],
                          "neither extra installed: this repository is gated only inside Claude sessions")
         self.assertEqual(doc["ok"], base[0] == 0)
 
@@ -241,7 +241,7 @@ class TestPythonInputVersion(Base):
         with mock.patch.object(sys, "version_info", (3, 8, 18, "final", 0)):
             lines = self.lines()
             self.assertEqual(lines[0], "FAIL doctor.python: Python 3.8 is older than 3.9")
-            self.assertEqual(len(lines), 12)  # the run continues
+            self.assertEqual(len(lines), 13)  # the run continues (12 lines and doctor.context)
         for bad in (None, "3.9", (3, "9"), ()):
             with self.subTest(bad=bad), mock.patch.object(sys, "version_info", bad):
                 first = self.lines()[0]
@@ -315,9 +315,9 @@ class TestPythonInputVersion(Base):
             self.assertIn(frag, self.lines()[1], name)
 
     def test_doctor_version_equal_different_absent(self):  # VE1, VE2, VE3, VE4
-        self.assertEqual(self.lines()[2], "PASS doctor.version")
+        self.assertEqual(self.lines()[3], "PASS doctor.version")
         self.set_cfg(framework_version="0.0.0")
-        self.assertEqual(self.lines()[2],
+        self.assertEqual(self.lines()[3],
                          "FAIL doctor.version: framework_version 0.0.0 differs from the plugin 0.1.0; run /strict-delivery:upgrade")
         self.set_cfg()
         mpath = os.path.join(self.fw, ".claude-plugin", "plugin.json")
@@ -332,20 +332,20 @@ class TestPythonInputVersion(Base):
                     with open(mpath, "w", encoding="utf-8") as fh:
                         fh.write(text)
                 lines = self.lines()
-                self.assertTrue(lines[2].startswith("FAIL doctor.version: "), lines[2])
+                self.assertTrue(lines[3].startswith("FAIL doctor.version: "), lines[3])
                 if text is None:
-                    self.assertEqual(lines[2], "FAIL doctor.version: .claude-plugin/plugin.json: cannot be read (FileNotFoundError)")
+                    self.assertEqual(lines[3], "FAIL doctor.version: .claude-plugin/plugin.json: cannot be read (FileNotFoundError)")
                     for id_ in ("claude-block", "gitignore-block"):  # CB15, CD9
                         self.assertEqual(self.line("doctor." + id_ if False else id_),
                                          "FAIL doctor.%s: not checked: doctor.version failed" % id_)
-                self.assertEqual(len(lines), 12)
+                self.assertEqual(len(lines), 13)
 
     def test_doctor_version_exact_text(self):  # VE5
         for cfgv, plug in (("0.1.00", "0.1.0"), ("1.0.0", "0.1.0"), ("0.1.0 ", "0.1.0")):
             self.set_cfg(framework_version=cfgv)
-            self.assertTrue(self.lines()[2].startswith("FAIL doctor.version: "), (cfgv, plug))
+            self.assertTrue(self.lines()[3].startswith("FAIL doctor.version: "), (cfgv, plug))
         self.set_cfg(framework_version="v0.1.0")
-        self.assertTrue(self.lines()[2].startswith("FAIL doctor.version: "))
+        self.assertTrue(self.lines()[3].startswith("FAIL doctor.version: "))
 
     def test_doctor_numeric_text_4300_4301(self):  # VE6, CB9, CI19, SA13, SA15, VR1
         for limit in INT_LIMITS:
@@ -358,14 +358,15 @@ class TestPythonInputVersion(Base):
                     with mock.patch.object(plugin, "framework_dir", return_value=self.fw):
                         self.set_cfg(framework_version=ver)
                         lines = self.lines()
-                        self.assertEqual(lines[1:3], ["PASS doctor.input", "PASS doctor.version"], (limit, n))
+                        self.assertEqual(lines[1:4], ["PASS doctor.input", "PASS doctor.context", "PASS doctor.version"],
+                                         (limit, n))
                         self.assertEqual(self.line("claude-block"), "FAIL doctor.claude-block: missing")
                         self.write("CLAUDE.md", self.claude(pv=ver))
                         self.assertEqual(self.line("claude-block"), "PASS doctor.claude-block")
                         self.write("CLAUDE.md", self.claude(pv=other))
                         self.assertTrue(self.line("claude-block").startswith("FAIL doctor.claude-block: version "))
                         self.set_cfg(framework_version=other)
-                        self.assertTrue(self.lines()[2].startswith("FAIL doctor.version: "))
+                        self.assertTrue(self.lines()[3].startswith("FAIL doctor.version: "))
                         self.managed_ci(pin="v" + ver)
                         self.assertEqual(self.line("ci"), "PASS doctor.ci")
                         os.unlink(os.path.join(self.r, WF))
@@ -382,7 +383,7 @@ class TestOutput(Base):
     def test_doctor_text_json_escape_unique_deterministic(self):  # OUT6-OUT10, OUT12, OUT13
         self.set_cfg(framework_version="bad\x00\n\r\t\x1b\\Ꟁ")
         lines = self.lines()
-        self.assertEqual(lines[2], "FAIL doctor.version: framework_version bad\\x00\\n\\r\\t\\x1b\\\\\\ua7c0 differs from the plugin 0.1.0; run /strict-delivery:upgrade")
+        self.assertEqual(lines[3], "FAIL doctor.version: framework_version bad\\x00\\n\\r\\t\\x1b\\\\\\ua7c0 differs from the plugin 0.1.0; run /strict-delivery:upgrade")
         self.assertEqual(len(lines), len(set(l.split(":")[0] for l in lines)))
         for ln in lines:
             if ln.startswith("FAIL"):
@@ -441,7 +442,7 @@ class TestHardening(Base):
         self.set_cfg(paths={"decisions": "docs/same", "findings": "docs/same"})
         self.assertEqual(self.line("indexes").split(":")[0], "FAIL doctor.indexes")
         self.set_cfg(paths={"decisions": "docs/a", "findings": "docs/a/b"})
-        self.assertEqual(len(self.lines()), 12)  # nested paths: no traceback, every line still printed
+        self.assertEqual(len(self.lines()), 13)  # nested paths: no traceback, every line still printed
 
     def test_h7_paths_outside_the_root_refused(self):  # H7 (IN4): a configured path outside the root fails doctor.input
         for value in ("../outside", "/abs/path", "a/../../b"):
@@ -598,7 +599,7 @@ class TestSwapAfterCheck(Base):
             os.unlink(m) if os.path.isfile(m) or os.path.islink(m) else None
             make()
             with self.no_block():
-                got = self.lines()[2]
+                got = self.lines()[3]
             self.assertTrue(got.startswith("FAIL doctor.version: "), got)
             clear(m)
 
@@ -617,3 +618,78 @@ class TestSwapAfterCheck(Base):
             os.mkfifo(os.path.join(hooks, name))
         with self.lie({n: reg for n in githooks.NAMES}), self.no_block():
             self.assertIn("neither extra installed", self.line("extras"))
+
+
+# ---------------------------------------------------------------------------------------------------- context.yml
+CTX_MISSING = "FAIL doctor.context: .strict-delivery/context.yml: missing; run /strict-delivery:init"
+
+
+class TestContext(Base):
+    """Amendment C (plan :5102; Note C-2): the line ``doctor.context`` directly after ``doctor.input``."""
+
+    def ctx_path(self):
+        return os.path.join(self.r, CONTEXT)
+
+    def test_cx1_context_missing(self):  # CX1: the repository is initialised but has no context.yml
+        os.unlink(self.ctx_path())
+        before = snap(self.r)
+        code, out, err = self.run_doctor()
+        lines = out.splitlines()
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(lines[:3], ["PASS doctor.python", "PASS doctor.input", CTX_MISSING])
+        self.assertEqual(len(lines), 13)  # the run continues after the line
+        self.assertEqual((snap(self.r), self.gh.log()), (before, []))  # writes nothing
+
+    def test_cx2_context_valid(self):  # CX2 valid: PASS, placed between doctor.input and doctor.version
+        lines = self.lines()
+        self.assertEqual(lines[1:4], ["PASS doctor.input", "PASS doctor.context", "PASS doctor.version"])
+        self.assertEqual(len([ln for ln in lines if " doctor.context" in ln]), 1)
+
+    def test_cx2_context_invalid(self):  # CX2 invalid against the schema: the production loader's text
+        for text, want in ((b"schema: context/9\n",
+                            "schema: expected context/1, got context/9; run /strict-delivery:upgrade"),
+                           (b"", "top level: must be a mapping"),
+                           (b"every: 3\n", "schema: expected context/1, got (missing)"),
+                           (b"schema: context/1\nevery: nope\n", "every: must be a list"),
+                           (b"schema: context/1\nbogus: 1\n", "bogus: unknown key"),
+                           (b"a: {b: 1}\n", ".strict-delivery/context.yml: flow mappings are not supported (line 1)")):
+            put(self.ctx_path(), text)
+            with self.subTest(text=text):
+                code, out, _ = self.run_doctor()
+                self.assertEqual(code, 1)
+                self.assertEqual(out.splitlines()[2], "FAIL doctor.context: .strict-delivery/context.yml: " + want)
+
+    def test_cx2_context_file_states(self):  # CX2 symlink, directory, FIFO, non-UTF-8 (H1, H2, H3, H6): doctor's own texts
+        import signal
+        real = os.path.join(self.tmp, "real-context.yml")
+        put(real, CONTEXT_OK)
+        p = self.ctx_path()
+        os.unlink(p)  # the fixture's valid file; each state below replaces it in turn
+        for name, make, want in (("symlink", lambda: os.symlink(real, p), "is a symlink"),
+                                 ("dangling", lambda: os.symlink(real + ".nope", p), "is a symlink"),
+                                 ("directory", lambda: os.mkdir(p), "is not a regular file"),
+                                 ("fifo", lambda: os.mkfifo(p), "is not a regular file"),
+                                 ("nonutf8", lambda: put(p, b"schema: context/1\n\xff\xfe"), "is not valid UTF-8")):
+            make()
+            with self.subTest(state=name):
+                def boom(sig, frm):
+                    raise AssertionError("blocked on a FIFO")
+                old = signal.signal(signal.SIGALRM, boom)
+                signal.alarm(20)
+                try:
+                    code, out, err = self.run_doctor()
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old)
+                self.assertEqual((code, err), (1, ""))
+                self.assertEqual(out.splitlines()[2], "FAIL doctor.context: .strict-delivery/context.yml: " + want)
+            clear(p)
+
+    def test_cx2_context_parent_symlink_refused(self):  # H4: a symlinked parent is refused by doctor.input first
+        os.unlink(self.ctx_path())
+        out = os.path.join(self.tmp, "moved")
+        os.rename(os.path.join(self.r, ".strict-delivery"), out)
+        os.symlink(out, os.path.join(self.r, ".strict-delivery"))
+        self.assertEqual(self.lines(), [
+            "PASS doctor.python",
+            "FAIL doctor.input: .strict-delivery/config.yml: parent .strict-delivery is a symlink"])
