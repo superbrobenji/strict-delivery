@@ -1163,6 +1163,13 @@ class Integration(Base):
                                  "it first" % (ARCH, ARCH, DB)])
 
 
+    def test_render_loads_the_repository_itself(self):
+        # every tracked handoff, program and status file of this tree is read by render; one that does not load
+        # refuses every command that re-renders the index (5b.1 review 1, HIGH)
+        files = index.render(REPO, config.load(REPO))
+        self.assertIn(INDEX_MD, files)
+
+
 
 
 # ------------------------------------------------ Task 5b.1: overview/2 (rows SC, RN, PL, SP, LP, HI, RG, SK)
@@ -1768,6 +1775,32 @@ class Overview2(Ov):
         self.ov(files={SPECS + "/s.md": "s\n", PS + "/p/handoff.md": ho_text("2a", [SPECS + "/s.md"])})
         self.assertEqual(self.sec("### In progress"), ["- " + SPECS + "/s.md"])
         self.assertEqual(self.sec("### Todo"), ["none"])
+
+    def test_spec_naming_a_plan_path_lists_it_once(self):  # F1 (review 1), PL8
+        # precedence within a section: done > in progress > todo (PL10, D-5b-Q4)
+        self.ov(files={PLANS + "/t.md": "p\n", PLANS + "/g.md": "p\n"})
+        git(self.work, "rm", "-q", PLANS + "/g.md")
+        self.commit("rm")
+        self.put(PS + "/p/handoff.md", ho_text("2a", [PLANS + "/t.md", PLANS + "/g.md"]))
+        self.assertEqual(self.sec("### Todo"), ["none"])
+        self.assertEqual(self.sec("### In progress"), ["- %s/t.md" % PLANS])
+        self.assertEqual(self.sec("### Done"), ["- %s/g.md (merge not recorded)" % PLANS])
+
+    def test_filled_overview_2_validates_against_its_schema(self):  # SC2, F2 (review 1)
+        self.ov(decs=[dec(PD1, "open", question="which?")],
+                files={PLANS + "/t.md": "p\n", PLANS + "/p.md": "p\n", PLANS + "/g.md": "p\n",
+                       SPECS + "/s.md": "s\n", SPECS + "/u.md": "s\n",
+                       PS + "/p/handoff.md": ho_text("2a", [SPECS + "/s.md"])})
+        git(self.work, "rm", "-q", PLANS + "/g.md")
+        self.commit("rm")
+        self.program(rows=[{"pending decisions": PD1}], requests=[req()])
+        md = self.idx()
+        self.assertIn("- %s: which?" % PD1, md)
+        self.assertIn("- %s/t.md" % PLANS, md)
+        self.assertIn("(block 2a)", md)
+        self.assertTrue(any(RID in ln for ln in md.split("\n")))
+        s = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "overview.yml"))
+        self.assertEqual(schema.validate_markdown(s, md), [])
 
     def test_spec_named_by_stream_handoff_at_tip(self):  # SP2, LP35
         self.ov(files={SPECS + "/s.md": "s\n"})

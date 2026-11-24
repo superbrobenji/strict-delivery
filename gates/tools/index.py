@@ -300,7 +300,9 @@ def _specs_and_plans(root: str, cfg: dict, progs: list) -> list:
         if path not in named:
             todo[path] = "- " + safe_text(path)
     for path in named:
-        doing[path] = "- " + safe_text(path)
+        if path not in done:  # one entry per path in a section: done > in progress > todo (PL10, D-5b-Q4)
+            todo.pop(path, None)
+            doing[path] = "- " + safe_text(path)
     if hist:
         for path in _deleted_md(root, spec_dir):
             if path not in named and path not in todo:
