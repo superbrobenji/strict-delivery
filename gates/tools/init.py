@@ -426,8 +426,7 @@ def _plan_hooks(root: str, answers: dict, conflicts: list, notes: list, extra: _
     if value is not None:
         conflicts.append("core.hooksPath is set (%s); unset it to install the hooks" % value)
         return
-    if os.path.lexists(hooks) and not (os.path.isdir(hooks) and not os.path.islink(hooks)) and \
-            not os.path.isdir(hooks):
+    if os.path.lexists(hooks) and (os.path.islink(hooks) or not os.path.isdir(hooks)):  # CD17: lstat, a link is a conflict
         conflicts.append("%s: exists and is not a directory" % hooks)
         return
     try:

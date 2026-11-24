@@ -1846,15 +1846,21 @@ class TestHookRows(More):
         self.put_answers()
         self.assertEqual(self.run_init("apply", "--root", tpl, "--answers", self.ans)[0], 0)
         self.assertTrue(os.path.exists(os.path.join(tpl, ".git", "hooks", "pre-commit")))
-        for name, setup, ok in (("hf", lambda p: touch(p), False), ("hd", lambda p: os.symlink(os.path.join(self.tmp, "none"), p), False),
-                                ("hl", lambda p: os.symlink(self.tmp, p), True)):
+        target = os.path.join(self.tmp, "hook-link-target")
+        os.makedirs(target)
+        # CD17 (run 11): a hooks directory that is a link, to a directory or dangling, is a conflict
+        for name, setup in (("hf", lambda p: touch(p)), ("hd", lambda p: os.symlink(os.path.join(self.tmp, "none"), p)),
+                            ("hl", lambda p: os.symlink(target, p))):
             r = self.repo(name, commit=False, flags=("--template=",))
             h = os.path.join(r, ".git", "hooks")
             setup(h)
             code, out, _ = self.run_init("plan", "--root", r, "--answers", self.ans)
-            self.assertEqual(code, 0 if ok else 1, out)
-            if not ok:
-                self.assertIn("FAIL init.conflict: %s: exists and is not a directory" % h, out)
+            self.assertEqual(code, 1, out)
+            self.assertIn("FAIL init.conflict: %s: exists and is not a directory" % h, out)
+            before = snapshot(r)
+            self.assertEqual(self.run_init("apply", "--root", r, "--answers", self.ans)[0], 1)
+            self.assertEqual(snapshot(r), before, name)
+            self.assertEqual(os.listdir(target), [], name)
         ro = self.repo("ro", commit=False)
         os.chmod(os.path.join(ro, ".git", "hooks"), 0o555)
         self.addCleanup(os.chmod, os.path.join(ro, ".git", "hooks"), 0o755)
