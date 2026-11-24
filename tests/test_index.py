@@ -1786,6 +1786,20 @@ class Overview2(Ov):
         self.assertEqual(self.sec("### In progress"), ["- %s/t.md" % PLANS])
         self.assertEqual(self.sec("### Done"), ["- %s/g.md (merge not recorded)" % PLANS])
 
+    def test_named_plan_keeps_its_in_progress_line(self):  # F-20261124-6hdc (review 2), plan :5330, PL4, PL5
+        # a plan that a handoff spec also names keeps the plan loop's suffix: the stream form, the program form
+        # and the own-handoff block form (the handoff form wins over the program form, Q9)
+        self.ov(files={PLANS + "/a-plan.md": "p\n", PLANS + "/pp.md": "p\n", PLANS + "/p.md": "p\n"})
+        self.program(rows=[dict(stream="a", block="5a")],
+                     streams={"schema": "streams/1", "program": PNAME, "plan": PLANS + "/pp.md",
+                              "streams": [{"id": "a", "plan": PLANS + "/a-plan.md"}]})
+        self.put(PS + "/p/handoff.md", ho_text("2a", [PLANS + "/a-plan.md", PLANS + "/pp.md", PLANS + "/p.md"]))
+        self.assertEqual(self.sec("### In progress"),
+                         ["- %s/a-plan.md (program %s, stream a, block 5a)" % (PLANS, PNAME),
+                          "- %s/p.md (block 2a)" % PLANS,
+                          "- %s/pp.md (program %s)" % (PLANS, PNAME)])
+        self.assertEqual(self.sec("### Todo"), ["none"])
+
     def test_filled_overview_2_validates_against_its_schema(self):  # SC2, F2 (review 1)
         self.ov(decs=[dec(PD1, "open", question="which?")],
                 files={PLANS + "/t.md": "p\n", PLANS + "/p.md": "p\n", PLANS + "/g.md": "p\n",
