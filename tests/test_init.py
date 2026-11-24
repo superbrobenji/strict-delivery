@@ -2526,5 +2526,107 @@ class TestReview1(More):
         self.assertEqual(os.listdir(outside), [])
 
 
+class TestSurvivors(More):
+    """Round 2: a surviving mutant is a missing test. Each test names the mutant ids (ch/4d1-mutants-5-table.py) it kills."""
+
+    def only_differs(self, expected_line, **cfg_extra):
+        """An initialised repository (config as ``init_config`` plus ``cfg_extra``); plan and apply refuse with exactly
+        ``expected_line``, writing nothing (D-Q4 (b))."""
+        self.init_config(**cfg_extra)
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub)
+            self.assertEqual((code, out), (1, "FAIL init.answers: %s\n" % expected_line), sub)
+            self.assertEqual(snapshot(self.root), before, sub)
+
+    # --- D-Q4 (b): each of the five config keys, one test each (members of _config_differences) ------------------
+    def test_initialised_merge_mode_must_match(self):  # D-Q4 (b); kills s-a14
+        self.only_differs('merge_mode: differs from the config (answer "host", config "controller")',
+                          merge={"mode": "controller"})
+
+    def test_initialised_base_branch_must_match(self):  # D-Q4 (b); kills s-a15
+        self.only_differs('base_branch: differs from the config (answer "main", config "develop")',
+                          base_branch="develop")
+
+    def test_initialised_tier_value_must_match(self):  # D-Q4 (b); kills s-a16
+        self.only_differs('models.tiers.tier2: differs from the config (answer "sonnet", config "mine")',
+                          models={"tiers": {"tier2": "mine"}})
+
+    def test_initialised_tier_absent_from_config_differs(self):  # D-Q4 (b); kills s-a16
+        self.init_config()
+        a = answers(models={"tiers": {"tier1": "haiku", "tier2": "sonnet", "tier3": "opus", "tier4": "x"}})
+        self.put_answers(a)
+        code, out, _ = self.run_init("plan", "--root", self.root, "--answers", self.ans)
+        self.assertEqual((code, out), (1, 'FAIL init.answers: models.tiers.tier4: differs from the config '
+                                          '(answer "x", config null)\n'))
+
+    def test_initialised_equal_answers_pass(self):  # D-Q4 (b) "equal values pass": the other branch of every key
+        self.init_config(merge={"mode": "controller"}, base_branch="develop", models={"tiers": {"tier2": "mine"}})
+        a = answers(merge_mode="controller", base_branch="develop",
+                    models={"tiers": {"tier1": "haiku", "tier2": "mine", "tier3": "opus"}})
+        self.put_answers(a)
+        self.assertEqual(self.run_init("plan", "--root", self.root, "--answers", self.ans)[0], 0)
+
+    # --- D-Q5 (a): a block present at this version with another body is left alone, with a note -----------------
+    def test_block_same_version_other_body_is_a_note(self):  # D-Q5 (a); kills s-a18 (CLAUDE.md)
+        self.assertEqual(self.cmd("apply")[0], 0)
+        self.write("CLAUDE.md", self.read("CLAUDE.md").replace("- Plans:", "- My plans:"))
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub)
+            self.assertEqual(code, 0, sub)
+            self.assertTrue(out.startswith("no changes\nnote: CLAUDE.md: present at version 0.0.0; "
+                                           "run /strict-delivery:upgrade\n"), (sub, out))
+            self.assertEqual(snapshot(self.root), before, sub)
+        self.assertIn("- My plans:", self.read("CLAUDE.md"))
+
+    def test_gitignore_block_same_version_other_body_is_a_note(self):  # D-Q5 (a); kills s-a18 (.gitignore)
+        self.assertEqual(self.cmd("apply")[0], 0)
+        self.write(".gitignore", self.read(".gitignore").replace("/in-force.md", "/mine.md"))
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub)
+            self.assertEqual(code, 0, sub)
+            self.assertTrue(out.startswith("no changes\nnote: .gitignore: present at version 0.0.0; "
+                                           "run /strict-delivery:upgrade\n"), (sub, out))
+            self.assertEqual(snapshot(self.root), before, sub)
+
+    # --- CD13: the direct-call argument checks -------------------------------------------------------------------
+    def test_load_answers_path_type_message(self):  # AF17; kills s-a33
+        import pathlib
+        for bad in (None, 5, b"x", pathlib.Path(self.ans), S(self.ans)):
+            with self.assertRaises(init.InitError) as cm:
+                init.load_answers(bad)
+            self.assertEqual((cm.exception.ident, cm.exception.reason), ("init.answers", "path: must be a string"),
+                             repr(bad))
+
+    def test_plan_init_schema_error_is_init_input(self):  # PL5 (SchemaError while loading init-answers.yml); kills s-a8
+        from gates.lib import schema
+        with mock.patch.object(schema, "load_schema", side_effect=schema.SchemaError("boom")):
+            with self.assertRaises(init.InitError) as cm:
+                init.plan_init(self.root, answers())
+        self.assertEqual((cm.exception.ident, cm.exception.reason), ("init.input", "boom"))
+
+    # --- AP4, CD18: a hook written before a later write fails stays and is listed ------------------------------------
+    def test_written_lists_hook_written_before_failure(self):  # AP4, CD18; kills s-g2
+        hooks = os.path.join(self.root, ".git", "hooks")
+        real = githooks._write
+
+        def second_fails(path, text):
+            if path.endswith("pre-push"):
+                raise OSError(28, "No space left on device")
+            return real(path, text)
+        with mock.patch.object(githooks, "_write", second_fails):
+            code, out, _ = self.cmd("apply")
+        dirs = ", ".join(".strict-delivery/%s/" % d for d in ("state", "state/decisions", "state/findings", "state/claims",
+                                                              "state/plans", "state/programs", "playbooks"))
+        self.assertEqual(out, "FAIL init.write: %s: cannot write (No space left on device)\n"
+                              "written: .strict-delivery/config.yml, %s, CLAUDE.md, .gitignore, .claude/settings.json, %s\n"
+                              % (os.path.join(hooks, "pre-push"), dirs, os.path.join(hooks, "pre-commit")))
+        self.assertEqual(code, 1)
+        self.assertTrue(os.path.exists(os.path.join(hooks, "pre-commit")))
+        self.assertFalse(os.path.exists(os.path.join(hooks, "pre-push")))
+
+
 if __name__ == "__main__":
     unittest.main()
