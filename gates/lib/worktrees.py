@@ -108,6 +108,18 @@ def _subagent(ctx, state: Optional[dict]) -> tuple:
     return frozenset({os.path.realpath(wt)}), []
 
 
+def _has_status_table(text: str) -> bool:
+    """Whether ``programs.status_rows`` found the status table in ``text`` (its first line starting with ``|`` whose
+    cells are the eleven headers, then a separator line): it returns ``[]`` both for a page with no such table and for
+    a table of zero rows, and only the second is a page that names no worktree."""
+    lines = text.split("\n")
+    for n, line in enumerate(lines):
+        if line.startswith("|") and programs._cells(line) == list(programs.STATUS_HEADERS):
+            nxt = lines[n + 1] if n + 1 < len(lines) else ""
+            return nxt.startswith("|") and set(nxt) <= set("|-: ")
+    return False
+
+
 def _status_cells(root: str, cfg: dict, name: str, known: set, tops: set, fails: list) -> None:
     """Add the worktree cells of program ``name``'s status page (read at the tip of ``<name>/integration``) that
     name an existing worktree of this repository; every other cell adds a fail line, an empty or ``-`` one nothing."""
@@ -119,6 +131,9 @@ def _status_cells(root: str, cfg: dict, name: str, known: set, tops: set, fails:
         return
     if text is None:
         fails.append("program %s: %s is not a file at the tip of %s/integration" % (name, safe_text(page), name))
+        return
+    if not _has_status_table(text):
+        fails.append("program %s: %s has no status table" % (name, safe_text(page)))
         return
     for row in programs.status_rows(text):
         if "__error__" in row:

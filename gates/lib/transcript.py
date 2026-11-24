@@ -8,6 +8,7 @@ subagent's own is ``<dirname(transcript_path)>/<session_id>/subagents/agent-<age
 from __future__ import annotations
 
 import json
+import math
 import os
 import stat
 from typing import Optional
@@ -42,10 +43,17 @@ def _integer(text: str) -> int:
     return int(text)
 
 
+def _float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise _Refused("number is not finite")
+    return value
+
+
 def _parse(line: bytes) -> dict:
     try:
         obj = json.loads(line.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant,
-                         parse_int=_integer)
+                         parse_int=_integer, parse_float=_float)
     except (UnicodeDecodeError, ValueError, RecursionError, _Refused):
         raise _Refused("not a JSON object line") from None
     if type(obj) is not dict:

@@ -4,6 +4,7 @@ only)."""
 from __future__ import annotations
 
 import json
+import math
 import os
 import types
 from dataclasses import dataclass, field
@@ -73,6 +74,13 @@ def _integer(text: str) -> int:
     return int(text)
 
 
+def _float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("number is not finite")
+    return value
+
+
 def _id_ok(value: object) -> bool:
     return type(value) is str and session.SESSION_ID.match(value) is not None
 
@@ -84,7 +92,8 @@ def parse(event: str, data: bytes) -> dict:
     except UnicodeDecodeError:
         raise _bad("input is not valid UTF-8") from None
     try:
-        raw = json.loads(text, object_pairs_hook=_pairs, parse_constant=_constant, parse_int=_integer)
+        raw = json.loads(text, object_pairs_hook=_pairs, parse_constant=_constant, parse_int=_integer,
+                         parse_float=_float)
     except (ValueError, RecursionError) as e:
         raise _bad("input is not valid JSON: " + safe_text(e)) from None
     if type(raw) is not dict:
