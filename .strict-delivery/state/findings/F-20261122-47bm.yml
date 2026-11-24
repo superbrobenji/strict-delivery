@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-47bm
+status: open
+source: "PR-5a review 2: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-2.md R2-1"
+severity: LOW
+class: "narrowing went too wide: test_repository_context_entries_resolve drops the existence check for every entry; members: static (non per-effort) entries such as playbook/review.md must exist; only per-effort files (handoff.md, ledger.md, in-force.md) are exempt"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e8eededcb25965347c0bdd286858937790717f57
+    by: stream-config-hooks
+review_round: 2
+caused_by_change: true
+dimension: "repository context entries: existence of static entries"

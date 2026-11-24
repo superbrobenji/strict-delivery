@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-98sa
+status: open
+source: "sub-block 3b final review (review 1 of the 3b end): .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-3b.md F3b-2"
+severity: LOW
+class: "test coverage: separators x quote kind; members: \"a && b\", \"a || b\", \"a | b\", \"a |& b\", 'a & b', 'a ;; b', a trailing newline inside '...' and \"...\", CRLF inside '...' and \"...\" (mutant X1 survives tests/test_shellscan.py)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 8d36843ee44e0ecd3c1eeb8a5d84c50fca0d7a71
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: separators x quote kind

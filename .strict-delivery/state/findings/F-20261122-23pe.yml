@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-23pe
+status: open
+source: "PR-5a head full suite at 9e7e3b7 (par_suite): .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-suite-1.out"
+severity: LOW
+class: "absolute wall-clock bounds in tests; members: tests/test_gate_context.py:1476 test_many_entries (LN13, 11.24 s not less than 10 on 3.13 under load), :1036 test_large_receipt_file_linear (RC24, < 20 s)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9e7e3b7c0417f72bd81a8f01395f89d90276aca3
+    by: stream-config-hooks
+review_round: 4
+caused_by_change: true
+dimension: timing assertion under load (wall clock)

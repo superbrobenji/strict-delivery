@@ -152,7 +152,7 @@ class SchemaFiles(GitIsolatedTestCase):
 
     def test_every_schema_file_loads(self):  # SC2
         names = sorted(n for n in os.listdir(schema.SCHEMAS_DIR) if n.endswith(".yml"))
-        self.assertEqual(len(names), 18)
+        self.assertEqual(len(names), 20)  # 6E.1's 18 plus 5a's context and receipt
         self.assertIn("mutation-transcript.yml", names)
         self.assertIn("review-report.yml", names)
         for n in names:

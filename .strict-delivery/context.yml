@@ -1,0 +1,55 @@
+schema: context/1
+every:
+  - path: "{paths.decisions}/in-force.md"
+    why: the decisions in force; every session reads them before acting (spec section 7.4)
+kinds:
+  plan:
+    - path: "{paths.plan_state}/{plan}/handoff.md"
+      why: where the plan stands and what to do next (handoff/1)
+    - path: "{paths.plan_state}/{plan}/ledger.md"
+      why: the plan's ledger, read from the handoff's ledger_from
+    - path: "{paths.plans}/{plan}.md"
+      why: the plan itself
+  stream-block:
+    - path: "{paths.plan_state}/{plan}/handoff.md"
+      why: where the stream plan stands and what to do next (handoff/1)
+    - path: "{paths.plan_state}/{plan}/ledger.md"
+      why: the stream plan's ledger, read from the handoff's ledger_from
+    - path: "{paths.plans}/{plan}.md"
+      why: the stream plan itself
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+  program:
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+  program-controller:
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+    - path: "{integration}/{paths.programs}/{program}/streams.yml"
+      why: the streams, their ownership and windows
+  sync:
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+    - path: "{integration}/{paths.programs}/{program}/streams.yml"
+      why: the streams, their ownership and windows
+roles:
+  task_reviewer:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+    - path: playbook/review.md
+      why: the review playbook
+  final_reviewer:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+    - path: playbook/review.md
+      why: the review playbook
+  final_verifier:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+    - path: playbook/review.md
+      why: the review playbook
+  exception_reviewer:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+    - path: playbook/review.md
+      why: the review playbook

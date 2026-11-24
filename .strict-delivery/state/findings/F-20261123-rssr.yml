@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261123-rssr
+status: open
+source: "PR-5a final review 2: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-5a-2.md FR-1"
+severity: LOW
+class: "git-call rule in test oracles: git calls in test oracles without --: tests/test_gate_context.py:1225 (sibling of F-20261121-tcda); members: every path-taking git call in the test files PR-5a touches"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: b0552a5a271bab63024620d7f147bc2cd873a372
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: git-call rule in test oracles

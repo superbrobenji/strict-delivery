@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261124-5gfw
+status: in-progress
+source: 3a.2 group C task review 1 at e6f37de (runtime/3a2-C-review-1.md, note 2)
+severity: LOW
+class: "version: git option support in worktrees.py: worktree list --porcelain -z (git 2.36), rev-parse --path-format=absolute (git 2.31); task-3a.2-domain.md has no row and no test of the fail-closed path when git refuses an option"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e6f37ded423c07f160d370ef1c1395f0e9e7b0ef
+    by: stream-runtime
+  - status: planned
+    sha: c4550680761c2a23e634ad598bf902070b96d819
+    by: stream-runtime
+  - status: in-progress
+    sha: c4550680761c2a23e634ad598bf902070b96d819
+    by: stream-runtime
+review_round: 1
+caused_by_change: true
+dimension: git version

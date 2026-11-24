@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-v9q9
+status: open
+source: PR-5b CI run 45386769990 macos-15/3.13 (records/PR-5b-ci-o6-investigation.md, F1)
+severity: MEDIUM
+class: "test-fixture isolation: detached git auto-maintenance started by fixture commits races snapshot oracles: tests/helpers.py make_repo (maintenance.auto, gc.auto unset; O6 test_gate_writes_nothing sees .git/objects/maintenance.lock removed under git 2.56.1)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2ec4bfaca3669997e3b5875701fd2c25ff3fde31
+    by: stream-records
+review_round: 7
+caused_by_change: true
+dimension: test-fixture isolation

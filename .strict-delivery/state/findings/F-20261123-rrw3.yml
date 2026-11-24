@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261123-rrw3
+status: open
+source: "PR-5a task review 6: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-6.md U1"
+severity: MEDIUM
+class: "concurrent creation of the receipts directory: gates/lib/receipts.py _step :73-93 (open ENOENT, rival mkdir, _kind 'dir', stale ENOENT raised); members: every _step call with create true (receipts directory and each hashed sub-directory)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e504100fe6a6db187475d3357f1ff29367ffeebe
+    by: stream-config-hooks
+review_round: 2
+caused_by_change: true
+dimension: concurrent first use of the receipts directory

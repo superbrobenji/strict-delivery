@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-6ht7
+status: open
+source: 5b.1 task review 1 (records/5b.1-review-1.md, F1)
+severity: LOW
+class: "output-consistency: a path listed in two states: spec names that name a plan path (present or deleted)"
+siblings: []
+cites:
+  - file: gates/tools/index.py
+    lines: 300-318
+    sha: 9aebeae
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f4ef878579dff8604ad874b6a4340216d4265a10
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: output-consistency
