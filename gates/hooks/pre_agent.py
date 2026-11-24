@@ -105,25 +105,25 @@ def _bind(ctx: HookContext, text: str, dispatcher_: Optional[dict], state: Optio
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
-        return "", refused
+        return "", None, refused
     if "\0" in text:                       # before realpath: 3.9 returns a string for it, 3.13 raises (CD14)
-        return "", refused
+        return "", None, refused
     real = os.path.realpath(text)
     if not worktrees.same_repository(ctx.root, real):
-        return "", refused
+        return "", None, refused
     try:
         branch = worktrees.bound_branch(real)
     except GateError:
-        return "", refused
+        return "", None, refused
     tops, notes = worktrees.allowed(ctx, ctx.root, ctx.cfg, state)
     if real in tops or _in_group(ctx, dispatcher_, state, branch):
-        return real, []
+        return real, branch or "", []
     fails = ["hook.agent.worktree: %s is not one of the dispatcher's worktrees" % shown]
-    return "", fails + ["hook.agent.worktree: %s" % safe_text(n) for n in notes]
+    return "", None, fails + ["hook.agent.worktree: %s" % safe_text(n) for n in notes]
 
 
-def worktree_of(ctx: HookContext, prompt: str, dispatcher: Optional[dict], state: Optional[dict]) -> tuple:
-    """``(path, fails)`` for the dispatch ``prompt``: ``path`` the ``realpath`` of the worktree bound to the child (or
+def _worktree(ctx: HookContext, prompt: str, dispatcher: Optional[dict], state: Optional[dict]) -> tuple:
+    """``(path, branch, fails)`` for the dispatch ``prompt``: ``path`` the ``realpath`` of the worktree bound to the child (or
     ``""`` for none) and ``fails`` the ``hook.agent.worktree: <reason>`` lines (no ``FAIL`` prefix, no way out).
 
     The ``worktree:`` line is the first ``## Task`` line reading ``worktree: /<path>``; it must be the top level of a
@@ -132,20 +132,27 @@ def worktree_of(ctx: HookContext, prompt: str, dispatcher: Optional[dict], state
     a program live a worker is refused and a controller binds nothing."""
     match, bad = _task_lines(prompt)
     if len(match) > 1:
-        return "", ["hook.agent.worktree: two worktree: lines in ## Task"]
+        return "", None, ["hook.agent.worktree: two worktree: lines in ## Task"]
     if bad:
-        return "", ["hook.agent.worktree: the line must read 'worktree: <absolute path>'"]
+        return "", None, ["hook.agent.worktree: the line must read 'worktree: <absolute path>'"]
     if match:
         return _bind(ctx, match[0], dispatcher, state)
     live = _program_live(ctx)
     if live is None or live:
         role = _role(prompt)
         if role is None or role not in dispatch.CONTROLLER_ROLES:
-            return "", ["hook.agent.worktree: a worker in a live program names its worktree"]
-        return "", []
+            return "", None, ["hook.agent.worktree: a worker in a live program names its worktree"]
+        return "", None, []
     main = os.path.realpath(ctx.root)
     tops, _ = worktrees.allowed(ctx, ctx.root, ctx.cfg, state)
-    return (main, []) if main in tops else ("", [])
+    return (main, None, []) if main in tops else ("", None, [])
+
+
+def worktree_of(ctx: HookContext, prompt: str, dispatcher: Optional[dict], state: Optional[dict]) -> tuple:
+    """``(path, fails)`` of ``_worktree``: ``path`` the ``realpath`` of the worktree bound to the child (or ``""``)
+    and ``fails`` the ``hook.agent.worktree: <reason>`` lines (no ``FAIL`` prefix, no way out)."""
+    path, _, fails = _worktree(ctx, prompt, dispatcher, state)
+    return path, fails
 
 
 def _gate(ctx: HookContext, prompt: str, disp: Optional[dict], live: Optional[bool]) -> tuple:
@@ -172,7 +179,7 @@ def _decide(ctx: HookContext, prompt: str, required: bool, state: Optional[dict]
     fails, context = [], []
     if required:
         fails, context = _gate(ctx, prompt, disp, _program_live(ctx))
-    path, wfails = worktree_of(ctx, prompt, disp, state)
+    path, branch, wfails = _worktree(ctx, prompt, disp, state)
     deny = list(fails) + ["FAIL %s%s" % (f, WAY_OUT) for f in wfails]
     if store_error is not None and required:
         deny.append("FAIL hook.agent.session: %s%s" % (safe_text(store_error), WAY_OUT))
@@ -183,7 +190,9 @@ def _decide(ctx: HookContext, prompt: str, required: bool, state: Optional[dict]
             return Outcome(deny=["FAIL hook.agent.dispatcher: the dispatcher is unknown and the gate passed it%s" % WAY_OUT])
         return Outcome()                   # no gate applies and no count to base a record on (plan step 5)
     role = _role(prompt) or "unknown"
-    branch = (worktrees.bound_branch(path) or "") if path else ""    # read once, here, never again (F-B3p-20)
+    if path and branch is None:            # no line: the main checkout is read here; with a line it was read in _bind
+        branch = worktrees.bound_branch(path) or ""   # the branch is read once per dispatch, never again (F-B3p-20)
+    branch = branch or ""
     session.add_dispatch(state, session.prompt_sha(prompt), role, disp["depth"] + 1, ctx.agent_id or "session", path,
                          branch)
     return Outcome(context=context)

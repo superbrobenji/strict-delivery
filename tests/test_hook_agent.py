@@ -839,17 +839,6 @@ class Worktrees(Base):
         via = os.path.join(parent, os.path.basename(self.stream_wt))
         self.assertEqual(self.hz_wo(via), (self.stream_wt, []))
 
-    def test_hardening_swap_after_check_is_stated_limit(self):   # HZ4 (stated limit)
-        self.program()
-        pr = real_prompt("stream_controller", "opus", brief="program: %s\nstream: s1" % NAME,
-                         task="t\nworktree: %s" % self.stream_wt)
-        p = self.hk(tin(pr, model="opus"))
-        self.assertEqual(p.returncode, 0, p.stderr)
-        rec = self.recs()[-1]
-        os.rename(self.stream_wt, self.stream_wt + "-moved")     # swapped after the check
-        self.assertEqual(self.recs()[-1], rec)                    # the recorded verdict is the state at check time
-        self.assertEqual(rec["worktree"], self.stream_wt)
-
     def test_hardening_nested_worktrees(self):   # HZ5
         self.program()
         inner = os.path.join(self.stream_wt, "nested")
@@ -1268,6 +1257,325 @@ class More(Base):
             pass
         with open(path, "rb") as fh:
             self.assertEqual(fh.read(), first)
+
+
+STATE_OK = ("schema: hook-session/1\nsession: s1\ndispatches:\n  - sha: %s\n    role: controller\n    depth: 1\n"
+            "    parent: session\n    worktree: /w\n    branch: b\nsurfaced: []\n")
+SHA_A = "a" * 64
+
+
+class Fix1(Base):
+    """Review round 1 (findings wfhu kafz yas4 9xky i2xx vmks hkwy)."""
+
+    def env_with(self, **kw):
+        e = dict(self.env)
+        e.update(kw)
+        return e
+
+    def counting(self, hijack=False):
+        calls = []
+        real_bb = pre_agent.worktrees.bound_branch
+
+        def bb(p):
+            calls.append(p)
+            return "hijacked" if (hijack and len(calls) > 1) else real_bb(p)
+        return calls, bb
+
+    def main_run(self, tool_input, check):
+        import io
+        from gates import hook
+        data = json.dumps(payload("PreToolUse", self.R, tool_name="Agent", session_id="s1", tool_input=tool_input)).encode()
+
+        class In:
+            buffer = io.BytesIO(data)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": self.pd}), mock.patch("sys.stdin", In), \
+                mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), \
+                mock.patch("gates.hooks.pre_agent.gate_dispatch.check", check):
+            code = hook.main(["PreToolUse"])
+        return code, out.getvalue(), err.getvalue()
+
+    # ---- wfhu: bound_branch read once per dispatch (call sites: pre_agent._bind and pre_agent._decide)
+    def test_branch_read_once(self):   # HA8, F-B3p-20: no line, line, group line
+        calls, bb = self.counting()
+        with mock.patch("gates.hooks.pre_agent.worktrees.bound_branch", bb):
+            self.seen(self.hand(tool_input=tin(real_prompt("implementer"))))
+            self.assertEqual(calls, [self.R])
+            del calls[:]
+            self.seen(self.hand(tool_input=tin(real_prompt("implementer", brief="l", task="t\nworktree: %s" % self.R))))
+            self.assertEqual(calls, [self.R])
+        self.assertEqual([r["branch"] for r in self.recs()], ["main", "main"])
+
+    def test_branch_read_once_group_hijack(self):   # HA8: the recorded branch is the one the group rule judged
+        self.program()
+        grp = self.add_wt("grp", "-b", NAME + "/s1/g1")
+        self.sub("a1", "stream prompt")
+        self.seed((session.prompt_sha("stream prompt"), "stream_controller", 1, "session", self.stream_wt,
+                   NAME + "/s1/main"))
+        calls, bb = self.counting(hijack=True)
+        with mock.patch("gates.hooks.pre_agent.worktrees.bound_branch", bb):
+            out, _ = self.seen(self.hand(agent_id="a1", tool_input=tin(real_prompt("implementer", task="t\nworktree: %s" % grp))))
+        self.assertEqual((out.deny, calls), ([], [grp]))
+        self.assertEqual(self.recs()[-1]["branch"], NAME + "/s1/g1")
+
+    # ---- kafz: group-rule refusals (WT13, WT16), one case per class member
+    def test_group_branch_shapes(self):   # WT13 WT16
+        self.program()
+        okwt = self.add_wt("okg", "-b", NAME + "/s1/g1")
+        self.sub("a1", "stream prompt")
+
+        def verdict(w, rec_branch=NAME + "/s1/main"):
+            st = {"dispatches": []}
+            session.add_dispatch(st, session.prompt_sha("stream prompt"), "stream_controller", 1, "session",
+                                 self.stream_wt, rec_branch)
+            return pre_agent.worktree_of(self.hand(agent_id="a1"), real_prompt("implementer", task="t\nworktree: %s" % w),
+                                         {"id": "stream_controller"}, st)
+        self.assertEqual(verdict(okwt), (okwt, []))
+        targets = {"four components": self.add_wt("w4", "-b", NAME + "/s1/a/b"),
+                   "another program": self.add_wt("wq", "-b", "20261102-y/s1/g1"),
+                   "records": self.add_wt("wr", "-b", NAME + "/records"),
+                   "integration": self.add_wt_existing("wi", NAME + "/integration"),
+                   "non-program branch": self.add_wt("wf", "-b", "feature2"),
+                   "detached": self.add_wt("wd", "--detach")}
+        for name, w in targets.items():
+            with self.subTest(name):
+                self.assertEqual(verdict(w), ("", ["hook.agent.worktree: %s is not one of the dispatcher's worktrees" % w]))
+        with self.subTest("WT16 record of another program, target in this one"):
+            self.assertEqual(verdict(okwt, "20261102-y/s1/main")[0], "")
+        with self.subTest("WT16 program differs only"):
+            other = self.add_wt("wq2", "-b", "20261102-y/s1/g2")
+            self.assertEqual(verdict(other, "20261102-y/s1/main")[0], other)    # same program and stream: allowed
+            self.assertEqual(verdict(other)[0], "")
+
+    def add_wt_existing(self, name, branch):
+        path = os.path.join(self.work, name)
+        git(self.R, "worktree", "add", "-q", path, branch)
+        return real(path)
+
+    # ---- yas4: HT2
+    def test_prompt_empty(self):   # HT2
+        p = self.hk({"prompt": "", "model": "sonnet"})
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("FAIL dispatch.grammar: missing heading ## Role", p.stderr)
+        self.set_config(profile="light")
+        p = self.hk({"prompt": "", "model": "sonnet"})
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertEqual([(r["sha"], r["role"]) for r in self.recs()], [(session.prompt_sha(""), "unknown")])
+
+    # ---- 9xky: the defensive deny
+    def test_defensive_unknown_dispatcher_deny(self):
+        out, calls = self.seen(self.hand(agent_id="a1", tool_input=tin("P")))
+        self.assertEqual(out.deny, ["FAIL hook.agent.dispatcher: the dispatcher is unknown and the gate passed it" + WAY])
+        self.assertEqual(self.recs(), [])
+        self.set_config(profile="light")
+        out, calls = pre_agent.handle(self.hand(agent_id="a1", tool_input=tin("P"), cfg=config.load(self.R))), None
+        self.assertEqual((out.deny, self.recs()), ([], []))
+
+    # ---- i2xx: the verdict follows the state at check time
+    def test_hardening_swap_after_check_is_stated_limit(self):   # HZ4
+        self.program()
+        mk = lambda brief: real_prompt("stream_controller", "opus", brief="program: %s\nstream: s1\n%s" % (NAME, brief),
+                                       task="t\nworktree: %s" % self.stream_wt)
+        p = self.hk(tin(mk("one"), model="opus"))
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        os.rename(self.stream_wt, self.stream_wt + "-moved")       # swapped after the check
+        p = self.hk(tin(mk("two"), model="opus"))                # the same line is judged on the state now
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("hook.agent.worktree: %s is not the top level of a worktree of this repository" % self.stream_wt,
+                      p.stderr)
+        self.assertEqual([r["worktree"] for r in self.recs()], [self.stream_wt])    # the first record kept its checked path
+
+    # ---- vmks: DS23 exact line
+    def test_depth_601_digits_exact_line(self):   # DS23 V1(c)
+        import re
+        seed_ctl(self, "controller", 10 ** 600, "P-601")
+        self.sub("a601", "P-601")
+        p = self.hk(tin(real_prompt("implementer", brief="d601")), agent_id="a601")
+        self.assertEqual(p.returncode, 2)
+        self.assertRegex(p.stderr, r"\AFAIL dispatch\.input: input: \S*dispatch\.json: not valid UTF-8 JSON "
+                                   r"\(an integer of more than 600 digits\)\n\Z")
+
+    # ---- hkwy: every value of the partly tested rows
+    def test_fork_spellings_pass_the_gate(self):   # HG5
+        for i, st in enumerate(("ｆｏｒｋ", " fork", "fork ")):
+            p = self.hk(tin(real_prompt("implementer", brief="f%d" % i), subagent_type=st))
+            self.assertEqual((p.returncode, p.stderr), (0, ""), st)
+
+    def test_dispatcher_transcript_symlink_followed(self):   # DS13
+        st = {"dispatches": []}
+        session.add_dispatch(st, session.prompt_sha("AB"), "controller", 2, "session", self.R, "main")
+        target = os.path.join(self.tmp, "real.jsonl")
+        write(target, user_line("AB") + "\n")
+        link = os.path.join(self.tmp, "s1", "subagents", "agent-a1.jsonl")
+        os.makedirs(os.path.dirname(link))
+        os.symlink(target, link)
+        self.assertEqual(pre_agent.dispatcher(self.hand(agent_id="a1"), st)["id"], "controller")
+
+    def test_config_directory_and_dangling_symlink(self):   # HC1
+        cfg = os.path.join(self.R, ".strict-delivery", "config.yml")
+        os.rename(cfg, cfg + ".bak")
+        for kind in ("dir", "dangling"):
+            if kind == "dir":
+                os.mkdir(cfg)
+            else:
+                os.symlink(os.path.join(self.tmp, "nowhere"), cfg)
+            p = self.hk(tin(real_prompt("implementer")))
+            self.assertEqual(p.returncode, 2, kind)
+            lines = p.stderr.split("\n")[:-1]
+            self.assertEqual(len(lines), 1, lines)
+            self.assertTrue(lines[0].startswith("FAIL hook.agent.config: ") and lines[0].endswith(WAY), lines)
+            os.rename(cfg, cfg + "." + kind)
+
+    def test_store_path_shapes(self):   # HS2 HS3 (corrected: a symlinked directory is accepted, 3a.1 L3)
+        afile = os.path.join(self.tmp, "afile")
+        write(afile, "x")
+        link = os.path.join(self.tmp, "pdlink")
+        os.symlink(self.pd, link)
+        for val in (afile, "", "rel"):
+            p = self.hk(tin(real_prompt("implementer")), env=self.env_with(CLAUDE_PLUGIN_DATA=val))
+            self.assertEqual(p.returncode, 2, val)
+            self.assertIn("FAIL dispatch.input: input: dispatcher must be an object\n", p.stderr)
+            self.assertRegex(p.stderr, r"FAIL hook\.agent\.session: ")
+        p = self.hk(tin(real_prompt("implementer", brief="file")), env=self.env_with(CLAUDE_PLUGIN_DATA=afile))
+        self.assertRegex(p.stderr, r"FAIL hook\.agent\.session: the session directory .* is not usable")
+        p = self.hk(tin(real_prompt("implementer", brief="link")), env=self.env_with(CLAUDE_PLUGIN_DATA=link))
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertEqual(len(self.recs()), 1)
+        self.set_config(profile="light")                          # HS3: not required: allow, nothing recorded
+        for val in (afile, "", "rel"):
+            p = self.hk({"prompt": "x"}, env=self.env_with(CLAUDE_PLUGIN_DATA=val))
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""), val)
+        p = self.hk({"prompt": "y"}, env=self.env_with(CLAUDE_PLUGIN_DATA=link))
+        self.assertEqual(len(self.recs()), 2)
+
+    def test_corrupt_state_variants(self):   # HS4
+        path = os.path.join(self.pd, "sessions", "s1.yml")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        variants = {"depth true": STATE_OK.replace("depth: 1", "depth: true") % SHA_A,
+                    "depth 0": STATE_OK.replace("depth: 1", "depth: 0") % SHA_A,
+                    "depth str": STATE_OK.replace("depth: 1", 'depth: "1"') % SHA_A,
+                    "sha 63": STATE_OK % SHA_A[:63], "sha 65": STATE_OK % (SHA_A + "a"),
+                    "other session": (STATE_OK % SHA_A).replace("session: s1", "session: s9"),
+                    "unknown key": (STATE_OK % SHA_A) + "extra: 1\n"}
+        for name, text in variants.items():
+            for profile, deny in (("strict", True), ("light", False)):
+                self.set_config(profile=profile)
+                write(path, text)
+                p = self.hk(tin(real_prompt("implementer", brief=name)) if deny else {"prompt": "x"})
+                self.assertEqual(p.returncode, 2 if deny else 0, (name, p.stderr))
+                if deny:
+                    self.assertIn("FAIL hook.agent.session: the session state file", p.stderr)
+                with open(path, encoding="utf-8") as fh:
+                    self.assertEqual(fh.read(), text, name)             # never moved or rewritten
+        os.rename(path, path + ".real")
+        os.symlink(path + ".real", path)
+        self.set_config(profile="strict")
+        p = self.hk(tin(real_prompt("implementer", brief="symlink")))
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("FAIL hook.agent.session: the session state file", p.stderr)
+
+    def test_stop_lock_held(self):   # SS12 (the lock is held by another process: exit 0, nothing changed)
+        import fcntl
+        self.seed((session.prompt_sha("rec"), "controller", 1, "session", "", ""))
+        tp = os.path.join(self.tmp, "t.jsonl")
+        write(tp, user_line("rec") + "\n")
+        fd = os.open(os.path.join(self.pd, "sessions", "s1.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        p = self.stop(tp)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(len(self.recs()), 1)
+
+    def test_concurrency_default_and_env(self):   # HN5
+        def fill(n):
+            with session.locked(self.env, "s1") as st:
+                st["dispatches"] = []
+                for i in range(n):
+                    session.add_dispatch(st, "%064d" % i, "controller", 1, "session", "", "")
+        fill(19)
+        self.assertEqual(self.hk(tin(real_prompt("implementer", brief="d19"))).returncode, 0)
+        fill(20)
+        p = self.hk(tin(real_prompt("implementer", brief="d20")))
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("FAIL dispatch.concurrency: 20 running + 1 exceeds max_concurrent 20", p.stderr)
+        env = self.env_with(CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS="21")
+        self.assertEqual(self.hk(tin(real_prompt("implementer", brief="e20")), env=env).returncode, 0)
+        fill(21)
+        p = self.hk(tin(real_prompt("implementer", brief="e21")), env=env)
+        self.assertIn("FAIL dispatch.concurrency: 21 running + 1 exceeds max_concurrent 21", p.stderr)
+
+    def test_session_start_resume_and_fork_reset(self):   # HN8
+        for src in ("resume", "fork"):
+            self.seed(("%064d" % 1, "controller", 1, "session", "", ""))
+            p = run_hook("SessionStart", payload("SessionStart", self.R, session_id="s1", source=src), self.env, FW)
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(self.recs(), [], src)
+
+    def test_limits_digit_edge_all_keys(self):   # HN13 (corrected: 601 digits give hook.agent.config)
+        for limits in ({"max_depth": 10 ** 599}, {"max_children": {"session": 10 ** 599}}):
+            self.set_config(limits=limits)
+            p = self.hk(tin(real_prompt("implementer", brief=str(sorted(limits)))))
+            self.assertEqual((p.returncode, p.stderr), (0, ""), limits)
+        for limits in ({"max_depth": 10 ** 600}, {"max_children": {"session": 10 ** 600}}, {"max_concurrent": 10 ** 600}):
+            self.set_config(limits=limits)
+            p = self.hk(tin(real_prompt("implementer", brief="x")))
+            self.assertEqual(p.returncode, 2)
+            self.assertTrue(p.stderr.startswith("FAIL hook.agent.config: "), p.stderr)
+
+    def test_gate_result_shapes_denied(self):   # HR5 HR6
+        from gates.lib.result import GateError
+        empty, other = Result("dispatch"), Result("other")
+        other.passed("other.x")
+        for what, want in ((GateError("cfg broke"), "FAIL dispatch.input: cfg broke"),
+                           (empty, "FAIL dispatch.empty: the gate produced no lines"),
+                           (other, "FAIL dispatch.input: the check returned a Result for gate other, not dispatch")):
+            kw = {"side_effect": what} if isinstance(what, Exception) else {"return_value": what}
+            with mock.patch("gates.hooks.pre_agent.gate_dispatch.check", **kw):
+                out = pre_agent.handle(self.hand(tool_input=tin("P")))
+            self.assertEqual(out.deny, [want])
+
+    def test_context_as_stdout_json(self):   # HR3 HR14 through hook.main
+        def check(args):
+            r = Result("dispatch")
+            r.passed("dispatch.input")
+            r.passed("dispatch.in-force.DEC-20261101-k3f9")
+            return r
+        code, out, err = self.main_run(tin(real_prompt("implementer")), check)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
+                                                                "PASS dispatch.in-force.DEC-20261101-k3f9"}}) + "\n")
+        self.assertNotIn("permissionDecision", out)
+
+    def test_baseexception_from_gate_is_exit_two_through_entry(self):   # HR7 V3
+        import builtins
+        cls = getattr(builtins, "BaseExceptionGroup", None)
+        for exc in (KeyboardInterrupt(), cls("g", [KeyboardInterrupt()]) if cls else type("Stand", (BaseException,), {})("g")):
+            code, out, err = self.main_run(tin(real_prompt("implementer")), mock.Mock(side_effect=exc))
+            self.assertEqual((code, out), (2, ""))
+            self.assertTrue(err.startswith("FAIL hook.PreToolUse: "), err)
+        self.assertEqual(self.recs(), [])
+
+    def test_unicode_role_and_session_file_bytes(self):   # V2
+        pr = real_prompt("implementer").replace("## Role\nimplementer\n", "## Role\nimplementerⰯ\n", 1)
+        p = self.hk(tin(pr))
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("FAIL dispatch.role: ", p.stderr)
+        self.seed(("%064d" % 1, "controller", 1, "session", "/w\U0001fae0Ⱟ", "b"))
+        with open(os.path.join(self.pd, "sessions", "s1.yml"), "rb") as fh:
+            self.assertIn(b"    worktree: /w\xf0\x9f\xab\xa0\xe2\xb0\xaf\n", fh.read())
+
+    def test_stop_oversize_and_surrogate_first_entry(self):   # SS5 through subagent_stop
+        self.seed((session.prompt_sha("A" * 4194000), "controller", 1, "session", "", ""),
+                  (session.prompt_sha("A"), "controller", 1, "session", "", ""))
+        big = os.path.join(self.tmp, "big.jsonl")
+        write(big, user_line("A" * 4194400) + "\n")
+        sur = os.path.join(self.tmp, "sur.jsonl")
+        write(sur, json.dumps({"type": "user", "message": {"content": "A\ud800"}}) + "\n")
+        for path in (big, sur):
+            p = self.stop(path)
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+            self.assertEqual(len(self.recs()), 2, path)
 
 
 if __name__ == "__main__":
