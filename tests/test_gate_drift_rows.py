@@ -309,11 +309,35 @@ class ProgramLines(Gate):
         bare = self.remote()
         self.advance_remote(bare)
         git(self.root, "fetch", "-q", "origin")
-        with mock.patch("gates.lib.drift.gitinfo.main_worktree", return_value="/p\\q ࡰ"):
+        with mock.patch("gates.lib.drift.worktrees.worktree_list", return_value=[("/p\\q ࡰ", "main")]):
             out, code = self.g()
         want = ("FAIL drift.base: update main from the remote: git -C /p\\\\q \\u0870 fetch origin, then git -C /p\\\\q \\u0870 "
                 "merge --ff-only origin/main")
         self.assertEqual(out.splitlines()[0], want)
+
+    def test_base_reason_text_through_main(self):  # B2, B3, B5, B8 (5c.1 r4): the reason text, once, through gate_drift.main
+        self.insync()
+        bare = self.remote()
+        self.advance_remote(bare)
+        git(self.root, "fetch", "-q", "origin")
+        git(self.root, "checkout", "-q", "-b", "elsewhere")
+        out, code = self.g()
+        self.assertEqual(out.splitlines()[0], "FAIL drift.base: update main from the remote: no worktree has main "
+                                              "checked out, so no update command is given")
+        self.assertEqual(code, 1)
+        wt = os.path.join(self.tmp, "n\nl")
+        git(self.root, "worktree", "add", "-q", wt, "main")
+        out, _ = self.g()
+        self.assertEqual(len(out.splitlines()), 1 + len(ok(P)))
+        self.assertIn("git -C %s fetch origin, then git -C %s merge --ff-only origin/main"
+                      % (wt.replace("\n", "\\n"), wt.replace("\n", "\\n")), out.splitlines()[0])
+        git(self.root, "worktree", "remove", "--force", wt)
+        git(self.root, "push", "-q", "origin", "origin/main:refs/heads/dev")
+        git(self.root, "fetch", "-q", "origin")
+        git(self.root, "branch", "-q", "--set-upstream-to=origin/dev", "main")
+        out, _ = self.g()
+        self.assertEqual(out.splitlines()[0], "FAIL drift.base: update main from its upstream origin/dev: it is not "
+                                              "origin/main, so no update command is given")
 
     def test_base_remote_name_escaped_once(self):  # B3, L10, V2a (F-20261124-8gz5): git accepts U+0870, U+0085, U+200B, U+1E030
         self.insync()
