@@ -1,5 +1,6 @@
 ---
 schema: handoff/1
+block: sb2
 ---
 # Stream b handoff (block sb2)
 

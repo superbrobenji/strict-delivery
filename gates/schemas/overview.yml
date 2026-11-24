@@ -1,10 +1,12 @@
 kind: overview
-version: 1
+version: 2
 format: markdown
 files:
   - path: index
-first_line: "<!-- schema: overview/1 -->"
+first_line: "<!-- schema: overview/2 -->"
 headings:
   - "## Architecture"
+  - "## Specs and plans"
+  - "## Live programs"
   - "## Open findings"
   - "## In-force decisions"
