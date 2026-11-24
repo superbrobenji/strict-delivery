@@ -27,6 +27,7 @@ PRODUCES = ("claude-block", "gitignore-block")
 USAGE = "usage: python3 -m gates init <questions|plan|apply> --root R [--answers F] [--json]\n"
 SETTINGS = ".claude/settings.json"
 CI_PATH = ".github/workflows/strict-delivery.yml"
+CONTEXT_TEMPLATE = "context.yml"  # templates/context.yml (Amendment C, plan :5102, owner answer Q-RC13-1)
 STATE_KEYS = ("decisions", "findings", "claims", "plan_state", "programs", "playbooks")
 SLOTS = detect.SLOTS
 TIERS = ("tier1", "tier2", "tier3", "tier4")
@@ -70,6 +71,7 @@ class _Extra:
     dirs: list = field(default_factory=list)
     hooks: list = field(default_factory=list)
     hooks_dir: Optional[str] = None
+    context_path: Optional[str] = None
     diffs: list = field(default_factory=list)  # (path, old, new)
     actions: list = field(default_factory=list)  # (path, new) from managed.plan
 
@@ -496,6 +498,9 @@ def _build(root: str, answers: dict) -> tuple:
         settings, set_conflicts, set_write = _settings_change(root, answers["subagents"])
         if set_write is not None:
             writes.append(set_write)
+        extra.context_path = cfg["paths"]["context"]
+        if managed._inspect(root, extra.context_path)[0] != "text":  # CX1, CX2: a present file is never rewritten
+            writes.append(managed.Write(extra.context_path, templates.render(CONTEXT_TEMPLATE, {}), "file"))
         actions, m_conflicts = managed.plan(root, writes, version)
         # write order: config, directories, blocks, CI, settings, hooks (PL3)
         config_c = [c for c in m_conflicts if c.startswith(config.CONFIG_PATH + ": ")]
@@ -608,6 +613,7 @@ def _apply(root: str, plan: InitPlan, extra: _Extra, written: list) -> list:
     group(("CLAUDE.md", ".gitignore"))
     group((CI_PATH,))
     group((SETTINGS,))
+    group((extra.context_path,))
     fw = githooks.framework_dir()
     for name in extra.hooks:
         hook = os.path.join(extra.hooks_dir, name)

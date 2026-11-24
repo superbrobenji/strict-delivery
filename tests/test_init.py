@@ -467,7 +467,7 @@ class TestPieces(Base):
         for d in ("state/decisions", "state/findings", "state/claims", "state/plans", "state/programs", "playbooks"):
             p = os.path.join(self.root, base, d)
             self.assertEqual(os.listdir(p), [], d)
-        self.assertEqual(sorted(os.listdir(os.path.join(self.root, base))), ["config.yml", "playbooks", "state"])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.root, base))), ["config.yml", "context.yml", "playbooks", "state"])
         self.assertFalse(os.path.exists(os.path.join(self.root, base, "receipts")))
 
     def test_dir_conflicts(self):  # DR5, DR6
@@ -598,7 +598,7 @@ class TestPieces(Base):
         self.assertEqual([k for k in flat if not k.startswith("mkdir:")],
                          ["apply:.strict-delivery/config.yml", "apply:CLAUDE.md", "apply:.gitignore",
                           "apply:.github/workflows/strict-delivery.yml", "apply:.claude/settings.json",
-                          "hook:pre-commit", "hook:pre-push"])
+                          "apply:.strict-delivery/context.yml", "hook:pre-commit", "hook:pre-push"])
         self.assertLess(flat.index("apply:.gitignore"), flat.index("apply:.github/workflows/strict-delivery.yml"))
         self.assertLess(flat.index("mkdir:.strict-delivery/state"), flat.index("apply:CLAUDE.md"))
 
@@ -2052,7 +2052,8 @@ class TestPlanApplyRows(More):
         marks = ["--- a/.strict-delivery/config.yml\n+++ b/.strict-delivery/config.yml\n", "mkdir .strict-delivery/state/\n",
                  "--- a/CLAUDE.md\n+++ b/CLAUDE.md\n", "--- a/.gitignore\n+++ b/.gitignore\n",
                  "--- a/.github/workflows/strict-delivery.yml\n+++ b/.github/workflows/strict-delivery.yml\n",
-                 "--- a/.claude/settings.json\n+++ b/.claude/settings.json\n", "\nhook /"]
+                 "--- a/.claude/settings.json\n+++ b/.claude/settings.json\n",
+                 "--- a/.strict-delivery/context.yml\n+++ b/.strict-delivery/context.yml\n", "\nhook /"]
         pos = [out.index(m) for m in marks]
         self.assertEqual(pos, sorted(pos), out)
         self.assertIn("@@ -0,0 +1,10 @@\n+schema: config/2\n", out)
@@ -2086,11 +2087,12 @@ class TestPlanApplyRows(More):
         code, out, _ = self.cmd("apply", ci=True)
         self.assertEqual(code, 0, out)
         self.assertEqual(out, "?? .claude/settings.json\n?? .github/workflows/strict-delivery.yml\n?? .gitignore\n"
-                              "?? .strict-delivery/config.yml\n?? CLAUDE.md\n")
+                              "?? .strict-delivery/config.yml\n?? .strict-delivery/context.yml\n?? CLAUDE.md\n")
         code, out, _ = self.cmd("apply", ci=True)
         self.assertEqual(code, 0)
         self.assertEqual(out, "no changes\n?? .claude/settings.json\n?? .github/workflows/strict-delivery.yml\n"
-                              "?? .gitignore\n?? .strict-delivery/config.yml\n?? CLAUDE.md\n")
+                              "?? .gitignore\n?? .strict-delivery/config.yml\n?? .strict-delivery/context.yml\n"
+                              "?? CLAUDE.md\n")
         for rel in (".strict-delivery/config.yml", "CLAUDE.md", ".gitignore", ".claude/settings.json"):
             self.assertEqual(os.stat(os.path.join(self.root, rel)).st_mode & 0o777, 0o666 & ~umask(), rel)
 
@@ -2255,7 +2257,8 @@ class TestReview1(More):
     # --- R1-4 (i5nc): one line per conflict --------------------------------------------------------------------
     def test_conflicts_listed_once(self):  # PL3, PO2
         os.symlink(self.tmp, os.path.join(self.root, ".strict-delivery"))
-        want = [".strict-delivery/config.yml: parent .strict-delivery is not a directory", ".strict-delivery: is a symlink"]
+        want = [".strict-delivery/config.yml: parent .strict-delivery is not a directory", ".strict-delivery: is a symlink",
+                ".strict-delivery/context.yml: parent .strict-delivery is not a directory"]
         self.assertEqual(init.plan_init(self.root, answers()).conflicts, want)
         code, out, _ = self.cmd("plan")
         self.assertEqual((code, out), (1, "".join("FAIL init.conflict: %s\n" % c for c in want)))
@@ -2608,7 +2611,7 @@ class TestSurvivors(More):
         self.assertEqual((cm.exception.ident, cm.exception.reason), ("init.input", "boom"))
 
     # --- AP4, CD18: a hook written before a later write fails stays and is listed ------------------------------------
-    def test_written_lists_hook_written_before_failure(self):  # AP4, CD18; kills s-g2
+    def test_written_lists_hook_written_before_failure(self):  # AP4, CD18; kills s-g2, s-x7
         hooks = os.path.join(self.root, ".git", "hooks")
         real = githooks._write
 
@@ -2621,11 +2624,213 @@ class TestSurvivors(More):
         dirs = ", ".join(".strict-delivery/%s/" % d for d in ("state", "state/decisions", "state/findings", "state/claims",
                                                               "state/plans", "state/programs", "playbooks"))
         self.assertEqual(out, "FAIL init.write: %s: cannot write (No space left on device)\n"
-                              "written: .strict-delivery/config.yml, %s, CLAUDE.md, .gitignore, .claude/settings.json, %s\n"
+                              "written: .strict-delivery/config.yml, %s, CLAUDE.md, .gitignore, .claude/settings.json, "
+                              ".strict-delivery/context.yml, %s\n"
                               % (os.path.join(hooks, "pre-push"), dirs, os.path.join(hooks, "pre-commit")))
         self.assertEqual(code, 1)
         self.assertTrue(os.path.exists(os.path.join(hooks, "pre-commit")))
         self.assertFalse(os.path.exists(os.path.join(hooks, "pre-push")))
+
+
+CONTEXT_YML = """schema: context/1
+every:
+  - path: "{paths.decisions}/in-force.md"
+    why: the decisions in force; every session reads them before acting (spec section 7.4)
+kinds:
+  plan:
+    - path: "{paths.plan_state}/{plan}/handoff.md"
+      why: where the plan stands and what to do next (handoff/1)
+    - path: "{paths.plan_state}/{plan}/ledger.md"
+      why: the plan's ledger, read from the handoff's ledger_from
+    - path: "{paths.plans}/{plan}.md"
+      why: the plan itself
+  stream-block:
+    - path: "{paths.plan_state}/{plan}/handoff.md"
+      why: where the stream plan stands and what to do next (handoff/1)
+    - path: "{paths.plan_state}/{plan}/ledger.md"
+      why: the stream plan's ledger, read from the handoff's ledger_from
+    - path: "{paths.plans}/{plan}.md"
+      why: the stream plan itself
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+  program:
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+  program-controller:
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+    - path: "{integration}/{paths.programs}/{program}/streams.yml"
+      why: the streams, their ownership and windows
+  sync:
+    - path: "{integration}/{paths.programs}/{program}/status.md"
+      why: the program's status page (programs design section 10)
+    - path: "{integration}/{paths.programs}/{program}/streams.yml"
+      why: the streams, their ownership and windows
+roles:
+  task_reviewer:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+  final_reviewer:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+  final_verifier:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+  exception_reviewer:
+    - path: "{brief}"
+      why: the dispatch brief this agent works from
+"""
+CTX = ".strict-delivery/context.yml"
+
+
+class TestContextYml(More):
+    """Amendment C (plan :5102, owner answer Q-RC13-1): init writes the default .strict-delivery/context.yml. The
+    expected text is hand-written above: origin/main's entries except the four ``playbook/review.md`` entries."""
+
+    def ctx_path(self):
+        return os.path.join(self.root, CTX)
+
+    # --- the template pin -------------------------------------------------------------------------------------
+    def test_template_is_the_expected_text(self):  # Q-RC13-1 (Note C-3)
+        from gates.lib import templates
+        with open(os.path.join(REPO, "templates", "context.yml"), "rb") as fh:
+            self.assertEqual(fh.read().decode("utf-8"), CONTEXT_YML)
+        self.assertEqual(templates.render("context.yml", {}), CONTEXT_YML)
+        self.assertNotIn("playbook/review.md", CONTEXT_YML)
+        self.assertEqual(CONTEXT_YML.count("{brief}"), 4)
+
+    # --- CX1: a fresh repository -------------------------------------------------------------------------------
+    def test_cx1_plan_lists_an_add(self):  # CX1; kills s-x1, s-x4
+        before = snapshot(self.root)
+        plan = init.plan_init(self.root, answers())
+        adds = [w for w in plan.writes if w.path == CTX]
+        self.assertEqual([(w.kind, w.text) for w in adds], [("file", CONTEXT_YML)])
+        code, out, _ = self.cmd("plan")
+        self.assertEqual(code, 0)
+        self.assertIn("--- a/%s\n+++ b/%s\n@@ -0,0 +1,%d @@\n" % (CTX, CTX, CONTEXT_YML.count("\n")), out)
+        self.assertIn("".join("+%s\n" % l for l in CONTEXT_YML.split("\n")[:-1]), out)
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_cx1_apply_writes_the_default(self):  # CX1; kills s-x1, s-x4, s-x6
+        code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read(CTX), CONTEXT_YML)
+        self.assertIn("?? %s\n" % CTX, out)
+        self.assertEqual(os.lstat(self.ctx_path()).st_mode & 0o777, 0o666 & ~umask())
+
+    def test_cx1_written_file_passes_check_schema(self):  # CX1: check schema, kind context
+        # ``context`` is in no producer list yet (it joins with block 5, plan :5102), so ``check schema`` does not look
+        # at the kind on this head; the test makes it produced, as it will be, and shows the gate then looks.
+        from gates import gate_schema
+        from gates.lib import schema
+        with mock.patch.object(schema, "produced_kinds", return_value=schema.produced_kinds() | {"context"}):
+            self.assertEqual(self.cmd("apply")[0], 0)
+            os.unlink(self.ctx_path())  # the fixture's own file: the gate must then name it missing
+            missing = gate_schema.check(["--root", self.root])
+            self.assertIn(("FAIL", "schema.context." + CTX), [(l.status, l.id) for l in missing.lines])
+            self.assertEqual(self.cmd("apply")[0], 0)
+            res = gate_schema.check(["--root", self.root])
+        self.assertIn(("PASS", "schema.context"), [(l.status, l.id) for l in res.lines])
+        self.assertEqual([l for l in res.lines if l.status == "FAIL"], [])
+
+    def test_cx1_configured_path_is_used(self):  # CX1 with paths.context set (config.py:30 key); kills s-x5
+        self.init_config(paths={"context": "ctx/context.yml"})
+        code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read("ctx/context.yml"), CONTEXT_YML)
+        self.assertFalse(os.path.exists(self.ctx_path()))
+
+    # --- CX2: present ------------------------------------------------------------------------------------------
+    def test_cx2_present_and_equal_is_no_change(self):  # CX2 equal; kills s-x2
+        self.assertEqual(self.cmd("apply")[0], 0)
+        before = snapshot(self.root)
+        self.assertEqual(self.cmd("plan")[:2], (0, "no changes\n"))
+        code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("no changes\n"), out)  # apply then prints the git status
+        self.assertEqual(snapshot(self.root), before)
+        self.assertEqual(self.read(CTX), CONTEXT_YML)
+
+    def test_cx2_present_and_different_is_left_alone(self):  # CX2 different (no-overwrite rule); kills s-x2
+        mine = "schema: context/1\nevery: []\n"
+        self.write(CTX, mine)
+        plan = init.plan_init(self.root, answers())
+        self.assertEqual((plan.conflicts, [w.path for w in plan.writes if w.path == CTX]), ([], []))
+        code, out, _ = self.cmd("plan")
+        self.assertEqual(code, 0)
+        self.assertNotIn(CTX, out)
+        code, out, _ = self.cmd("apply")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read(CTX), mine)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "CLAUDE.md")))  # the other pieces are still written
+        self.assertEqual(self.cmd("plan")[:2], (0, "no changes\n"))
+
+    def conflict(self, setup, text, sub_list=("plan", "apply")):
+        setup()
+        before = snapshot(self.root)
+        for sub in sub_list:
+            code, out, _ = helpers.within(lambda: self.cmd(sub))
+            self.assertEqual(code, 1, (sub, out))
+            self.assertIn("FAIL init.conflict: %s: %s\n" % (CTX, text), out)
+            self.assertEqual(snapshot(self.root), before, sub)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "CLAUDE.md")))
+
+    def test_cx2_malformed_non_utf8_is_a_conflict(self):  # CX2 malformed; H6; kills s-x3
+        self.conflict(lambda: self.write(CTX, b"schema: context/1\n\xff\xfe", mode="wb"),
+                      "exists and is not framework-managed")
+
+    def test_cx2_symlink_is_a_conflict(self):  # CX2 symlink, H1; kills s-x3
+        def setup():
+            os.makedirs(os.path.dirname(self.ctx_path()))
+            os.symlink(os.path.join(self.root, "README.md"), self.ctx_path())
+        self.conflict(setup, "is a symlink")
+
+    def test_cx2_dangling_symlink_is_a_conflict(self):  # CX2 symlink (dangling), H1; kills s-x3
+        def setup():
+            os.makedirs(os.path.dirname(self.ctx_path()))
+            os.symlink(os.path.join(self.tmp, "nowhere"), self.ctx_path())
+        self.conflict(setup, "is a symlink")
+
+    def test_cx2_directory_is_a_conflict(self):  # CX2 directory, H2; kills s-x3
+        self.conflict(lambda: os.makedirs(self.ctx_path()), "exists and is not framework-managed")
+
+    def test_cx2_fifo_is_a_conflict(self):  # CX2 FIFO, H3; kills s-x3
+        def setup():
+            os.makedirs(os.path.dirname(self.ctx_path()))
+            os.mkfifo(self.ctx_path())
+        self.conflict(setup, "exists and is not framework-managed")
+
+    def test_cx2_parent_link_is_a_conflict(self):  # H4: .strict-delivery is a symlink to a directory
+        outside = os.path.join(self.tmp, "outside")
+        os.mkdir(outside)
+        os.symlink(outside, os.path.join(self.root, ".strict-delivery"))
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub)
+            self.assertEqual(code, 1, sub)
+            self.assertIn("FAIL init.conflict: %s: parent .strict-delivery is not a directory\n" % CTX, out)
+            self.assertEqual(snapshot(self.root), before, sub)
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_cx2_unreadable_is_init_input(self):  # H6: mode 0 (as BK8 for CLAUDE.md)
+        p = self.write(CTX, "x: y\n")
+        os.chmod(p, 0)
+        self.addCleanup(os.chmod, p, 0o644)
+        code, out, _ = self.cmd("plan")
+        self.assertEqual((code, out), (1, "FAIL init.input: %s: cannot read (Permission denied)\n" % CTX))
+
+    def test_cx_write_failure_names_the_path(self):  # AP4: the context write fails after the others; kills s-x6
+        real = managed._write
+
+        def fail_ctx(root, path, text):
+            if path == CTX:
+                raise OSError(28, "No space left on device")
+            return real(root, path, text)
+        with mock.patch.object(managed, "_write", fail_ctx):
+            code, out, _ = self.cmd("apply", git_hooks=False)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: %s: cannot write (No space left on device)\nwritten: " % CTX, out)
+        self.assertIn("CLAUDE.md, .gitignore, .claude/settings.json\n", out)
 
 
 if __name__ == "__main__":

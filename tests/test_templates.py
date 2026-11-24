@@ -47,7 +47,7 @@ CLAUDE_KEYS = ("specs", "plans", "reviews", "architecture", "playbooks")
 CHANGED = {"specs": "s1/specs", "plans": "p1/plans", "reviews": "r1/reviews", "architecture": "a1/arch.md",
            "playbooks": "pb1", "decisions": "d1", "findings": "f1", "index": "i1/INDEX.md", "receipts": "rc1"}
 BREAKS = ["\n", "\r", "\x00", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", " ", " "]
-RAW_NAMES = ["claude-block.md", "gitignore-block.txt", "ci/strict-delivery.yml"]
+RAW_NAMES = ["claude-block.md", "gitignore-block.txt", "ci/strict-delivery.yml", "context.yml"]
 CBS = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "claude-block.yml"))
 GBS = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "gitignore-block.yml"))
 
