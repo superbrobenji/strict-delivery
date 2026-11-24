@@ -106,10 +106,10 @@ CH6_SHAPES = (
     ("program", 4000, lambda k: "/" + "a/" * k + " x", _scan,
      lambda k: _pw(("/" + "a/" * k, "x"), ("/" + "a/" * k, "x"))),
     # the cd prefix: the segment loop of _cd_target
-    ("cd", 4000, lambda k: "cd /" + "a/" * k + " && git x", _scan,
+    ("cd", 40000, lambda k: "cd /" + "a/" * k + " && git x", _scan,
      lambda k: _pw(("git", "x"), ("cd", "/" + "a/" * k, "&&", "git", "x"), cd="/" + "a/" * k)),
     # the occurrence loop of token_in (every occurrence has a token character beside it)
-    ("token_in", 8000, lambda k: "a" * k, _token, lambda k: False),
+    ("token_in", 256000, lambda k: "a" * k, _token, lambda k: False),
 )
 
 
