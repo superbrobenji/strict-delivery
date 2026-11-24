@@ -1170,6 +1170,18 @@ class More(Base):
         with open(os.path.join(self.pd, "sessions", "s1.yml"), encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "schema: [\n")
 
+    def test_stop_relative_path_never_read(self):   # SS3 (CD9): a relative path that resolves from the hook's own directory
+        rec = os.path.join(self.tmp, "rel.jsonl")
+        write(rec, user_line("rec") + "\n")
+        self.seed((session.prompt_sha("rec"), "controller", 1, "session", "", ""))
+        rel = os.path.relpath(rec, FW)
+        self.assertFalse(os.path.isabs(rel))
+        p = self.stop(rel)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertEqual(len(self.recs()), 1)
+        self.assertEqual(self.stop(rec).returncode, 0)
+        self.assertEqual(len(self.recs()), 0)
+
     def test_stop_unreadable_does_not_end_empty_prompt_record(self):   # SS4 (kills a None-prompt-as-empty mutant)
         self.seed((session.prompt_sha(""), "unknown", 1, "session", "", ""))
         p = self.stop(os.path.join(self.tmp, "absent.jsonl"))
