@@ -185,10 +185,11 @@ def ch6_growth(shape, check, n):
                 gc.enable()
             if t >= CH6_FLOOR:
                 break
+            ran = reps
             reps *= 2
             if reps > CH6_MAX_REPS:
                 raise AssertionError("CH6 shape %s base %d: the CPU clock did not advance to %g s in a sample of %d "
-                                     "calls (clock %r)" % (name, n, CH6_FLOOR, reps, clock))
+                                     "calls (clock %r)" % (name, n, CH6_FLOOR, ran, clock))
         reps *= 2
         for _ in range(CH6_ROUNDS):
             for size in (n, big):
@@ -1068,8 +1069,39 @@ class Ch6GrowthTest(unittest.TestCase):
             with self.assertRaises(AssertionError) as cm:
                 ch6_growth(shape, self.assertEqual, 100)
         msg = str(cm.exception)
-        for part in ("const", "base 100", "131072", repr(time.get_clock_info("process_time"))):
+        for part in ("const", "base 100", "65536", repr(time.get_clock_info("process_time"))):
             self.assertIn(part, msg)
+        self.assertNotIn("131072", msg)  # the last sample ran 65536 calls, not the doubled count
+
+    def test_constant_clock_message_follows_max_reps(self):  # the number is the last sample's reps, not a constant
+        shape = _loop_shape("const", 100, len, lambda k: k)
+        with mock.patch.object(time, "process_time", lambda: 1.0), mock.patch.object(
+                sys.modules[__name__], "CH6_MAX_REPS", 2 ** 10):
+            with self.assertRaises(AssertionError) as cm:
+                ch6_growth(shape, self.assertEqual, 100)
+        self.assertIn("sample of 1024 calls", str(cm.exception))
+        self.assertNotIn("2048", str(cm.exception))
+
+    def test_calibration_boundary(self):  # reaching the floor exactly at the last allowed sample is no error
+        shape_calls = []
+
+        def call(text):
+            shape_calls.append(1)
+            return len(text)
+
+        def clock():  # dyadic values: differences are exact
+            return 2.0 ** -20 * len(shape_calls)
+        shape = _loop_shape("edge", 100, call, lambda k: k)
+        mod = sys.modules[__name__]
+        with mock.patch.object(time, "process_time", clock), mock.patch.object(mod, "CH6_ROUNDS", 1), \
+                mock.patch.object(mod, "CH6_FLOOR", 2.0 ** -4):
+            ch6_growth(shape, self.assertEqual, 100)  # a sample of 2 ** 16 calls reads exactly 2 ** -4
+        del shape_calls[:]
+        with mock.patch.object(time, "process_time", clock), mock.patch.object(mod, "CH6_ROUNDS", 1), \
+                mock.patch.object(mod, "CH6_FLOOR", 2.0 ** -4 + 2.0 ** -20):
+            with self.assertRaises(AssertionError) as cm:
+                ch6_growth(shape, self.assertEqual, 100)
+        self.assertIn("sample of 65536 calls", str(cm.exception))
 
     def test_clock_frozen_after_calibration_is_a_named_error(self):  # a small sample of 0 is never divided by
         shape_calls = []
