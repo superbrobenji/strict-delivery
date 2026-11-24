@@ -1049,7 +1049,8 @@ class Ch6GrowthTest(unittest.TestCase):
         self.assertEqual(shape[0], "fast")
         with mock.patch.object(time, "process_time", _quantised(10 ** 7)):
             ratio, small, large = ch6_growth(shape, self.assertEqual, shape[1] // 8)
-        self.assertGreaterEqual(min(small), CH6_FLOOR, small)
+        # one tick of the quantised clock is 0.01 up to the float error of a difference of two readings (seen: 0.00999..)
+        self.assertGreaterEqual(min(small), CH6_FLOOR - 1e-9, small)
         self.assertLess(ratio, CH6_BOUND, "small %r large %r" % (small, large))
 
     def test_coarse_clock_quadratic_shape(self):  # the coarse clock does not hide a quadratic shape
