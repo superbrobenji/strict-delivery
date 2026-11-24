@@ -1,0 +1,18 @@
+kind: receipt
+version: 1
+format: yaml
+files:
+  - dir: receipts
+    glob: "*.yml"
+fields:
+  schema:
+    type: str
+  reads:
+    type: list
+    items:
+      type: map
+      fields:
+        path:
+          type: str
+        sha:
+          type: sha

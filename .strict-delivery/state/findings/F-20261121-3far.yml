@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261121-3far
+status: open
+source: "5a.2 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/5a2-review-1.md R1-1"
+severity: LOW
+class: "receipt file states read by load: a symlink swapped in after the lstat is followed (no O_NOFOLLOW at receipts.py:172-181); members: symlink to a file, dangling symlink, swap between lstat and open"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1558dc14cc4192586af2d4a29e713371ce264704
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: receipt file state (symlink swap after lstat in load)

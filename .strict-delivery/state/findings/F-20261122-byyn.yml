@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-byyn
+status: open
+source: "PR-5a final review (review 1 of the PR): .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-5a.md FR-3"
+severity: LOW
+class: "fixtures: schema tag as a literal; members: receipt/1 and context/1 in tests/test_receipts_lib.py, tests/test_receipt_cli.py, tests/test_gate_context.py, tests/test_context_cli.py, tests/test_context_lib.py (owner Q-FR5a-1 (a), 2026-11-22: build from migrations.current_version(kind); golden-bytes and tag-subject tests stay literal)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: c02510869b179eee1d9756fd0502901abc6ed38e
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: schema tag literal in test fixtures (plan :32)

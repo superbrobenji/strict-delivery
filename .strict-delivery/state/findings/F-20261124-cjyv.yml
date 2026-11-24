@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-cjyv
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/pr5a-review-7.md Part A
+severity: LOW
+class: "concurrent creation of the receipts directory: every _step path; members: gates/lib/receipts.py:116 _read_by_descriptor with a rival mkdir between the open and the check has no test (record and load are tested)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5a.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 479a98c77adbd3b7de3e71660f4ab4c44d84e7c2
+    by: stream-config-hooks
+review_round: 3
+caused_by_change: true
+dimension: concurrent creation of the receipts directory

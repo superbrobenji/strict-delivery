@@ -163,10 +163,11 @@ class KnownKinds(unittest.TestCase):
 class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
-        self.assertEqual(sorted(got), ["breakdown", "claim", "claude-block", "config", "decision", "decision-index",
+        self.assertEqual(sorted(got), ["breakdown", "claim", "claude-block", "config", "context", "decision", "decision-index",
                                        "finding", "finding-index", "gitignore-block", "handoff", "in-force",
-                                       "init-answers", "ledger", "merged-log", "mutation-transcript", "overview", "profile", "request",
-                                       "review-report", "status", "streams", "sync-log"])  # Task 4a.1: four more; Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds; 6E.1: the two evidence kinds
+                                       "init-answers", "ledger", "merged-log", "mutation-transcript", "overview", "profile", "receipt",
+                                       "request", "review-report", "status", "streams",
+                                       "sync-log"])  # Task 4a.1: four more; Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds; 6E.1: the two evidence kinds; 5a: context, receipt
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
 
     def test_K6_fixture_dir_and_bad_file_raises_naming_it(self):
@@ -1116,7 +1117,7 @@ class FrontMatterSchema(Dirs):
 
     def test_old_schemas_unchanged(self):  # FS7
         listed = sorted(os.listdir(schema.SCHEMAS_DIR))
-        later = ["breakdown.yml", "handoff.yml", "ledger.yml", "merged-log.yml", "mutation-transcript.yml", "request.yml",
+        later = ["breakdown.yml", "context.yml", "handoff.yml", "ledger.yml", "merged-log.yml", "mutation-transcript.yml", "receipt.yml", "request.yml",
                  "review-report.yml", "status.yml", "streams.yml",
                  "sync-log.yml", "claude-block.yml", "gitignore-block.yml", "profile.yml",
                  "init-answers.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas; 4a.1 four; Task 6E.1 the two evidence ones
