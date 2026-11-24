@@ -1,0 +1,14 @@
+kind: review-report
+version: 1
+format: markdown
+files:
+  - dir: reviews
+    glob: "*/*.md"
+first_line: "<!-- schema: review-report/1 -->"
+lines:
+  - word: PIN
+    pattern: "PIN [A-Z]+-[0-9]{8}-[2-9a-km-np-z]{4} transcript=[0-9a-f]{7,40}:.+"
+  - word: PIN-TEST
+    pattern: "PIN-TEST [A-Z]+-[0-9]{8}-[2-9a-km-np-z]{4} .+"
+  - word: PIN-COMMAND
+    pattern: "PIN-COMMAND [A-Z]+-[0-9]{8}-[2-9a-km-np-z]{4} .+"

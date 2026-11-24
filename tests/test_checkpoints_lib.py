@@ -1590,8 +1590,8 @@ class Repository(unittest.TestCase):
         sch = schema.schemas()
         self.assertEqual(sorted(sch), ["breakdown", "claim", "claude-block", "config", "decision", "decision-index",
                                        "finding", "finding-index", "gitignore-block", "handoff", "in-force",
-                                       "init-answers", "ledger", "merged-log", "overview", "profile", "request",
-                                       "status", "streams", "sync-log"])  # Task P2.1 part i adds the five program schemas; Task 4a.1 adds four
+                                       "init-answers", "ledger", "merged-log", "mutation-transcript", "overview", "profile", "request",
+                                       "review-report", "status", "streams", "sync-log"])  # Task P2.1 part i adds the five program schemas; Task 4a.1 adds four; 6E.1 the two evidence kinds
         for k in ("handoff", "ledger"):
             self.assertIn(k, schema.KNOWN_KINDS)
 

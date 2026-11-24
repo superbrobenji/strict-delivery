@@ -707,8 +707,8 @@ class KindsAndVersions(unittest.TestCase):
     def test_schemas_dir_loads_and_stems_known(self):  # KK2
         loaded, problems = schema.scan_dir()
         self.assertEqual(problems, [])
-        self.assertEqual(len(loaded), 20)  # 4a.1 adds claude-block, gitignore-block, profile, init-answers
-        for kind in ("streams", "request", "status", "sync-log", "merged-log"):
+        self.assertEqual(len(loaded), 22)  # 4a.1 adds claude-block, gitignore-block, profile, init-answers; Task 6E.1 adds mutation-transcript and review-report
+        for kind in ("streams", "request", "status", "sync-log", "merged-log", "mutation-transcript", "review-report"):
             self.assertIn(kind, loaded)
             self.assertIn(kind, KNOWN_KINDS)
 
