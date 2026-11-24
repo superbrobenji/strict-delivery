@@ -1096,6 +1096,16 @@ class ReceiptsDir(Base):
             self.rec()
         self.assertEqual(hk["seen"], 1)  # one open: no second attempt
 
+    @unittest.skipIf(os.geteuid() == 0, "uid 0 opens anything")
+    def test_content_sha_unreadable_directory_is_not_a_regular_file(self):  # CS-F3, D-Q4 (a), F-20261124-ndkg
+        path = self.real + "/udir"
+        os.mkdir(path)
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o700)
+        with self.assertRaises(GateError) as cm:
+            content_sha(path)
+        self.assertEqual(str(cm.exception), path + ": is not a regular file")
+
     def test_missing_dir_with_failed_check_is_refused_not_retried(self):  # F-20261123-rrw3 (only "dir" is retried)
         with open_hook("receipts", lambda: None, directory=True) as hk, mock.patch.object(
                 receipts, "_kind", lambda n, d: "other"), self.assertRaisesRegex(
@@ -1281,6 +1291,86 @@ class ReceiptFile(Base):
         with mock.patch.object(receipts.os, "open", op):
             self.rec()
         self.assertEqual(seen, [(os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, (0o600,))])
+
+    def rival_creates_at_open(self, rival, times=1):
+        """F-20261124-un7j: the first ``times`` O_CREAT opens of the receipt file fail ENOENT after ``rival()`` ran, as
+        on macOS when a second process creates the file at the same moment. Returns the record of the opens."""
+        real = os.open
+        st = {"opens": [], "fired": 0}
+
+        def op(n, flags, *a, **k):
+            if n == SID + ".yml" and "dir_fd" in k:
+                st["opens"].append(flags)
+                if st["fired"] < times:
+                    st["fired"] += 1
+                    rival()
+                    raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT))
+            return real(n, flags, *a, **k)
+        return st, mock.patch.object(receipts.os, "open", op)
+
+    def make_rival_file(self):
+        os.makedirs(self.rdir, exist_ok=True)
+        with open(self.rf, "wb") as fh:
+            fh.write((HDR + row_text("/r/other", S40())).encode())
+
+    def test_file_made_by_rival_between_open_and_check_is_opened_again(self):  # RF1, F-20261124-un7j
+        st, patch = self.rival_creates_at_open(self.make_rival_file)
+        with patch:
+            self.assertEqual(self.rec(), {"path": self.real + "/a.txt", "sha": self.sha_a})
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+        self.assertEqual(st["opens"], [flags, flags])  # the same flags, once more
+        self.assertEqual(self.rf_bytes(), (HDR + row_text("/r/other", S40()) + self.arow).encode())
+
+    def test_file_made_by_rival_and_still_missing_is_an_error_not_a_loop(self):  # F-20261124-un7j
+        st, patch = self.rival_creates_at_open(self.make_rival_file, times=5)
+        with patch, self.assertRaises(GateError) as cm:
+            self.rec()
+        self.assertEqual(str(cm.exception), ".strict-delivery/receipts/" + SID + ".yml: cannot append (No such file or directory)")
+        self.assertEqual(len(st["opens"]), 2)  # one retry, never more
+        self.assertEqual(self.rf_bytes(), (HDR + row_text("/r/other", S40())).encode())
+
+    def test_missing_file_with_failed_check_is_refused_not_retried(self):  # F-20261124-un7j (only "reg" is retried)
+        st, patch = self.rival_creates_at_open(lambda: os.makedirs(self.rdir, exist_ok=True))
+        with patch, self.assertRaises(GateError) as cm:
+            self.rec()
+        self.assertEqual(str(cm.exception), ".strict-delivery/receipts/" + SID + ".yml: cannot append (No such file or directory)")
+        self.assertEqual(len(st["opens"]), 1)
+        self.assertFalse(os.path.lexists(self.rf))
+
+    def test_other_open_failure_is_not_retried(self):  # F-20261124-un7j (only ENOENT is retried)
+        real = os.open
+        opens = []
+
+        def op(n, flags, *a, **k):
+            if n == SID + ".yml" and "dir_fd" in k:
+                opens.append(flags)
+                self.make_rival_file()
+                raise OSError(errno.EIO, os.strerror(errno.EIO))
+            return real(n, flags, *a, **k)
+        with mock.patch.object(receipts.os, "open", op), self.assertRaises(GateError) as cm:
+            self.rec()
+        self.assertEqual(str(cm.exception), ".strict-delivery/receipts/" + SID + ".yml: cannot append (Input/output error)")
+        self.assertEqual(len(opens), 1)
+
+    def test_rival_link_dir_or_special_at_receipt_file_refused(self):  # F-20261124-un7j (contradiction)
+        target = os.path.join(self.other(), "elsewhere.yml")
+        mk = {"link": lambda: os.symlink(target, self.rf), "dir": lambda: os.mkdir(self.rf),
+              "special": lambda: os.mkfifo(self.rf)}
+        msgs = {"link": "is a symlink", "dir": "is not a regular file", "special": "is not a regular file"}
+        for kind in ("link", "dir", "special"):
+            with self.subTest(kind):
+                os.makedirs(self.rdir, exist_ok=True)
+                st, patch = self.rival_creates_at_open(mk[kind])
+                with patch, self.assertRaises(GateError) as cm:
+                    self.rec()
+                self.assertEqual(str(cm.exception), ".strict-delivery/receipts/" + SID + ".yml: " + msgs[kind]
+                                 + "; receipt files must be regular files")
+                self.assertEqual(len(st["opens"]), 1)
+                self.assertFalse(os.path.lexists(target))
+                if kind == "dir":
+                    os.rmdir(self.rf)
+                else:
+                    os.unlink(self.rf)
 
     def test_record_appends_after_truncated_line(self):  # RF13, RF27, LD7
         for data in (b"garbage", (HDR + "  - path: /r/a\n    sha: 3b18").encode(),

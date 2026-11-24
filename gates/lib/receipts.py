@@ -233,16 +233,20 @@ def record(root: str, cfg: dict, session: str, path: str) -> dict:
     name = session + ".yml"
     shown = rel + "/" + name
     try:
-        try:
-            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
-            fd = os.open(name, flags, 0o600, dir_fd=dirfd)
-        except OSError as e:
-            kind = _kind(name, dirfd)  # decision D-Q4 (a): the same sentences as a file that was a symlink all along
-            if kind == "link":
-                raise GateError("%s: is a symlink; receipt files must be regular files" % shown) from None
-            if kind in ("dir", "special"):
-                raise GateError("%s: is not a regular file; receipt files must be regular files" % shown) from None
-            raise
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+        for attempt in (0, 1):
+            try:
+                fd = os.open(name, flags, 0o600, dir_fd=dirfd)
+                break
+            except OSError as e:
+                kind = _kind(name, dirfd)  # decision D-Q4 (a): the same sentences as a file that was a symlink all along
+                if kind == "link":
+                    raise GateError("%s: is a symlink; receipt files must be regular files" % shown) from None
+                if kind in ("dir", "special"):
+                    raise GateError("%s: is not a regular file; receipt files must be regular files" % shown) from None
+                if kind == "reg" and isinstance(e, FileNotFoundError) and attempt == 0:
+                    continue  # a rival created the file between the open and the check (ENOENT on macOS): open it once more
+                raise
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise GateError("%s: is not a regular file; receipt files must be regular files" % shown)
