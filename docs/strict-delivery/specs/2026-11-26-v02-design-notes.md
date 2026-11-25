@@ -26,3 +26,12 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Squash or rebase merges: when the fix commit is not on the base, the fix is accepted when a base commit carries the same patch (patch-id match) and the pinned test is on the base; otherwise the record stays "waiting to merge" and doctor flags it.
 - A fix reverted later: the record still reads closed; the pinned test fails in CI, which catches the regression as a new finding.
 - Records with no pin (most of today's open ones) show "fixed, owes a test" until pinned; nothing is closed silently.
+
+### V2-06 and V2-07 Who found a finding; loop statistics for inherited and pre-review findings (2026-11-26)
+
+- Owner: "yes go with that" (on the recommendation below).
+- Every finding record carries two fixed facts: `found_by` (implementer, task_review, final_review, verifier, other) and `found_in` (task id and round where it was first raised). The owner (`owner.task`) may move; these two never change. This is also V2-06 (review kind).
+- `loopstats` counts only findings with `found_in.task` equal to the task and `found_by` a review of that task; every other finding of the task is printed on a separate line, for example `carried in: 3 (4d.1 r5: LOW x3), pre-review: 1 (MEDIUM)`, and never enters X, W or the verdict.
+- A task reaches CLEAN only when every carried-in and pre-review finding is fixed or registered against a named task (zero-bug rule): they cannot stop or prolong the loop, but they block the sign-off.
+- The rework share and the late-findings measure come from the same facts: a finding first raised by a final review or verifier in code a task review already passed counts as late (target under 20 %).
+- Rejected: counting carried-in findings at a lower weight (mixes two questions; arbitrary weights).
