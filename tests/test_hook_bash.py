@@ -3,6 +3,7 @@
 values are written by hand from the task-3b.2 input-domain table (row ids in the comments)."""
 import json
 import os
+import shutil
 import subprocess
 import time
 import unittest
@@ -91,6 +92,16 @@ class HookCase(GitIsolatedTestCase):
 
     def dirty(self, root=None):
         write(os.path.join(root or self.R, "a.txt"), "changed\n")
+
+    def failing_git_env(self, case_body, name="fakegit"):
+        """``env`` with a fake ``git`` first on PATH: ``case_body`` is the body of a shell ``case "$*" in ... esac``
+        (the arguments joined); every call it does not match runs the real git."""
+        real = shutil.which("git", path=self.env["PATH"])
+        fake = os.path.join(self.tmp, name)
+        os.mkdir(fake)
+        write(os.path.join(fake, "git"), '#!/bin/sh\ncase "$*" in\n%s\nesac\nexec "%s" "$@"\n' % (case_body, real))
+        os.chmod(os.path.join(fake, "git"), 0o755)
+        return dict(self.env, PATH=fake + os.pathsep + self.env["PATH"])
 
 
 class CommitTest(HookCase):
@@ -312,8 +323,9 @@ class CommandShapeTest(HookCase):
         self.assertNotIn("hook.bash", r.stderr)
 
     def test_git_missing(self):   # PB20
-        # hookio.context re-raises GitNotFound (3a.2): the handler is never reached, the hook fails closed for every
-        # command; this differs from table row PB20 (ls: PASS) and is reported as a divergence.
+        # Decision (controller) PB20: hookio.context re-raises GitNotFound (3a.2) before any handler runs, so with no
+        # git on PATH every Bash call, `ls` included, is refused by the 3a.2 line; the table verdict `ls: PASS` was
+        # corrected (hooks stream controller 2, 2026-11-25). No divergence remains.
         env = dict(self.env, PATH=self.tmp)
         for command in ("git commit -m m", "ls"):
             r = self.B(command, env=env)
@@ -537,6 +549,602 @@ class GatesAndWritesTest(HookCase):
     def test_handler_wired(self):   # PB21
         r = self.B("true")
         self.passes(r)
+
+
+STATUS_HEADER = ("| stream | block | branch | worktree | next task | estimate | used | status | blockers | pending decisions "
+                 "| delivers |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
+PROG = "20261101-prog"
+PROGRAMS = ".strict-delivery/state/programs"
+UNSTAGED_TAIL = "tracked file has unstaged changes; stage it or stash it, so the gates read the tree being committed"
+
+
+def status_row(stream, wt):
+    return "| %s | 3 | %s/%s/main | %s | t1 | 1 | 0 | running | - | - | - |\n" % (stream, PROG, stream, wt)
+
+
+class ProgramTest(HookCase):
+    """``LIVE`` of the table: ``R`` plus a live program (the branch ``<p>/integration`` holds ``streams.yml`` and the
+    status page naming ``SW``; ``IW`` is the worktree on that branch; ``UW`` is a worktree the page does not name)."""
+
+    def make_program(self, rows=None):
+        self.IW, self.SW, self.UW = (os.path.join(self.work, n) for n in ("IW", "SW", "UW"))
+        git(self.R, "worktree", "add", "-q", "-b", PROG + "/integration", self.IW, "main")
+        write(os.path.join(self.IW, PROGRAMS, PROG, "streams.yml"), "schema: streams/1\n")
+        self.status(STATUS_HEADER + (rows if rows is not None else status_row("s1", self.SW)))
+        git(self.R, "worktree", "add", "-q", "-b", PROG + "/s1/main", self.SW, "main")
+        git(self.R, "worktree", "add", "-q", "-b", "other", self.UW, "main")
+
+    def status(self, text):
+        write(os.path.join(self.IW, PROGRAMS, PROG, "status.md"), "# status\n\n" + text)
+        commit_all(self.IW, "status")
+
+    def test_program_session_writes_in_program_worktrees_only(self):   # TR13, TR14, PB23
+        self.make_program()
+        self.passes(self.B("git -C %s merge main" % self.SW))
+        self.passes(self.B("git -C %s merge main" % self.IW))
+        self.passes(self.B("git merge main"))
+        self.dirty(self.IW)
+        r = self.B("git -C %s commit -m m" % self.IW)
+        self.refused(r, "unstaged", absent=("target",))
+        r = self.B("git -C %s merge main" % self.UW)
+        self.refused(r, "target")
+        self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s, %s, %s)"
+                      % (self.UW, self.IW, self.R, self.SW), r.stderr)
+        self.refused(self.B("git -C %s commit -m m" % self.UW), "target")
+        W = self.worktree("W", "-b", "wb")
+        self.refused(self.B("git -C %s merge main" % self.SW, agent=self.agent(W)), "target")   # a subagent gets its own only
+
+    def test_program_session_bad_status_cell(self):   # TR15
+        missing = os.path.join(self.work, "never-made")
+        for label, cell, text in (("missing path", missing, "does not exist"),
+                                  ("relative path", "rel/path", "is not an absolute path")):
+            with self.subTest(label):
+                self.make_program(rows=status_row("s1", cell))
+                r = self.B("git -C %s merge main" % self.SW)
+                self.refused(r, "target")
+                self.assertIn("FAIL hook.bash.target: program %s: status worktree %s %s" % (PROG, cell, text), r.stderr)
+                self.passes(self.B("git -C %s merge main" % self.IW))   # the integration worktree stays allowed
+                for path in (self.IW, self.SW, self.UW):
+                    git(self.R, "worktree", "remove", "--force", path)
+                git(self.R, "branch", "-D", PROG + "/integration", PROG + "/s1/main", "other")
+        with self.subTest("no status page at the tip"):
+            self.make_program()
+            git(self.IW, "rm", "-q", os.path.join(PROGRAMS, PROG, "status.md"))
+            commit_all(self.IW, "drop status")
+            r = self.B("git -C %s merge main" % self.SW)
+            self.refused(r, "target")
+            self.assertIn("is not a file at the tip of %s/integration" % PROG, r.stderr)
+
+    def test_live_programs_raising(self):   # TR15 (live_programs raising: git for-each-ref fails)
+        self.make_program()
+        env = self.failing_git_env('*for-each-ref*) echo "fatal: injected" >&2; exit 128;;')
+        r = self.B("git -C %s merge main" % self.SW, env=env)
+        self.refused(r, "target")
+        self.assertIn("FAIL hook.bash.target: live programs cannot be read (git for-each-ref failed (exit 128))\n", r.stderr)
+        self.assertIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.SW, self.R), r.stderr)
+
+    def test_old_git_fails_closed_bash(self):   # V5 (the session form: worktree_list needs git 2.36)
+        self.make_program()
+        fake = os.path.join(self.tmp, "fakegit")
+        os.mkdir(fake)
+        real = subprocess.run(["which", "git"], env=self.env, stdout=subprocess.PIPE, check=True).stdout.decode().strip()
+        write(os.path.join(fake, "git"), '#!/bin/sh\ncase "$*" in *"worktree list"*) echo "error: unknown option" >&2; exit 129;; '
+                                         'esac\nexec "%s" "$@"\n' % real)
+        os.chmod(os.path.join(fake, "git"), 0o755)
+        env = dict(self.env, PATH=fake + os.pathsep + self.env["PATH"])
+        r = self.B("git -C %s merge main" % self.SW, env=env)
+        self.refused(r, "target")
+        self.assertIn("worktrees cannot be listed", r.stderr)
+        self.passes(self.B("git merge main", env=env, cwd=self.R))   # cwd's own top level stays allowed
+
+
+class SubagentBindingTest(HookCase):
+    def test_subagent_bound_to_main_checkout(self):   # TR5
+        agent = self.agent(self.R)
+        self.dirty()
+        for command in ("git commit -m m", "git -C %s commit -m m" % self.R):
+            with self.subTest(command=command):
+                self.refused(self.B(command, agent=agent), "unstaged", absent=("target",))
+
+    def test_unbound_subagent_record_forms(self):   # TR7, TR8, TR9
+        W = self.worktree("W", "-b", "wb")
+        gone = self.worktree("gone", "-b", "gb")
+        agents = (("empty worktree", self.agent(""), None),
+                  ("gone worktree", self.agent(gone), None))
+        git(self.R, "worktree", "remove", "--force", gone)
+        notdir = os.path.join(self.tmp, "plugin-file")
+        write(notdir, "x")
+        agents += (("plugin data a regular file", self.agent(W), dict(self.env, CLAUDE_PLUGIN_DATA=notdir)),)
+        for label, agent, env in agents:
+            with self.subTest(label):
+                r = self.B("git -C %s commit -m m" % W, agent=agent, env=env)
+                self.refused(r, "target")
+                self.assertIn("this agent has no bound worktree (", r.stderr)
+
+    def test_relative_worktree_record_refused_by_store(self):   # TR9 (relative form: the store refuses it first)
+        W = self.worktree("W", "-b", "wb")
+        agent = self.agent(W)
+        path = os.path.join(self.plugin, "sessions", "sess-1.yml")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn(W, text)
+        write(path, text.replace(W, "rel/wt"))
+        r = self.B("git -C %s commit -m m" % W, agent=agent)
+        self.refused(r, "target")
+        self.assertIn("this agent has no bound worktree (the session store is unavailable)", r.stderr)
+        self.assertIn('is unreadable (dispatches[0].worktree: must be an absolute path or ""); start a new session',
+                      r.stderr)
+
+    def test_session_commit_without_plugin_data(self):   # PO5
+        self.dirty()
+        env = {k: v for k, v in self.env.items() if k != "CLAUDE_PLUGIN_DATA"}
+        self.refused(self.B("git commit -m m", env=env), "unstaged", absent=("target",))
+
+    def test_agent_vs_session(self):   # PB23
+        W = self.worktree("W", "-b", "wb")
+        agent = self.agent(W)
+        decide = "python3 -m gates decisions decide X --by owner"
+        self.assertNotIn("hook.bash.decide", self.B(decide).stderr)
+        self.refused(self.B(decide, agent=agent), "decide")
+        self.dirty()
+        self.refused(self.B("git commit -m m"), "unstaged", absent=("target",))
+        self.refused(self.B("git commit -m m", agent=agent), "target")
+
+    def test_decide_agent_kinds(self):   # TX46
+        decide = "python3 -m gates decisions decide X"
+        self.refused(self.B(decide, agent=self.agent(self.R)), "decide")
+        for bad in ("", "a b", None, "../x"):
+            with self.subTest(agent_id=bad):
+                r = self.B(decide, agent={"agent_id": bad, "agent_type": "implementer"})
+                self.assertEqual(r.returncode, 2)
+                self.assertNotIn("hook.bash.decide", r.stderr)
+                self.assertRegex(r.stderr, r"FAIL hook\.")
+
+    def test_decide_needs_decision_word(self):   # TX41
+        agent = self.agent(self.R)
+        for command in ("grep decide notes.md", "echo withdraw", 'git commit -m "decide"'):
+            with self.subTest(command=command):
+                self.assertNotIn("hook.bash.decide", self.B(command, agent=agent).stderr)
+
+    def test_read_only_members_still_writes(self):   # GW2
+        W = self.worktree("W", "-b", "wb")
+        agent = self.agent(W)
+        for sub in ("tag -l", "stash list", "worktree list", "reset --help"):
+            with self.subTest(sub=sub):
+                self.refused(self.B("git %s" % sub, agent=agent), "target")
+                self.assertNotIn("hook.bash.target", self.B("git %s" % sub, cwd=W, agent=agent).stderr)
+
+    def test_c_value_shapes(self):   # TR27
+        spaced, accent = (self.worktree(n, "-b", "b%d" % i) for i, n in enumerate(("W with space", "Wé")))
+        dashed = os.path.join(self.R, "-x")
+        git(self.R, "worktree", "add", "-q", "-b", "dash", dashed)
+        for target, quoted in ((spaced, "'%s'" % spaced), (accent, "'%s'" % accent)):
+            with self.subTest(target=target):
+                self.dirty(target)
+                self.refused(self.B("git -C %s commit -m m" % quoted, agent=self.agent(target)), "unstaged",
+                             absent=("target",))
+        self.dirty(dashed)
+        self.refused(self.B("git -C -x commit -m m", agent=self.agent(dashed)), "unstaged", absent=("target",))
+        self.refused(self.B('git -C "a\nb" commit -m m', agent=self.agent(spaced)), "target")
+
+    def test_c_as_last_word(self):   # TR27 (-C with no value; the observed verdicts, REF(global-option.-C) for a commit text)
+        self.refused(self.B("git commit -m m && git -C"), "compound")
+        self.passes(self.B("git add x && git -C"))   # stated limit: no commit word, so no commit check applies
+        self.passes(self.B("git -C"))   # no commit word, not a write: no check applies
+        r = self.B("git commit -C")   # -C as the last word of a commit text is git's own commit option (reuse message)
+        self.assertNotIn("hook.bash.target", r.stderr)
+
+
+class CommitShapeTest(HookCase):
+    def test_commit_redirect_refused(self):   # CS4
+        for command in ("git commit -F - <<'EOF'", "git commit -m m 2>&1", "git commit -m m > out", "git commit -m m < in"):
+            with self.subTest(command=command):
+                r = self.B(command)
+                self.refused(r, "compound")
+                self.assertIn("(redirection)", r.stderr)
+        self.assertFalse(self.gates_ran())
+
+    def test_cd_forms_not_plain(self):   # TR25, CS6
+        W = self.worktree("W", "-b", "wb")
+        agent = self.agent(W)
+        for command in ("cd %s; git commit -m m" % W, "cd %s || git commit -m m" % W, "cd && git commit -m m",
+                        "cd - && git commit -m m", "cd %s && cd y && git commit -m m" % W, "cd $W && git commit -m m",
+                        "cd %s && git add x && git commit -m m" % W, "cd %s && git commit -m m && git push" % W):
+            with self.subTest(command=command):
+                self.refused(self.B(command, agent=agent), "compound")
+
+    def test_compound_reasons(self):   # CS7
+        for command, reason in (("git commit -m $MSG", "expansion"), ('git commit -m "$MSG"', "expansion"),
+                                ("git commit -m *", "expansion"), ("git commit -m {a,b}", "character"),
+                                ("git commit -m é", "character"), ("git commit -m \x00", "nul character"),
+                                ('git commit -m "x', "unbalanced quote"), ("git commit -m m # c", "comment")):
+            with self.subTest(command=command):
+                r = self.B(command)
+                self.refused(r, "compound")
+                self.assertIn("FAIL hook.bash.compound: git commit runs as its own command (%s);" % reason, r.stderr)
+
+    def test_commit_plain_whitespace(self):   # CS9
+        self.dirty()
+        for command in ("git commit -m m\n", "git\tcommit -m m", "git commit \\\n-m m"):
+            with self.subTest(command=command):
+                self.refused(self.B(command), "unstaged", absent=("compound",))
+
+    def test_wrappers(self):   # CP1
+        self.dirty()
+        for command in ("/usr/bin/git commit -m m", "./git commit -m m", "/opt/x/git commit -m m"):
+            with self.subTest(command=command):
+                self.refused(self.B(command), "unstaged", absent=("not-git", "compound"))
+
+    def test_allowed_assignments(self):   # CP11, CE4
+        self.dirty()
+        for command in ("LANG=C git commit -m m", "TZ=UTC git commit -m m", "LC_ALL=C git commit -m m",
+                        "LANG=C env git commit -m m"):
+            with self.subTest(command=command):
+                self.refused(self.B(command), "unstaged", absent=("not-git", "compound", "index", "target"))
+
+    def test_quoted_program_refused(self):   # CP12
+        for command in ("'git' commit -m m", '"git" commit -m m', "g\\it commit -m m"):
+            with self.subTest(command=command):
+                self.refused(self.B(command), "compound")
+
+    def test_commit_other_assignment_refused(self):   # CE5, CE6
+        for command in ("FOO=1 git commit -m m", "git_index_file=x git commit -m m", "Git_Dir=x git commit -m m"):
+            with self.subTest(command=command):
+                self.refused(self.B(command), "compound")
+
+    def test_which_step_wins(self):   # CR19
+        self.dirty()
+        r = self.B('GIT_INDEX_FILE=x git commit -m "--no-verify"')
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual([ln.split(":")[0] for ln in r.stderr.splitlines()],
+                         ["FAIL hook.bash.bypass.no-verify", "FAIL hook.bash.index"])
+        self.assertFalse(self.gates_ran())
+
+    def test_command_non_ascii(self):   # PB7
+        self.dirty()
+        self.refused(self.B('git commit -m "é"'), "unstaged", absent=("compound",))
+        self.refused(self.B('git commit -m "\U0001fae0"'), "unstaged", absent=("compound",))
+        for command in ("git commit -m é", "git commit -m é", "git commit -m \U0001fae0"):
+            with self.subTest(command=command):
+                r = self.B(command)
+                self.refused(r, "compound")
+                self.assertIn("(character)", r.stderr)
+                self.assertNotIn("\U0001fae0", r.stderr)
+
+    def test_command_control_chars(self):   # PB8
+        self.refused(self.B("git commit\r-m m"), "compound")
+        self.refused(self.B("git\fcommit"), "compound")
+
+    def test_deny_render(self):   # PB16
+        r = self.B("git commit --no-verify -m m && true")
+        self.assertEqual((r.returncode, r.stdout), (2, ""))
+        self.assertEqual(r.stderr, "\n".join(r.stderr.splitlines()) + "\n")
+        self.assertEqual(len(r.stderr.splitlines()), 2)
+
+    def test_subdirectory_cwd(self):   # PB27
+        os.mkdir(os.path.join(self.R, "sub"))
+        self.dirty()
+        r = self.B("git commit -m m", cwd=os.path.join(self.R, "sub"))
+        self.refused(r, "unstaged")
+        self.assertIn("FAIL hook.bash.unstaged: a.txt: " + UNSTAGED_TAIL, r.stderr)
+
+    def test_handler_module_wired(self):   # PB21
+        from gates import hook
+        self.assertEqual(hook.HANDLERS[("PreToolUse", "bash")], "gates.hooks.pre_bash")
+        from gates.hooks import pre_bash
+        self.assertTrue(callable(pre_bash.handle))
+        r = self.B("true")
+        self.passes(r)
+        self.assertNotIn("hook.PreToolUse", r.stderr)
+
+    def test_git_error_refuses_commit(self):   # PB19
+        with open(os.path.join(self.R, ".git", "config"), "ab") as fh:
+            fh.write(b"[alias]\n\tbad = \xff\n")
+        r = self.B("git commit -m m")
+        self.refused(r, "git")
+        self.assertFalse(self.gates_ran())
+        for command in ("ls", "git status"):
+            self.passes(self.B(command), command)
+
+    def test_raising_handler_stand_in(self):   # V3
+        import builtins
+        import io
+        from unittest import mock
+        from gates import hook
+
+        class Stand(BaseException):
+            pass
+        raisers = [Stand("stand-in")]
+        group = getattr(builtins, "BaseExceptionGroup", None)
+        if group is not None:
+            raisers.append(group("g", [KeyboardInterrupt()]))
+        data = json.dumps(hookrun.payload("PreToolUse", self.R, tool_input={"command": "git commit -m m", "description": "d"}))
+        for exc in raisers:
+            with self.subTest(exc=type(exc).__name__):
+                out, err = io.StringIO(), io.StringIO()
+                stdin = mock.Mock()
+                stdin.buffer = io.BytesIO(data.encode("utf-8"))
+                with mock.patch.object(githooks, "pre_commit_result", side_effect=exc), \
+                        mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": self.plugin}), \
+                        mock.patch("sys.stdin", stdin), mock.patch("sys.stdout", out), mock.patch("sys.stderr", err):
+                    code = hook.main(["PreToolUse"])
+                self.assertEqual((code, out.getvalue()), (2, ""))
+                self.assertRegex(err.getvalue(), r"^FAIL hook\.PreToolUse: ")
+
+    def test_digit_limit_hook_json(self):   # V1a, V1b
+        for digits, ok in ((4300, True), (4301, False)):
+            with self.subTest(digits=digits):
+                body = json.dumps(hookrun.payload("PreToolUse", self.R, tool_input={"command": "ls", "description": "d",
+                                                                                     "n": 0}))
+                data = body.replace('"n": 0', '"n": ' + "1" * digits).encode("utf-8")
+                r = hookrun.run_hook("PreToolUse", data, self.env, FW)
+                if ok:
+                    self.passes(r)
+                else:
+                    self.assertEqual(r.returncode, 2)
+                    self.assertIn("4300 digits", r.stderr)
+        text = json.dumps(hookrun.payload("PreToolUse", self.R, tool_input={"command": "ls", "description": "9" * 4301}))
+        self.passes(hookrun.run_hook("PreToolUse", text.encode("utf-8"), self.env, FW))
+
+    def test_transcript_digits_binding(self):   # V1f
+        W = self.worktree("W", "-b", "wb")
+        for digits, bound in ((4300, True), (4301, False)):
+            with self.subTest(digits=digits):
+                agent = self.agent(W)
+                sub = os.path.join(os.path.dirname(agent["transcript_path"]), "sess-1", "subagents", "agent-a1.jsonl")
+                with open(sub, encoding="utf-8") as fh:
+                    first = fh.read()
+                write(sub, json.dumps({"type": "x", "n": 0}).replace(": 0", ": " + "1" * digits) + "\n" + first)
+                r = self.B("git -C %s commit -m m" % W, agent=agent)
+                if bound:
+                    self.assertNotIn("hook.bash.target", r.stderr)
+                else:
+                    self.refused(r, "target")
+                    self.assertIn("this agent has no bound worktree (", r.stderr)
+
+    def test_unicode_paths_identical_bytes(self):   # V2a
+        name = "\U0001fae0.txt"
+        write(os.path.join(self.R, name), "1\n")
+        commit_all(self.R, "unicode")
+        write(os.path.join(self.R, name), "2\n")
+        r = self.B("git commit -m m")
+        self.refused(r, "unstaged")
+        self.assertIn("FAIL hook.bash.unstaged: \\U0001fae0.txt: " + UNSTAGED_TAIL, r.stderr)
+        self.assertNotIn("\U0001fae0", r.stderr)
+        W = self.worktree("W\U0001fae0", "-b", "wb")
+        r = self.B("git commit -m m", agent=self.agent(W))   # cwd R is not the bound worktree
+        self.refused(r, "target")
+        self.assertNotIn("\U0001fae0", r.stderr)
+        self.assertIn("W\\U0001fae0", r.stderr)
+
+
+class ConfigTest(HookCase):
+    def put_config(self, text):
+        write(os.path.join(self.R, ".strict-delivery", "config.yml"), text)
+
+    def test_config_error_kinds(self):   # CC4, V1e
+        good = dict(minimal_config())
+        digits = "schema: config/2\nframework_version: 0.0.0\nprofile: strict\nbogus: "
+        for label, text in (("schema", emit(dict(good, schema="config/1"))), ("unknown key", emit(dict(good, bogus=1))),
+                            ("missing key", emit({"schema": "config/2", "profile": "strict"})),
+                            ("profile", emit(dict(good, profile="weird"))), ("empty", ""),
+                            ("4300 digits", digits + "1" * 4300 + "\n"), ("4301 digits", digits + "1" * 4301 + "\n")):
+            with self.subTest(label):
+                self.put_config(text)
+                r = self.B("git commit -m m")
+                self.refused(r, "config")
+                self.assertIn("no commit runs until the config loads", r.stderr)
+                if "digits" in label:
+                    self.assertIn("integer too large", r.stderr)
+                self.assertEqual(len(r.stderr.splitlines()), 1)
+                self.passes(self.B("ls"))
+        self.assertFalse(self.gates_ran())
+        path = os.path.join(self.R, ".strict-delivery", "config.yml")
+        moved = os.path.join(self.tmp, "config-moved.yml")
+        os.rename(path, moved)
+        os.mkdir(path)   # a directory at the path
+        r = self.B("git commit -m m")
+        self.refused(r, "config")
+        self.assertIn("no commit runs until the config loads", r.stderr)
+        self.assertEqual(len(r.stderr.splitlines()), 1)
+        os.rename(path, os.path.join(self.tmp, "config-dir"))
+        os.symlink("config.yml", path)   # a symlink loop
+        r = self.B("git commit -m m")
+        self.refused(r, "config")
+        self.assertIn("no commit runs until the config loads", r.stderr)
+        self.assertEqual(len(r.stderr.splitlines()), 1)
+        self.assertFalse(self.gates_ran())
+
+    def test_config_error_before_unstaged(self):   # CC8
+        self.put_config("schema: [\n")
+        r = self.B("git commit -m m")
+        self.refused(r, "config", absent=("unstaged",))   # the config file itself is an unstaged change
+        self.assertFalse(self.gates_ran())
+
+    def test_target_config_used(self):   # CC6, CC7
+        W = self.worktree("W", "-b", "wb")
+        agent = self.agent(W)
+        self.dirty(W)
+        self.put_config("schema: [\n")   # cwd's root broken, the target fine
+        r = self.B("git -C %s commit -m m" % W, agent=agent)
+        self.refused(r, "unstaged", absent=("config",))
+        git(self.R, "checkout", "--", ".strict-delivery/config.yml")
+        write(os.path.join(W, ".strict-delivery", "config.yml"), "schema: [\n")   # cwd fine, the target broken
+        r = self.B("git -C %s commit -m m" % W, agent=agent)
+        self.refused(r, "config", absent=("unstaged",))
+        self.assertIn("no commit runs until the config loads", r.stderr)
+
+    def test_gates_commands_test_strict_only(self):   # CR9
+        for profile in ("standard", "light"):
+            with self.subTest(profile=profile):
+                cfg = dict(minimal_config())
+                cfg["profile"] = profile
+                cfg["commands"] = {"test": "echo ran >> %s" % self.marker}
+                write(os.path.join(self.R, ".strict-delivery", "config.yml"), emit(cfg))
+                commit_all(self.R, "profile " + profile)
+                self.passes(self.B("git commit -m m"))
+                self.assertFalse(self.gates_ran())
+
+
+class TreeStateTest(HookCase):
+    def only_unstaged(self, r, *paths):
+        self.refused(r, "unstaged")
+        head = "FAIL hook.bash.unstaged: "
+        listed = [ln[len(head):].split(": tracked file")[0] for ln in r.stderr.splitlines() if ln.startswith(head)]
+        self.assertEqual(sorted(listed), sorted(paths))
+        self.assertFalse(self.gates_ran())
+
+    def two_files(self):
+        write(os.path.join(self.R, "b.txt"), "1\n")
+        write(os.path.join(self.R, "c.txt"), "1\n")
+        commit_all(self.R, "bc")
+        write(os.path.join(self.R, "b.txt"), "2\n")   # the sentinel: the one path that must be listed
+
+    def test_staged_deletion_not_listed(self):   # CU4
+        self.two_files()
+        git(self.R, "rm", "-q", "c.txt")
+        self.only_unstaged(self.B("git commit -m m"), "b.txt")
+
+    def test_staged_rename_not_listed(self):   # CU5
+        self.two_files()
+        git(self.R, "mv", "c.txt", "d.txt")
+        self.only_unstaged(self.B("git commit -m m"), "b.txt")
+
+    def test_unstaged_rename(self):   # CU6
+        os.rename(os.path.join(self.R, "a.txt"), os.path.join(self.R, "z.txt"))
+        self.only_unstaged(self.B("git commit -m m"), "a.txt")
+
+    def test_intent_to_add_listed(self):   # CU8
+        write(os.path.join(self.R, "new.txt"), "x\n")
+        git(self.R, "add", "-N", "new.txt")
+        self.only_unstaged(self.B("git commit -m m"), "new.txt")
+
+    def test_touch_not_listed(self):   # CU13
+        self.two_files()
+        os.utime(os.path.join(self.R, "c.txt"), (1, 1))
+        self.only_unstaged(self.B("git commit -m m"), "b.txt")
+
+    def test_unstaged_many_paths(self):   # CU11
+        names = ["f%04d.txt" % n for n in range(1000)]
+        for n in names:
+            write(os.path.join(self.R, n), "1\n")
+        commit_all(self.R, "many")
+        for n in names:
+            write(os.path.join(self.R, n), "2\n")
+        r = self.B("git commit -m m")
+        self.only_unstaged(r, *names)
+
+    def test_submodule_changed_listed(self):   # CU9
+        S = os.path.join(self.work, "S")
+        os.mkdir(S)
+        make_repo(S)
+        git(self.R, "-c", "protocol.file.allow=always", "submodule", "add", "-q", S, "sub")
+        commit_all(self.R, "submodule")
+        write(os.path.join(self.R, "sub", "new.txt"), "x\n")   # only an untracked file inside the submodule
+        self.only_unstaged(self.B("git commit -m m"), "sub")
+        commit_all(os.path.join(self.R, "sub"), "inner")   # a new commit checked out in the submodule
+        self.only_unstaged(self.B("git commit -m m"), "sub")
+
+    def test_unmerged_listed(self):   # CU17
+        git(self.R, "checkout", "-q", "-b", "other")
+        write(os.path.join(self.R, "a.txt"), "other\n")
+        commit_all(self.R, "other")
+        git(self.R, "checkout", "-q", "feat")
+        write(os.path.join(self.R, "a.txt"), "feat\n")
+        commit_all(self.R, "feat")
+        git(self.R, "merge", "other", check=False)
+        r = self.B("git commit -m m")
+        self.refused(r, "unstaged")
+        self.assertIn("FAIL hook.bash.unstaged: a.txt: " + UNSTAGED_TAIL, r.stderr)   # git lists an unmerged path twice
+        self.assertFalse(self.gates_ran())
+
+    def test_unstaged_paths_raises(self):   # CU16 (git diff fails: a refusal on one gates line, not an exception)
+        self.dirty()
+        env = self.failing_git_env('*--ignore-submodules=none*) echo "fatal: injected" >&2; exit 128;;')
+        r = self.B("git commit -m m", env=env)
+        self.refused(r, "gates", absent=("unstaged",))
+        self.assertEqual(r.stderr, "FAIL hook.bash.gates: git diff --name-only failed (exit 128)\n")
+        self.assertFalse(self.gates_ran())
+
+    def test_unborn_head(self):   # CU19
+        U = os.path.join(self.work, "U")
+        os.mkdir(U)
+        git(U, "init", "-q", "-b", "main")
+        cfg = dict(minimal_config())
+        cfg["commands"] = {"test": "echo ran >> %s" % self.marker}
+        write(os.path.join(U, ".strict-delivery", "config.yml"), emit(cfg))
+        git(U, "add", ".strict-delivery/config.yml")
+        r = self.B("git commit -m m", cwd=U)
+        self.assertNotIn("hook.bash.unstaged", r.stderr)
+        self.assertNotIn("FAIL hook.PreToolUse", r.stderr)
+        self.assertIn(r.returncode, (0, 2))
+
+
+class GatesTest(HookCase):
+    def test_gates_hooks_stale(self):   # CR5
+        self.assertEqual(githooks.install(self.R, FW), [])
+        path = os.path.join(self.R, ".git", "hooks", "pre-commit")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("# edited\n")
+        self.passes(self.B("git commit -m m"))
+        self.assertTrue(self.gates_ran())
+
+    def test_gates_run_all_failure_kept(self):   # CR7
+        write(os.path.join(self.R, ".strict-delivery/state/decisions/DEC-20261031-k3f9.yml"), "schema: decision/999\n")
+        git(self.R, "add", "-A")
+        r = self.B("git commit -m m")
+        self.refused(r, "gates")
+        bad = ("FAIL hook.bash.gates: schema.decision..strict-delivery/state/decisions/DEC-20261031-k3f9.yml: schema: "
+               "expected decision/2, got decision/999; run /strict-delivery:upgrade")
+        self.assertEqual(r.stderr.splitlines().count(bad), 1)
+        self.assertTrue(all(ln.startswith("FAIL hook.bash.gates: ") for ln in r.stderr.splitlines()))
+        self.assertFalse(self.gates_ran())   # fail fast: commands.test not run
+
+    def test_run_gates_raises(self):   # CR13 (GateError: the second git diff, the gates' own, fails)
+        mark = os.path.join(self.tmp, "diff-seen")
+        env = self.failing_git_env('*--ignore-submodules=none*) if [ -e "%s" ]; then echo "fatal: injected" >&2; exit 128; '
+                                  'fi; : > "%s";;' % (mark, mark))
+        r = self.B("git commit -m m", env=env)
+        self.refused(r, "gates")
+        self.assertEqual(r.stderr, "FAIL hook.bash.gates: git diff --name-only failed (exit 128)\n")
+        self.assertTrue(os.path.exists(mark))   # the hook's own diff passed; the failing one was the gates'
+        self.assertFalse(self.gates_ran())
+
+    def test_gate_output_size(self):   # CR15
+        cfg = dict(minimal_config())
+        cfg["commands"] = {"test": "head -c 10485760 /dev/zero; head -c 1048576 /dev/zero >&2; echo ran >> %s" % self.marker}
+        write(os.path.join(self.R, ".strict-delivery", "config.yml"), emit(cfg))
+        commit_all(self.R, "big output")
+        self.passes(self.B("git commit -m m"))   # 10 MiB of commands.test output is dropped, stdout stays empty
+        self.assertTrue(self.gates_ran())
+        write(os.path.join(self.R, ".strict-delivery/state/decisions/DEC-20261031-k3f9.yml"),
+              "schema: decision/" + "9" * 1048576 + "\n")
+        git(self.R, "add", "-A")
+        r = self.B("git commit -m m")
+        self.refused(r, "gates")
+        self.assertTrue(all(ln.startswith("FAIL hook.bash.gates: ") for ln in r.stderr.splitlines()))
+
+    def test_status_error_runs_gates(self):   # CR14
+        notdir = os.path.join(self.tmp, "hooks-file")
+        write(notdir, "x")
+        git(self.R, "config", "core.hooksPath", notdir)
+        self.passes(self.B("git commit -m m"))
+        self.assertTrue(self.gates_ran())
+
+    def test_flagged_file_gates_line(self):   # CU12
+        git(self.R, "update-index", "--assume-unchanged", "a.txt")
+        self.dirty()
+        r = self.B("git commit -m m")
+        self.refused(r, "gates")
+        self.assertIn("FAIL hook.bash.gates: githook.flagged: a.txt: tracked file is flagged assume-unchanged or "
+                      "skip-worktree", r.stderr)
+        self.assertFalse(self.gates_ran())
+
+    def test_gates_leave_tree_clean(self):   # PB25
+        before = git(self.R, "status", "--porcelain", "--untracked-files=all")
+        self.passes(self.B("git commit -m m"))
+        self.assertTrue(self.gates_ran())
+        self.assertEqual(git(self.R, "status", "--porcelain", "--untracked-files=all"), before)
 
 
 if __name__ == "__main__":
