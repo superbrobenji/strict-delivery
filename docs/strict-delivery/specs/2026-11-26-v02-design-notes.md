@@ -159,3 +159,11 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - init and upgrade install a `pre-merge-commit` hook running the pre-commit checks; a merge that would break run_all is refused before its commit exists.
 - The Bash hook refuses a plain `git cherry-pick` and a plain `git revert` (both create a commit without the pre-commit hook) and names the form that runs the checks: `--no-commit` then `git commit`. `git commit --amend` already runs pre-commit and needs nothing (correction 2026-11-26: the first wording listed it in error). Which git commands skip which hooks is verified against git 2.30 and the current git during planning.
 - A human cherry-pick outside an agent still skips local checks; CI's process-gates job catches it on the PR, and doctor documents the gap.
+
+### V2-38 Program status view (2026-11-26)
+
+- Owner: "that looks good. also add a done list".
+- Header: program, progress (tasks done/total, PRs merged/total), planned versus actual ("day 3 of 7, 1 day behind"), the owner queue (open questions by id, oldest first), time-use shares against targets.
+- One row per stream: stream, now (task and step), state (building, in review, fix round k, PR open, CI running, waiting, done), waiting on (owner question id, CI run, mutation slot, another PR), open PR and its CI, open findings by severity, last merge, planned versus actual.
+- Below: the merge queue in order, main's latest CI result, and a done list (each merged PR with its tasks, merge time and merge sha, newest first).
+- Everything derived from git, the records, the handoffs and CI; nothing maintained by hand. `python3 -m gates program status` prints it; the index tool renders it into the program status page.
