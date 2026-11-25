@@ -35,3 +35,12 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - A task reaches CLEAN only when every carried-in and pre-review finding is fixed or registered against a named task (zero-bug rule): they cannot stop or prolong the loop, but they block the sign-off.
 - The rework share and the late-findings measure come from the same facts: a finding first raised by a final review or verifier in code a task review already passed counts as late (target under 20 %).
 - Rejected: counting carried-in findings at a lower weight (mixes two questions; arbitrary weights).
+
+### V2-09 Empty brief sections (2026-11-26)
+
+- Owner: "yes both match, go ahead".
+- `check dispatch` fails every required section (Role, Brief, Findings, Claims, Budget, Model, Report, Task) whose body is empty or whitespace only, one line each: `FAIL dispatch.section.<name>: empty`. A section saying "None." has content and passes. The strict block keeps its byte-for-byte check.
+
+### V2-24 This repository's nonconforming handoffs (2026-11-26)
+
+- Owner: "yes both match". Treated as v0.1 data clean-up (the program controller's owed handoff/1 rewrites, docs PR); V2-04 (handoffs written only by the checkpoint tool) prevents a recurrence in v0.2.
