@@ -1669,6 +1669,16 @@ class FinalReview(Base):
                 with open(os.path.join(self.pd, "sessions", sid + ".yml"), "rb") as fh:
                     self.assertEqual(fh.read(), before)                  # nothing was recorded
 
+    def test_unavailable_inside_locked_body_is_reraised(self):   # fail closed: not re-run without a store (mutant R3)
+        err = session.SessionUnavailable("inside the body")
+        for profile in ("strict", "light"):
+            with self.subTest(profile):
+                self.set_config(profile=profile)
+                with mock.patch("gates.hooks.pre_agent.session.add_dispatch", side_effect=err):
+                    with self.assertRaises(session.SessionUnavailable) as cm:
+                        self.seen(self.hand(cfg=config.load(self.R), tool_input=tin(real_prompt("implementer"))))
+                self.assertIs(cm.exception, err)
+
     def test_nested_dispatcher_from_record(self):   # DS4 M1 M3, plan P:3939: what the gate receives
         seed_ctl(self, "stream_controller", 1, "P0")
         self.sub("a1", "P0")
