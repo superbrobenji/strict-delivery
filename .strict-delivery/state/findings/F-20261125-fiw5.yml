@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261125-fiw5
+status: open
+source: task-CI2-review-1.md finding 4 (CI2 r1; mutant R3 SURVIVED)
+severity: LOW
+class: "F5/F11 symlink copy teeth in cached_history: top-level symlink to a directory, dangling symlink, nested directory symlink"
+siblings: []
+cites:
+  - file: tests/helpers.py
+    lines: "215"
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: F5/F11 symlink copy

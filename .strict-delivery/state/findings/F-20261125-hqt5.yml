@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261125-hqt5
+status: open
+source: task-CI2-review-1.md finding 1 (CI2 r1; mutant R4 wrote T/.git)
+severity: HIGH
+class: "test failure path writes outside its own directory: test_h5_template_directory_is_never_a_target (tests/test_helpers_fixture.py:699-711, parent of the template root = the real TMPDIR), test_h5_history_and_template_directories_are_never_a_target (:549-560, parent case for both roots)"
+siblings: []
+cites:
+  - file: tests/test_helpers_fixture.py
+    lines: 549-711
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: "H5 hardening: test sandbox of the parent case"

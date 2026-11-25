@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261125-ix2g
+status: open
+source: task-CI2-review-1.md finding 3 (CI2 r1)
+severity: LOW
+class: "F4 environment, process state not in the template key: umask (make_repo template and cached_history copies freeze the first caller's umask)"
+siblings: []
+cites:
+  - file: tests/helpers.py
+    lines: 159-181
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: "F4 environment: umask"

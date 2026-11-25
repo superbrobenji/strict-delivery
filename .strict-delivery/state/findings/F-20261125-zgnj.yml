@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261125-zgnj
+status: open
+source: task-CI2-review-1.md finding 5 (CI2 r1)
+severity: LOW
+class: "H5 overlap aliases on a case-insensitive file system: make_repo (tests/helpers.py:170-172), cached_history (:204-206); relations equal, below, above, each case-folded"
+siblings: []
+cites:
+  - file: tests/helpers.py
+    lines: 170-206
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: "H5 overlap: case-folded aliases"

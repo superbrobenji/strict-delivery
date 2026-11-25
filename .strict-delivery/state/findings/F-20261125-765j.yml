@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261125-765j
+status: open
+source: task-CI2-review-1.md finding 2 (CI2 r1)
+severity: MEDIUM
+class: "L2 member list incomplete and test_member_list_is_complete blind per file: tests/test_claims_lib.py StagedBlobIdTests (test_conversion_cases_match_git_add, test_f1_reproducer_crlf_in_index_is_fresh, test_lf_file_and_spaces_and_dash, test_tab_and_newline_paths, test_no_index_entry_yet, test_index_from_git_index_file_is_read_and_unchanged, test_temp_index_removed_on_every_exit), tests/test_context_cli.py test_cli_leaves_index_alone"
+siblings: []
+cites:
+  - file: tests/test_helpers_fixture.py
+    lines: 945-964
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9f1b4ee0f3fde136baf71a477f70c1c288c9bd3f
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: L2 .git index oracles
