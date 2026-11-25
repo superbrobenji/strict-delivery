@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-nu2d
+status: open
+source: 5c.2 task review 1 (records/5c.2-review-1.md, unrelated U5; blamed to 0f01f20, Task 5c.1's change)
+severity: MEDIUM
+class: "output text: double escaping: every message built with drift._shown (safe_text then Result.render or drift.input escapes again): the 30 call sites in gates/lib/drift.py"
+siblings: []
+cites:
+  - file: gates/lib/drift.py
+    lines: 31-33
+    sha: 42f1741
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 42f1741c749846bb52f2dee2042d658088f03926
+    by: stream-records
+review_round: 3
+caused_by_change: true
+dimension: output-consistency

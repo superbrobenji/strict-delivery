@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-9v77
+status: open
+source: PR-5c delta final review (records/PR-5c-final-review-2.md, R5-3)
+severity: MEDIUM
+class: "worktree placement of the base branch: a prunable (missing-directory) worktree entry taken as the checkout (drift.py:137)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 6f2441ed3f6ae0be04560daf76b601974922854c
+    by: stream-records
+review_round: 5
+caused_by_change: false
+dimension: base branch checkout placement
