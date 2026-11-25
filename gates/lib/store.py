@@ -15,7 +15,6 @@ from typing import Callable
 
 from gates.lib import gitinfo, ids, migrations, yamlsub
 from gates.lib.result import GateError, _raw, safe_text
-from gates.lib import tipread
 
 _PATH_KEY = {"decision": "decisions", "finding": "findings"}
 _GENERATED = ("index.yml", "in-force.md")
@@ -241,12 +240,12 @@ def _records_at(root: str, ref: str, directory: str, base: str, where: str) -> l
     """``(file, row)`` for every record file directly in ``directory`` at ``ref``; an unreadable one is a
     GateError naming ``<base>:<file>``."""
     out = []
-    for name in sorted(n for _, _, n in gitinfo.ls_tree_entries(root, ref, directory)):  # every kind, so none is hidden
+    for name in sorted(gitinfo.ls_tree(root, ref, directory)):
         if not _is_record_name(posixpath.basename(name)):
             continue
         shown = "%s:%s%s" % (base, name, where)
         try:
-            text = tipread.show_file(root, ref, name)
+            text = gitinfo.show(root, ref, name)
             if text is None:
                 raise GateError("%s: missing" % shown)
             data = _parse(text)

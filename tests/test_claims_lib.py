@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from gates import gate_schema
-from gates.lib import claims, config, gitinfo, migrations, schema, tipread, yamlsub
+from gates.lib import claims, config, gitinfo, migrations, schema, yamlsub
 from gates.lib.claims import (ClaimFile, base_errors, document_errors, file_errors, load, slug, stale_errors,
                               validate)
 from gates.lib.result import GateError, run_check
@@ -824,7 +824,7 @@ class BaseTests(RepoCase):
         self.assertEqual([s for s, _ in self.errs("main")], ["collision." + nid])
 
     def test_file_vanishing_between_listing_and_show(self):  # B10: show() giving None is a GateError
-        with mock.patch.object(tipread, "show_file", return_value=None):  # the listing's read moved to the helper (5b.3 F7)
+        with mock.patch.object(gitinfo, "show", return_value=None):
             with self.assertRaises(GateError) as cm:
                 self.errs()
         self.assertIn("HEAD:%s (at the merge base): missing" % self.fa, str(cm.exception))
@@ -1667,7 +1667,8 @@ class ArgvChunkTests(RepoCase):
 
 
 class RefListingKinds(GitIsolatedTestCase):
-    """Task 5b.3 row F7: the claim files of a directory at a ref (``claims._rows_at``)."""
+    """Task 5b.3 row F7: the claim files of a directory at a ref (``claims._rows_at``); a non-regular entry is
+    ignored (owner Q-RC10-1 (b), Q-1a3r-3 (b): the base's own gate refuses it)."""
 
     def test_ref_listing_entry_kinds(self):
         root = make_repo(self.work)
@@ -1682,11 +1683,9 @@ class RefListingKinds(GitIsolatedTestCase):
             set_entry(root, ref, name, "absent")
             self.assertEqual(claims._rows_at(root, ref, d, "main", ""), [])
         for kind, mode in BAD_KINDS:
-            with self.subTest(kind):
+            with self.subTest(kind):  # row F7: ignored, never a GateError
                 set_entry(root, ref, name, kind, text)
-                with self.assertRaises(GateError) as cm:
-                    claims._rows_at(root, ref, d, "main", "")
-                self.assertEqual(str(cm.exception), "main:%s: %s" % (name, refusal(ref, name)))
+                self.assertEqual(claims._rows_at(root, ref, d, "main", ""), [])
             with self.subTest(kind + " with a non-claim name"):  # a name that is no claim file stays ignored
                 set_entry(root, ref, name, "absent")
                 set_entry(root, ref, d + "/.hidden.yml", kind, text)

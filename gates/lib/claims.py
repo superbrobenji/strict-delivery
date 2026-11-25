@@ -309,12 +309,12 @@ def _rows_at(root: str, ref: str, directory: str, base: str, where: str) -> list
     """``(file, migrated row)`` for every non-hidden ``*.yml`` directly in ``directory`` at ``ref``; one that does
     not parse or is not a mapping is a GateError naming ``<base>:<file>``."""
     out = []
-    for name in sorted(n for _, _, n in gitinfo.ls_tree_entries(root, ref, directory)):  # every kind, so none is hidden
+    for name in sorted(gitinfo.ls_tree(root, ref, directory)):
         if not _is_claim_name(posixpath.basename(name)):
             continue
         shown = "%s:%s%s" % (base, name, where)
         try:
-            text = tipread.show_file(root, ref, name)
+            text = gitinfo.show(root, ref, name)
             if text is None:
                 raise GateError("missing")
             data = store._parse(text)

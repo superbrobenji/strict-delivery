@@ -647,7 +647,7 @@ class BaseTests(Base):  # C3-C7
                 self.other_branch()
                 self.drop_entry(fpath(F))
                 git(self.work, "commit", "-q", "-m", "drop")
-                self.input_fail(*self.run_(), "(not a regular file)")  # 5b.3 F8 (Q-RC9-1 (a)) supersedes "ignored"
+                self.assertEqual(self.run_(), (passes(*CATS), 0))
             with self.subTest(kind=kind, at="merge base, a regular record in its place on the branch"):
                 self.fresh(kind + "_replaced")
                 self.build(files=real)
@@ -657,7 +657,7 @@ class BaseTests(Base):  # C3-C7
                 write_record(self.work, fpath(F), frow(F))
                 git(self.work, "add", "--", fpath(F))
                 git(self.work, "commit", "-q", "-m", "regular")
-                self.input_fail(*self.run_(), "(not a regular file)")
+                self.assertEqual(self.run_(), (passes(*CATS), 0))
             with self.subTest(kind=kind, at="base tip only, the same id added on the branch"):
                 self.fresh(kind + "_tip")
                 self.build(files=real)
@@ -667,7 +667,7 @@ class BaseTests(Base):  # C3-C7
                 git(self.work, "checkout", "-q", "main")
                 self.commit_entry(kind, fpath(F))
                 git(self.work, "checkout", "-q", "feat")
-                self.input_fail(*self.run_(), "(not a regular file)")
+                self.assertEqual(self.run_(), (passes(*CATS), 0))
 
     def test_c7_unparsable_record_only_at_base_tip_is_input_fail(self):  # C7 (1c.1 C7: the tip)
         root = self.build()

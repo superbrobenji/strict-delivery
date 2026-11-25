@@ -14,7 +14,7 @@ from gates.lib.result import GateError, Result, repo_root, run_check, run_gate
 from gates.lib.store import Record, Store, base_errors, store_errors
 from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms,
                            write_record)
-from tests.tipkinds import BAD_KINDS, refusal, set_entry
+from tests.tipkinds import BAD_KINDS, set_entry
 
 DIR = ".strict-delivery/state/decisions"
 FDIR = ".strict-delivery/state/findings"
@@ -962,13 +962,7 @@ class BaseErrorsContentTest(GitCase):
         commit_all(self.root, "symlink record and junk at the base")
         self.fork()
         git(self.root, "rm", "-q", "--", "%s/%s.yml" % (DIR, C), "%s/.x.yml" % DIR, "%s/x.yaml" % DIR)
-        # 5b.3 F8 (owner Q-RC9-1 (a)) supersedes Q-1a3r-3 for a symlink with a record name: refused by name; the junk
-        # names (.x.yml, x.yaml) stay ignored (test_non_record_files_at_base_are_ignored)
-        with self.assertRaises(GateError) as cm:
-            self.errs()
-        self.assertIn("%s/%s.yml (at the merge base)" % (DIR, C), str(cm.exception))
-        self.assertIn("(not a regular file)", str(cm.exception))
-        self.assertNotIn(".x.yml", str(cm.exception))
+        self.assertEqual(self.errs(), [])
 
     def test_base_side_gitlink_entries_are_ignored(self):  # B9 (owner Q-1a3r-3), F-1a3rr-1: mode 160000
         self.seed()
@@ -978,13 +972,9 @@ class BaseErrorsContentTest(GitCase):
         git(self.root, "commit", "-q", "-m", "gitlink record at the base")
         self.assertIn("160000 commit", git(self.root, "ls-tree", "HEAD", "--", path))
         self.fork()
-        for removed in (False, True):  # 5b.3 F8 (owner Q-RC9-1 (a)) supersedes Q-1a3r-3: a gitlink with a record name is refused by name
-            if removed:
-                git(self.root, "rm", "-q", "--cached", "--", path)  # removed on the branch: the merge base still holds it
-            with self.assertRaises(GateError) as cm:
-                self.errs()
-            self.assertIn("%s (at the merge base)" % path, str(cm.exception))
-            self.assertIn("(not a regular file)", str(cm.exception))
+        self.assertEqual(self.errs(), [])
+        git(self.root, "rm", "-q", "--cached", "--", path)
+        self.assertEqual(self.errs(), [])
 
     def test_unparsable_record_at_base_tip_refused(self):  # B6
         self.seed()
@@ -1614,7 +1604,8 @@ class RowChangedMigrateTest(GitIsolatedTestCase):
 
 
 class RefListingKinds(GitIsolatedTestCase):
-    """Task 5b.3 row F8: the record files of a directory at a ref (``store._records_at``)."""
+    """Task 5b.3 row F8: the record files of a directory at a ref (``store._records_at``); a non-regular entry is
+    ignored (owner Q-RC10-1 (b), Q-1a3r-3 (b): the base's own gate refuses it)."""
 
     def test_ref_listing_entry_kinds(self):
         root = make_repo(self.work)
@@ -1628,11 +1619,9 @@ class RefListingKinds(GitIsolatedTestCase):
             set_entry(root, ref, name, "absent")
             self.assertEqual(store_mod._records_at(root, ref, FDIR, "main", ""), [])
         for kind, mode in BAD_KINDS:
-            with self.subTest(kind):  # the working tree's read of the same kind refuses it too (Store.load, not a regular file)
+            with self.subTest(kind):  # row F8: ignored, never a GateError
                 set_entry(root, ref, name, kind, text)
-                with self.assertRaises(GateError) as cm:
-                    store_mod._records_at(root, ref, FDIR, "main", "")
-                self.assertEqual(str(cm.exception), "main:%s: %s" % (name, refusal(ref, name)))
+                self.assertEqual(store_mod._records_at(root, ref, FDIR, "main", ""), [])
             with self.subTest(kind + " with a non-record name"):
                 set_entry(root, ref, name, "absent")
                 set_entry(root, ref, FDIR + "/notes.txt", kind, text)

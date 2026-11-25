@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from gates import __main__ as gates_main
-from gates.lib import checkpoints, config, dispatch, findings, gitinfo, ids, migrations, schema, store, tipread, yamlsub
+from gates.lib import checkpoints, config, dispatch, findings, gitinfo, ids, migrations, schema, store, yamlsub
 from gates.lib.checkpoints import (checkpoint_lines, handoff_errors, ledger_errors, merged_lines, parse_handoff,
                                    plan_slug, question_errors, resume_line)
 from gates.lib.schema import files_of, load_schema, validate_front_matter, validate_markdown
@@ -2796,7 +2796,7 @@ class RecordsAt(GitIsolatedTestCase):
         self.put(D6 + ".yml")
         self.commit()
         for exc in (beg("x", [KeyboardInterrupt()]), eg("x", [ValueError()])):
-            for mod, name in ((gitinfo, "ls_tree_entries"), (tipread, "show_file"), (gitinfo, "show"), (yamlsub, "parse")):
+            for mod, name in ((gitinfo, "ls_tree_entries"), (gitinfo, "ls_tree"), (gitinfo, "show"), (yamlsub, "parse")):
                 with self.subTest(exc=type(exc).__name__, call=name):
                     with mock.patch.object(mod, name, side_effect=exc):
                         with self.assertRaises(beg) as cm:
