@@ -7,6 +7,7 @@ written out by hand from the plan lines and the table, never read back from the 
 Constraints :33) with a bare remote in the temp directory (no network). Rows MG1-MG15, DC4 and DC5 are the oracle of
 Step 5 (the program controller's migration of this repository's workspace, D-Q26) and are not tested here."""
 import ast
+import builtins
 import contextlib
 import io
 import json
@@ -19,8 +20,8 @@ from unittest import mock
 
 from gates import __main__ as gates_main
 from gates import gate_checkpoint, producers
-from gates.lib import gitinfo, yamlsub
-from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, minimal_config,
+from gates.lib import checkpoints, gitinfo, yamlsub
+from tests.helpers import (INT_LIMITS, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, int_limit, make_repo, minimal_config,
                            root_forms, write_record)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,9 +34,13 @@ HANDOFF = "%s/%s/handoff.md" % (PS, SLUG)
 LH = "<!-- schema: ledger/1 -->\n"
 CK = "CHECKPOINT P1 P1.1 head={H} tests=5/5 gates=PASS next=P1.2"
 EIGHT = ["handoff", "ledger", "agree", "head", "clean", "pushed", "reads", "worktrees"]
-NINE = EIGHT + ["merges"]  # Task P3.1 (CM20): checkpoint.merges is the last line, after worktrees
-ALL = "".join("PASS checkpoint.%s\n" % i for i in NINE)
+NINE = EIGHT + ["merges"]  # Task P3.1 (CM20): checkpoint.merges follows worktrees
+NEW = ["cap", "records", "base", "files", "last"]  # Task 6K.2: the five lines after merges
+ALL14 = NINE + NEW  # plan :6076, :6095
+ALL = "".join("PASS checkpoint.%s\n" % i for i in ALL14)
 ALL_EIGHT = "".join("PASS checkpoint.%s\n" % i for i in EIGHT)
+NEW_PASS = "".join("PASS checkpoint.%s\n" % i for i in NEW)
+SPEC = "docs/strict-delivery/specs/s.md"
 # the fixtures whose ledger holds a MERGED line for a made-up merge sha ("b" * 40, pr 3, host mode): the line is now
 # checked against git, so the gate's last line fails with the merge rule only (Task P3.1)
 FAKE_MERGE_FAIL = ("FAIL checkpoint.merges: merge.3: %s is not a commit in this repository; update main from the remote\n"
@@ -94,6 +99,7 @@ class Fx(GitIsolatedTestCase):
               ledger_text=None, handoff_text=None):
         git(self.root, "checkout", "-q", "-b", "block/p1")
         self.put(PLAN, plan_text)
+        self.put(SPEC, "spec\n")
         for rel, data in (files or {}).items():
             self.put(rel, data)
         self.c1 = commit_all(self.root, "code")
@@ -102,7 +108,7 @@ class Fx(GitIsolatedTestCase):
         body = "\n".join(l.replace("{H}", self.h7) for l in (lines if lines is not None else ["Prose line.", CK]))
         self.put(LEDGER, ledger_text if ledger_text is not None else LH + body + "\n")
         self.row = {
-            "schema": "handoff/1", "plan": PLAN, "spec": ["docs/strict-delivery/specs/s.md"], "branch": "block/p1",
+            "schema": "handoff/1", "plan": PLAN, "spec": [SPEC], "branch": "block/p1",
             "head": self.h7, "base": self.base, "ledger": LEDGER, "resume": resume_text(PLAN, "P1.2", "block/p1", self.h7),
             "block": "P1", "next_task": "P1.2", "findings_in_flight": [], "open_decisions": [], "rulings": 0,
             "grant": None, "live_subagents": [], "role": "controller", "budget": {"tokens": 300000, "minutes": 150},
@@ -148,7 +154,7 @@ class HappyPath(Fx):
     def test_line_order_with_new_lines(self):  # OR1; plan :2588
         self.build()
         out, _ = self.chk()
-        self.assertEqual(ids(out), ["handoff", "ledger", "agree", "head", "clean", "pushed", "reads", "worktrees", "merges"])
+        self.assertEqual(ids(out), ALL14)
 
     def test_short_and_full_head_agree(self):  # AG1, AG4; plan :2574
         for ledger_head, handoff_head in (("{H}", None), ("FULL", None), ("{H}", "FULL"), ("FULL", "FULL"), ("12", "{H}")):
@@ -256,7 +262,7 @@ class Arguments(Fx):
         d = json.loads(out)
         self.assertEqual(d["gate"], "checkpoint")
         self.assertIs(d["ok"], True)
-        self.assertEqual([l["id"] for l in d["lines"]], ["checkpoint." + i for i in NINE])
+        self.assertEqual([l["id"] for l in d["lines"]], ["checkpoint." + i for i in ALL14])
         self.assertEqual(d["lines"][5], {"status": "PASS", "id": "checkpoint.pushed", "reason": ""})
         out, code = run_main(["check", "checkpoint", "--root", self.root, "--plan", SLUG, "--json"])
         self.assertEqual(out, "FAIL checkpoint.input: invalid arguments: unrecognized arguments: --json\n")
@@ -341,7 +347,7 @@ class Arguments(Fx):
         out, _ = self.chk()
         got = ids(out)
         self.assertEqual(len(got), len(set(got)))
-        self.assertTrue(set(got) <= set(EIGHT))
+        self.assertTrue(set(got) <= set(ALL14))
 
     def test_not_in_run_all(self):  # AV11
         from gates import run_all
@@ -502,7 +508,7 @@ class Files(Fx):
         os.unlink(path)
         out, _ = self.chk()
         self.assertEqual(line_of(out, "ledger"), "FAIL checkpoint.ledger: %s: missing" % LEDGER)
-        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees"])
+        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees"] + ["records", "base", "files"])
         os.mkdir(path)
         out, _ = self.chk()
         self.assertIn("is not a regular file", line_of(out, "ledger"))
@@ -557,12 +563,12 @@ class Files(Fx):
         merged = "MERGED pr=3 head=%s merge=%s merged_by=a at=2026-11-02T08:59:36Z final=no stream=a block=P1 approval=host" % ("a" * 40, "b" * 40)
         self.build(lines=["Prose.", CK, merged])
         out, _ = self.chk()
-        self.assertEqual(out, ALL_EIGHT + FAKE_MERGE_FAIL)  # P3.1: the fake merge sha is now checked against git
+        self.assertEqual(out, ALL_EIGHT + FAKE_MERGE_FAIL + NEW_PASS)  # P3.1: the fake merge sha is now checked against git
         nob = "MERGED pr=3 head=%s merge=%s merged_by=a at=2026-11-02T08:59:36Z final=no approval=host" % ("a" * 40, "b" * 40)
         self.put(LEDGER, LH + "Prose.\n" + CK.replace("{H}", self.h7) + "\n" + nob + "\n")
         commit_all(self.root, "l")
         self.push()
-        self.assertEqual(self.chk()[0], ALL_EIGHT + FAKE_MERGE_FAIL)
+        self.assertEqual(self.chk()[0], ALL_EIGHT + FAKE_MERGE_FAIL + NEW_PASS)
 
     def test_ledger_needs_a_checkpoint_line(self):  # LG3
         for lines in ([], ["prose only"], ["CHECKPOINT x"]):
@@ -599,7 +605,7 @@ class Files(Fx):
     def test_ledger_gate_passes_no_stream_ids(self):  # LG7
         merged = "MERGED pr=3 head=%s merge=%s merged_by=a at=2026-11-02T08:59:36Z final=no stream=zz block=P1 approval=host" % ("a" * 40, "b" * 40)
         self.build(lines=["Prose.", CK, merged])
-        self.assertEqual(self.chk()[0], ALL_EIGHT + FAKE_MERGE_FAIL)
+        self.assertEqual(self.chk()[0], ALL_EIGHT + FAKE_MERGE_FAIL + NEW_PASS)
 
     def test_ledger_cross_line_rules_surface(self):  # LG8
         m = "MERGED pr=3 head=%s merge=%s merged_by=a at=%s final=%s approval=host" % ("a" * 40, "b" * 40, "%s", "%s")
@@ -684,7 +690,7 @@ class Files(Fx):
     def test_agree_not_printed_when_ledger_fails(self):  # AG11, D-Q2
         self.build(lines=["Prose.", CK, "CHECKPOINT bad line"])
         out, _ = self.chk()
-        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees"])
+        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees"] + NEW)
 
     def test_agree_digit_limits_same_on_both(self):  # AG10, V1
         n = "9" * 600
@@ -975,7 +981,7 @@ class Pushed(Fx):
         for argv in calls:
             i = argv.index("-C") + 2
             subs.add(argv[i])
-        self.assertLessEqual(subs, {"symbolic-ref", "rev-parse", "remote", "status", "merge-base", "ls-tree", "cat-file", "config"})
+        self.assertLessEqual(subs, {"symbolic-ref", "rev-parse", "remote", "status", "merge-base", "ls-tree", "cat-file", "config", "ls-files"})
         self.assertFalse(subs & {"fetch", "ls-remote", "push", "pull"})
 
     def test_pushed_uses_stale_local_ref(self):  # PU16
@@ -1200,7 +1206,8 @@ class Worktrees(Fx):
         os.mkdir(other)
         make_repo(other)
         out = self.wt({"path": "../otherrepo", "branch": "main", "head": git(other, "rev-parse", "HEAD")[:7], "porcelain": ""})
-        self.assertEqual(line_of(out, "worktrees"), "PASS checkpoint.worktrees")  # same-repository is Task 6K.2's
+        # WT1 (Task 6K.2, U2): another repository's top level is no worktree of this repository, so this line used to PASS
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../otherrepo: not a worktree of this repository")
 
     def test_worktree_path_forms(self):  # WT8
         self.build()
@@ -1266,7 +1273,8 @@ class Worktrees(Fx):
         os.mkdir(u)
         git(u, "init", "-q", "-b", "main")
         out = self.wt({"path": "../unb", "branch": "main", "head": self.c1[:7], "porcelain": ""})
-        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../unb: HEAD has no commit")
+        # Task 6K.2 (row WT1, like U2): a separate repository, even an unborn one, is no worktree of this repository
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../unb: not a worktree of this repository")
 
 
 class Output(Fx):
@@ -1275,7 +1283,7 @@ class Output(Fx):
         self.rewrite(head="0000000", resume=resume_text(PLAN, "P1.2", "block/p1", "0000000"))
         self.put("x.txt")
         out, _ = self.chk()
-        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees"])
+        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees"] + NEW)
 
     def test_exit_codes(self):  # OR5
         self.build()
@@ -1418,13 +1426,13 @@ class Merges(MergesFx):
         self.assertEqual(code, 1)
         self.assertEqual(self.merges(bad_out), "FAIL checkpoint.merges: head.7: the second parent of %s is %s, not the "
                          "recorded head %s" % (m, head, "c" * 40))
-        self.assertEqual(ids(bad_out), NINE)
+        self.assertEqual(ids(bad_out), ALL14)
 
     def test_merges_printed_last_after_worktrees(self):  # CM20
         head, m = self.pr_merge("w1", {NOTE: "x\n"})
         self.build(lines=["Prose.", CK, mline(7, head, m)])
         out, _ = self.chk()
-        self.assertEqual(ids(out)[-2:], ["worktrees", "merges"])
+        self.assertEqual(ids(out)[-7:-5], ["worktrees", "merges"])
 
     def test_merges_merge_not_a_commit(self):  # CM4
         head, m = self.pr_merge("w1", {NOTE: "x\n"})
@@ -1622,7 +1630,7 @@ class Merges(MergesFx):
         self.reledger([mline(7, "c" * 40, m)])
         p = run()
         self.assertEqual(p.returncode, 1)
-        self.assertEqual(p.stdout.decode().split("\n")[-2], "FAIL checkpoint.merges: head.7: the second parent of %s is %s, "
+        self.assertEqual([l for l in p.stdout.decode().split("\n") if l.startswith("FAIL checkpoint.merges")][0], "FAIL checkpoint.merges: head.7: the second parent of %s is %s, "
                          "not the recorded head %s" % (m, head, "c" * 40))
 
 
@@ -1648,6 +1656,1036 @@ class MergesHost(MergesFx):
         out, _ = self.chk()
         self.assertTrue(line_of(out, "ledger").startswith("FAIL checkpoint.ledger"))
         self.assertNotIn("checkpoint.merges", out)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Task 6K.2: the five new lines (cap, records, base, files, last) and the same-repository rule of worktrees. Row ids refer
+# to task-6K.2-domain.md (records/ of the program workspace) and its decisions D-6K2-Q1..Q9. Expected lines are written
+# by hand from the plan (:6069-6089, :6092-6116) and that table, never read back from checkpoints.* or worktrees.*.
+# ---------------------------------------------------------------------------------------------------------------------
+F1 = "F-20261101-abcd"
+D1 = "DEC-20261101-abcd"
+D2 = "DEC-20261101-abce"
+F2 = "F-20261101-abce"
+FDIR = ".strict-delivery/state/findings"
+DDIR = ".strict-delivery/state/decisions"
+SPEC2 = "docs/strict-delivery/specs/s2.md"
+CAP3 = dict(minimal_config(), block={"max_tasks": 3})
+
+
+def ck(n, block="P1", tests="5/5", gates="PASS", nxt=None):
+    """A CHECKPOINT line for task ``<block>.<n>`` (head is the placeholder the fixture replaces)."""
+    return "CHECKPOINT %s %s.%d head={H} tests=%s gates=%s next=%s" % (block, block, n, tests, gates, nxt or "%s.%d" % (block, n + 1))
+
+
+def plan_with(*ns, block="P1"):
+    return "## Block %s: x\n" % block + "".join("### Task %s.%s: t\n" % (block, n) for n in ns)
+
+
+class FullFx(Fx):
+    """``Fx`` with a strict-like cap of 3 tasks written into the committed config (owner answer Q-RC6-1 (a))."""
+    CFG = CAP3
+
+    def commit_push(self, msg="x"):
+        commit_all(self.root, msg)
+        self.push()
+
+    def setcfg(self, **kw):
+        write_record(self.root, ".strict-delivery/config.yml", dict(minimal_config(), **kw))
+        self.commit_push("cfg")
+
+    def reledger(self, lines, **kw):
+        body = "\n".join(l.replace("{H}", self.h7) for l in lines)
+        self.put(LEDGER, LH + body + "\n")
+        self.commit_push("ledger")
+
+    def replan(self, text):
+        self.put(PLAN, text)
+        self.commit_push("plan")
+
+    def rec(self, directory, id_, status, root=None):
+        self.put("%s/%s.yml" % (directory, id_), yamlsub.emit({"id": id_, "status": status}), root=root)
+
+    def line(self, id_):
+        return line_of(self.chk()[0], id_)
+
+
+class NewLinesOrder(FullFx):
+    def test_full_checkpoint_passes(self):  # GO1; plan :6094-6095
+        self.build()
+        out, code = self.chk()
+        self.assertEqual(ids(out), ["handoff", "ledger", "agree", "head", "clean", "pushed", "reads", "worktrees", "merges",
+                                    "cap", "records", "base", "files", "last"])
+        self.assertEqual(out, ALL)
+        self.assertEqual(code, 0)
+
+    def test_line_ids_unique_and_known_with_new_lines(self):  # GO2
+        self.build()
+        self.rewrite(head="0000000", resume=resume_text(PLAN, "P1.2", "block/p1", "0000000"), base="0000000")
+        out, _ = self.chk()
+        got = ids(out)
+        self.assertEqual(len(got), len(set(got)))
+        self.assertTrue(set(got) <= set(ALL14))
+        self.assertEqual(got, [i for i in ALL14 if i in got])  # a subsequence of the fixed order
+
+    def test_handoff_missing_prints_no_dependent_lines(self):  # GO3; plan :6114-6115
+        self.build()
+        os.remove(os.path.join(self.root, *HANDOFF.split("/")))
+        commit_all(self.root, "rm")
+        self.push()
+        out, code = self.chk()
+        self.assertEqual(ids(out), ["handoff", "clean", "pushed"])
+        self.assertNotIn("checkpoint.cap", out)
+        self.assertIn("FAIL checkpoint.handoff", out)
+        self.assertEqual(code, 1)
+        self.rewrite(plan="docs/strict-delivery/plans/other.md")  # a handoff that fails its own rules
+        out, _ = self.chk()
+        self.assertTrue(line_of(out, "handoff").startswith("FAIL checkpoint.handoff"))
+        for i in ("ledger", "agree", "head", "reads", "worktrees", "merges") + tuple(NEW):
+            self.assertNotIn("checkpoint.%s" % i, out)
+
+    def test_ledger_failure_new_lines_print_rule(self):  # GO4, D-6K2-Q2 (a)
+        self.build(lines=["Prose only, no checkpoint line."], row={"ledger_from": 3})
+        out, _ = self.chk()
+        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees"] + NEW)
+        self.assertEqual(line_of(out, "last"), "FAIL checkpoint.last: no CHECKPOINT line")
+        self.assertEqual(line_of(out, "cap"), "PASS checkpoint.cap")
+        # an unreadable ledger file: records, base and files need only the handoff; cap and last need ledger text
+        os.remove(os.path.join(self.root, *LEDGER.split("/")))
+        commit_all(self.root, "rm ledger")
+        self.push()
+        out, _ = self.chk()
+        self.assertEqual(ids(out), ["handoff", "ledger", "head", "clean", "pushed", "reads", "worktrees", "records", "base", "files"])
+        self.assertNotIn("checkpoint.cap", out)
+        self.assertNotIn("checkpoint.last", out)
+
+    def test_new_lines_json_and_exit(self):  # GO6, section 13
+        self.build()
+        self.rewrite(base="0000000")
+        self.push()
+        out, code = run_main(["check", "checkpoint", "--json", "--root", self.root, "--plan", SLUG])
+        d = json.loads(out)
+        self.assertEqual([l["id"] for l in d["lines"]], ["checkpoint." + i for i in ALL14])
+        self.assertIs(d["ok"], False)
+        self.assertEqual(code, 1)
+        base = [l for l in d["lines"] if l["id"] == "checkpoint.base"][0]
+        self.assertEqual(base, {"status": "FAIL", "id": "checkpoint.base", "reason": "0000000 is not a commit"})
+        out, code = self.chk()
+        self.assertEqual(code, 1)
+        self.assertEqual(line_of(out, "base"), "FAIL checkpoint.base: 0000000 is not a commit")
+
+    def test_new_line_reasons_joined(self):  # GO8, D-Q15
+        self.build(lines=["Prose.", ck(1), ck(2), ck(3), ck(4, nxt="P1.2")], row={"rulings": 5, "ledger_from": 7})
+        self.replan(plan_with(1, 2, 3, 4))
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: block: 4 tasks in ledger exceed block.max_tasks 3; "
+                         "block: 4 tasks in plan exceed block.max_tasks 3; rulings: handoff says 5, ledger has 0")
+
+
+class Cap(FullFx):
+    def test_light_has_no_cap(self):  # CA1; plan :6100
+        for n in (1, 4, 10):
+            with self.subTest(tasks=n):
+                fx = type(self)("test_light_has_no_cap")
+                fx.CFG = minimal_config()
+                fx.setUp()
+                try:
+                    fx.build(lines=["Prose."] + [ck(i) for i in range(1, n + 1)], row={"ledger_from": n + 3})
+                    fx.replan(plan_with(*range(1, n + 1)))
+                    self.assertEqual(fx.line("cap"), "PASS checkpoint.cap")
+                finally:
+                    fx.doCleanups()
+
+    def test_fourth_task_over_strict_cap_fails(self):  # CA2; plan :6098-6099 (the cap is written into the config, Q-RC6-1)
+        self.build(lines=["Prose.", ck(1), ck(2), ck(3), ck(4)], row={"ledger_from": 7})
+        self.replan(plan_with(1, 2, 3, 4))
+        out, _ = self.chk()
+        self.assertIn("FAIL checkpoint.cap: block: 4 tasks in ledger exceed block.max_tasks 3", out)
+        self.assertEqual(line_of(out, "cap"), "FAIL checkpoint.cap: block: 4 tasks in ledger exceed block.max_tasks 3; "
+                         "block: 4 tasks in plan exceed block.max_tasks 3")
+
+    def test_cap_line_at_over_under(self):  # CA3
+        self.build()
+        for cap in (1, 3, 5):
+            self.setcfg(block={"max_tasks": cap})
+            for n_led, n_plan, want in (
+                    (cap, cap, "PASS checkpoint.cap"), (cap - 1, cap - 1, "PASS checkpoint.cap"),
+                    (cap + 1, cap, "FAIL checkpoint.cap: block: %d tasks in ledger exceed block.max_tasks %d" % (cap + 1, cap)),
+                    (cap, cap + 1, "FAIL checkpoint.cap: block: %d tasks in plan exceed block.max_tasks %d" % (cap + 1, cap))):
+                with self.subTest(cap=cap, ledger=n_led, plan=n_plan):
+                    self.reledger(["Prose."] + [ck(i) for i in range(1, n_led + 1)])
+                    self.replan(plan_with(*range(1, n_plan + 1)))
+                    self.assertEqual(self.line("cap"), want)
+
+    @unittest.skip("Block 4 Task 4a.2 adds the profile presets (light none, standard 5, strict 3); this runs unchanged once it merges")
+    def test_cap_profile_presets(self):  # CA4; plan :6081
+        for profile, tasks, want in (("light", 10, "PASS checkpoint.cap"), ("standard", 6, "FAIL checkpoint.cap"),
+                                     ("standard", 5, "PASS checkpoint.cap"), ("strict", 4, "FAIL checkpoint.cap"),
+                                     ("strict", 3, "PASS checkpoint.cap")):
+            with self.subTest(profile=profile, tasks=tasks):
+                fx = type(self)("test_cap_profile_presets")
+                fx.CFG = dict(minimal_config(), profile=profile)
+                fx.setUp()
+                try:
+                    fx.build(lines=["Prose."] + [ck(i) for i in range(1, tasks + 1)], row={"ledger_from": tasks + 3})
+                    fx.replan(plan_with(*range(1, tasks + 1)))
+                    self.assertTrue(fx.line("cap").startswith(want))
+                finally:
+                    fx.doCleanups()
+
+    @unittest.skip("Block 4 Task 4a.2 adds the overrides shape; this runs unchanged once it merges")
+    def test_cap_overrides_entry(self):  # CA5
+        self.fail("an overrides entry changing block.max_tasks (the form Task 4a.2 fixes) must raise the cap for the gate")
+
+    def test_cap_bad_value_through_gate(self):  # CA6, CA7, D-6K2-Q6 (a)
+        self.build()
+        for value in (0, -1, True, "3", None, [3]):  # a float is not in the YAML subset, so no config holds one
+            with self.subTest(max_tasks=repr(value)):
+                self.setcfg(block={"max_tasks": value})
+                out, _ = self.chk()
+                self.assertEqual(line_of(out, "cap"), "FAIL checkpoint.cap: block.max_tasks: must be an integer of at least 1")
+                self.assertEqual(len(ids(out)), 14)
+        for value in (0, True, "2"):
+            with self.subTest(max_per_block=repr(value)):
+                self.setcfg(rulings={"max_per_block": value})
+                self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: rulings.max_per_block: must be an integer of at least 1")
+        self.setcfg(block=5)
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: block: must be a mapping")
+        self.setcfg(rulings=[1])
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: rulings: must be a mapping")
+
+    def test_rulings_cap_through_gate(self):  # CA8
+        r = "Ruling: a -- b -- c -- d"
+        self.build(lines=["Prose.", ck(1), r, r], row={"rulings": 2, "ledger_from": 3})
+        self.setcfg(rulings={"max_per_block": 2})
+        self.assertEqual(self.line("cap"), "PASS checkpoint.cap")
+        self.reledger(["Prose.", ck(1), r, r, r])
+        self.rewrite(rulings=3)
+        self.push()
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: rulings: 3 Ruling lines in the ledger exceed rulings.max_per_block 2")
+
+    def test_cap_rulings_agreement(self):  # CA9
+        r = "Ruling: a -- b -- c -- d"
+        self.build(lines=["Prose.", ck(1), r, r], row={"rulings": 0})
+        for cfg in ({}, {"rulings": {"max_per_block": 5}}):
+            self.setcfg(**cfg)
+            self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: rulings: handoff says 0, ledger has 2")
+        self.rewrite(rulings=2)
+        self.push()
+        self.assertEqual(self.line("cap"), "PASS checkpoint.cap")
+
+    def test_cap_plan_unreadable(self):  # CA10, D-6K2-Q5 (a)
+        self.build()
+        path = os.path.join(self.root, *PLAN.split("/"))
+        os.remove(path)
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: %s: missing" % PLAN)
+        os.mkdir(path)
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: %s: is not a regular file (a directory, symlink or other entry "
+                         "is never followed)" % PLAN)
+        os.rmdir(path)
+        self.put(PLAN, b"\xff\xfe\x00")
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: %s: not valid UTF-8" % PLAN)
+        os.remove(path)
+        os.symlink(os.path.join(self.root, SPEC), path)
+        self.assertTrue(self.line("cap").startswith("FAIL checkpoint.cap: %s: is not a regular file" % PLAN))
+
+    def test_cap_plan_duplicate_heading(self):  # CA11, D-6K2-Q6 (a)
+        self.build()
+        self.replan("## Block P1\n### Task P1.1: a\n#### Task P1.1: b\n")
+        out, _ = self.chk()
+        self.assertEqual(line_of(out, "cap"), "FAIL checkpoint.cap: plan_tasks: task P1.1 is listed twice")
+        self.assertEqual(len(ids(out)), 14)
+        # a condition before the colon is not a heading of the form; two of them are not a duplicate
+        self.replan("## Block P1\n### Task P1.1 (only under x): a\n### Task P1.1 (only under y): b\n")
+        self.assertEqual(self.line("cap"), "PASS checkpoint.cap")
+
+    def test_cap_block_outside_letters_digits(self):  # CA12
+        self.build()
+        self.rewrite(block="P-1")
+        self.push()
+        out, _ = self.chk()
+        self.assertEqual(line_of(out, "handoff"), "PASS checkpoint.handoff")
+        self.assertEqual(line_of(out, "cap"), "FAIL checkpoint.cap: cap_errors: handoff block must be a string of ASCII letters and digits")
+        for block in ("P 1", "Pࡰ"):
+            self.rewrite(block=block)
+            self.push()
+            out, _ = self.chk()
+            if line_of(out, "handoff") == "PASS checkpoint.handoff":
+                self.assertEqual(line_of(out, "cap"), "FAIL checkpoint.cap: cap_errors: handoff block must be a string of "
+                                 "ASCII letters and digits")
+            else:
+                self.assertIsNone(line_of(out, "cap"))
+
+    def test_cap_ledger_real_size(self):  # CA13: only the handoff's block is counted in a long ledger
+        others = ["CHECKPOINT P0 P0.%d head={H} tests=5/5 gates=PASS next=P0.%d" % (i, i + 1) for i in range(1, 1001)]
+        self.build(lines=["Prose."] + others + [ck(1)], row={"ledger_from": 1004})
+        self.replan(plan_with(1))
+        out, _ = self.chk()
+        self.assertEqual(line_of(out, "cap"), "PASS checkpoint.cap")
+
+    def test_cap_rulings_counted_by_segment(self):  # CA14
+        r = "Ruling: a -- b -- c -- d"
+        lines = ["Prose.", r, ck(1, block="P0"), r, ck(1), r]  # the first ruling belongs to P0's segment, the last two to P1
+        self.build(lines=lines, row={"rulings": 2, "ledger_from": 8})
+        self.assertEqual(self.line("cap"), "PASS checkpoint.cap")
+        self.rewrite(rulings=3)
+        self.push()
+        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: rulings: handoff says 3, ledger has 2")
+
+    def test_cap_digit_limits_same_on_both(self):  # CA15, V1a; D-6K2-Q6 (a)
+        for limit in INT_LIMITS:
+            for digits, want in ((600, "FAIL checkpoint.cap: rulings: handoff says %s, ledger has 0" % ("9" * 600)),
+                                 (601, "FAIL checkpoint.cap: cap_errors: handoff rulings must be an integer of 0 to 600 digits"),
+                                 (1000, "FAIL checkpoint.cap: cap_errors: handoff rulings must be an integer of 0 to 600 digits")):
+                with self.subTest(limit=limit, digits=digits), int_limit(limit):
+                    fx = type(self)("test_cap_digit_limits_same_on_both")
+                    fx.setUp()
+                    try:
+                        fx.build()
+                        text = "---\n" + yamlsub.emit(fx.row).replace("rulings: 0\n", "rulings: %s\n" % ("9" * digits)) + "---\nbody\n"
+                        fx.put(HANDOFF, text)
+                        fx.commit_push()
+                        if digits > (640 if limit == 640 else 1000):  # yamlsub refuses an integer beyond the limit in force
+                            out, _ = fx.chk()
+                            self.assertTrue(line_of(out, "handoff").startswith("FAIL checkpoint.handoff: front matter: line "), out[:300])
+                            self.assertIsNone(line_of(out, "cap"))
+                        else:
+                            self.assertEqual(fx.line("cap"), want)
+                    finally:
+                        fx.doCleanups()
+            for digits in (1001, 4300, 4301):  # V1a: refused by the front matter reader before the gate's own rules
+                with self.subTest(limit=limit, digits=digits), int_limit(limit):
+                    fx = type(self)("test_cap_digit_limits_same_on_both")
+                    fx.setUp()
+                    try:
+                        fx.build()
+                        fx.put(HANDOFF, "---\n" + yamlsub.emit(fx.row).replace("rulings: 0\n", "rulings: %s\n" % ("9" * digits)) + "---\nbody\n")
+                        fx.commit_push()
+                        out, _ = fx.chk()
+                        self.assertTrue(line_of(out, "handoff").startswith("FAIL checkpoint.handoff: front matter: line "), out[:300])
+                        self.assertIsNone(line_of(out, "cap"))
+                    finally:
+                        fx.doCleanups()
+
+    def test_cap_config_value_digits(self):  # V1b: a 1000-digit max_tasks is a valid integer that no count exceeds
+        for limit in INT_LIMITS:
+            with self.subTest(limit=limit), int_limit(limit):
+                fx = type(self)("test_cap_config_value_digits")
+                fx.setUp()
+                try:
+                    fx.build()
+                    fx.put(".strict-delivery/config.yml", yamlsub.emit(minimal_config()) + "block:\n  max_tasks: %s\n" % ("9" * 1000))
+                    fx.commit_push()
+                    if limit == 640:  # yamlsub refuses an integer beyond the limit in force (1000 digits > 640)
+                        self.assertTrue(fx.chk()[0].startswith("FAIL checkpoint.input: "))
+                    else:
+                        self.assertEqual(fx.line("cap"), "PASS checkpoint.cap")
+                    fx.put(".strict-delivery/config.yml", yamlsub.emit(minimal_config()) + "block:\n  max_tasks: %s\n" % ("9" * 1001))
+                    fx.commit_push()
+                    out, _ = fx.chk()
+                    self.assertTrue(out.startswith("FAIL checkpoint.input: "), out[:300])
+                    self.assertEqual(out.count("\n"), 1)
+                finally:
+                    fx.doCleanups()
+
+    def test_cap_unicode_headings_not_counted(self):  # V2a: U+0870 and U+A7C1 changed category between Unicode 13 and 15
+        self.build()
+        self.setcfg(block={"max_tasks": 1})
+        self.replan("## Block P1\n### Task P1.1: a\n### Task P1.ࡰ: b\n### Task P1.ꟁ: c\n")
+        self.assertEqual(self.line("cap"), "PASS checkpoint.cap")
+
+
+class Records(FullFx):
+    def build_open(self, *ids_, **row):
+        """``build`` whose handoff lists the open decisions ``ids_`` (and the resume line that names them)."""
+        self.build(row=row)
+        self.rewrite(open_decisions=list(ids_), resume=resume_text(PLAN, "P1.2", "block/p1", self.h7, ", ".join(ids_)))
+        self.push()
+        return self
+
+    def prog(self, decisions=(), findings=(), raw=None):
+        """Branch ``p/integration`` (cut from HEAD) holding the given decision and finding records; the handoff gets
+        ``program: p``, ``stream: records``."""
+        git(self.root, "checkout", "-q", "-b", "p/integration")
+        for id_, status in decisions:
+            self.rec(DDIR, id_, status)
+        for id_, status in findings:
+            self.rec(FDIR, id_, status)
+        for rel, data in (raw or {}).items():
+            self.put(rel, data)
+        commit_all(self.root, "records")
+        git(self.root, "checkout", "-q", "block/p1")
+        self.rewrite(program="p", stream="records")
+        self.push()
+
+    def test_records_empty_passes(self):  # RC1
+        self.build()
+        self.assertEqual(self.line("records"), "PASS checkpoint.records")
+
+    def test_records_unresolved_findings_pass(self):  # RC2
+        for status in ("open", "planned", "in-progress", "fixed-unpinned", "pinned", "deferred"):
+            with self.subTest(status=status):
+                fx = type(self)("test_records_empty_passes")
+                fx.setUp()
+                try:
+                    fx.build(row={"findings_in_flight": [F1]})
+                    fx.rec(FDIR, F1, status)
+                    fx.commit_push()
+                    self.assertEqual(fx.line("records"), "PASS checkpoint.records")
+                finally:
+                    fx.doCleanups()
+
+    def test_resolved_finding_in_flight_fails(self):  # RC3; plan :6102-6103
+        for status in ("closed", "merged"):
+            with self.subTest(status=status):
+                fx = type(self)("test_records_empty_passes")
+                fx.setUp()
+                try:
+                    fx.build(row={"findings_in_flight": [F1]})
+                    fx.rec(FDIR, F1, status)
+                    fx.commit_push()
+                    out, _ = fx.chk()
+                    self.assertIn("FAIL checkpoint.records", out)
+                    self.assertIn(F1, out)
+                    self.assertEqual(line_of(out, "records"), "FAIL checkpoint.records: findings_in_flight.%s: resolved (status %s)" % (F1, status))
+                finally:
+                    fx.doCleanups()
+
+    def test_records_missing_finding(self):  # RC4
+        self.build(row={"findings_in_flight": [F1]})
+        self.assertEqual(self.line("records"), "FAIL checkpoint.records: findings_in_flight.%s: no finding record" % F1)
+
+    def test_records_open_decisions(self):  # RC5
+        self.build_open(D1)
+        self.assertEqual(self.line("records"), "FAIL checkpoint.records: open_decisions.%s: no decision record" % D1)
+        for status, want in (("open", "PASS checkpoint.records"),
+                             ("answered", "FAIL checkpoint.records: open_decisions.%s: status answered, not open" % D1),
+                             ("withdrawn", "FAIL checkpoint.records: open_decisions.%s: status withdrawn, not open" % D1)):
+            with self.subTest(status=status):
+                self.rec(DDIR, D1, status)
+                self.commit_push()
+                self.assertEqual(self.line("records"), want)
+
+    def test_records_error_order(self):  # RC6, D-K-Q7
+        self.build_open(D2, findings_in_flight=[F2, F1])
+        self.rec(FDIR, F1, "closed")
+        self.rec(DDIR, D2, "answered")
+        self.commit_push()
+        self.assertEqual(self.line("records"), "FAIL checkpoint.records: findings_in_flight.%s: no finding record; "
+                         "findings_in_flight.%s: resolved (status closed); open_decisions.%s: status answered, not open" % (F2, F1, D2))
+
+    def test_records_plain_plan_reads_worktree(self):  # RC7: a decision committed on another branch only is not found
+        self.build_open(D1)
+        git(self.root, "checkout", "-q", "-b", "other")
+        self.rec(DDIR, D1, "open")
+        commit_all(self.root, "d")
+        git(self.root, "checkout", "-q", "block/p1")
+        self.assertEqual(self.line("records"), "FAIL checkpoint.records: open_decisions.%s: no decision record" % D1)
+
+    def test_program_records_read_from_integration(self):  # RC8; Q-Pplan-12 (a); plan :6104-6105
+        self.build_open(D1)
+        self.prog(decisions=[(D1, "open")])
+        out, _ = self.chk()
+        self.assertIn("PASS checkpoint.records", out)
+        self.assertEqual(line_of(out, "records"), "PASS checkpoint.records")
+
+    def test_program_record_only_in_worktree_fails(self):  # RC9
+        self.build_open(D1)
+        self.prog()
+        self.rec(DDIR, D1, "open")
+        self.commit_push()
+        self.assertEqual(self.line("records"), "FAIL checkpoint.records: open_decisions.%s: no decision record" % D1)
+
+    def test_program_without_local_integration_fails(self):  # RC10; plan :6106-6107; D-6K2-Q4 (a)
+        self.build_open(D1)
+        self.prog()
+        want = "FAIL checkpoint.records: branch p/integration is missing locally; fetch it"
+        git(self.root, "branch", "-q", "-m", "p/integration", "p/renamed")
+        out, _ = self.chk()
+        self.assertIn("FAIL checkpoint.records", out)
+        self.assertIn("p/integration", out)
+        self.assertEqual(line_of(out, "records"), want)
+        # a remote-tracking ref or a tag of that spelling never answers
+        sha = git(self.root, "rev-parse", "p/renamed")
+        git(self.root, "update-ref", "refs/remotes/origin/p/integration", sha)
+        self.assertEqual(self.line("records"), want)
+        git(self.root, "tag", "p/integration", sha)
+        self.assertEqual(self.line("records"), want)
+
+    def test_program_decisions_directory_absent(self):  # RC11
+        self.build()
+        self.prog()
+        self.assertEqual(self.line("records"), "PASS checkpoint.records")
+        self.rewrite(open_decisions=[D1], resume=resume_text(PLAN, "P1.2", "block/p1", self.h7, D1))
+        self.push()
+        self.assertEqual(self.line("records"), "FAIL checkpoint.records: open_decisions.%s: no decision record" % D1)
+
+    def test_program_value_forms(self):  # RC12: the handoff gate refuses the shapes first; records is then not printed
+        self.build()
+        for prog, stream in (("a-b", "records"), ("A", "records"), ("a/b", "records"), ("", "records"), ("ࡰ", "records"),
+                             (None, "records"), ("p", None)):
+            with self.subTest(program=prog, stream=stream):
+                self.row.pop("program", None)
+                self.row.pop("stream", None)
+                if prog is not None:
+                    self.row["program"] = prog
+                if stream is not None:
+                    self.row["stream"] = stream
+                self.rewrite()
+                self.push()
+                out, _ = self.chk()
+                ok = prog == "a-b"
+                self.assertEqual(line_of(out, "handoff").startswith("PASS"), ok, out[:300])
+                if not ok:
+                    self.assertIsNone(line_of(out, "records"))
+
+    def test_records_unreadable_register_is_input(self):  # RC13; plan :6071
+        self.build()
+        self.put("%s/bad.yml" % DDIR, "a: [\n")
+        self.commit_push()
+        out, code = self.chk()
+        self.assertEqual(out, "FAIL checkpoint.input: %s/bad.yml: unterminated flow sequence (line 1)\n" % DDIR)
+        self.assertEqual(code, 1)
+        os.remove(os.path.join(self.root, DDIR, "bad.yml"))
+        os.makedirs(os.path.join(self.root, FDIR, "sub"))
+        self.put("%s/sub/x" % FDIR, "x")
+        self.commit_push()
+        out, _ = self.chk()
+        self.assertEqual(out, "FAIL checkpoint.input: %s/sub: not a regular file named <id>.yml (only index.yml and in-force.md "
+                         "are allowed besides records)\n" % FDIR)
+
+    def test_program_unreadable_register_is_input(self):  # RC14
+        for raw in ({"%s/bad.yml" % DDIR: "a: [\n"}, {"%s/sub/x.yml" % DDIR: "id: a\n"}, {"%s/notyml.txt" % DDIR: "x"}):
+            with self.subTest(raw=sorted(raw)):
+                fx = type(self)("test_records_empty_passes")
+                fx.setUp()
+                try:
+                    fx.build()
+                    fx.prog(raw=raw)
+                    out, code = fx.chk()
+                    self.assertTrue(out.startswith("FAIL checkpoint.input: "), out)
+                    self.assertEqual(out.count("\n"), 1)
+                    self.assertIn(".strict-delivery/state/decisions/", out)
+                    self.assertEqual(code, 1)
+                finally:
+                    fx.doCleanups()
+
+    def test_records_non_utf8_record(self):  # RC15
+        self.build()
+        self.put("%s/%s.yml" % (DDIR, D1), b"\xff\xfe\x00")
+        self.commit_push()
+        out, _ = self.chk()
+        self.assertTrue(out.startswith("FAIL checkpoint.input: "), out)
+        self.assertEqual(out.count("\n"), 1)
+        self.assertIn("%s/%s.yml" % (DDIR, D1), out)
+
+    def test_records_kind_mixup(self):  # RC16
+        self.build_open(D1, findings_in_flight=[F1])
+        self.rec(DDIR, F1, "open")  # a finding id sitting in the decisions register
+        self.rec(FDIR, D1, "open")  # a decision id sitting in the findings register
+        self.commit_push()
+        self.assertEqual(self.line("records"), "FAIL checkpoint.records: findings_in_flight.%s: no finding record; "
+                         "open_decisions.%s: no decision record" % (F1, D1))
+        self.rewrite(findings_in_flight=[D1])  # the handoff gate refuses the wrong kind first
+        self.push()
+        out, _ = self.chk()
+        self.assertTrue(line_of(out, "handoff").startswith("FAIL checkpoint.handoff"))
+        self.assertIsNone(line_of(out, "records"))
+
+    def test_records_each_kind_read_once(self):  # RC17
+        self.build()
+        self.prog()
+        with mock.patch.object(checkpoints, "records_at", wraps=checkpoints.records_at) as spy:
+            out, _ = self.chk()
+        self.assertEqual(line_of(out, "records"), "PASS checkpoint.records")
+        self.assertEqual(spy.call_count, 2)
+        self.assertEqual(sorted(c.args[3] for c in spy.call_args_list), ["decision", "finding"])
+        self.assertTrue(all(c.args[2] == "refs/heads/p/integration" for c in spy.call_args_list))
+
+    def test_records_dirty_worktree_plain_vs_program(self):  # RC18
+        self.build_open(D1)
+        self.rec(DDIR, D1, "answered")
+        self.commit_push()
+        self.rec(DDIR, D1, "open")  # uncommitted change: a plain plan reads the worktree content
+        out, _ = self.chk()
+        self.assertEqual(line_of(out, "records"), "PASS checkpoint.records")
+        self.assertTrue(line_of(out, "clean").startswith("FAIL checkpoint.clean: uncommitted paths: "))
+        git(self.root, "checkout", "-q", "--", DDIR)
+        self.prog(decisions=[(D1, "open")])  # the worktree holds the answered record, the integration branch the open one
+        self.rec(DDIR, D1, "withdrawn")      # and a dirty change: a program plan never reads the worktree
+        self.assertEqual(self.line("records"), "PASS checkpoint.records")
+
+
+class Base(FullFx):
+    def based(self, base, **row):
+        self.rewrite(base=base, **row)
+        self.push()
+        return self.chk()[0]
+
+    def test_base_ancestor_passes(self):  # BA1
+        self.build()
+        for base in (self.base, self.base[:7]):
+            with self.subTest(base=base):
+                self.assertEqual(line_of(self.based(base), "base"), "PASS checkpoint.base")
+
+    def test_base_equal_to_head_passes(self):  # BA2
+        self.build()
+        for base in (self.h7, self.c1):
+            self.assertEqual(line_of(self.based(base), "base"), "PASS checkpoint.base")
+
+    def test_base_not_ancestor_fails(self):  # BA3; plan :6108-6109
+        self.build()
+        orphan = git(self.root, "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "orphan")
+        out = self.based(orphan)
+        self.assertIn("FAIL checkpoint.base", out)
+        self.assertEqual(line_of(out, "base"), "FAIL checkpoint.base: %s is not an ancestor of %s" % (orphan, self.h7))
+        git(self.root, "checkout", "-q", "-b", "ahead")
+        self.put("ahead.txt")
+        ahead = commit_all(self.root, "ahead")
+        git(self.root, "checkout", "-q", "block/p1")
+        self.assertEqual(line_of(self.based(ahead), "base"), "FAIL checkpoint.base: %s is not an ancestor of %s" % (ahead, self.h7))
+
+    def test_base_not_a_commit_fails(self):  # BA4
+        self.build()
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        blob = git(self.root, "rev-parse", "HEAD:" + PLAN)
+        for base in ("0000000", tree, blob):
+            with self.subTest(base=base):
+                out = self.based(base)
+                self.assertEqual(line_of(out, "base"), "FAIL checkpoint.base: %s is not a commit" % base)
+                self.assertEqual(len(ids(out)), 14)  # no lone checkpoint.input line
+
+    def test_base_short_and_full(self):  # BA5
+        self.build()
+        for base in (self.base[:7], self.base, self.base[:12]):
+            self.assertEqual(line_of(self.based(base), "base"), "PASS checkpoint.base")
+
+    def test_base_annotated_tag_object(self):  # BA6
+        self.build()
+        git(self.root, "tag", "-a", "-m", "m", "t1", self.base)
+        tagobj = git(self.root, "rev-parse", "t1")
+        self.assertNotEqual(tagobj, self.base)
+        self.assertEqual(line_of(self.based(tagobj), "base"), "PASS checkpoint.base")
+
+    def test_base_forms_refused_by_schema(self):  # BA7
+        self.build()
+        for base in ("main", self.base[:6], self.base.upper(), self.base + "0"):
+            with self.subTest(base=base):
+                out = self.based(base)
+                self.assertTrue(line_of(out, "handoff").startswith("FAIL checkpoint.handoff"), out[:300])
+                self.assertIsNone(line_of(out, "base"))
+
+    def test_base_when_head_missing(self):  # BA8, D-6K2-Q5 (a)
+        self.build()
+        out = self.based(self.base, head="0000000", resume=resume_text(PLAN, "P1.2", "block/p1", "0000000"))
+        self.assertEqual(line_of(out, "base"), "FAIL checkpoint.base: head 0000000 is not a commit")
+        self.assertEqual(line_of(out, "head"), "FAIL checkpoint.head: head: 0000000 is not a commit")
+
+    def test_base_ambiguous_prefix(self):  # BA9: a 7-hex prefix of two objects is not a commit (core.disambiguate=none)
+        self.build()
+        import hashlib
+        seen = {}
+        pair = None
+        n = 0
+        while pair is None:
+            body = ("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor a <a@x> %d +0000\ncommitter a <a@x> %d +0000\n\nm\n" % (n, n)).encode()
+            sha = hashlib.sha1(b"commit %d\x00" % len(body) + body).hexdigest()
+            if sha[:7] in seen:
+                pair = (seen[sha[:7]], body, sha[:7])
+            seen[sha[:7]] = body
+            n += 1
+        for i, body in enumerate(pair[:2]):
+            path = os.path.join(self.tmp, "c%d.txt" % i)
+            with open(path, "wb") as fh:
+                fh.write(body)
+            git(self.root, "hash-object", "-t", "commit", "-w", path)
+        out = self.based(pair[2])
+        self.assertEqual(line_of(out, "base"), "FAIL checkpoint.base: %s is not a commit" % pair[2])
+
+
+class Files3(FullFx):
+    def untrack(self, *rels):
+        for rel in rels:
+            git(self.root, "rm", "-q", "--cached", rel)
+        git(self.root, "commit", "-q", "-m", "untrack")
+        self.push()
+
+    def test_files_tracked_passes(self):  # FI1
+        self.build(files={SPEC2: "s2\n"}, row={"spec": [SPEC, SPEC2]})
+        self.assertEqual(self.line("files"), "PASS checkpoint.files")
+        self.assertEqual(git(self.root, "ls-files", "--", PLAN, SPEC, SPEC2).split("\n"), sorted([PLAN, SPEC, SPEC2]))
+
+    def test_untracked_plan_fails(self):  # FI2
+        self.build()
+        self.untrack(PLAN)
+        self.assertEqual(self.line("files"), "FAIL checkpoint.files: %s: not tracked" % PLAN)
+
+    def test_untracked_spec_fails(self):  # FI3; plan :6110-6111
+        self.build(row={"spec": [SPEC, "docs/strict-delivery/specs/never.md"]})
+        self.put("docs/strict-delivery/specs/never.md")  # on disk, never added
+        self.push()
+        out, _ = self.chk()
+        self.assertIn("FAIL checkpoint.files", out)
+        self.assertEqual(line_of(out, "files"), "FAIL checkpoint.files: docs/strict-delivery/specs/never.md: not tracked")
+
+    def test_spec_deleted(self):  # FI4, D-6K2-Q8 (a)
+        self.build()
+        git(self.root, "rm", "-q", SPEC)
+        git(self.root, "commit", "-q", "-m", "rm")
+        self.push()
+        self.assertEqual(self.line("files"), "FAIL checkpoint.files: %s: not tracked" % SPEC)
+        git(self.root, "revert", "--no-edit", "-n", "HEAD")
+        git(self.root, "commit", "-q", "-m", "back")
+        self.push()
+        self.assertEqual(self.line("files"), "PASS checkpoint.files")
+        git(self.root, "rm", "-q", "--cached", SPEC)
+        git(self.root, "commit", "-q", "-m", "cached")
+        self.push()
+        self.assertEqual(self.line("files"), "FAIL checkpoint.files: %s: not tracked" % SPEC)
+        git(self.root, "add", SPEC)
+        git(self.root, "commit", "-q", "-m", "tracked again")
+        self.push()
+        os.remove(os.path.join(self.root, *SPEC.split("/")))  # disk only: the index still tracks it; clean reports it
+        out, _ = self.chk()
+        self.assertEqual(line_of(out, "files"), "PASS checkpoint.files")
+        self.assertIn(SPEC, line_of(out, "clean"))
+
+    def test_spec_renamed(self):  # FI5
+        self.build()
+        new = "docs/strict-delivery/specs/renamed.md"
+        git(self.root, "mv", SPEC, new)
+        git(self.root, "commit", "-q", "-m", "mv")
+        self.push()
+        self.assertEqual(self.line("files"), "FAIL checkpoint.files: %s: not tracked" % SPEC)
+        self.rewrite(spec=[new])
+        self.push()
+        self.assertEqual(self.line("files"), "PASS checkpoint.files")
+
+    def test_two_specs_one_missing(self):  # FI6
+        self.build(files={SPEC2: "s2\n"}, row={"spec": [SPEC, SPEC2]})
+        self.untrack(SPEC2)
+        line = self.line("files")
+        self.assertEqual(line, "FAIL checkpoint.files: %s: not tracked" % SPEC2)
+        self.assertNotIn(SPEC + ":", line)
+
+    def test_files_reasons_order(self):  # FI7, D-6K2-Q7 (a)
+        self.build(files={SPEC2: "s2\n"}, row={"spec": [SPEC, SPEC2]})
+        self.untrack(SPEC2, PLAN, SPEC)
+        out, _ = self.chk()
+        self.assertEqual(out.count("FAIL checkpoint.files"), 1)
+        self.assertEqual(line_of(out, "files"), "FAIL checkpoint.files: %s: not tracked; %s: not tracked; %s: not tracked" % (PLAN, SPEC, SPEC2))
+
+    def test_spec_directory_and_symlink(self):  # FI8
+        self.build()
+        self.rewrite(spec=["docs/strict-delivery/specs"])
+        self.push()
+        self.assertEqual(self.line("files"), "FAIL checkpoint.files: docs/strict-delivery/specs: not tracked")
+        link = "docs/strict-delivery/specs/link.md"
+        os.symlink("s.md", os.path.join(self.root, *link.split("/")))
+        self.commit_push()
+        self.rewrite(spec=[link])
+        self.push()
+        self.assertEqual(self.line("files"), "FAIL checkpoint.files: %s: not tracked" % link)
+
+    def test_spec_staged_only(self):  # FI9
+        self.build(row={"spec": [SPEC, "docs/strict-delivery/specs/n.md"]})
+        self.put("docs/strict-delivery/specs/n.md")
+        git(self.root, "add", "docs/strict-delivery/specs/n.md")
+        out, _ = self.chk()
+        self.assertEqual(line_of(out, "files"), "PASS checkpoint.files")
+        self.assertTrue(line_of(out, "clean").startswith("FAIL checkpoint.clean: uncommitted paths: "))
+        self.assertIn("n.md", line_of(out, "clean"))
+
+    def test_spec_case_differs(self):  # FI10
+        self.build(row={"spec": ["docs/strict-delivery/specs/S.md"]})
+        self.assertEqual(self.line("files"), "FAIL checkpoint.files: docs/strict-delivery/specs/S.md: not tracked")
+
+    def test_spec_non_ascii_refused_earlier(self):  # FI11
+        self.build(row={"spec": ["docs/strict-delivery/specs/ünï.md"]})
+        out, _ = self.chk()
+        self.assertTrue(line_of(out, "handoff").startswith("FAIL checkpoint.handoff"), out[:300])
+        self.assertIsNone(line_of(out, "files"))
+
+    def test_spec_path_forms(self):  # FI12: a path that is not normalised is never reported as tracked
+        self.build()
+        for spec in ("./" + SPEC, "docs//strict-delivery/specs/s.md", "../x", "/" + SPEC, "docs/strict-delivery/specs/../specs/s.md"):
+            with self.subTest(spec=spec):
+                self.rewrite(spec=[spec])
+                self.push()
+                out, _ = self.chk()
+                self.assertNotEqual(line_of(out, "files"), "PASS checkpoint.files")
+                if line_of(out, "handoff") == "PASS checkpoint.handoff":
+                    self.assertEqual(line_of(out, "files"), "FAIL checkpoint.files: %s: not tracked" % spec)
+
+    def test_spec_duplicates(self):  # FI13
+        self.build(row={"spec": [SPEC, SPEC]})
+        out, _ = self.chk()
+        self.assertTrue(line_of(out, "handoff").startswith("FAIL checkpoint.handoff"))
+        self.assertIsNone(line_of(out, "files"))
+
+
+class Last(FullFx):
+    def last(self, *lines):
+        self.build(lines=["Prose."] + list(lines), row={"ledger_from": len(lines) + 3})
+        out, _ = self.chk()
+        return out
+
+    def test_last_green_passes(self):  # LA1
+        self.assertEqual(line_of(self.last(ck(1)), "last"), "PASS checkpoint.last")
+
+    def test_red_last_checkpoint_fails(self):  # LA2, D-6K2-Q1 (a); plan :6112-6113
+        out = self.last(ck(1, tests="4/5"))
+        self.assertIn("FAIL checkpoint.last", out)
+        self.assertEqual(line_of(out, "last"), "FAIL checkpoint.last: last CHECKPOINT: tests 4/5")
+        self.assertEqual(line_of(out, "ledger"), "FAIL checkpoint.ledger: line 3: last CHECKPOINT is not green (tests=4/5 gates=PASS)")
+        self.assertNotIn("checkpoint.agree", out)
+        self.assertNotIn("checkpoint.merges", out)
+
+    def test_last_gates_not_pass(self):  # LA3
+        out = self.last(ck(1, gates="n/a"))
+        self.assertEqual(line_of(out, "last"), "FAIL checkpoint.last: last CHECKPOINT: gates=n/a")
+
+    def test_last_both_red(self):  # LA4
+        out = self.last(ck(1, tests="4/5", gates="n/a"))
+        self.assertEqual(line_of(out, "last"), "FAIL checkpoint.last: last CHECKPOINT: gates=n/a; last CHECKPOINT: tests 4/5")
+
+    def test_last_zero_of_zero(self):  # LA5, D-K-Q16: 0/0 fails the ledger and passes last
+        out = self.last(ck(1, tests="0/0"))
+        self.assertEqual(line_of(out, "last"), "PASS checkpoint.last")
+        self.assertEqual(line_of(out, "ledger"), "FAIL checkpoint.ledger: line 3: last CHECKPOINT is not green (tests=0/0 gates=PASS)")
+
+    def test_last_only_last_line(self):  # LA6
+        out = self.last(ck(1, tests="4/5"), ck(2, nxt="P1.3"))
+        self.assertEqual(line_of(out, "last"), "PASS checkpoint.last")
+
+    def test_last_any_block(self):  # LA7: the block mismatch is agree's
+        out = self.last(ck(1), ck(1, block="P2"))
+        self.assertEqual(line_of(out, "last"), "PASS checkpoint.last")
+        self.assertTrue(line_of(out, "agree").startswith("FAIL checkpoint.agree: block: ledger line 4 has P2, handoff has P1"))
+
+    def test_last_no_checkpoint_line(self):  # LA8
+        out = self.last()
+        self.assertEqual(line_of(out, "last"), "FAIL checkpoint.last: no CHECKPOINT line")
+        self.assertIn("no conforming CHECKPOINT line", line_of(out, "ledger"))
+
+    def test_last_crlf_last_line(self):  # LA9: a CRLF line is not a CHECKPOINT line; the line before it is the last
+        text = LH + "Prose.\n" + ck(1).replace("{H}", "0000000") + "\n" + ck(2, tests="1/5", gates="n/a").replace("{H}", "0000000") + "\r\n"
+        self.build(ledger_text=text, row={"ledger_from": 5})
+        out, _ = self.chk()
+        self.assertEqual(line_of(out, "last"), "PASS checkpoint.last")
+        self.assertTrue(line_of(out, "ledger").startswith("FAIL checkpoint.ledger"))
+
+    def test_last_digit_limits_same_on_both(self):  # LA10, V1b
+        for limit in INT_LIMITS:
+            with self.subTest(limit=limit), int_limit(limit):
+                n = "9" * 600
+                m = "9" * 599 + "8"
+                for tests, want in (("%s/%s" % (n, n), "PASS checkpoint.last"),
+                                    ("%s/%s" % (m, n), "FAIL checkpoint.last: last CHECKPOINT: tests %s/%s" % (m, n)),
+                                    ("%s/%s" % ("9" * 601, "9" * 601), "FAIL checkpoint.last: no CHECKPOINT line")):
+                    fx = type(self)("test_last_green_passes")
+                    fx.setUp()
+                    try:
+                        out = fx.last(ck(1, tests=tests))
+                        self.assertEqual(line_of(out, "last"), want)
+                    finally:
+                        fx.doCleanups()
+
+
+class WorktreesSameRepo(Fx):
+    wt = Worktrees.wt
+    sib = Worktrees.sib
+
+    def foreign(self, name="otherrepo"):
+        other = os.path.join(self.tmp, name)
+        os.mkdir(other)
+        make_repo(other)
+        return other
+
+    def test_worktree_of_another_repository_fails(self):  # WT1; rewrites the U2 test of test_worktree_directory_not_a_top_level
+        self.build()
+        other = self.foreign()
+        head = git(other, "rev-parse", "HEAD")[:7]
+        out = self.wt({"path": "../otherrepo", "branch": "main", "head": head, "porcelain": ""})
+        self.assertIn("FAIL checkpoint.worktrees", out)
+        self.assertIn("../otherrepo", out)
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../otherrepo: not a worktree of this repository")
+
+    def test_linked_worktree_passes(self):  # WT2
+        self.build()
+        self.sib()
+        out = self.wt({"path": "../w", "branch": "wb", "head": self.c1[:7], "porcelain": ""})
+        self.assertEqual(line_of(out, "worktrees"), "PASS checkpoint.worktrees")
+
+    def test_worktree_symlink_to_linked(self):  # WT4
+        self.build()
+        w = self.sib()
+        os.symlink(w, os.path.join(self.tmp, "lnk"))
+        out = self.wt({"path": "../lnk", "branch": "wb", "head": self.c1[:7], "porcelain": ""})
+        self.assertEqual(line_of(out, "worktrees"), "PASS checkpoint.worktrees")
+
+    def test_worktree_clone_fails(self):  # WT5
+        self.build()
+        clone = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", "-b", "block/p1", self.bare, clone)
+        out = self.wt({"path": "../clone", "branch": "block/p1", "head": self.c1[:7], "porcelain": ""})
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../clone: not a worktree of this repository")
+
+    def test_worktree_unborn_linked_entry(self):  # fix round 1, F-20261124-cqac: HEAD has no commit, same repository
+        self.build()
+        orph = os.path.join(self.tmp, "orph")
+        git(self.root, "worktree", "add", "-q", "--orphan", "-b", "orph", orph)
+        self.assertEqual(git(orph, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+                         git(self.root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        out = self.wt({"path": "../orph", "branch": "orph", "head": self.c1[:7], "porcelain": ""})
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../orph: HEAD has no commit")
+
+    def test_worktree_kinds_keep_old_reasons(self):  # WT6
+        self.build()
+        os.mkdir(os.path.join(self.tmp, "plain"))
+        bare = os.path.join(self.tmp, "b.git")
+        git(self.tmp, "init", "-q", "--bare", bare)
+        for path, want in (("../b.git", "not a git top level (not a repository)"), ("../plain", "not a git top level (not a repository)"),
+                           ("../nope", "directory missing")):
+            with self.subTest(path=path):
+                out = self.wt({"path": path, "branch": None, "head": self.c1[:7], "porcelain": ""})
+                self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: %s: %s" % (path, want))
+
+    def test_worktree_foreign_repository_reason_first(self):  # WT8, D-6K2-Q9 (a): the reason replaces the head and branch checks
+        self.build()
+        self.foreign()
+        out = self.wt({"path": "../otherrepo", "branch": "zzz", "head": "0000000", "porcelain": ""})
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../otherrepo: not a worktree of this repository")
+
+    def test_worktree_same_repository_ignores_git_env(self):  # WT11
+        self.build()
+        other = self.foreign()
+        self.sib()
+        entries = ({"path": "../w", "branch": "wb", "head": self.c1[:7], "porcelain": ""},
+                   {"path": "../otherrepo", "branch": "main", "head": git(other, "rev-parse", "HEAD")[:7], "porcelain": ""})
+        self.rewrite(worktrees=[{"path": ".", "branch": "block/p1", "head": self.h7, "porcelain": ""}] + list(entries))
+        self.push()
+        env = {"GIT_DIR": os.path.join(self.tmp, "nowhere"), "GIT_COMMON_DIR": os.path.join(self.tmp, "nowhere2")}
+        with mock.patch.dict(os.environ, env):
+            out, _ = self.chk()
+        self.assertEqual(line_of(out, "worktrees"), "FAIL checkpoint.worktrees: ../otherrepo: not a worktree of this repository")
+
+
+class SourceAndGroups(FullFx):
+    def test_gate_source_no_unbounded_int_format(self):  # V1c (fix round 1, F-20261124-iwe7)
+        """Rule: an integer reaches output only through the ``%d`` strings of Tasks P1.3 and P3.1 (their operands are line
+        numbers, test counts and file line counts, each bounded by ``checkpoint_lines`` or the file size). So the set of
+        string constants holding ``%d`` must equal that hand-written set; no f-string and no ``.format`` call exists; and
+        every ``str(...)`` call takes the caught exception ``e`` (never a count). A new formatted integer, in any function,
+        fails; an unrelated edit does not."""
+        with open(os.path.join(REPO, "gates", "gate_checkpoint.py"), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        want = {
+            "line %d: last CHECKPOINT is not green (tests=%d/%d gates=%s)",
+            "block: ledger line %d has %s, handoff has %s",
+            "next: ledger line %d has %s, handoff next_task is %s",
+            "ledger line %d names %s, handoff names %s: not the same commit",
+            "ledger_from: %s is not %d (the line after the last CHECKPOINT line, %d)",
+            "%s: lines %s: the file has %d lines",
+            "%s: lines %s: need start <= end <= %d (the file's line count)",
+        }
+        got = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and "%d" in node.value:
+                got.add(node.value)
+            self.assertNotIsInstance(node, ast.JoinedStr, "an f-string")
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+                    self.fail(".format at line %d" % node.lineno)
+                if isinstance(node.func, ast.Name) and node.func.id in ("str", "repr", "format"):
+                    ok = node.func.id == "str" and len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == "e"
+                    self.assertTrue(ok, "%s(...) of something but an exception at line %d" % (node.func.id, node.lineno))
+        self.assertEqual(got, want)
+
+    def test_gate_source_has_no_unicode_table_calls(self):  # V2b
+        with open(os.path.join(REPO, "gates", "gate_checkpoint.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        for banned in (".lower()", ".isprintable", "unicodedata", ".splitlines", "\\w", "BaseException", "except:"):
+            self.assertNotIn(banned, src, banned)
+
+    def test_gate_unexpected_exception_is_input_not_a_reason(self):  # V3, both interpreters (fix round 1, F-20261124-iwe7)
+        """An exception the new code does not name (here a ``RuntimeError``; an ``ExceptionGroup`` is the 3.11+ form) at
+        any call it makes is not turned into a reason on ``cap``, ``base``, ``files``, ``last`` or ``worktrees``: ``run_check``
+        prints the single line ``FAIL checkpoint.input: RuntimeError: boom``."""
+        self.build()
+        exc = [RuntimeError("boom")]
+
+        def boom(*a, **k):
+            raise exc[0]
+        real = {"is_ancestor": gitinfo.is_ancestor, "commit_exists": gitinfo.commit_exists}
+
+        def below_base(name):
+            def side(*a, **k):
+                f = sys._getframe(1)
+                while f is not None and f.f_code.co_name != "_base":
+                    f = f.f_back
+                if f is None:
+                    return real[name](*a, **k)
+                raise exc[0]
+            return side
+        for target, side in (("gates.lib.gitinfo.tracked_files", boom), ("gates.lib.checkpoints.cap_errors", boom),
+                             ("gates.lib.checkpoints.last_line_errors", boom), ("gates.lib.checkpoints.record_errors", boom),
+                             ("gates.lib.worktrees.same_repository", boom),
+                             ("gates.lib.gitinfo.is_ancestor", below_base("is_ancestor")),
+                             ("gates.lib.gitinfo.commit_exists", below_base("commit_exists"))):
+            with self.subTest(target=target), mock.patch(target, side_effect=side):
+                out, code = self.chk()
+                self.assertEqual((out, code), ("FAIL checkpoint.input: RuntimeError: boom\n", 1))
+            # a BaseException that is not an Exception (the 3.9-safe stand-in of BaseExceptionGroup) leaves main unchanged
+            exc[0] = KeyboardInterrupt()
+            with self.subTest(target=target, kind="KeyboardInterrupt"), mock.patch(target, side_effect=side):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.chk()
+            exc[0] = RuntimeError("boom")
+
+    def test_gate_exception_groups_propagate(self):  # V3 (fix round 1, F-20261124-iwe7)
+        """A ``BaseExceptionGroup`` raised at any call the new code makes leaves ``main`` unchanged (``run_check`` catches
+        ``Exception`` only). An ``ExceptionGroup`` is an ``Exception``: ``run_check`` turns it into the one line
+        ``FAIL checkpoint.input: ...``, and it never becomes a reason on ``cap``, ``records``, ``base``, ``files`` or ``last``."""
+        if not hasattr(builtins, "BaseExceptionGroup"):
+            self.skipTest("no BaseExceptionGroup on this interpreter")
+        self.build()
+        real = {"is_ancestor": gitinfo.is_ancestor, "commit_exists": gitinfo.commit_exists}
+
+        def raiser(make, only_in=None, name=None):
+            def side(*a, **k):
+                if only_in is not None:  # raise only below the named function; the other gate lines call these too
+                    f = sys._getframe(1)
+                    while f is not None and f.f_code.co_name != only_in:
+                        f = f.f_back
+                    if f is None:
+                        return real[name](*a, **k)
+                raise make()
+            return side
+        bgroup = lambda: builtins.BaseExceptionGroup("x", [KeyboardInterrupt()])
+        egroup = lambda: builtins.ExceptionGroup("x", [ValueError("y")])
+        targets = [("gates.lib.gitinfo.tracked_files", None, None), ("gates.lib.checkpoints.cap_errors", None, None),
+                   ("gates.lib.checkpoints.last_line_errors", None, None), ("gates.lib.checkpoints.record_errors", None, None),
+                   ("gates.lib.worktrees.same_repository", None, None),
+                   ("gates.lib.gitinfo.is_ancestor", "_base", "is_ancestor"), ("gates.lib.gitinfo.commit_exists", "_base", "commit_exists")]
+        for target, only_in, name in targets:
+            with self.subTest(target=target, kind="BaseExceptionGroup"), mock.patch(target, side_effect=raiser(bgroup, only_in, name)):
+                with self.assertRaises(builtins.BaseExceptionGroup):
+                    self.chk()
+            with self.subTest(target=target, kind="ExceptionGroup"), mock.patch(target, side_effect=raiser(egroup, only_in, name)):
+                out, code = self.chk()
+                self.assertTrue(out.startswith("FAIL checkpoint.input: "), out)
+                self.assertEqual((out.count("\n"), code), (1, 1))
+        # the program path: local_branches and records_at
+        git(self.root, "branch", "p/integration")
+        self.rewrite(program="p", stream="records")
+        self.push()
+        for target in ("gates.lib.gitinfo.local_branches", "gates.lib.checkpoints.records_at"):
+            with self.subTest(target=target, kind="BaseExceptionGroup"), mock.patch(target, side_effect=raiser(bgroup)):
+                with self.assertRaises(builtins.BaseExceptionGroup):
+                    self.chk()
+            with self.subTest(target=target, kind="ExceptionGroup"), mock.patch(target, side_effect=raiser(egroup)):
+                out, _ = self.chk()
+                self.assertTrue(out.startswith("FAIL checkpoint.input: ") and out.count("\n") == 1, out)
 
 
 class Registration(unittest.TestCase):

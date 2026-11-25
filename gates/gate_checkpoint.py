@@ -2,7 +2,9 @@
 
 One line per id, in this order: ``handoff``, ``ledger``, ``agree``, ``head``, ``clean``, ``pushed``, ``reads``,
 ``worktrees``, ``merges`` (Task P3.1: every ``MERGED`` line of the ledger passes ``merge.merged_errors``; it prints
-only when the handoff and the ledger passed, and later tasks add lines without moving these). ``--plan SLUG`` names the workspace
+only when the handoff and the ledger passed), then Task 6K.2's ``cap``, ``records``, ``base``, ``files``, ``last``
+(decisions D-6K2-Q1 to Q9: ``records``, ``base`` and ``files`` print when the handoff passed; ``cap`` and ``last`` also
+need a readable ledger text, so a red last checkpoint fails both ``ledger`` and ``last``). ``--plan SLUG`` names the workspace
 ``<paths.plan_state>/<SLUG>/``. A line prints only when its inputs exist (D-Q2): ``ledger``, ``agree``, ``head``,
 ``reads`` and ``worktrees`` need a handoff that passed ``checkpoint.handoff``; ``agree`` also needs ``checkpoint.ledger``
 to pass; ``clean`` and ``pushed`` always print. Several reasons for one id are joined with ``"; "`` (D-Q15), so every
@@ -17,8 +19,9 @@ import re
 import stat
 import sys
 
-from gates.lib import checkpoints, config, gitinfo, merge, schema
+from gates.lib import checkpoints, config, gitinfo, merge, schema, worktrees
 from gates.lib.result import GateError, Line, Result, _Once, gate_args, repo_root, run_gate
+from gates.lib.store import Store
 
 PRODUCES: tuple = ()
 
@@ -125,10 +128,10 @@ def _same_commit(root: str, a: str, b: str) -> tuple:
 
 def _ledger(root: str, cfg: dict, row: dict) -> tuple:
     """``(lines, reasons, text)``: the conforming ``CHECKPOINT`` lines, what is wrong with the ledger the handoff names,
-    and its text (``""`` when it could not be read)."""
+    and its text (``None`` when it could not be read)."""
     text, problem = _read_text(root, row["ledger"])
     if text is None:
-        return [], [problem], ""
+        return [], [problem], None
     reasons = []
     plan_text = None
     try:
@@ -162,6 +165,67 @@ def _merges(root: str, cfg: dict, plan: str, text: str) -> list:
     except ValueError as e:
         reasons.append(str(e))
     return reasons
+
+
+def _cap(root: str, cfg: dict, row: dict, lines: list, text: str) -> list:
+    """``checkpoint.cap`` (Task 6K.2, D-6K2-Q5, Q6): ``cap_errors`` for the plan read from the working tree. A plan that
+    cannot be read, a duplicate task heading, a bad cap value or a handoff block outside ``[0-9A-Za-z]+`` is one reason
+    on this line, so the other lines stay."""
+    plan_text, problem = _read_text(root, row["plan"])
+    if plan_text is None:
+        return [problem]
+    try:
+        try:
+            rulings = checkpoints.ledger_rulings(text, row["block"])
+        except ValueError:
+            rulings = 0  # only a block outside [0-9A-Za-z]+ raises; cap_errors names it first
+        return checkpoints.cap_errors(row, lines, plan_text, cfg, rulings)
+    except (GateError, ValueError) as e:
+        return [str(e)]
+
+
+def _records(root: str, cfg: dict, row: dict) -> list:
+    """``checkpoint.records`` (Task 6K.2, D-6K2-Q4): the worktree's registers for a plain plan; with a handoff ``program``
+    the tip of the local branch ``<program>/integration`` (``refs/heads/`` only, so a tag or a remote-tracking ref never
+    answers). An unreadable register raises ``GateError`` (``checkpoint.input``, plan :6071)."""
+    program = row.get("program")
+    if program is None:
+        findings = Store(root, "finding", cfg).load()
+        decisions = Store(root, "decision", cfg).load()
+    else:
+        branch = "%s/integration" % program
+        if branch not in gitinfo.local_branches(root):
+            return ["branch %s is missing locally; fetch it" % branch]
+        ref = "refs/heads/" + branch
+        findings = checkpoints.records_at(root, cfg, ref, "finding")
+        decisions = checkpoints.records_at(root, cfg, ref, "decision")
+    try:
+        return checkpoints.record_errors(row, findings, decisions)
+    except ValueError as e:
+        return [str(e)]
+
+
+def _base(root: str, row: dict) -> list:
+    """``checkpoint.base`` (Task 6K.2): ``head`` and ``base`` are commits and ``base`` is an ancestor of (or equal to)
+    ``head``; ``commit_exists`` comes before ``is_ancestor``, which raises for a revision that is not a commit."""
+    base, head = row["base"], row["head"]
+    try:
+        if not gitinfo.commit_exists(root, head):
+            return ["head %s is not a commit" % head]
+        if not gitinfo.commit_exists(root, base):
+            return ["%s is not a commit" % base]
+        if not gitinfo.is_ancestor(root, base, head):
+            return ["%s is not an ancestor of %s" % (base, head)]
+    except GateError as e:
+        return [str(e)]
+    return []
+
+
+def _files(root: str, row: dict) -> list:
+    """``checkpoint.files`` (Task 6K.2, D-6K2-Q7, Q8): the plan, then each spec in the handoff's order, must be in
+    ``gitinfo.tracked_files`` (the index; regular files)."""
+    tracked = gitinfo.tracked_files(root)
+    return ["%s: not tracked" % rel for rel in [row["plan"]] + list(row["spec"]) if rel not in tracked]
 
 
 def _agree(root: str, row: dict, last: dict) -> list:
@@ -281,6 +345,8 @@ def _worktree(root: str, entry: dict) -> list:
         return ["not a git top level"]
     if not same:
         return ["not a git top level"]
+    if not worktrees.same_repository(root, d):  # Task 6K.2, D-6K2-Q9: a foreign repository's heads mean nothing here
+        return ["not a worktree of this repository"]
     out = []
     try:
         sha = gitinfo.head_sha(d)
@@ -316,6 +382,7 @@ def check(args: list) -> Result:
     good = not reasons
     lines = []
     ledger_text = None  # set when the ledger passed: checkpoint.merges needs it
+    text = None  # the ledger text when it could be read: checkpoint.cap and checkpoint.last need it
     if good:
         lines, ledger_reasons, text = _ledger(root, cfg, row)
         if not ledger_reasons:
@@ -333,6 +400,14 @@ def check(args: list) -> Result:
         _add(res, "checkpoint.worktrees", _worktrees(root, row))
     if ledger_text is not None:
         _add(res, "checkpoint.merges", _merges(root, cfg, ns.plan, ledger_text))
+    if good:
+        if text is not None:
+            _add(res, "checkpoint.cap", _cap(root, cfg, row, lines, text))
+        _add(res, "checkpoint.records", _records(root, cfg, row))
+        _add(res, "checkpoint.base", _base(root, row))
+        _add(res, "checkpoint.files", _files(root, row))
+        if text is not None:
+            _add(res, "checkpoint.last", checkpoints.last_line_errors(lines))
     return res
 
 
