@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-iu7y
-status: open
+status: planned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-5.md R5-1
 severity: LOW
 class: "state key equal to or below an existing planned file prints two conflict lines: members: CLAUDE.md, .gitignore, .claude/settings.json (existing)"
@@ -10,7 +10,7 @@ repro: null
 owner:
   kind: plan
   plan: 2026-10-31-strict-delivery-framework
-  task: 4d.1
+  task: 4d.2
 pin: null
 ruling: null
 evidence: []
@@ -18,6 +18,9 @@ history:
   - status: open
     sha: e369e6ef1e5ff08fc812ef1339a3b8323452ef39
     by: stream-config
+  - status: planned
+    sha: b16596ee7b407ec83e41db1daca384b862db16b6
+    by: "stream-config: owner.task 4d.1 -> 4d.2 Part B (Q-RC14-4 (a), Q-RC15-1); review_round and caused_by_change are 4d.1's"
 review_round: 5
 caused_by_change: true
 dimension: "output: one conflict line per fault"
