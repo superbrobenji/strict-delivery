@@ -200,7 +200,16 @@ def _option_word(word: str) -> str:
 
 
 def is_git_write(sub: str, args) -> bool:
-    """Whether the git subcommand ``sub`` (exact, case-sensitive; already alias-resolved) with ``args`` is a write."""
+    """Whether the git subcommand ``sub`` (exact, case-sensitive; already alias-resolved) with ``args`` is a write.
+    A ``sub`` that is not a ``str``, or ``args`` holding a non-``str`` word, raises ``TypeError``; an empty ``sub``
+    raises ``GateError`` (the table's row GW13: a callable never receives them, the refusal is the fail-closed reading)."""
+    if type(sub) is not str:
+        raise TypeError("subcommand must be a str")
+    if sub == "":
+        raise GateError("an empty git subcommand")
+    args = list(args)
+    if any(type(word) is not str for word in args):
+        raise TypeError("git words must be str")
     if sub in GIT_WRITES:
         return True
     if sub not in WRITE_OPTIONS:
@@ -414,6 +423,7 @@ def commit_refusals(text: str, p: Policy, run_gates: Callable, stop: bool = Fals
         paths = gitinfo.unstaged_paths(p.root)
     except GateError as e:
         return ["FAIL hook.bash.gates: %s" % safe_text(e)]
+    paths = list(dict.fromkeys(paths))  # an unmerged path is listed twice by git diff: one line per path (CD10)
     if paths:
         return ["FAIL hook.bash.unstaged: %s: %s" % (safe_text(path), UNSTAGED_REASON) for path in paths]
     try:

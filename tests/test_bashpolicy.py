@@ -679,6 +679,22 @@ class CommitRefusalsTest(Repo):
         self.assertEqual(out, ["FAIL hook.bash.config: bad key\\nx; no commit runs until the config loads"])
         self.assertEqual(rec.calls, [])
 
+    def test_unstaged_unmerged_path_once(self):  # CU18, CD10: one line per path, also for an unmerged path
+        d = self.repo()
+        git(d, "checkout", "-q", "-b", "other")
+        with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("other\n")
+        git(d, "commit", "-q", "-a", "-m", "o")
+        git(d, "checkout", "-q", "main")
+        with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("main\n")
+        git(d, "commit", "-q", "-a", "-m", "m")
+        git(d, "merge", "other", check=False)
+        out, rec = self.run_lines("git commit -m m", pol(root=d, cwd=d))
+        self.assertEqual(out, ["FAIL hook.bash.unstaged: a.txt: tracked file has unstaged changes; stage it or stash it, "
+                               "so the gates read the tree being committed"])
+        self.assertEqual(rec.calls, [])
+
     def test_unstaged_then_gates(self):  # CU1-CU3, CU18, CR1, CR7-CR12, CR18
         d = self.repo()
         git(d, "config", "alias.ci", "commit")
@@ -723,6 +739,262 @@ class CommitRefusalsTest(Repo):
         out, rec = self.run_lines("GIT_INDEX_FILE=x git commit -m m", pol(root=d, cwd=d))
         self.assertEqual(ids(out), ["hook.bash.index"])
         self.assertEqual(rec.calls, [])
+
+
+# ---- continuation 4, part TB: survivors M33 and M36 and the rows without a test ----
+from gates.hooks import pre_bash  # noqa: E402
+from gates.lib import hookio  # noqa: E402
+
+# Written by hand from ruling (3b) (plan :3336) and table GW1: the thirteen subcommands that write by name.
+THIRTEEN = ("commit", "push", "merge", "pull", "rebase", "cherry-pick", "revert", "am", "reset", "update-ref", "tag",
+            "stash", "worktree")
+
+
+class TargetRealpathTest(Repo):
+    """M33, HR1, HR4: the allowed set holds realpaths, so the target is compared by realpath."""
+
+    def test_target_realpath_applied_to_the_path_and_to_the_top(self):  # TR17, HR1, HR4 (M33)
+        w = self.repo("w")
+        real = os.path.realpath(w)
+        link = os.path.join(self.tmp, "wlink")
+        os.symlink(w, link)
+        alias = os.path.join(self.tmp, "walias")
+        os.symlink(w, alias)
+        seen = []
+        original = gitinfo.toplevel
+
+        def toplevel(root):
+            seen.append(root)
+            original(root)
+            return alias  # a git that reports the top level through a symlink instead of its real path
+
+        p = pol(cwd=self.tmp, state_access=lambda: (frozenset({real}), [], None))
+        with mock.patch.object(gitinfo, "toplevel", toplevel):
+            self.assertEqual(bp.target_root(shellscan.scan("git commit"), link, p), (real, []))
+        self.assertEqual(seen, [real])  # git was asked about the realpath of the link, not about the link
+
+    def test_symlinked_parent_and_link_with_real_git(self):  # HR1, HR4
+        w = self.repo("w")
+        real = os.path.realpath(w)
+        parent_link = os.path.join(self.tmp, "plink")
+        os.symlink(self.tmp, parent_link)
+        link = os.path.join(self.tmp, "wlink")
+        os.symlink(w, link)
+        other = self.repo("o")
+        olink = os.path.join(self.tmp, "olink")
+        os.symlink(other, olink)
+        p = pol(cwd=self.tmp, state_access=lambda: (frozenset({real}), [], None))
+        for named in (os.path.join(parent_link, "w"), link, "wlink", "plink/w"):
+            self.assertEqual(bp.target_root(shellscan.scan("git commit"), named, p), (real, []), named)
+        root, fails = bp.target_root(shellscan.scan("git commit"), olink, p)
+        self.assertIsNone(root)
+        self.assertEqual(fails, ["FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
+                                 % (os.path.realpath(other), real)])
+        dangling = os.path.join(self.tmp, "dangling")
+        os.symlink(os.path.join(self.tmp, "nowhere"), dangling)
+        root, fails = bp.target_root(shellscan.scan("git commit"), dangling, p)
+        self.assertIsNone(root)
+        self.assertEqual(len(fails), 1)
+        self.assertTrue(fails[0].startswith("FAIL hook.bash.target: %s has no git top level; " % dangling), fails)
+
+
+class GitWritesMembersTest(Repo):
+    """M36, GW1, GW2: every one of the thirteen members is a write by name, through ``is_git_write`` and the target check."""
+
+    def test_the_thirteen_members(self):  # GW1
+        self.assertEqual(sorted(bp.GIT_WRITES), sorted(THIRTEEN))
+        self.assertEqual(len(bp.GIT_WRITES), 13)
+
+    def test_each_member_is_a_write(self):  # GW1, GW2
+        for sub in THIRTEEN:
+            with self.subTest(sub=sub):
+                self.assertTrue(bp.is_git_write(sub, []))
+                self.assertTrue(bp.is_git_write(sub, ["-C", "x", "--help"]))
+        for sub, args in (("tag", ["-l"]), ("stash", ["list"]), ("worktree", ["list"]), ("reset", ["--help"])):
+            with self.subTest(sub=sub, args=args):
+                self.assertTrue(bp.is_git_write(sub, args))
+
+    def test_each_member_gets_the_target_check(self):  # GW1, GW2 (target_root of the plain command naming the member)
+        w = self.repo("w")
+        x = self.repo("x")
+        real = os.path.realpath(w)
+        p = pol(cwd=w, state_access=lambda: (frozenset({real}), [], None))
+        for sub in THIRTEEN:
+            for tail in ("", " -l", " list", " --help"):
+                text = "git -C %s %s%s" % (x, sub, tail)
+                scan = shellscan.scan(text)
+                call = bp.git_call(scan, {})
+                self.assertEqual((call.sub, call.argv_C), (sub, x), text)
+                self.assertTrue(bp.is_git_write(call.sub, call.args), text)
+                root, fails = bp.target_root(scan, call.argv_C, p)
+                self.assertIsNone(root, text)
+                self.assertEqual(fails, ["FAIL hook.bash.target: %s is not a worktree this caller may write in "
+                                         "(allowed: %s)" % (os.path.realpath(x), real)], text)
+            scan = shellscan.scan("git -C %s %s" % (w, sub))
+            self.assertEqual(bp.target_root(scan, w, p), (real, []), sub)
+
+
+class GitWriteBadInputTest(unittest.TestCase):
+    def test_git_writes_bad_input(self):  # GW13
+        for bad in (b"commit", None, 7, ("commit",)):
+            with self.subTest(sub=bad):
+                with self.assertRaises(TypeError):
+                    bp.is_git_write(bad, [])
+        with self.assertRaises(GateError):
+            bp.is_git_write("", [])
+        for args in (None, [b"-f"], [3]):
+            with self.subTest(args=args):
+                with self.assertRaises(TypeError):
+                    bp.is_git_write("branch", args)
+
+
+class PolicyBuildTest(Repo):
+    """PO2, PO3, PO4, PO7, PO8 through the hook's own ``_policy`` on a real context."""
+
+    def ctx(self, root, cwd=None, agent=None):
+        raw = {"tool_name": "Bash", "tool_input": {"command": "ls", "description": "d"}, "session_id": "s1",
+               "cwd": cwd or root}
+        if agent is not None:
+            raw["agent_id"] = agent
+        return hookio.context("PreToolUse", raw, {"PATH": os.environ["PATH"], "K": "v"}, githooks.framework_dir())
+
+    def test_policy_agent_key(self):  # PO2
+        d = self.repo()
+        self.assertEqual(pre_bash._policy(self.ctx(d), d, {}).agent_key, "session")
+        self.assertEqual(pre_bash._policy(self.ctx(d, agent="a1"), d, {}).agent_key, "a1")
+
+    def test_policy_base(self):  # PO3
+        d = self.repo()
+        self.assertEqual(pre_bash._policy(self.ctx(d), d, {}).base, "main")
+        cfg = minimal_config()
+        cfg["base_branch"] = "trunk"
+        e = os.path.join(self.tmp, "e")
+        os.mkdir(e)
+        make_repo(e, cfg)
+        p = pre_bash._policy(self.ctx(e), e, {})
+        self.assertEqual((p.base, p.cfg["base_branch"], p.cfg_error), ("trunk", "trunk", None))
+        with open(os.path.join(e, ".strict-delivery", "config.yml"), "w", encoding="utf-8") as fh:
+            fh.write("schema: [\n")
+        p = pre_bash._policy(self.ctx(e), e, {})
+        self.assertIsNone(p.cfg)
+        self.assertIsNotNone(p.cfg_error)
+        self.assertEqual(p.base, "main")  # config.DEFAULTS["base_branch"]
+
+    def test_policy_branch(self):  # PO4
+        d = self.repo()
+        git(d, "checkout", "-q", "-b", "feat")
+        self.assertEqual(pre_bash._policy(self.ctx(d), d, {}).branch, "feat")
+        git(d, "checkout", "-q", "--detach")
+        self.assertIsNone(pre_bash._policy(self.ctx(d), d, {}).branch)
+        git(d, "checkout", "-q", "--orphan", "unborn")
+        self.assertEqual(pre_bash._policy(self.ctx(d), d, {}).branch, "unborn")
+        git(d, "symbolic-ref", "HEAD", "refs/odd/x")
+        c = self.ctx(d)
+        with self.assertRaises(GateError):  # not swallowed: the policy cannot be built
+            pre_bash._policy(c, d, {})
+
+    def test_policy_env_readonly(self):  # PO7
+        d = self.repo()
+        c = self.ctx(d)
+        p = pre_bash._policy(c, d, {})
+        self.assertEqual(dict(p.env), {"PATH": os.environ["PATH"], "K": "v"})
+        with self.assertRaises(TypeError):
+            p.env["K"] = "w"
+        pre_bash.handle(c)
+        self.assertEqual(dict(c.env), {"PATH": os.environ["PATH"], "K": "v"})
+
+    def test_policy_cwd(self):  # PO8
+        d = self.repo()
+        sub = os.path.join(d, "sub")
+        os.mkdir(sub)
+        link = os.path.join(self.tmp, "dlink")
+        os.symlink(d, link)
+        p = pre_bash._policy(self.ctx(d, cwd=sub), d, {})
+        self.assertEqual(p.cwd, sub)
+        self.assertEqual(p.root, d)
+        p = pre_bash._policy(self.ctx(d, cwd=os.path.join(link, "sub")), d, {})
+        self.assertEqual(p.cwd, os.path.join(link, "sub"))  # the field is not realpathed
+
+
+class HandleShapeTest(Repo):
+    """PB18, CE10 through ``pre_bash.handle``."""
+
+    def ctx(self, root, command):
+        raw = {"tool_name": "Bash", "tool_input": {"command": command, "description": "d"}, "session_id": "s1",
+               "cwd": root}
+        return hookio.context("PreToolUse", raw, {"PATH": os.environ["PATH"]}, githooks.framework_dir())
+
+    def test_handle_outcome_shape(self):  # PB18
+        d = self.repo()
+        for command in ("ls", "git status", "git commit -n -m m", "--no-verify"):
+            out = pre_bash.handle(self.ctx(d, command))
+            self.assertIs(type(out), hookio.Outcome, command)
+            self.assertIs(type(out.deny), list, command)
+            self.assertTrue(all(type(x) is str for x in out.deny), command)
+            self.assertEqual((out.context, out.text), ([], []), command)
+        self.assertEqual(pre_bash.handle(self.ctx(d, "ls")).deny, [])
+        self.assertTrue(pre_bash.handle(self.ctx(d, "git commit -n -m m")).deny)
+        bad = self.ctx(d, "ls")
+        bad.tool_input["command"] = b"ls"
+        out = pre_bash.handle(bad)
+        self.assertEqual(len(out.deny), 1)
+        self.assertTrue(out.deny[0].startswith("FAIL hook.bash.input: command must be a string; "))
+
+    def test_assignment_and_c(self):  # CE10
+        d = self.repo()
+        w = os.path.join(self.tmp, "w")
+        git(d, "worktree", "add", "-q", "-b", "wb", w)
+        out = pre_bash.handle(self.ctx(d, "GIT_DIR=x git -C %s commit -m m" % w))
+        want_assignment = "FAIL hook.bash.target: GIT_DIR is refused; run it with the ! prefix if you must, or ask the owner"
+        want_target = ("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
+                       % (os.path.realpath(w), os.path.realpath(d)))
+        self.assertIn(want_assignment, out.deny)
+        self.assertIn(want_target, out.deny)
+        self.assertEqual(ids(out.deny), ["hook.bash.target"] * len(out.deny))
+
+
+class VersionDigitsTest(unittest.TestCase):
+    def test_command_text_digits(self):  # V1c: numbers are text; the verdicts follow the words, never an int()
+        for n in (4300, 4301):
+            digits = "9" * n
+            self.assertEqual(ids(bp.text_refusals("GIT_CONFIG_COUNT=" + digits)), ["hook.bash.bypass.git-config-env"])
+            self.assertEqual(ids(bp.text_refusals("HOME=" + digits + " ls")), ["hook.bash.bypass.home"])
+            self.assertEqual(ids(bp.text_refusals("git commit -m " + digits)), [])
+            self.assertEqual(bp.effective_words("git commit -m " + digits, {}), {"commit"})
+            self.assertTrue(shellscan.scan("git commit -m " + digits).plain)
+            self.assertEqual(shellscan.scan("git commit -m " + digits).argv[-1], digits)
+
+    def test_checks_unicode_independent(self):  # V2b: U+A7C0 is never folded; the verdicts are equal on both interpreters
+        c = "Ꟁ"
+        for text, want in ((c + "--no-verify", ["hook.bash.bypass.no-verify"]),
+                           ("core.hooksPath" + c, ["hook.bash.bypass.hooks-path"]),
+                           (c + "GIT_CONFIG_COUNT=1", ["hook.bash.bypass.git-config-env"]),
+                           (c + "HOME=x", ["hook.bash.bypass.home"]),
+                           (c + "core.hooksPath", ["hook.bash.bypass.hooks-path"])):
+            self.assertEqual(ids(bp.text_refusals(text)), want, text)
+        self.assertEqual(ids(bp.text_refusals(c + "decision decide", "a1")), ["hook.bash.decide"])
+        self.assertEqual(ids(bp.text_refusals("decision decide" + c, "a1")), ["hook.bash.decide"])
+        for line in bp.text_refusals(c + "--no-verify core.hooksPath", "a1"):
+            self.assertNotIn(c, line)
+
+    def test_checks_ascii_fold_only(self):  # V2c: Kelvin sign and long s fold to k, s under lower()/casefold(), not under git
+        for text in ("hooKspath", "hookſpath", "core.hooKspath", "GIT_CONFIGK", "GITKEY"):
+            self.assertEqual(ids(bp.text_refusals(text, "a1")), [], text)
+        self.assertEqual(ids(bp.text_refusals("decisiſon decide", "a1")), [])
+        self.assertEqual(ids(bp.text_refusals("decision decide")), [])
+        self.assertEqual(ids(bp.text_refusals("decision decide", "a1")), ["hook.bash.decide"])
+
+
+class EffectiveWordsTextKindsTest(unittest.TestCase):
+    def test_effective_words_text_kinds(self):  # EW15
+        self.assertEqual(bp.effective_words("", {}), set())
+        for text in ("git commit\x00", "git\rcommit", "git commit é", "git\x00commit"):
+            self.assertEqual(bp.effective_words(text, {}), {"commit"}, repr(text))
+        self.assertEqual(bp.effective_words("git commit " + "a " * 50000, {}), {"commit"})
+        self.assertEqual(bp.effective_words("git commit " + "a" * (4 * 2 ** 20 + 1 - 11), {}), {"commit"})
+        for bad in (b"git commit", None, 3):
+            with self.assertRaises(TypeError):
+                bp.effective_words(bad, {})
 
 
 if __name__ == "__main__":
