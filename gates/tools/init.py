@@ -437,6 +437,19 @@ def _context_overlap(ctx: str, dirs: list, files: list, state: str) -> list:
     return ["%s: parent %s is not a directory" % (ctx, f) for f in files if ctx.startswith(f + "/")]
 
 
+def _hook_overlap(root: str, ctx: str, hooks: str, names: list) -> list:
+    """H5 (F-20261125-ninr, controller decision): the hook files init plans (``names`` in ``hooks``) are planned files.
+    ``ctx`` equal to one, or to the hooks directory when init creates it (absent), is ``two writes name the same
+    path``; below one is ``parent <f> is not a directory``. A present hooks directory or git directory is managed's own
+    conflict for the context write. Hooks outside ``root`` (a linked worktree's common git directory) get a ``..``
+    path, which ``ctx`` never names (config: no ``..`` component)."""
+    rel = os.path.relpath(hooks, root)
+    hook_files = [rel + "/" + n for n in names]
+    if ctx in hook_files + ([] if os.path.lexists(hooks) else [rel]):
+        return ["%s: two writes name the same path" % ctx]
+    return ["%s: parent %s is not a directory" % (ctx, h) for h in hook_files if ctx.startswith(h + "/")]
+
+
 def _hooks_dir_blocked(hooks: str) -> bool:
     """CD17: the hooks directory exists as a link or as anything but a directory (``lstat``, never followed)."""
     return os.path.lexists(hooks) and (os.path.islink(hooks) or not os.path.isdir(hooks))
@@ -529,6 +542,8 @@ def _build(root: str, answers: dict) -> tuple:
         conflicts = list(dict.fromkeys(conflicts))  # PO2: one line per conflict, first place kept
         if answers["git_hooks"]:
             _plan_hooks(root, answers, conflicts, notes, extra)
+            if extra.hooks:  # H5: no hook is planned at a path equal to or nested with paths.context
+                conflicts.extend(_hook_overlap(root, extra.context_path, extra.hooks_dir, extra.hooks))
     except InitError:
         raise
     except GateError as e:

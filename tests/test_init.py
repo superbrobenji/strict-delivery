@@ -3094,5 +3094,131 @@ class TestReview2(More):
         self.assertFalse(os.path.exists(outside))
 
 
+NOT_MANAGED = "%s: exists and is not framework-managed"
+HOOKS_PATH = "core.hooksPath is set (%s); unset it to install the hooks"
+
+
+class TestReview3(More):
+    """Fix round 4 (review 3): R3-1 (F-20261125-ninr, the hook files init plans are planned files for H5), R3-2
+    (F-20261125-4fji, the ``/`` boundary: a sibling name is accepted). R3-3 (F-20261125-5x5w, the case fold) waits for
+    a ruling: it diverges from table row VR4. Mutant ids: ch/4d1-mutants-7-table.py (t7-*)."""
+
+    overlap = TestReview2.overlap
+
+    def refused_at(self, root, ctx, lines, **paths):
+        """``plan`` and ``apply`` on ``root`` print exactly the conflict ``lines`` and change nothing in ``root`` or in
+        the main repository ``self.root`` (which holds the common git directory)."""
+        rec = {"schema": "config/2", "framework_version": "0.0.0", "profile": "standard",
+               "commands": answers()["commands"], "paths": dict(paths, context=ctx)}
+        helpers.write_record(root, ".strict-delivery/config.yml", rec)
+        before = (snapshot(root), snapshot(self.root))
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub, root=root)
+            self.assertEqual((code, out), (1, "".join("FAIL init.conflict: %s\n" % l for l in lines)), (ctx, sub))
+            self.assertEqual((snapshot(root), snapshot(self.root)), before, (ctx, sub))
+
+    def accepted_ctx(self, ctx, ci=False):
+        """``plan`` exits 0 and ``apply`` exits 0 and writes the default context file at ``ctx``."""
+        self.init_config(paths={"context": ctx})
+        fw = self.make_fw("tagged", version="0.1.0")
+        for sub in ("plan", "apply"):
+            with mock.patch.object(plugin, "framework_dir", return_value=fw), \
+                    mock.patch.object(init.gitinfo, "head_sha", side_effect=init.GitNotFound("no git")):
+                code, out, _ = helpers.within(lambda: self.cmd(sub, ci=ci))
+            self.assertEqual(code, 0, (ctx, sub, out))
+        self.assertEqual(self.read(ctx), CONTEXT_YML)
+
+    def hide_hooks_dir(self):
+        os.rename(os.path.join(self.root, ".git", "hooks"), os.path.join(self.root, ".git", "hooks.old"))
+
+    # --- R3-1 (ninr): equal to, or below, a hook file init plans (default .git/hooks) ------------------------------
+    def test_ctx_equals_pre_commit_hook(self):  # H5; red on the parent; kills t7-h1, t7-h2
+        self.overlap(".git/hooks/pre-commit", SAME % ".git/hooks/pre-commit")
+
+    def test_ctx_equals_pre_push_hook(self):  # H5; red on the parent; kills t7-h1, t7-h2
+        self.overlap(".git/hooks/pre-push", SAME % ".git/hooks/pre-push")
+
+    def test_ctx_below_pre_commit_hook(self):  # H5; red on the parent; kills t7-h1, t7-h4
+        p = ".git/hooks/pre-commit"
+        self.overlap(p + "/x", PARENT % (p + "/x", p))
+
+    def test_ctx_below_pre_push_hook(self):  # H5; red on the parent; kills t7-h1, t7-h4
+        p = ".git/hooks/pre-push"
+        self.overlap(p + "/x", PARENT % (p + "/x", p))
+
+    def test_ctx_equals_hook_hooks_dir_absent(self):  # H5; red on the parent; kills t7-h1, t7-h2
+        self.hide_hooks_dir()
+        self.overlap(".git/hooks/pre-commit", SAME % ".git/hooks/pre-commit")
+
+    def test_ctx_below_hook_hooks_dir_absent(self):  # H5; red on the parent; kills t7-h1, t7-h4
+        self.hide_hooks_dir()
+        p = ".git/hooks/pre-push"
+        self.overlap(p + "/x", PARENT % (p + "/x", p))
+
+    def test_ctx_equals_absent_hooks_dir(self):  # H5 (the directory init creates); red on the parent; kills t7-h3
+        self.hide_hooks_dir()
+        self.overlap(".git/hooks", SAME % ".git/hooks")
+
+    def test_ctx_equals_present_hooks_dir_keeps_existing_text(self):  # H5 pin (passes on the parent); kills t7-h5
+        self.overlap(".git/hooks", NOT_MANAGED % ".git/hooks")
+
+    def test_ctx_equals_git_dir_keeps_existing_text(self):  # H5 pin (passes on the parent); kills t7-h5
+        self.overlap(".git", NOT_MANAGED % ".git")
+
+    # --- R3-1: core.hooksPath (init installs no hook there: its conflict is the one line) --------------------------
+    def test_ctx_equals_hook_in_hooks_path(self):  # H5 pin (passes on the parent)
+        git(self.root, "config", "core.hooksPath", "hk")
+        self.refused_at(self.root, "hk/pre-commit", [HOOKS_PATH % "hk"])
+
+    def test_ctx_below_hook_in_hooks_path(self):  # H5 pin (passes on the parent)
+        git(self.root, "config", "core.hooksPath", "hk")
+        self.refused_at(self.root, "hk/pre-push/x", [HOOKS_PATH % "hk"])
+
+    def test_ctx_equals_hooks_path_dir(self):  # H5 pin (passes on the parent); kills t7-h6
+        git(self.root, "config", "core.hooksPath", "hk")
+        self.refused_at(self.root, "hk", [HOOKS_PATH % "hk"])
+
+    # --- R3-1: a linked worktree (hooks in the common git directory, outside its root) -----------------------------
+    def test_ctx_hook_path_in_linked_worktree(self):  # H5 pin (passes on the parent): .git is a file there
+        wt = os.path.join(self.tmp, "wt")
+        git(self.root, "worktree", "add", "-q", "--detach", "--", wt)
+        self.refused_at(wt, ".git/hooks/pre-commit", [PARENT % (".git/hooks/pre-commit", ".git")])
+
+    # --- R3-1: a separate git directory inside the root (its hooks are below the root) ----------------------------
+    def sep_repo(self):
+        p = os.path.join(self.tmp, "sep")
+        return self.repo("sep", flags=("--separate-git-dir", os.path.join(p, "gd")))
+
+    def test_ctx_equals_hook_in_separate_git_dir(self):  # H5; red on the parent; kills t7-h1, t7-h2
+        root = self.sep_repo()
+        self.refused_at(root, "gd/hooks/pre-commit", [SAME % "gd/hooks/pre-commit"])
+
+    def test_ctx_below_hook_in_separate_git_dir(self):  # H5; red on the parent; kills t7-h1, t7-h4
+        root = self.sep_repo()
+        self.refused_at(root, "gd/hooks/pre-push/x", [PARENT % ("gd/hooks/pre-push/x", "gd/hooks/pre-push")])
+
+    # --- R3-2 (4fji): the ``/`` boundary; a name that only shares a planned file's prefix is accepted -------------
+    def test_ctx_sibling_of_claude_md_passes(self):  # pin (passes on the parent); kills t7-b1
+        self.accepted_ctx("CLAUDE.mdx")
+
+    def test_ctx_sibling_of_gitignore_passes(self):  # pin (passes on the parent); kills t7-b1
+        self.accepted_ctx(".gitignorex")
+
+    def test_ctx_sibling_of_settings_passes(self):  # pin (passes on the parent); kills t7-b1
+        self.accepted_ctx(".claude/settings.jsonx")
+
+    def test_ctx_sibling_of_ci_workflow_passes(self):  # pin (passes on the parent); kills t7-b1 (ci true)
+        self.accepted_ctx(".github/workflows/strict-delivery.ymlx", ci=True)
+
+    def test_ctx_sibling_of_config_passes(self):  # pin (passes on the parent); kills t7-b1
+        self.accepted_ctx(".strict-delivery/config.ymlx")
+
+    def test_ctx_sibling_of_pre_commit_hook_passes(self):  # pin (passes on the parent); kills t7-b2
+        self.accepted_ctx(".git/hooks/pre-commitx")
+
+    def test_ctx_sibling_of_pre_push_hook_passes(self):  # pin (passes on the parent); kills t7-b2
+        self.accepted_ctx(".git/hooks/pre-pushx")
+
+
 if __name__ == "__main__":
     unittest.main()
