@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-m638
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-5.md R5-3
+severity: LOW
+class: "the / boundary of _state_overlap: members: each state key vs each planned file name plus x (CLAUDE.mdx, .gitignorex, .claude/settings.jsonx, the CI workflow plus x, each hook plus x)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e369e6ef1e5ff08fc812ef1339a3b8323452ef39
+    by: stream-config
+review_round: 5
+caused_by_change: true
+dimension: input-domain boundary
