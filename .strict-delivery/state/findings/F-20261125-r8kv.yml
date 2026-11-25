@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-r8kv
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-3
+severity: LOW
+class: "plan-named tests and their assertion form: P:3939 (absent; nested gate input unasserted), P:3957 (absent by name), P:3961 (absent; pure call only, WT12 not through the entry)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
+    by: stream-hooks-2
+review_round: 4
+caused_by_change: true
+dimension: plan-named tests through the production entry

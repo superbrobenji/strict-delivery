@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-2ka4
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-5
+severity: LOW
+class: "re-assertions of a completed result after a state change: test_hook_edit.py:1241 (test_hook_agent.py:1375-1386 re-reads the store and is not a member)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
+    by: stream-hooks-2
+review_round: 3
+caused_by_change: true
+dimension: "oracle: test can fail"

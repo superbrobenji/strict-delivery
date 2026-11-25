@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-zeak
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-2
+severity: LOW
+class: "hook-originated deny lines and the owner way out (Ruling R2, spec section 4): pre_edit.py:170 lacks it; pre_edit.py:174 and pre_agent.py :183 :185 :190 :203 :213 :227 have it"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
+    by: stream-hooks-2
+review_round: 3
+caused_by_change: true
+dimension: "deny wording: way out named (R2)"

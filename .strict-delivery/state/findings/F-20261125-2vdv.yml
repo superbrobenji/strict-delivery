@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-2vdv
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-6
+severity: LOW
+class: "this PR's finding records that do not record their landed fix: 3c.1 se42 jjq8 vyet n5zc npuq; 3c.2 wfhu kafz yas4 9xky i2xx vmks hkwy vbkd wt9b ztbx dq53"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
+    by: stream-hooks-2
+review_round: 4
+caused_by_change: true
+dimension: "finding record lifecycle: fix recorded"
