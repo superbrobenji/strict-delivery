@@ -1579,6 +1579,7 @@ class TipKinds(Fx):
                 c = self.sa_entry(path, kind, PLAN_A)
                 out = self.run_gate()[0]
                 self.assertIn(refusal(c, path), out)
+                self.assertIn("FAIL streams.owned.%s: %s (" % (path, refusal(c, path)), out)  # R2-3: the handler's line, not a crash line
                 self.assertNotIn("created or deleted", out)
         with self.subTest("regular"):
             self.fresh_sa()
@@ -1599,6 +1600,7 @@ class TipKinds(Fx):
                 self.sa_entry(path, "regular", PLAN_A.replace("body one", "body ONE"))
                 out = self.run_gate()[0]
                 self.assertIn(refusal(a, path), out)
+                self.assertIn("FAIL streams.owned.%s: %s (" % (path, refusal(a, path)), out)  # R2-3: the handler's line, not a crash line
                 self.assertNotIn("created or deleted", out)
                 set_entry(self.root, "refs/heads/main", path, "regular", PLAN_A)
                 git(self.root, "reset", "-q", "--hard", "main")
@@ -1614,6 +1616,7 @@ class TipKinds(Fx):
                 c = self.sa_entry("reg.md", kind, text + "| r2 |\n")
                 out = self.run_gate()[0]
                 self.assertIn(refusal(c, "reg.md"), out)
+                self.assertIn("FAIL streams.shared.reg.md: %s (" % refusal(c, "reg.md"), out)  # R2-3: the handler's line, not a crash line
                 self.assertNotIn("is deleted", out)
         with self.subTest("regular"):
             self.fresh_sa()
@@ -1632,6 +1635,7 @@ class TipKinds(Fx):
                 self.sa_entry("reg.md", "regular", text + "| r2 |\n")
                 out = self.run_gate()[0]
                 self.assertIn(refusal(a, "reg.md"), out)
+                self.assertIn("FAIL streams.shared.reg.md: %s (" % refusal(a, "reg.md"), out)  # R2-3: the handler's line, not a crash line
                 set_entry(self.root, "refs/heads/main", "reg.md", "regular", text)
                 git(self.root, "reset", "-q", "--hard", "main")
 

@@ -1033,6 +1033,40 @@ class Batch(Base):
                 out = self.ok("--since", cut)
                 self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
                 set_entry(self.root, "refs/heads/main", DEC + "/notes.txt", "absent")
+        # R2-1 (5b.3 fix round 2, F-20261125-c3k2): only a record name is refused; a generated name (index.yml,
+        # in-force.md), a dot name and a name that is not .yml stay ignored, as at 9b3a1c6, at every kind (R2-H: a name
+        # with a space or with U+0870 (Cn on 3.9, Lo on 3.13) has the verdict of its kind)
+        for name in ("index.yml", "in-force.md", ".hidden.yml", "notes.txt", "a b.txt", "ࡰ.txt", ".ࡰ.yml"):
+            for kind, _ in BAD_KINDS:
+                with self.subTest("%s %s ignored" % (name.encode("ascii", "backslashreplace").decode(), kind)):
+                    try:
+                        set_entry(self.root, "refs/heads/main", DEC + "/" + name, kind, text)
+                        cut = set_entry(self.root, "refs/heads/main", path, "regular", text)
+                        out = self.ok("--since", cut)
+                        self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+                    finally:
+                        set_entry(self.root, "refs/heads/main", DEC + "/" + name, "absent")
+        # R2-1b, R2-H, R2-K: a record name (<anything>.yml that is no generated or dot name) is refused by name at every
+        # kind, whatever its characters; a name of 4300 or 4301 digits is a record name like any other
+        for label, name, shown in (("space", "a b.yml", "a b.yml"), ("u0870", "ࡰ.yml", "\\u0870.yml"),
+                                   ("digits4300", "9" * 4300 + ".yml", "9" * 4300 + ".yml"),
+                                   ("digits4301", "9" * 4301 + ".yml", "9" * 4301 + ".yml")):
+            for kind, _ in BAD_KINDS:
+                with self.subTest("%s %s refused" % (label, kind)):
+                    try:
+                        cut = set_entry(self.root, "refs/heads/main", DEC + "/" + name, kind, text)
+                    finally:
+                        set_entry(self.root, "refs/heads/main", DEC + "/" + name, "absent")
+                    err = self.refused(("batch", "--since", cut),
+                                       "%s:%s/%s: cannot be read as a UTF-8 regular file (not a regular file)" % (cut, DEC, shown))
+                    self.assertEqual(err, "decisions batch: %s:%s/%s: cannot be read as a UTF-8 regular file "
+                                          "(not a regular file)\n" % (cut, DEC, shown))
+        # R2-H, parent component a symlink: paths.decisions itself is a symlink at the cut; git does not follow it, so the
+        # listing at the cut is empty and every open record is new (exit 0, as at 9b3a1c6). Last: it replaces the directory.
+        with self.subTest("paths.decisions symlink"):
+            cut = set_entry(self.root, "refs/heads/main", DEC, "symlink", "x\n")
+            out = self.ok("--since", cut)
+            self.assertEqual((new_ids(out), also_ids(out)), ([DA, DB], []))
 
     def test_batch_since_ancestor_splits_new_and_also_open(self):  # C3, C4, C28, C35, C37
         c1 = self.two_commits()

@@ -43,6 +43,9 @@ class ShowFile(GitIsolatedTestCase):
                 with self.assertRaises(GateError):
                     tipread.show_file(self.work, REF, path)
 
+    def test_show_file_empty_path_is_absent(self):  # R2-3: the empty path (the root) names no file: None, no refusal
+        self.assertIsNone(tipread.show_file(self.work, REF, ""))
+
     def test_show_file_parent_symlink_absent(self):  # FH4
         set_entry(self.work, REF, "d", "symlink", "x\n")  # d -> a regular file; below it nothing exists
         self.assertIsNone(tipread.show_file(self.work, REF, "d/handoff.md"))
@@ -72,6 +75,43 @@ class ShowFile(GitIsolatedTestCase):
                 self.assertEqual(body.count("except UnicodeDecodeError"), body.count("except"))
             else:
                 self.assertNotIn(word, body)
+
+    def test_show_file_changed_while_read(self):  # R2-2: the listing gave a regular entry, then show found none
+        for mode_kind in ("regular", "executable"):
+            with self.subTest(mode_kind):
+                set_entry(self.work, REF, "a/b.md", mode_kind, "hello\n")
+                with mock.patch.object(gitinfo, "show", return_value=None) as show:
+                    with self.assertRaises(GateError) as cm:
+                        tipread.show_file(self.work, REF, "a/b.md")
+                self.assertEqual(str(cm.exception), "refs/heads/main:a/b.md: changed while it was being read")
+                self.assertEqual(show.call_count, 1)
+        with self.subTest("absent is not this refusal"):  # no entry: None before any show call
+            with mock.patch.object(gitinfo, "show", return_value=None) as show:
+                self.assertIsNone(tipread.show_file(self.work, REF, "nothing/here.md"))
+            self.assertEqual(show.call_count, 0)
+        with self.subTest("non-regular is the other refusal"):  # the kind is refused before show is called
+            set_entry(self.work, REF, "p.md", "symlink", "hello\n")
+            with mock.patch.object(gitinfo, "show", return_value=None) as show:
+                with self.assertRaises(GateError) as cm:
+                    tipread.show_file(self.work, REF, "p.md")
+            self.assertEqual(str(cm.exception), refusal(REF, "p.md"))
+            self.assertEqual(show.call_count, 0)
+
+    def test_show_file_propagates_keyboard_interrupt_from_show(self):  # R2-K: an interrupt in the read of the regular entry
+        set_entry(self.work, REF, "a.md", "regular")
+        with mock.patch.object(gitinfo, "show", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                tipread.show_file(self.work, REF, "a.md")
+
+    def test_show_file_matches_the_entry_by_exact_name(self):  # R2-3: a sibling or a prefix of the path is not the entry
+        set_entry(self.work, REF, "d/ab.md", "symlink", "x\n")
+        set_entry(self.work, REF, "d/b.md", "regular", "right\n")
+        self.assertEqual(tipread.show_file(self.work, REF, "d/b.md"), "right\n")
+        self.assertIsNone(tipread.show_file(self.work, REF, "d/a.md"))
+        self.assertIsNone(tipread.show_file(self.work, REF, "d/ab"))
+        with self.assertRaises(GateError) as cm:
+            tipread.show_file(self.work, REF, "d/ab.md")
+        self.assertEqual(str(cm.exception), refusal(REF, "d/ab.md"))
 
     def test_show_contract_unchanged(self):  # F27: gitinfo.show keeps returning None for a non-regular entry
         for kind, _ in BAD_KINDS:
