@@ -52,3 +52,10 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - The record holds `members: [{id, text, test, status, found_by, found_in}]`. A member is resolved when it names its test; the finding cannot close (V2-08) until every member is resolved, so class-completeness is checked by the tools.
 - A member found by a later review is added to the same record with its own `found_by` and `found_in` (it feeds the late-findings measure); it does not become a new finding.
 - Records without a member list (older ones) stay valid and count as one member until edited.
+
+### V2-02 Hardening section in every coverage table (2026-11-26)
+
+- Owner: "yes that matches, go with the fixed section".
+- Every input-domain table has a fixed hardening section listing the standard cases (symlink target; directory; FIFO or special file; a parent swapped after the check; equal or nested configured paths; non-UTF-8 names and contents; outside the root). Each case is a row with its test or `not applicable: <reason>`.
+- `check dispatch` warns (does not fail) when the section is missing or a case is unanswered, naming the cases; the warning shows in the dispatch result and the ledger. The reviewer checks every "not applicable" reason.
+- The standard case list lives once, in the base playbook, so a new case updates every checklist.
