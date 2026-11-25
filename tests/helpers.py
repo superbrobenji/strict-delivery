@@ -1,6 +1,7 @@
 """Shared test helpers: fixture repositories built with plain git, isolated from the user's git config."""
 import atexit
 import contextlib
+import copy
 import os
 import shutil
 import subprocess
@@ -120,21 +121,27 @@ _REPO_SHAPING = frozenset(("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OB
 _TEMPLATE_LOCK = threading.Lock()
 _TEMPLATES: dict = {}  # (emitted config text, PATH) -> directory of the template repository
 _TEMPLATE_ROOT: list = []  # [private temporary directory], created on first use, removed at process exit
+_HISTORY_ROOT: list = []  # the same for ``cached_history`` (a build runs there, so ``make_repo`` inside it is not an overlap)
 
 
-def _template_root() -> str:
-    if not _TEMPLATE_ROOT:
-        root = os.path.realpath(tempfile.mkdtemp(prefix="sd-fixture-template-"))
-        _TEMPLATE_ROOT.append(root)
+def _private_root(holder: list, prefix: str) -> str:
+    """A private temporary directory made on first use and removed at process exit (git objects are read-only)."""
+    if not holder:
+        root = os.path.realpath(tempfile.mkdtemp(prefix=prefix))
+        holder.append(root)
 
         def _remove() -> None:
-            def _writable(fn, path, _exc):  # git objects are read-only
+            def _writable(fn, path, _exc):
                 os.chmod(os.path.dirname(path), 0o700)
                 os.chmod(path, 0o700)
                 fn(path)
             shutil.rmtree(root, onerror=_writable)
         atexit.register(_remove)
-    return _TEMPLATE_ROOT[0]
+    return holder[0]
+
+
+def _template_root() -> str:
+    return _private_root(_TEMPLATE_ROOT, "sd-fixture-template-")
 
 
 def _fast_path_ok(tmp: str, root: str) -> bool:
@@ -176,6 +183,43 @@ def make_repo(tmp: str, config: Optional[dict] = None) -> str:
     for name in os.listdir(tpl):
         shutil.copytree(os.path.join(tpl, name), os.path.join(tmp, name), symlinks=True)
     return tmp
+
+
+_HISTORY_LOCK = threading.Lock()
+_HISTORIES: dict = {}  # (key, PATH, GIT_* environment) -> (directory of the built history, facts)
+
+
+def cached_history(key, dest: str, build):
+    """Row F11: a history built once per process and copied for every caller. ``build(root)`` is called on an empty
+    directory (inside a private history root, apart from the template root) and builds the whole repository there, with ``make_repo``,
+    ``commit_all`` and plain file writes, and returns *facts* (plain data without paths, such as commit ids); ``key`` names the
+    content (the same key must mean the same ``build``). Returns ``(dest, facts)``: ``dest`` is a real copy of the
+    built directory (``copytree``: no hard links, no alternates, no shared object store), the facts a deep copy.
+    Under the same conditions as ``make_repo``'s fast path (an empty, real ``dest`` on the template's file system,
+    the isolated git environment) the build runs once per key, PATH and GIT_* environment; otherwise ``build(dest)``
+    runs on ``dest`` itself. Use only for a test that never depends on fresh history (the commit dates are the fixed
+    ``_IDENTITY`` ones; the copy keeps every mtime, the index included)."""
+    root = _template_root()
+    real = os.path.realpath(dest)
+    for rroot in (os.path.realpath(root), os.path.realpath(_private_root(_HISTORY_ROOT, "sd-fixture-history-"))):
+        if real == rroot or real.startswith(rroot + os.sep) or rroot.startswith(real + os.sep):
+            raise ValueError("cached_history: %s overlaps the fixture template directory" % dest)
+    if not _fast_path_ok(dest, root):
+        return dest, build(dest)
+    full = (key, os.environ.get("PATH", ""), tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("GIT_"))))
+    with _HISTORY_LOCK:  # not _TEMPLATE_LOCK: a build calls make_repo
+        hit = _HISTORIES.get(full)
+        if hit is None:
+            built = tempfile.mkdtemp(prefix="h", dir=_private_root(_HISTORY_ROOT, "sd-fixture-history-"))
+            hit = (built, build(built))
+            _HISTORIES[full] = hit
+    for name in os.listdir(hit[0]):
+        src, dst = os.path.join(hit[0], name), os.path.join(dest, name)
+        if os.path.isdir(src) and not os.path.islink(src):
+            shutil.copytree(src, dst, symlinks=True)
+        else:
+            shutil.copy2(src, dst, follow_symlinks=False)
+    return dest, copy.deepcopy(hit[1])
 
 
 def commit_all(root: str, msg: str) -> str:

@@ -15,7 +15,7 @@ from gates import __main__ as gates_main
 from gates import gate_register
 from gates.lib import decisions, schema
 from gates.lib.yamlsub import emit
-from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
+from tests.helpers import GitIsolatedTestCase, cached_history, commit_all, git, make_repo, minimal_config, write_record
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FS = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "finding.yml"))
@@ -106,19 +106,23 @@ SRC = {"src/x.py": "x\n"}
 
 class Base(GitIsolatedTestCase):
     def build(self, findings=(), decs=(), files=None, cfg=None, commit=True):
-        root = make_repo(self.work, cfg)
-        for r in findings:
-            write_record(root, fpath(r["id"]), r)
-        for r in decs:
-            write_record(root, "%s/%s.yml" % (DEC, r["id"]), r)
-        for rel, data in (files or {}).items():
-            self.put(rel, data)
-        if commit:
-            commit_all(root, "fixture")
-        return root
+        """The fixture repository in self.work; the same arguments give the same history, built once per process and
+        copied (row F11: no test here reads commit dates, the reflog or mtimes)."""
+        def make(root):
+            make_repo(root, cfg)
+            for r in findings:
+                write_record(root, fpath(r["id"]), r)
+            for r in decs:
+                write_record(root, "%s/%s.yml" % (DEC, r["id"]), r)
+            for rel, data in (files or {}).items():
+                self.put(rel, data, root)
+            if commit:
+                commit_all(root, "fixture")
+        cached_history(("test_gate_register.build", repr((findings, decs, files, cfg, commit))), self.work, make)
+        return self.work
 
-    def put(self, rel, data):
-        path = os.path.join(self.work, rel)
+    def put(self, rel, data, root=None):
+        path = os.path.join(root or self.work, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as fh:
             fh.write(data if isinstance(data, bytes) else data.encode("utf-8"))

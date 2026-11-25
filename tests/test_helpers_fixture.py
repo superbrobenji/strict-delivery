@@ -324,6 +324,280 @@ class OrderFreeTest(Base):
         self.assertEqual(facts(a), facts(b))
 
 
+def history_build(root):
+    """A history with a symlink, an executable, a nested file and two commits; the facts are its commit ids."""
+    make_repo(root)
+    os.makedirs(os.path.join(root, "d", "e"))
+    for rel, data in (("a.txt", b"alpha\n"), ("d/e/f.txt", b"f\n"), ("run", b"#!/bin/sh\n")):
+        with open(os.path.join(root, rel), "wb") as fh:
+            fh.write(data)
+    os.chmod(os.path.join(root, "run"), 0o755)
+    os.symlink("a.txt", os.path.join(root, "ln"))
+    one = helpers.commit_all(root, "one")
+    return {"one": one, "two": helpers.commit_all(root, "two")}
+
+
+class HistoryTemplateTest(Base):
+    """Row F11 (per-module fixtures), the helper behind it: ``helpers.cached_history``; rows F5, F6, F8, H1, H5 for it."""
+
+    def counting(self):
+        calls = []
+
+        def build(root):
+            calls.append(root)
+            return history_build(root)
+        return calls, build
+
+    def regular_files(self, top):
+        """Path relative to ``top`` -> (inode, link count) of every regular file."""
+        out = {}
+        for d, dirs, files in os.walk(top):
+            for n in files:
+                st = os.lstat(os.path.join(d, n))
+                if stat.S_ISREG(st.st_mode):
+                    out[os.path.relpath(os.path.join(d, n), top)] = (st.st_ino, st.st_nlink)
+        return out
+
+    def test_f11_copy_equals_a_direct_build(self):  # F11: same facts, same repository as the builder run on its own
+        calls, build = self.counting()
+        dest, got = helpers.cached_history("k-equal", self.fresh("copy"), build)
+        direct = self.fresh("direct")
+        want = history_build(direct)
+        self.assertEqual(got, want)
+        self.assertEqual(facts(dest), facts(direct))
+        got_tree, want_tree = tree_state(dest), tree_state(direct)
+        self.assertEqual(got_tree.pop(".git/index")[:2], want_tree.pop(".git/index")[:2])  # the index holds stat data
+        self.assertEqual(got_tree, want_tree)
+        self.assertEqual(rawok(dest, "ls-files", "-s"), rawok(direct, "ls-files", "-s"))
+        self.assertEqual(os.readlink(os.path.join(dest, "ln")), "a.txt")
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(dest, "run")).st_mode), 0o755)
+        self.assertEqual(rawok(dest, "rev-list", "--count", "HEAD"), "3")
+
+    def test_f11_builds_once_per_key(self):  # F11: the second and later callers copy
+        calls, build = self.counting()
+        a = helpers.cached_history("k-once", self.fresh("a"), build)
+        b = helpers.cached_history("k-once", self.fresh("b"), build)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((a[1], facts(a[0])), (b[1], facts(b[0])))
+        helpers.cached_history("k-once-other", self.fresh("c"), build)
+        self.assertEqual(len(calls), 2)
+        with mock.patch.dict(os.environ, {"GIT_FIXTURE_PROBE": "1"}):  # another GIT_* environment: another template
+            helpers.cached_history("k-once", self.fresh("d"), build)
+        self.assertEqual(len(calls), 3)
+        with mock.patch.dict(os.environ, {"PATH": os.environ.get("PATH", "") + os.pathsep + self.tmp}):
+            helpers.cached_history("k-once", self.fresh("e"), build)
+        self.assertEqual(len(calls), 4)
+
+    def test_f5_copies_share_nothing(self):  # F5: no hard links, alternates, symlinked object stores, shared inodes
+        calls, build = self.counting()
+        a, _ = helpers.cached_history("k-iso", self.fresh("a"), build)
+        b, _ = helpers.cached_history("k-iso", self.fresh("b"), build)
+        tree = {top: self.regular_files(top) for top in (calls[0], a, b)}
+        for top in (a, b):
+            self.assertTrue(tree[top])
+            self.assertEqual({n for (_, n) in tree[top].values()}, {1}, top)  # no hard link to anything
+            self.assertEqual(tree[top].keys(), tree[calls[0]].keys())
+            self.assertFalse(os.path.lexists(os.path.join(top, ".git", "objects", "info", "alternates")))
+            self.assertFalse(os.path.islink(os.path.join(top, ".git", "objects")))
+            self.assertFalse(os.path.islink(os.path.join(top, ".git")))
+        inodes = [{i for (i, _) in tree[top].values()} for top in (calls[0], a, b)]
+        self.assertEqual(inodes[0] & inodes[1], set())
+        self.assertEqual(inodes[0] & inodes[2], set())
+        self.assertEqual(inodes[1] & inodes[2], set())
+
+    def test_f5_mutating_a_copy_leaves_the_template_and_others(self):  # F5: commit, branch, config, hooks, gc
+        calls, build = self.counting()
+        a, _ = helpers.cached_history("k-mut", self.fresh("a"), build)
+        b, _ = helpers.cached_history("k-mut", self.fresh("b"), build)
+        built = calls[0]
+        template_before, b_before = tree_state(built), tree_state(b)
+        self.write(a, "new.txt", b"n\n")
+        git(a, "add", "-A")
+        git(a, "commit", "-q", "-m", "three")
+        git(a, "branch", "side")
+        git(a, "config", "k.v", "1")
+        self.write(a, ".git/hooks/pre-commit", b"#!/bin/sh\nexit 0\n")
+        rawok(a, "gc", "-q")
+        self.assertEqual(tree_state(built), template_before)
+        self.assertEqual(tree_state(b), b_before)
+        c, _ = helpers.cached_history("k-mut", self.fresh("c"), build)
+        self.assertEqual(facts(c), facts(b))
+        self.assertEqual(len(calls), 1)
+
+    def test_f11_facts_are_a_copy(self):  # a test that edits its facts cannot change the next caller's
+        _, build = self.counting()
+        _, one = helpers.cached_history("k-facts", self.fresh("a"), build)
+        one["one"] = "changed"
+        _, two = helpers.cached_history("k-facts", self.fresh("b"), build)
+        self.assertNotEqual(two["one"], "changed")
+
+    def test_f11_keeps_mtimes_and_a_same_size_edit_is_seen(self):  # F8 for a cached history
+        calls, build = self.counting()
+        a, _ = helpers.cached_history("k-mtime", self.fresh("a"), build)
+        for rel in ("a.txt", "d/e/f.txt", ".git/index", ".git/HEAD"):
+            self.assertEqual(os.stat(os.path.join(a, rel)).st_mtime_ns, os.stat(os.path.join(calls[0], rel)).st_mtime_ns, rel)
+        path = os.path.join(a, "a.txt")
+        stamp = os.stat(path).st_mtime_ns
+        with open(path, "wb") as fh:
+            fh.write(b"omega\n")  # same size as "alpha\n"
+        os.utime(path, ns=(stamp, stamp))
+        self.assertEqual(rawok(a, "status", "--porcelain"), "M a.txt")
+
+    def test_h1_non_empty_or_symlinked_dest_builds_in_place(self):  # F3, H1: the fast path's own conditions
+        calls, build = self.counting()
+        busy = self.fresh("busy")
+        self.write(busy, "pre.txt", b"p\n")
+        with self.no_copy():
+            helpers.cached_history("k-busy", busy, build)
+        self.assertEqual(calls, [busy])
+        real = self.fresh("real")
+        link = os.path.join(self.tmp, "lnk")
+        os.symlink(real, link)
+        with self.no_copy():
+            helpers.cached_history("k-link", link, build)
+        self.assertEqual(calls, [busy, link])
+        self.assertEqual(rawok(real, "rev-list", "--count", "HEAD"), "3")
+
+    def test_h2_regular_file_and_missing_dest(self):  # H2: the build runs in place and fails as make_repo does
+        calls, build = self.counting()
+        plain = os.path.join(self.tmp, "plain")
+        with open(plain, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        for label, path in (("file", plain), ("missing", os.path.join(self.tmp, "nope"))):
+            with self.subTest(label):
+                rc, _, err = raw(path, "init", "-q", "-b", "main")
+                self.assertNotEqual(rc, 0)
+                with self.no_copy(), self.assertRaises(AssertionError) as cm:
+                    helpers.cached_history("k-h2", path, build)
+                self.assertEqual(str(cm.exception), "git init -q -b main failed: %s" % err)
+        self.assertEqual(calls, [plain, os.path.join(self.tmp, "nope")])
+
+    def test_h3_fifo_dest_is_never_opened(self):  # H3
+        calls, build = self.counting()
+        fifo = os.path.join(self.tmp, "fifo")
+        os.mkfifo(fifo)
+        rc, _, err = raw(fifo, "init", "-q", "-b", "main")
+        self.assertNotEqual(rc, 0)
+        kind, val = helpers.watched(lambda: helpers.cached_history("k-h3", fifo, build), 20)
+        self.assertEqual(kind, "err")
+        self.assertIsInstance(val, AssertionError)
+        self.assertEqual(str(val), "git init -q -b main failed: %s" % err)
+        self.assertEqual(calls, [fifo])
+        self.assertTrue(stat.S_ISFIFO(os.lstat(fifo).st_mode))
+
+    def test_h4_a_parent_of_dest_is_a_symlink(self):  # H4: the copy equals a direct build
+        calls, build = self.counting()
+        real = self.fresh("real")
+        os.mkdir(os.path.join(real, "sub"))
+        link = os.path.join(self.tmp, "parentlink")
+        os.symlink(real, link)
+        dest, got = helpers.cached_history("k-h4", os.path.join(link, "sub"), build)
+        direct = self.fresh("direct")
+        want = history_build(direct)
+        self.assertEqual(got, want)
+        self.assertEqual(facts(os.path.join(real, "sub")), facts(direct))
+        self.assertFalse(os.path.islink(os.path.join(real, "sub")))
+
+    def test_h6_unusual_names_in_an_existing_dest(self):  # H6 (F3): built in place, equal to a direct build
+        calls, build = self.counting()
+        names = ["sp ace.txt", "new\nline.txt", "éè.txt", "‮.txt", "-dash", "tab\t.txt"]
+        a, b = self.fresh("a"), self.fresh("b")
+        for d in (a, b):
+            for n in names:
+                with open(os.path.join(d, n), "wb") as fh:
+                    fh.write(b"x\n")
+        with self.no_copy():
+            _, got = helpers.cached_history("k-h6", a, build)
+        self.assertEqual((calls, got), ([a], history_build(b)))
+        self.assertEqual(facts(a), facts(b))
+
+    def test_h6_non_utf8_name_in_an_existing_dest(self):  # H6 (skipped where the file system refuses the name)
+        calls, build = self.counting()
+        a, b = self.fresh("a"), self.fresh("b")
+        try:
+            for d in (a, b):
+                with open(os.path.join(os.fsencode(d), b"\xff\xfe.txt"), "wb") as fh:
+                    fh.write(b"x\n")
+        except OSError as e:
+            self.skipTest("the file system refuses a non-UTF-8 name: %s" % e)
+        with self.no_copy():
+            helpers.cached_history("k-h6u", a, build)
+        history_build(b)
+        self.assertEqual(rawok(a, "rev-parse", "HEAD^{tree}"), rawok(b, "rev-parse", "HEAD^{tree}"))
+        self.assertEqual(calls, [a])
+
+    def test_k1_numeric_text_4300_and_4301_digits(self):  # K1: the text is never turned into an int
+        for digits in (4300, 4301):
+            for limit in helpers.INT_LIMITS:
+                with self.subTest(digits=digits, limit=limit), helpers.int_limit(limit):
+                    cfg = dict(minimal_config(), big="7" * digits)
+                    dest, got = helpers.cached_history(("k-k1", digits, limit), self.fresh("f%d-%s" % (digits, limit)),
+                                                       lambda root, cfg=cfg: (make_repo(root, cfg), {"n": 1})[1])
+                    slow = slow_build(self.fresh("s%d-%s" % (digits, limit)), helpers.emit(cfg))
+                    self.assertEqual(got, {"n": 1})
+                    self.assertEqual(facts(dest), facts(slow))
+                    self.assertIn(("7" * digits).encode(), facts(dest)["bytes"][".strict-delivery/config.yml"])
+
+    def test_k2_unicode_code_point_whose_category_differs(self):  # K2: U+1FAE0 is unassigned in 3.9's Unicode, a symbol in 3.13's
+        for ch in ("\U0001fae0", "é", " ", "ퟻ"):
+            with self.subTest(code=hex(ord(ch))):
+                cfg = dict(minimal_config(), note="a" + ch + "b")
+                dest, _ = helpers.cached_history(("k-k2", ord(ch)), self.fresh("f%x" % ord(ch)),
+                                                 lambda root, cfg=cfg: (make_repo(root, cfg), {})[1])
+                self.assertEqual(facts(dest), facts(slow_build(self.fresh("s%x" % ord(ch)), helpers.emit(cfg))))
+
+    def test_h5_history_and_template_directories_are_never_a_target(self):  # H5
+        calls, build = self.counting()
+        helpers.cached_history("k-h5", self.fresh("warm"), build)
+        for root in (helpers._TEMPLATE_ROOT[0], helpers._HISTORY_ROOT[0]):
+            before = tree_state(root)
+            for label, path in (("root", root), ("inside", os.path.join(root, "x")), ("parent", os.path.dirname(root)),
+                                ("a built history", calls[0])):
+                with self.subTest(root=root, label=label), self.assertRaises(ValueError) as cm:
+                    helpers.cached_history("k-h5", path, build)
+                self.assertIn("overlaps the fixture template directory", str(cm.exception))
+            self.assertEqual(tree_state(root), before)
+        self.assertEqual(len(calls), 1)
+
+    def test_h7_history_root_is_private_and_outside_the_checkout(self):  # H7
+        helpers.cached_history("k-h7", self.fresh("warm"), self.counting()[1])
+        root = helpers._HISTORY_ROOT[0]
+        self.assertEqual(os.path.dirname(root), os.path.realpath(tempfile.gettempdir()))
+        self.assertTrue(os.path.basename(root).startswith("sd-fixture-history-"))
+        self.assertEqual(stat.S_IMODE(os.stat(root).st_mode), 0o700)
+        for under in (REPO, self.tmp):
+            self.assertFalse(root.startswith(under + os.sep), under)
+        self.assertNotEqual(root, helpers._TEMPLATE_ROOT[0])
+
+    def test_f6_f7_order_free_and_removed_at_exit(self):  # F6, F7: any call may be first, in any process
+        script = os.path.join(self.tmp, "hscript.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write("import os, sys\nsys.path.insert(0, %r)\nfrom tests import helpers\n"
+                     "n = []\n"
+                     "def build(root):\n    n.append(1)\n    helpers.make_repo(root)\n    return {'x': 1}\n"
+                     "for name in sys.argv[1:]:\n    os.mkdir(name)\n    helpers.cached_history('k', name, build)\n"
+                     "print(len(n))\nprint(helpers._HISTORY_ROOT[0])\nprint(helpers._TEMPLATE_ROOT[0])\n" % REPO)
+        procs = [subprocess.Popen([sys.executable, script] + [os.path.join(self.tmp, "p%d%s" % (i, k)) for k in "ab"],
+                                  cwd=self.tmp, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in (1, 2)]
+        roots = []
+        for p in procs:
+            out, err = p.communicate(timeout=300)
+            self.assertEqual((p.returncode, err), (0, b""), err)
+            lines = out.decode().splitlines()
+            self.assertEqual(lines[0], "1")  # built once for two copies
+            roots.append(lines[1])
+            for r in lines[1:]:
+                self.assertFalse(os.path.exists(r), r)
+                self.assertFalse(r.startswith(REPO + os.sep))
+        self.assertNotEqual(roots[0], roots[1])
+        for i in (1, 2):
+            self.assertEqual(facts(os.path.join(self.tmp, "p%da" % i)), facts(os.path.join(self.tmp, "p%db" % i)))
+
+    def test_k3_no_exception_group_in_cached_history(self):  # K3 (PC1): the new helper names none
+        with open(os.path.join(REPO, "tests", "helpers.py"), encoding="utf-8") as fh:
+            self.assertNotIn("Exception" + "Group", fh.read())
+
+
 class InterfaceTest(unittest.TestCase):
     SIGS = {
         "git": "(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -> str",
@@ -539,8 +813,11 @@ class MemberOracleTest(Base):
         (C10): status text only
      10 test_gate_streams.py: test_inside_pre_commit_hook_environment (BS18, real index bytes after a gate run)
      11 test_self_adoption.py: listing() (size, mode, mtime of this checkout's hooks directory, H3)
-     12 tests/test_drift_lib.py: Arguments.test_stream_errors_writes_nothing (PR-5c; not on origin/main, the records
-        stream owns it; the same measure as member 1 or 3, covered by their tests)
+     12 test_drift_lib.py: Arguments.test_stream_errors_writes_nothing and test_status_probe_writes_nothing (``probe()``:
+        status with explicit optional locks off, HEAD, index st_mtime_ns)
+     13 test_drift_cli.py: test_report_writes_nothing (drift_fx.snapshot: sha256 of every path, .git included)
+     14 test_gate_drift_rows.py: test_gate_writes_nothing (the same snapshot)
+     Member 8 is also pinned to its real test's source and teeth by test_member8_real_test_is_the_measured_one.
     ``git diff`` is not a status probe: it refreshes a stat-dirty index even under GIT_OPTIONAL_LOCKS=0 (measured, and
     noted at test_gitinfo.py CP14), so no member's setup may probe with ``diff`` between its two measurements.
     Not members (no .git in the measurement, grep-checked): test_detect snapshot (a plain directory), test_claims_cli
@@ -604,17 +881,84 @@ class MemberOracleTest(Base):
     def test_member9_status_text_oracles(self):
         self.immune(lambda root: git(root, "status", "--porcelain", "--untracked-files=all"), teeth=False)
 
+    def test_member12_drift_lib_probe(self):  # tests/test_drift_lib.py Arguments.test_stream_errors_writes_nothing
+        from tests import test_drift_lib
+
+        def measure(root):
+            with mock.patch.dict(test_drift_lib.G, {"root": root}):
+                return test_drift_lib.Arguments.probe()
+        self.immune(measure)
+
+    def test_member13_drift_cli_snapshot(self):  # tests/test_drift_cli.py test_report_writes_nothing (sha256, .git included)
+        from tests import test_drift_cli
+        self.immune(test_drift_cli.snapshot)
+
+    def test_member14_gate_drift_rows_snapshot(self):  # tests/test_gate_drift_rows.py test_gate_writes_nothing (same)
+        from tests import test_gate_drift_rows
+        self.immune(test_gate_drift_rows.snapshot)
+
+    def test_member8_real_test_is_the_measured_one(self):
+        """Member 8 is measured above by a copy of the snapshot; this pins the real test to the same shape: the walk
+        leaves out ``.git`` (so a probe's index rewrite cannot show in it) and the status goes through ``helpers.git``
+        (optional locks off), and the copy sees a touched file, a new file and a changed status (teeth)."""
+        import inspect as _inspect
+        from tests import test_gate_context
+        src = _inspect.getsource(test_gate_context.Receipts.test_gate_writes_nothing)
+        self.assertIn('dirs[:] = [d for d in dirs if d != ".git"]', src)
+        self.assertIn('os.lstat(p).st_mtime_ns', src)
+        self.assertIn('git(self.fx, "status", "--porcelain", "--untracked-files=all")', src)
+        self.assertIs(test_gate_context.git, git)
+        root = self.stat_dirty_repo()
+
+        def snap():
+            out = {}
+            for base, dirs, files in os.walk(root):
+                dirs[:] = [d for d in dirs if d != ".git"]
+                for n in dirs + files:
+                    p = os.path.join(base, n)
+                    out[p] = os.lstat(p).st_mtime_ns
+            return out, git(root, "status", "--porcelain", "--untracked-files=all")
+        before = snap()
+        git(root, "status")
+        git(root, "ls-files", "-s")
+        self.assertEqual(snap(), before)
+        cfg = os.path.join(root, ".strict-delivery", "config.yml")
+        os.utime(cfg, (2, 2))
+        self.assertNotEqual(snap(), before)
+        os.utime(cfg, (1, 1))
+        self.assertEqual(snap(), before)
+        self.write(root, "new.txt", b"x")
+        self.assertNotEqual(snap(), before)
+
     def test_member_list_is_complete(self):  # the grep that produced the list: every file naming an oracle over .git
-        found = set()
-        for name in sorted(os.listdir(os.path.join(REPO, "tests"))):
-            if not (name.startswith("test_") and name.endswith(".py")) or name == "test_helpers_fixture.py":
-                continue
-            with open(os.path.join(REPO, "tests", name), encoding="utf-8") as fh:
-                text = fh.read()
-            if "st_mtime" in text or "getmtime" in text or ".git/index" in text or '".git", "index"' in text:
-                found.add(name)
-        # every file the grep finds is either a member above or one of the listed non-members
-        self.assertEqual(found - {"test_gate_index.py", "test_claims_lib.py", "test_gitinfo.py", "test_gate_context.py",
-                                  "test_detect.py", "test_claims_cli.py", "test_context_cli.py", "test_githooks.py",
-                                  "test_hookio.py", "test_program_merged.py", "test_drift_lib.py", "test_hook_entry.py",
-                                  "test_gate_cleanup.py", "test_self_adoption.py", "test_gate_streams.py"}, set())
+        self.assertEqual(unlisted_oracle_files(os.path.join(REPO, "tests")), set())
+
+    def test_member_list_has_teeth(self):  # a new test file that names a pattern is found and fails the list
+        for pattern in ("st_mtime", "getmtime", ".git/index", '".git", "index"', "drift_fx"):
+            with self.subTest(pattern=pattern), tempfile.TemporaryDirectory(dir=self.tmp) as d:
+                self.write(d, "test_new_oracle.py", ("# " + pattern + "\n").encode())
+                self.write(d, "test_quiet.py", b"# nothing\n")
+                self.write(d, "test_gitinfo.py", b"# st_mtime\n")  # a listed member is accepted
+                self.assertEqual(unlisted_oracle_files(d), {"test_new_oracle.py"})
+
+
+ORACLE_PATTERNS = ("st_mtime", "getmtime", ".git/index", '".git", "index"', "drift_fx")
+LISTED_FILES = {"test_gate_index.py", "test_claims_lib.py", "test_gitinfo.py", "test_gate_context.py",
+                "test_detect.py", "test_claims_cli.py", "test_context_cli.py", "test_githooks.py",
+                "test_hookio.py", "test_program_merged.py", "test_drift_lib.py", "test_hook_entry.py",
+                "test_gate_cleanup.py", "test_self_adoption.py", "test_gate_streams.py",
+                "test_drift_cli.py", "test_gate_drift_rows.py", "test_gate_drift.py"}
+
+
+def unlisted_oracle_files(tests_dir):
+    """Test files under ``tests_dir`` that name an oracle pattern (an mtime, ``.git/index``, or the ``drift_fx`` hashing
+    snapshot of ``.git``) and are neither a member nor a checked non-member listed above."""
+    found = set()
+    for name in sorted(os.listdir(tests_dir)):
+        if not (name.startswith("test_") and name.endswith(".py")) or name == "test_helpers_fixture.py":
+            continue
+        with open(os.path.join(tests_dir, name), encoding="utf-8") as fh:
+            text = fh.read()
+        if any(p in text for p in ORACLE_PATTERNS):
+            found.add(name)
+    return found - LISTED_FILES

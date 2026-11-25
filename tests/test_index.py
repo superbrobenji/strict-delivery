@@ -20,8 +20,8 @@ from gates.lib import config, programs, schema, yamlsub
 from gates.lib.result import GateError
 from gates.lib.store import Store
 from gates.tools import decisions_cli, index
-from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config,
-                           write_record)
+from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, cached_history, commit_all, git, int_limit, make_repo,
+                           minimal_config, write_record)
 from tests.test_cleanup_lib import mline
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -140,21 +140,24 @@ class Base(GitIsolatedTestCase):
         self.n = getattr(self, "n", 0) + 1
         self.work = os.path.join(self.tmp, "w%d" % self.n)
         os.mkdir(self.work)
-        root = make_repo(self.work, cfg)
-        c = config.load(root)
-        for r in decs:
-            write_record(root, "%s/%s.yml" % (c["paths"]["decisions"], r["id"]), r)
-        for r in fins:
-            write_record(root, "%s/%s.yml" % (c["paths"]["findings"], r["id"]), r)
-        for rel, data in (files or {}).items():
-            self.put(rel, data)
-        if commit:
-            commit_all(root, "fixture")
+
+        def make(root):  # built once per process and copied (row F11: no test here reads dates, the reflog or mtimes)
+            make_repo(root, cfg)
+            c = config.load(root)
+            for r in decs:
+                write_record(root, "%s/%s.yml" % (c["paths"]["decisions"], r["id"]), r)
+            for r in fins:
+                write_record(root, "%s/%s.yml" % (c["paths"]["findings"], r["id"]), r)
+            for rel, data in (files or {}).items():
+                self.put(rel, data, root)
+            if commit:
+                commit_all(root, "fixture")
+        root, _ = cached_history(("test_index.build", repr((decs, fins, files, cfg, commit))), self.work, make)
         self.cfg = config.load(root)
         return root
 
-    def put(self, rel, data):
-        path = os.path.join(self.work, rel)
+    def put(self, rel, data, root=None):
+        path = os.path.join(root or self.work, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as fh:
             fh.write(data if isinstance(data, bytes) else data.encode("utf-8"))
