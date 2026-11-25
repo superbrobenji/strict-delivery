@@ -14,7 +14,10 @@ import re
 import stat
 import subprocess
 import sys
+import threading
+import time
 import unittest
+from unittest import mock
 
 from tests import ci_mutants
 from tests import test_self_adoption as sa
@@ -488,6 +491,189 @@ class PathTest(Fx):
         self.assertEqual(self.read("src/raw.py"), body)
 
 
+class SwapAfterCheckTest(Fx):
+    """T5 hardening row "a parent component is a symlink or is swapped after the check", one test per member of the class:
+    the O_NONBLOCK flag, the O_NOFOLLOW flag, the fstat regular-file check, the write-open before the run, the write-open
+    of the restore, and the parent components. The path of the one id is checked as a tracked regular file; then it is
+    swapped (after the check, hidden from ``git status``) at one of three moments: AFTER_CHECK (while the baseline runs, before
+    the file is read), BEFORE_WRITE (after the read, before the mutated bytes are written: the hook is count_problem) and
+    BEFORE_RESTORE (during the mutated run, before the restore writes the bytes back). Every swap target lives in this
+    test's own temporary directory (self.tmp, a sibling of the repository), never in a shared directory."""
+
+    TARGET = "src/a.py"
+    OUTSIDE_BODY = b"OUTSIDE a + b\n"
+    ALL = ("symlink-inside", "symlink-outside", "directory", "fifo", "fifo-with-reader", "parent-inside", "parent-outside")
+    MOMENTS = ("after-check", "before-write", "before-restore")
+    SWAP_AT_CALL = {"after-check": 1, "before-restore": 3}  # the 1st execute call is a baseline run, the 3rd the mutated run
+
+    def setUp(self):
+        super().setUp()
+        self.fds = []
+        self.addCleanup(lambda: [os.close(fd) for fd in self.fds])
+
+    def prepare(self):
+        self.repo({TABLE: table({"i1": (self.TARGET, "a + b", "a - b")}, {"i1": ("tests.test_a",)})})
+        self.outside = os.path.join(self.tmp, "outside%d" % next(COUNTER))
+        os.mkdir(self.outside)
+        self.outside_file = os.path.join(self.outside, "a.py")
+        with open(self.outside_file, "wb") as fh:
+            fh.write(self.OUTSIDE_BODY)
+        os.utime(self.outside_file, ns=(10 ** 18, 10 ** 18))  # an old mtime: any write to the file changes it
+        self.outside_before = (self.OUTSIDE_BODY, os.stat(self.outside_file).st_mtime_ns)
+        with open(os.path.join(self.root, ".git", "info", "exclude"), "a", encoding="utf-8") as fh:
+            fh.write("src/a.aside\nsrcreal\n/src\n")
+        for rel in ("src/__init__.py", "src/a.py", "src/b.py"):
+            git(self.root, "update-index", "--skip-worktree", rel)
+        self.assertEqual(self.status(), "")
+
+    def swap(self, kind):
+        path = os.path.join(self.root, self.TARGET)
+        if kind.startswith("parent"):
+            os.rename(os.path.join(self.root, "src"), os.path.join(self.root, "srcreal"))
+            os.symlink("srcreal" if kind == "parent-inside" else self.outside, os.path.join(self.root, "src"))
+            return
+        os.rename(path, os.path.join(self.root, "src/a.aside"))
+        if kind == "symlink-inside":
+            os.symlink("b.py", path)  # another tracked file of the repository
+        elif kind == "symlink-outside":
+            os.symlink(self.outside_file, path)
+        elif kind == "directory":
+            os.mkdir(path)
+        else:
+            os.mkfifo(path)
+            if kind == "fifo-with-reader":  # a FIFO that a non-blocking write open can reach
+                self.fds.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
+
+    def attempt(self, moment, kind):
+        """One run through main() with the swap at ``moment``; (code, out, execute calls). A run that blocks (on a FIFO)
+        fails the test after it is released."""
+        self.prepare()
+        lock, calls, result = threading.Lock(), [], {}
+
+        def execute(py, mods, root, timeout):
+            with lock:
+                calls.append(py)
+                if len(calls) == self.SWAP_AT_CALL.get(moment):
+                    self.swap(kind)
+            return PASS
+        real_count = ci_mutants.count_problem
+
+        def count_then_swap(data, old):
+            if moment == "before-write":
+                self.swap(kind)
+            return real_count(data, old)
+
+        def work():
+            result["r"] = self.call(self.argv(), execute=execute)
+        with mock.patch.object(ci_mutants, "count_problem", count_then_swap):
+            thread = threading.Thread(target=work, daemon=True)
+            thread.start()
+            thread.join(30)
+            if thread.is_alive():  # blocked in an open of the FIFO: release it, then fail
+                path = os.path.join(self.root, self.TARGET)
+                for _ in range(100):
+                    for flag in (os.O_WRONLY, os.O_RDONLY):
+                        try:
+                            self.fds.append(os.open(path, flag | os.O_NONBLOCK))
+                        except OSError:
+                            pass
+                    thread.join(0.1)
+                    if not thread.is_alive():
+                        break
+                self.fail("the run blocked on %s swapped in at %s" % (kind, moment))
+        code, out, err = result["r"]
+        return code, out, calls
+
+    def check(self, moment, kind):
+        code, out, calls = self.attempt(moment, kind)
+        self.assertEqual((code, verdicts(out)), (1, {"i1": "ERROR"}), (moment, kind, out))
+        line = lines_of(out)["i1"][1]
+        refused = r" \| path 'src/a\.py' changed after the check"
+        if moment == "after-check":
+            self.assertRegex(line, "^" + refused, (moment, kind, line))
+            self.assertEqual(len(calls), 2, (moment, kind))  # the baseline only: the id never ran
+        elif moment == "before-write":
+            self.assertRegex(line, refused + r".*the file src/a\.py was not restored", (moment, kind, line))
+            self.assertEqual(len(calls), 2, (moment, kind))
+        else:
+            self.assertRegex(line, r" \| the file src/a\.py was not restored: path 'src/a\.py' changed after the check",
+                             (moment, kind, line))
+            self.assertEqual(len(calls), 4, (moment, kind))
+        with open(self.outside_file, "rb") as fh:  # nothing was written outside the root, through any link
+            body = fh.read()
+        self.assertEqual((body, os.stat(self.outside_file).st_mtime_ns), self.outside_before, (moment, kind))
+        real = "srcreal" if kind.startswith("parent") else "src"  # where the real directory is now
+        self.assertEqual(self.read(real + "/b.py"), BASE_FILES["src/b.py"].encode(), (moment, kind))  # nor to another file
+        if moment != "before-restore":  # the original file was never touched
+            original = "srcreal/a.py" if kind.startswith("parent") else "src/a.aside"
+            self.assertEqual(self.read(original), BASE_FILES["src/a.py"].encode(), (moment, kind))
+
+    def each(self, moments, kinds):
+        for moment, kind in itertools.product(moments, kinds):
+            with self.subTest(moment=moment, kind=kind):
+                self.check(moment, kind)
+
+    def test_o_nonblock_a_fifo_swapped_in_never_blocks_the_open(self):  # T5 swapped after the check: O_NONBLOCK
+        self.each(self.MOMENTS, ("fifo", "fifo-with-reader"))
+
+    def test_o_nofollow_a_symlink_swapped_in_is_never_followed(self):  # T5 swapped after the check: O_NOFOLLOW
+        self.each(self.MOMENTS, ("symlink-inside", "symlink-outside"))
+
+    def test_the_regular_file_check_on_the_opened_file(self):  # T5 swapped after the check: fstat S_ISREG
+        self.each(("after-check",), ("directory", "fifo", "fifo-with-reader"))
+        self.each(("before-write", "before-restore"), ("fifo", "fifo-with-reader"))
+
+    def test_the_write_open_before_the_run_never_follows_a_swap(self):  # T5 swapped after the check: the mutated write
+        self.each(("before-write",), self.ALL)
+
+    def test_the_write_open_of_the_restore_never_follows_a_swap(self):  # T5 swapped after the check: the restore write
+        self.each(("before-restore",), self.ALL)
+
+    def test_a_parent_directory_swapped_for_a_symlink_is_never_followed(self):  # T5 swapped after the check: parents
+        self.each(self.MOMENTS, ("parent-inside", "parent-outside"))
+
+    def test_a_restore_that_does_not_read_back_the_bytes_is_an_error_and_stops_the_job(self):  # T10 restore
+        class Lying:
+            """The file of the restore, whose write is replaced."""
+            def __init__(self, fh, write):
+                self.fh, self.lie = fh, write
+
+            def write(self, data):
+                return self.lie(data)
+
+            def __getattr__(self, name):
+                return getattr(self.fh, name)
+
+            def __enter__(self):
+                self.fh.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self.fh.__exit__(*exc)
+
+        def full_disk(data):
+            raise OSError(28, "No space left on device")
+        real = ci_mutants.open_target
+        for label, lie, needle in (("dropped", lambda data: len(data), "the bytes read back differ"),
+                                   ("failed", full_disk, "OSError: .*No space left")):
+            with self.subTest(label):
+                writes = []
+
+                def patched(root, rel, write):
+                    fh = real(root, rel, write)
+                    if write:
+                        writes.append(rel)
+                        if len(writes) == 2:  # the second write open of the run is the restore of the first id
+                            return Lying(fh, lie)
+                    return fh
+                self.repo({TABLE: SIMPLE})
+                with mock.patch.object(ci_mutants, "open_target", patched):
+                    code, out, err, fake = self.go()
+                self.assertEqual((code, verdicts(out)), (1, {"i1": "ERROR", "i2": "ERROR"}), out)
+                self.assertRegex(lines_of(out)["i1"][1], r"the file src/a\.py was not restored: " + needle)
+                self.assertRegex(lines_of(out)["i2"][1], r"not run: the file of i1 was not restored")
+                self.assertEqual(len(fake.mutated_calls()), 2)  # i1's two runs only: i2 never ran
+
 COUNTER = itertools.count(1)
 
 
@@ -517,8 +703,8 @@ class PairMatrixTest(Fx):
             return path.upper()
         raise AssertionError(relation)
 
-    def cells(self):
-        for (kind, path), relation in itertools.product(sorted(self.PROTECTED.items()),
+    def cells(self, protected=None):
+        for (kind, path), relation in itertools.product(sorted((protected or self.PROTECTED).items()),
                                                          ("equal", "below", "above", "case-folded")):
             yield "%s-%s" % (kind, relation), kind, relation, self.relate(path, relation)
 
@@ -563,6 +749,62 @@ class PairMatrixTest(Fx):
         code, out, err, fake = self.go()
         self.assertEqual(verdicts(out), {"i1": "ERROR", "i2": "SURVIVED"}, out)
         self.assertIn("protected", lines_of(out)["i1"][1])
+
+    def cross_product_in_parts(self, parts, targets_first):
+        """The same cross product on a run split in ``parts`` jobs: the ids that mutate a protected path (targets) are in
+        one part, the ids that protect it (their table, their killing module) in another part, through main() per part."""
+        first, second = ".strict-delivery/mutants/CI8.py", TABLE  # the sorted tables: ids of ``first`` come first
+        target_table, other_table = (first, second) if targets_first else (second, first)
+        paths = dict(self.PROTECTED, **{"table-itself": target_table, "other-table": other_table})
+        m_t, k_t, expect = {}, {}, {}
+        for n, (label, kind, relation, path) in enumerate(self.cells(paths)):
+            m_t["t%02d" % n] = (path, "a + b", "a - b")
+            k_t["t%02d" % n] = ("tests.test_b",)  # tests/test_a.py is no killing module of any target, only of the protectors
+            expect["t%02d" % n] = (label, path)
+        size = len(m_t) + 2
+        controls = {"t%02d" % len(m_t): ("src/a.py", "a + b", "a - b"),  # allowed cells: an ordinary source file
+                    "t%02d" % (len(m_t) + 1): ("tests/test_c.py", "assertTrue(True)", "assertTrue(False)")}  # no killer here
+        m_t.update(controls)
+        k_t.update({ident: ("tests.test_b",) for ident in controls})
+        self.assertEqual(len(m_t), size)
+        harmless = ("src/b.py", "'two'", "'three'")
+        protectors = {"q%02d" % n: harmless for n in range(size)}  # their killing module tests.test_a is the protected path
+        fillers = {"f%02d" % n: harmless for n in range(size)}
+        table_first = m_t if targets_first else protectors
+        table_second = dict(fillers if parts == 3 else {}, **(protectors if targets_first else m_t))
+        kills = dict(k_t, **{ident: ("tests.test_a",) for ident in protectors}, **{ident: ("tests.test_b",) for ident in fillers})
+        self.repo({first: table(table_first, {i: kills[i] for i in table_first}),
+                   second: table(table_second, {i: kills[i] for i in table_second})})
+        order = (["targets"] + ["fillers"] * (parts == 3) + ["protectors"]) if targets_first \
+            else (["protectors"] + ["fillers"] * (parts == 3) + ["targets"])
+        groups = {"targets": set(m_t), "protectors": set(protectors), "fillers": set(fillers)}
+        protected_files = ["tests/test_a.py", "tests/ci_mutants.py", "tests/test_ci_mutants.py",
+                           ".github/workflows/strict-delivery.yml", first, second]
+        watch = ["src/a.py", "src/b.py", "tests/test_c.py"] + protected_files
+        for k, name in enumerate(order, 1):
+            fake = Fake(self.root, watch=watch)
+            code, out, err = self.call(self.argv(part=k, parts=parts), execute=fake)
+            got = verdicts(out)
+            self.assertEqual(set(got), groups[name], (parts, k, name, out))  # the layout: this part holds exactly this group
+            if name == "targets":
+                self.assertEqual(code, 1, out)
+                for ident, (label, path) in expect.items():
+                    self.assertEqual(got[ident], "ERROR", (parts, label, path, lines_of(out)[ident]))
+                    if label.endswith(("-equal", "-case-folded")):
+                        self.assertIn("protected", lines_of(out)[ident][1], (parts, label))
+                for ident in controls:
+                    self.assertEqual(got[ident], "SURVIVED", (parts, ident, out))
+            else:
+                self.assertEqual((code, set(got.values())), (0, {"SURVIVED"}), (parts, k, name, out))
+            for call in fake.calls:  # the invariant of every refused cell: no protected file was ever altered
+                for rel in protected_files:
+                    self.assertEqual(call[2][rel], fake.pristine[rel], (parts, k, rel))
+            self.assertEqual(self.status(), "")
+
+    def test_the_cross_product_holds_on_a_run_split_in_parts(self):  # T6, multi-part
+        for parts, targets_first in itertools.product((2, 3), (True, False)):
+            with self.subTest(parts=parts, targets_first=targets_first):
+                self.cross_product_in_parts(parts, targets_first)
 
 
 # ---- T7: replacement ----------------------------------------------------------------------------------------------

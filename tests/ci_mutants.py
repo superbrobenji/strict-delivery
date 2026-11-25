@@ -38,7 +38,6 @@ id). Exit 2: refused arguments (nothing is run). ``main(argv, root=..., execute=
 ``execute(python_path, modules, root, timeout)`` returns ``(exit code, text, timed out)`` for one test run. POSIX only.
 """
 import ast
-import hashlib
 import os
 import re
 import secrets
@@ -513,32 +512,76 @@ def count_problem(data, old):
     return first, ""
 
 
+class Unsafe(Exception):
+    """The path no longer opens as the tracked regular file it was checked to be: a link or another file type was swapped
+    in after the check. The message is the finished ``path ... changed after the check (...)`` text."""
+
+
+def open_target(root, rel, write):
+    """The open file (``rb``, or ``r+b`` truncated when ``write``) of the checked path ``rel`` below ``root``.
+
+    Nothing is followed and nothing blocks: every parent is opened as a directory with O_NOFOLLOW (one step at a time, from
+    the root), the last component with O_NOFOLLOW and O_NONBLOCK, and the opened file must be a regular file (fstat);
+    otherwise Unsafe (the path was swapped for a symbolic link, a directory or a FIFO after the check)."""
+    flags = (os.O_RDWR | os.O_TRUNC if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    parts = rel.split("/")
+    try:
+        dfd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            for part in parts[:-1]:
+                nfd = os.open(part, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=dfd)
+                os.close(dfd)
+                dfd = nfd
+            fd = os.open(parts[-1], flags, dir_fd=dfd)
+        finally:
+            os.close(dfd)
+    except OSError as err:
+        raise Unsafe("path %s changed after the check (cannot be opened as a regular file: %s)"
+                     % (show(rel), err.strerror or type(err).__name__))
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise Unsafe("path %s changed after the check (it is not a regular file)" % show(rel))
+    return os.fdopen(fd, "r+b" if write else "rb")
+
+
+def restore(root, rel, data):
+    """'' when the file holds ``data`` again (written and read back through one open), else why it does not."""
+    try:
+        with open_target(root, rel, True) as fh:
+            fh.write(data)
+            fh.flush()
+            fh.seek(0)
+            back = fh.read()
+    except Unsafe as err:
+        return str(err)
+    except OSError as err:
+        return "%s: %s" % (type(err).__name__, clean(str(err)))
+    return "" if back == data else "the bytes read back differ"
+
+
 def one_row(root, row, pythons, timeout, execute):
     """The finished line of one id whose path and baseline are fine, and whether the tree is still clean."""
-    target = os.path.join(root, *row.path.split("/"))
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(target, flags)
-    with os.fdopen(fd, "rb") as fh:
-        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
-            return "%s: ERROR | path %s is not a regular file" % (row.id, show(row.path)), True
-        data = fh.read()
+    try:
+        with open_target(root, row.path, False) as fh:
+            data = fh.read()
+    except Unsafe as err:
+        return "%s: ERROR | %s" % (row.id, err), True
     first, problem = count_problem(data, row.old)
     if first < 0:
         return "%s: NOT_APPLIED | %s of old in %s" % (row.id, problem, row.path), True
-    digest = hashlib.sha256(data).hexdigest()
+    line, problem = "", ""
     try:
-        with open(target, "wb") as fh:
+        with open_target(root, row.path, True) as fh:
             fh.write(data[:first] + row.new + data[first + len(row.old):])
         results = run_pair(execute, pythons, list(row.modules), root, timeout)
     except Exception as err:  # noqa: BLE001 - one ERROR line; the file is restored below
-        line = "%s: ERROR | %s: %s" % (row.id, type(err).__name__, clean(str(err)))
+        line = "%s: ERROR | %s" % (row.id, err if isinstance(err, Unsafe) else "%s: %s" % (type(err).__name__, clean(str(err))))
         results = None
     finally:
-        with open(target, "wb") as fh:
-            fh.write(data)
-    with open(target, "rb") as fh:
-        if hashlib.sha256(fh.read()).hexdigest() != digest:
-            return "%s: ERROR | the file %s was not restored byte for byte" % (row.id, row.path), False
+        problem = restore(root, row.path, data)
+    if problem:
+        head = line + "; " if line else "%s: ERROR | " % row.id
+        return "%sthe file %s was not restored: %s" % (head, row.path, problem), False
     if results is None:
         return line, True
     if any(r.timed_out for r in results):
