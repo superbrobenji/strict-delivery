@@ -119,3 +119,14 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Foreign checkouts: each dispatch names the agent's worktree; the Bash hook refuses state-changing git commands (merge, checkout, commit, reset, stash, branch) aimed at any other checkout, by cd, `git -C` or the working directory.
 - Finding states by role: `findings` commands check the caller's role from its dispatch (implementers cannot close or pin their own findings; only reviewers record findings; only controllers repoint owner.task); the role table lives in the base playbook.
 - Every refusal names rule and alternative and is counted in time-use; an owner override decision can lift one refusal.
+
+### V2-28 Playbook methods gated (2026-11-26)
+
+- Owner: "all of them, gate every one".
+- Table rows name real tests: every test a coverage table names must exist (test defs, both interpreters' discovery).
+- No weakened assertion in a fix: a fix commit that deletes an assertion or replaces it with a weaker one fails unless the change is recorded and approved (a decision or the review's explicit acceptance).
+- Pinned behaviour has its mutation transcript: covered by V2-08.
+- Commit messages: a commit-msg hook checks the conventional type, a task or finding id, and the attribution line.
+- Cross-stream test-literal edits stay exact unions: a merge with a test-literal conflict keeps every line of both sides.
+- Reports carry their required sections (status, claims, findings, budget): the report schema is checked at commit.
+- Tests call the production path: stays a reviewer judgment, plus a warning when a test imports a private helper of the code under test.
