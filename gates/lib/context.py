@@ -226,9 +226,30 @@ def load(root: str, cfg: dict) -> dict:
     if not os.path.lexists(path):
         raise GateError("%s: missing; run /strict-delivery:init" % rel)
     try:
-        data = yamlsub.load(path, rel)
+        raw = yamlsub._read_regular_file(path, rel)
     except yamlsub.YamlError as e:
         raise GateError("%s: %s" % (rel, "%s (line %d)" % (e.reason, e.line) if e.line else e.reason)) from None
+    return load_text(raw, rel, cfg)
+
+
+def load_text(text: bytes, rel: str, cfg: dict) -> dict:
+    """Validate the already-read bytes ``text`` of the context file named ``rel`` exactly as ``load`` validates the
+    bytes it reads (one leading BOM stripped, CRLF normalised, UTF-8, ``yamlsub.parse``, the ``context/1`` schema,
+    ``context_errors``); the row, or a ``GateError`` listing every problem. A YAML error keeps today's doubled prefix
+    ``<rel>: <rel>: <reason>``. ``text`` must be exactly ``bytes`` and ``rel`` exactly ``str`` (``TypeError``)."""
+    if type(text) is not bytes:
+        raise TypeError("text must be bytes, got %s" % type(text).__name__)
+    if type(rel) is not str:
+        raise TypeError("rel must be str, got %s" % type(rel).__name__)
+    try:
+        body = yamlsub._file_text(text)
+    except UnicodeDecodeError:
+        raise GateError("%s: %s: not valid UTF-8" % (rel, rel)) from None
+    try:
+        data = yamlsub.parse(body)
+    except yamlsub.YamlError as e:
+        reason = "%s: %s" % (rel, e.reason)
+        raise GateError("%s: %s" % (rel, "%s (line %d)" % (reason, e.line) if e.line else reason)) from None
     try:
         sch = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "context.yml"))
     except schema.SchemaError as e:

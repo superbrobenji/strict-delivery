@@ -196,7 +196,7 @@ class Enforced(Base):
         names = sorted(n for n in dir(context) if not n.startswith("_") and callable(getattr(context, n))
                        and getattr(getattr(context, n), "__module__", "") == "gates.lib.context")
         self.assertEqual(names, sorted([
-            "absolute", "context_errors", "enforced", "handoff_reads", "kind_of", "load", "needs", "parse_lines",
+            "absolute", "context_errors", "enforced", "handoff_reads", "kind_of", "load", "load_text", "needs", "parse_lines",
             "required", "resolve", "split", "values_for"]))
 
 
