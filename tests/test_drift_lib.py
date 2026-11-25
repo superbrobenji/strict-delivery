@@ -1154,6 +1154,35 @@ class Fresh(GitIsolatedTestCase):
             wt = os.path.join(self.tmp, "od aࡰb")
             git(root, "worktree", "add", "-q", wt, "main")
             self.verdict(root, [("base", self.cmd(wt))])
+        with self.subTest("bare-main-linked"):
+            # W8: the main entry is a bare repository (field `bare`, no branch); a linked worktree has main
+            root = self.wcase("bl")
+            wt = os.path.join(self.tmp, "bl-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            git(root, "config", "core.bare", "true")
+            self.assertIn("bare", git(wt, "worktree", "list", "--porcelain").split())
+            self.verdict(wt, [("base", self.cmd(wt))])
+        with self.subTest("bare-main-none"):
+            # W8: a bare main entry, and no entry has main
+            root = self.wcase("bn")
+            wt = os.path.join(self.tmp, "bn-wt")
+            git(root, "worktree", "add", "-q", "--detach", wt)
+            git(root, "config", "core.bare", "true")
+            self.assertIn("bare", git(wt, "worktree", "list", "--porcelain").split())
+            self.verdict(wt, [("base", self.NOCO)])
+        with self.subTest("detached"):
+            # W9: the entry that had main is detached now: it has no branch field
+            root = self.wcase("de")
+            wt = os.path.join(self.tmp, "de-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            git(wt, "checkout", "-q", "--detach")
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("newline-path"):
+            # W10: the path as git lists it, raw
+            root = self.wcase("nl")
+            wt = os.path.join(self.tmp, "nl-wt\nx")
+            git(root, "worktree", "add", "-q", wt, "main")
+            self.verdict(root, [("base", self.cmd(wt))])
         with self.subTest("list-fails"):
             root = self.wcase("lf")
             real = gitinfo._run
