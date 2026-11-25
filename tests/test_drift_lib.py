@@ -1498,15 +1498,26 @@ class Arguments(unittest.TestCase):
         drift.stream_errors(G["root"], cfg, prog, r, st)
         self.assertEqual((prog, r, st, cfg), before)
 
+    @staticmethod
+    def probe():
+        """The writes-nothing probe: status, HEAD and the index mtime. Its own ``git status`` runs with optional locks
+        off, so it never rewrites a racily clean ``.git/index`` itself (F-20261125-tphg)."""
+        return (git(G["root"], "status", "--porcelain", "--untracked-files=all", env={"GIT_OPTIONAL_LOCKS": "0"}),
+                git(G["root"], "rev-parse", "HEAD"), os.stat(os.path.join(G["root"], ".git", "index")).st_mtime_ns)
+
     def test_stream_errors_writes_nothing(self):
-        "R6"
-        before = (git(G["root"], "status", "--porcelain", "--untracked-files=all"), git(G["root"], "rev-parse", "HEAD"),
-                  os.stat(os.path.join(G["root"], ".git", "index")).st_mtime_ns)
+        "R6 (M1, M2)"
+        before = self.probe()
         se(row("i"), stream("i"))
         se(row("c", "merged"), stream("c"))
-        after = (git(G["root"], "status", "--porcelain", "--untracked-files=all"), git(G["root"], "rev-parse", "HEAD"),
-                 os.stat(os.path.join(G["root"], ".git", "index")).st_mtime_ns)
+        after = self.probe()
         self.assertEqual(before, after)
+
+    def test_status_probe_writes_nothing(self):
+        "M3: the probe pair alone, with no stream_errors call between, leaves the index mtime unchanged, 50 times"
+        first = self.probe()
+        for _ in range(50):
+            self.assertEqual(self.probe(), first)
 
     def test_no_resources_left(self):
         "R8: judged on a private temp directory (in-process tempfile and child processes via TMPDIR), never the shared system one"
