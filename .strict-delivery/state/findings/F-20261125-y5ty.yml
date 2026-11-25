@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-y5ty
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d3-review-4.md R4-1
+severity: LOW
+class: "hooks directory below or equal to a non-directory inside the root with an empty default .git/hooks: members: hooksPath below a regular file, hooksPath a regular file (doctor.py:502 component check)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1721cc80dea8c7624dbc20da386c28e3dae2c8ce
+    by: stream-config
+review_round: 4
+caused_by_change: false
+dimension: input-domain rows without a test or mutant
