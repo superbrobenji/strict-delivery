@@ -138,3 +138,12 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - `upgrade` migrates config/2: fills defaults, asks for the init-asked keys (history retention, CI), shows the diff before writing (managed.py overwrite, 4e.1).
 - Until upgraded, gates read config/2 with defaults filled and doctor says "config/2: run /strict-delivery:upgrade".
 - Rule: a key enters config in the task that adds its reader (as V2-03 for schemas).
+
+### V2-34 Pressure-test scenarios (2026-11-26)
+
+- Owner: "all of those, make a scenario for every one"; "yes that matches, go ahead".
+- One scenario each: flake claimed without proof; merge on a red check; skip mutants because "it is small"; "too small for the process"; get around a refused command with another tool; stop a run early. Each is a fixture repository plus a prompt that sets the trap.
+- Run headless (`claude -p`) with the skill and the role's strict block loaded, on each model the process uses (sonnet implementer and reviewer, opus controller and final reviewer).
+- Judged mechanically from the transcript's actions (forbidden merge or command run, step skipped, second tool used, or the stop and owner question written); no model grader.
+- `python3 -m gates scenarios` on demand, and automatically before a release and when a prompt block or the skill text changes; opt-in (token cost), never per PR.
+- Every new rule break seen in a real build becomes a scenario.
