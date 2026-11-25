@@ -3340,5 +3340,266 @@ class TestReview3(More):
                 self.assertEqual(snapshot(self.root), before, (key, sub))
 
 
+# --- Fix round 5 (owner answer Q-RC14-1 (a)): the H5 pair matrix, written by hand ------------------------------------
+# Rows: every configured key init reads as a path. Columns: every path init plans on the matrix layouts (the files,
+# every directory it creates, the hooks directory and both hook files with the hooks missing, installed, or with no
+# hooks directory, each state directory, paths.state, paths.context), each with its layout and the ci answer. The
+# plan-side completeness check is test_matrix_columns_hold_every_planned_path.
+MATRIX_ROWS = ("context", "decisions", "findings", "claims", "plan_state", "programs", "playbooks", "state")
+MATRIX_DEFAULT_CTX = ".strict-delivery/context.yml"
+MATRIX_HOOKS = ".git/hooks"
+MATRIX_CI = ".github/workflows/strict-delivery.yml"
+MATRIX_COLUMNS = (
+    (".strict-delivery/config.yml", "missing", False), ("CLAUDE.md", "missing", False),
+    (".gitignore", "missing", False), (".claude/settings.json", "missing", False), (".claude", "missing", False),
+    (".github/workflows/strict-delivery.yml", "missing", True), (".github/workflows", "missing", True),
+    (".github", "missing", True),
+    (".git/hooks/pre-commit", "missing", False), (".git/hooks/pre-push", "missing", False),
+    (".git/hooks", "missing", False),
+    (".git/hooks/pre-commit", "installed", False), (".git/hooks/pre-push", "installed", False),
+    (".git/hooks", "installed", False),
+    (".git/hooks/pre-commit", "nodir", False), (".git/hooks/pre-push", "nodir", False),
+    (".git/hooks", "nodir", False),
+    (".strict-delivery/state/decisions", "missing", False), (".strict-delivery/state/findings", "missing", False),
+    (".strict-delivery/state/claims", "missing", False), (".strict-delivery/state/plans", "missing", False),
+    (".strict-delivery/state/programs", "missing", False), (".strict-delivery/playbooks", "missing", False),
+    (".strict-delivery/state", "missing", False), (".strict-delivery/context.yml", "missing", False),
+    (".strict-delivery", "missing", False),
+)
+# The files a plan of each layout writes (besides paths.context and the CI workflow), and the directories it makes.
+MATRIX_FILES = {
+    "missing": ["CLAUDE.md", ".gitignore", ".claude/settings.json", ".git/hooks/pre-commit", ".git/hooks/pre-push"],
+    "installed": ["CLAUDE.md", ".gitignore", ".claude/settings.json"],
+    "nodir": ["CLAUDE.md", ".gitignore", ".claude/settings.json", ".git/hooks/pre-commit", ".git/hooks/pre-push"],
+}
+MATRIX_DIRS = [".strict-delivery/state", ".strict-delivery/state/decisions", ".strict-delivery/state/findings",
+               ".strict-delivery/state/claims", ".strict-delivery/state/plans", ".strict-delivery/state/programs",
+               ".strict-delivery/playbooks"]
+_MATRIX_UP = str.maketrans("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")  # Note H-1's map, reversed
+
+
+def matrix_cells():
+    """``{(row, value, layout, ci): [(column, relation, fold), ...]}``: rows x columns x (equal, below, above: each
+    proper ancestor of the column) x (exact, upper case); cells that configure the same value share one run."""
+    out = {}
+    for row in MATRIX_ROWS:
+        for col, layout, ci in MATRIX_COLUMNS:
+            parts = col.split("/")
+            rel = [("equal", col), ("below", col + "/x")]
+            rel += [("above", "/".join(parts[:i])) for i in range(1, len(parts))]
+            for relation, value in rel:
+                for fold in ("exact", "upper"):
+                    v = value if fold == "exact" else value.translate(_MATRIX_UP)
+                    out.setdefault((row, v, layout, ci), []).append((col, relation, fold))
+    return out
+
+
+def plan_paths(out, root):
+    """``(files, dirs)`` a plan prints: ``{path: content}`` of each ``+++ b/`` diff (every planned file is new on the
+    matrix layouts, so its content is the ``+`` lines) and of each ``hook`` line (content None), and the ``mkdir``
+    paths."""
+    files, dirs, cur = {}, [], None
+    for line in out.splitlines():
+        if line.startswith("+++ b/"):
+            cur = line[6:]
+            files[cur] = ""
+        elif cur is not None and line.startswith("+"):
+            files[cur] += line[1:] + "\n"
+        elif cur is not None and line.startswith("@@"):
+            continue
+        else:
+            cur = None
+            if line.startswith("mkdir "):
+                dirs.append(line[6:-1])
+            elif line.startswith("hook "):
+                files[os.path.relpath(line[5:], root)] = None
+    return files, dirs
+
+
+class TestPairMatrix(More):
+    """Fix round 5 (F-20261125-jmqe, -fqg3, -38fh, -5bb3; owner answer Q-RC14-1 (a)): every cell of the H5 pair matrix
+    holds the invariant: plan exit 0 implies apply exit 0 with every planned file written with its planned content and
+    every planned directory made; plan exit not 0 implies apply exit not 0 and a byte-identical tree. Mutant ids:
+    ch/4d1-mutants-8-table.py (t8-*)."""
+
+    def layouts(self):
+        fw = self.make_fw("tagged", version="0.1.0")
+        out = {}
+        for layout in ("missing", "installed", "nodir"):
+            t = os.path.join(self.tmp, "layout-" + layout)
+            os.mkdir(t)
+            helpers.make_repo(t, {"schema": "config/2", "framework_version": "0.0.0", "profile": "standard",
+                                  "commands": answers()["commands"]})
+            os.makedirs(os.path.join(t, MATRIX_HOOKS), exist_ok=True)
+            if layout == "installed":
+                for n in ("pre-commit", "pre-push"):
+                    githooks._write(os.path.join(t, MATRIX_HOOKS, n), githooks.shim(n, githooks.framework_dir()))
+            elif layout == "nodir":
+                os.rename(os.path.join(t, MATRIX_HOOKS), os.path.join(t, ".git", "hooks.old"))
+            out[layout] = t
+        ans = {}
+        for ci in (False, True):
+            ans[ci] = os.path.join(self.tmp, "answers-%s.yml" % ci)
+            with open(ans[ci], "w", encoding="utf-8") as fh:
+                fh.write(yamlsub.emit(answers(ci=ci)))
+        return fw, out, ans
+
+    def matrix_main(self, fw, ans, sub, root, ci):
+        with mock.patch.object(plugin, "framework_dir", return_value=fw), \
+                mock.patch.object(init.gitinfo, "head_sha", side_effect=init.GitNotFound("no git")):
+            return self.run_init(sub, "--root", root, "--answers", ans[ci])[:2]
+
+    def test_matrix_columns_hold_every_planned_path(self):  # completeness: a planned path outside the columns fails
+        fw, lay, ans = self.layouts()
+        cols = set()
+        for col, _layout, _ci in MATRIX_COLUMNS:
+            parts = col.split("/")
+            cols.update("/".join(parts[:i]) for i in range(1, len(parts) + 1))
+        for layout, tmpl in sorted(lay.items()):
+            for ci in (False, True):
+                root = os.path.join(self.tmp, "c-%s-%s" % (layout, ci))
+                shutil.copytree(tmpl, root, symlinks=True)
+                code, out = self.matrix_main(fw, ans, "plan", root, ci)
+                files, dirs = plan_paths(out, root)
+                want = MATRIX_FILES[layout] + [MATRIX_DEFAULT_CTX] + ([MATRIX_CI] if ci else [])
+                self.assertEqual((code, sorted(files), dirs), (0, sorted(want), MATRIX_DIRS), (layout, ci, out))
+                for p in list(files) + dirs:
+                    parts = p.split("/")
+                    self.assertEqual(["/".join(parts[:i]) for i in range(1, len(parts) + 1)
+                                      if "/".join(parts[:i]) not in cols], [], (layout, ci, p))
+
+    def test_pair_matrix(self):  # H5, every cell; the red cells on 118ccec are listed in ch/4d1-fix-5.md
+        fw, lay, ans = self.layouts()
+        cells = matrix_cells()
+        self.assertEqual((sum(len(v) for v in cells.values()), len(cells)), (1360, 880))
+        shim = {n: githooks.shim(n, githooks.framework_dir()) for n in ("pre-commit", "pre-push")}
+        for i, ((row, value, layout, ci), labels) in enumerate(sorted(cells.items())):
+            with self.subTest(row=row, value=value, layout=layout, ci=ci, cells=len(labels)):
+                root = os.path.join(self.tmp, "m%d" % i)
+                shutil.copytree(lay[layout], root, symlinks=True)
+                helpers.write_record(root, ".strict-delivery/config.yml", {
+                    "schema": "config/2", "framework_version": "0.0.0", "profile": "standard",
+                    "commands": answers()["commands"], "paths": {row: value}})
+                before = snapshot(root)
+                pcode, pout = self.matrix_main(fw, ans, "plan", root, ci)
+                acode, aout = self.matrix_main(fw, ans, "apply", root, ci)
+                if pcode != 0:
+                    self.assertNotEqual(acode, 0, (pout, aout))
+                    self.assertEqual(snapshot(root), before, aout)
+                    continue
+                self.assertEqual(acode, 0, (pout, aout))
+                files, dirs = plan_paths(pout, root)
+                ctx = value if row == "context" else MATRIX_DEFAULT_CTX
+                want = MATRIX_FILES[layout] + [ctx] + ([MATRIX_CI] if ci else [])
+                self.assertEqual(sorted(files), sorted(want), pout)
+                for p, text in files.items():
+                    path = os.path.join(root, p)
+                    self.assertFalse(os.path.islink(path), p)
+                    with open(path, "rb") as fh:
+                        got = fh.read()
+                    self.assertEqual(got, shim[os.path.basename(p)] if text is None else text.encode("utf-8"), p)
+                self.assertEqual(files[ctx], CONTEXT_YML)
+                for d in dirs:
+                    path = os.path.join(root, d)
+                    self.assertTrue(os.path.isdir(path) and not os.path.islink(path), d)
+
+    # --- the texts of the members the matrix found red on 118ccec (one test per shape) ------------------------------
+    overlap = TestReview2.overlap
+
+    def install_hooks(self, mode=0o755):
+        for n in ("pre-commit", "pre-push"):
+            p = os.path.join(self.root, MATRIX_HOOKS, n)
+            githooks._write(p, githooks.shim(n, githooks.framework_dir()))
+            os.chmod(p, mode)
+
+    def test_ctx_equals_installed_pre_commit_hook(self):  # R4-1 (jmqe); red on 118ccec; kills t8-h1, t8-h2
+        self.install_hooks()
+        self.overlap(".git/hooks/pre-commit", SAME % ".git/hooks/pre-commit")
+
+    def test_ctx_equals_installed_pre_push_hook(self):  # R4-1 (jmqe); red on 118ccec; kills t8-h1, t8-h2
+        self.install_hooks()
+        self.overlap(".git/hooks/pre-push", SAME % ".git/hooks/pre-push")
+
+    def test_ctx_folds_to_installed_hook(self):  # R4-1 under the map; red on 118ccec; kills t8-h1
+        self.install_hooks()
+        self.overlap(".GIT/HOOKS/PRE-PUSH", SAME % ".GIT/HOOKS/PRE-PUSH")
+
+    def test_ctx_equals_stale_hook(self):  # R4-1 sibling (a present hook, stale mode); red on 118ccec; kills t8-h1
+        self.install_hooks(mode=0o644)
+        self.overlap(".git/hooks/pre-commit", SAME % ".git/hooks/pre-commit")
+
+    def test_ctx_equals_foreign_hook_keeps_existing_text(self):  # pin: a foreign hook is its own conflict, one line
+        self.write(".git/hooks/pre-commit", "#!/bin/sh\necho mine\n")
+        self.overlap(".git/hooks/pre-commit", "githooks.pre-commit: foreign")
+
+    def test_ctx_below_installed_hook_keeps_existing_text(self):  # pin: managed's own text, one line (PO2)
+        self.install_hooks()
+        p = ".git/hooks/pre-commit"
+        self.overlap(p + "/x", PARENT % (p + "/x", p))
+
+    def test_state_equals_claude_md(self):  # R4-4 (5bb3); red on 118ccec; kills t8-s1, t8-s2
+        self.overlap(MATRIX_DEFAULT_CTX, SAME % "CLAUDE.md", claims="CLAUDE.md")
+
+    def test_state_below_gitignore(self):  # R4-4; red on 118ccec; kills t8-s1, t8-s3
+        self.overlap(MATRIX_DEFAULT_CTX, PARENT % (".gitignore/x", ".gitignore"), decisions=".gitignore/x")
+
+    def test_state_equals_settings(self):  # R4-4; red on 118ccec; kills t8-s1
+        self.overlap(MATRIX_DEFAULT_CTX, SAME % ".claude/settings.json", playbooks=".claude/settings.json")
+
+    def test_state_equals_ci_workflow(self):  # R4-4 (ci true); red on 118ccec; kills t8-s1
+        self.overlap(MATRIX_DEFAULT_CTX, SAME % MATRIX_CI, ci=True, programs=MATRIX_CI)
+
+    def test_state_folds_to_claude_md(self):  # R4-4 under the map; red on 118ccec; kills t8-s4
+        self.overlap(MATRIX_DEFAULT_CTX, SAME % "claude.md", findings="claude.md")
+
+    def test_state_equals_planned_hook(self):  # R4-4; red on 118ccec; kills t8-s5
+        self.overlap(MATRIX_DEFAULT_CTX, SAME % ".git/hooks/pre-commit", plan_state=".git/hooks/pre-commit")
+
+    def test_state_below_planned_hook_no_hooks_dir(self):  # R4-4; red on 118ccec; kills t8-s5, t8-s3
+        self.hide_hooks_dir()
+        p = ".git/hooks/pre-push"
+        self.overlap(MATRIX_DEFAULT_CTX, PARENT % (p + "/x", p), claims=p + "/x")
+
+    def test_state_folds_to_planned_hook(self):  # R4-4 under the map; red on 118ccec; kills t8-s5, t8-s4
+        self.overlap(MATRIX_DEFAULT_CTX, SAME % ".GIT/HOOKS/PRE-PUSH", claims=".GIT/HOOKS/PRE-PUSH")
+
+    def test_state_equals_installed_hook_keeps_existing_text(self):  # pin: _dir_plan's own text, one line
+        self.install_hooks()
+        p = ".git/hooks/pre-commit"
+        self.overlap(MATRIX_DEFAULT_CTX, "%s: exists and is not a directory" % p, claims=p)
+
+    def test_state_above_planned_file_passes(self):  # control (passes on 118ccec): a state directory holds a file
+        self.init_config(paths={"claims": ".claude"})
+        code, out = self.cmd("apply")[:2]
+        self.assertEqual(code, 0, out)
+        self.assertTrue(os.path.isfile(os.path.join(self.root, ".claude/settings.json")))
+
+    hide_hooks_dir = TestReview3.hide_hooks_dir
+
+    def ignore_pair(self, decisions, findings, line):
+        self.init_config(paths={"decisions": decisions, "findings": findings})
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub)
+            self.assertEqual((code, out), (1, "FAIL init.input: two ignore lines are equal: %s\n" % line), sub)
+            self.assertEqual(snapshot(self.root), before, sub)
+
+    def test_decisions_folds_to_findings(self):  # R4-3 (38fh), decision U-3 (a); red on 118ccec; kills t8-u1
+        self.ignore_pair(".strict-delivery/state/Findings", ".strict-delivery/state/findings",
+                         ".strict-delivery/state/findings/index.yml")
+
+    def test_findings_folds_to_decisions(self):  # R4-3; red on 118ccec; kills t8-u1, t8-u2
+        self.ignore_pair("rec/dec", "REC/Dec", "REC/Dec/index.yml")
+
+    def test_decisions_equals_findings_keeps_existing_text(self):  # pin: the exact pair (templates' own check)
+        self.ignore_pair("rec/dec", "rec/dec", "rec/dec/index.yml")
+
+    def test_decisions_nested_in_findings_under_the_map_passes(self):  # DR8 under the map: created once; control
+        self.init_config(paths={"decisions": "REC/x", "findings": "rec/x/y"})
+        code, out = self.cmd("apply")[:2]
+        self.assertEqual(code, 0, out)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "rec/x/y")))
+
+
 if __name__ == "__main__":
     unittest.main()

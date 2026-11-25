@@ -71,6 +71,7 @@ class _Extra:
     dirs: list = field(default_factory=list)
     hooks: list = field(default_factory=list)
     hooks_dir: Optional[str] = None
+    hook_names: list = field(default_factory=list)  # every hook init plans or keeps there: missing, stale, ok
     context_path: Optional[str] = None
     diffs: list = field(default_factory=list)  # (path, old, new)
     actions: list = field(default_factory=list)  # (path, new) from managed.plan
@@ -469,6 +470,20 @@ def _hook_overlap(root: str, ctx: str, hooks: str, names: list) -> list:
     return ["%s: parent %s is not a directory" % (shown, hook_name[h]) for h in hook_files if ctx.startswith(h + "/")]
 
 
+def _state_overlap(dirs: list, files: list) -> list:
+    """H5 (F-20261125-5bb3): a configured state directory (``dirs``) equal to a planned file (``files``) is
+    ``<dir>: two writes name the same path``; below one is ``<dir>: parent <f> is not a directory`` (managed's texts).
+    Compared under the ASCII map (Note H-1); the configured spellings are shown."""
+    out = []
+    for d in dirs:
+        for f in files:
+            if _fold(d) == _fold(f):
+                out.append("%s: two writes name the same path" % d)
+            elif _fold(d).startswith(_fold(f) + "/"):
+                out.append("%s: parent %s is not a directory" % (d, f))
+    return out
+
+
 def _hooks_dir_blocked(hooks: str) -> bool:
     """CD17: the hooks directory exists as a link or as anything but a directory (``lstat``, never followed)."""
     return os.path.lexists(hooks) and (os.path.islink(hooks) or not os.path.isdir(hooks))
@@ -489,16 +504,19 @@ def _plan_hooks(root: str, answers: dict, conflicts: list, notes: list, extra: _
         res = githooks.status(root, fw)
     except GateError as e:
         raise _input(e) from None
+    foreign = []
     for line in res.lines:
         if line.status == "FAIL":
             state = line.reason
             name = line.id.split(".", 1)[1]
             if state == "foreign":
                 conflicts.append("githooks.%s: foreign" % name)
+                foreign.append(name)
             elif state == "missing":
                 extra.hooks.append(name)
             else:
                 notes.append("%s: present and stale; run /strict-delivery:upgrade" % os.path.join(hooks, name))
+    extra.hook_names = [n for n in githooks.NAMES if n not in foreign]
     try:
         main = gitinfo.main_worktree(root)
     except GateError:
@@ -530,6 +548,8 @@ def _build(root: str, answers: dict) -> tuple:
             extra.dirs = [d for d in extra.dirs if d != ".strict-delivery"]
         _plan_block(root, "claude-block", templates.claude_block_body(cfg), version, notes, writes)
         _plan_block(root, "gitignore-block", templates.gitignore_block_body(cfg), version, notes, writes)
+        if _fold(cfg["paths"]["decisions"]) == _fold(cfg["paths"]["findings"]):  # decision U-3 (a), F-20261125-38fh
+            raise _input("two ignore lines are equal: %s/index.yml" % cfg["paths"]["findings"])
         if answers["ci"]:
             fw = plugin.framework_dir()
             try:
@@ -549,6 +569,9 @@ def _build(root: str, answers: dict) -> tuple:
             writes.append(set_write)
         extra.context_path = cfg["paths"]["context"]
         planned_files = [config.CONFIG_PATH, "CLAUDE.md", ".gitignore", SETTINGS] + ([CI_PATH] if answers["ci"] else [])
+        # H5 (F-20261125-5bb3): a state directory equal to or below a planned file; config.yml is _dir_plan's own
+        # conflict (a present file when initialised; the defaults never overlap it otherwise)
+        dir_conflicts = dir_conflicts + _state_overlap(paths, planned_files[1:])
         overlap = _context_overlap(extra.context_path, paths, planned_files, cfg["paths"]["state"])
         if overlap:  # H5: no write is planned for a path equal to or nested with another planned path
             dir_conflicts = dir_conflicts + overlap
@@ -561,8 +584,11 @@ def _build(root: str, answers: dict) -> tuple:
         conflicts = list(dict.fromkeys(conflicts))  # PO2: one line per conflict, first place kept
         if answers["git_hooks"]:
             _plan_hooks(root, answers, conflicts, notes, extra)
-            if extra.hooks:  # H5: no hook is planned at a path equal to or nested with paths.context
-                conflicts.extend(_hook_overlap(root, extra.context_path, extra.hooks_dir, extra.hooks))
+            if extra.hook_names:  # H5: every hook init plans or keeps is a planned file (ninr; jmqe: installed too)
+                conflicts.extend(_hook_overlap(root, extra.context_path, extra.hooks_dir, extra.hook_names))
+                hooks_rel = os.path.relpath(extra.hooks_dir, root)
+                conflicts.extend(_state_overlap(paths, [hooks_rel + "/" + n for n in extra.hooks]))
+                conflicts[:] = dict.fromkeys(conflicts)  # PO2 after the hook compares
     except InitError:
         raise
     except GateError as e:
