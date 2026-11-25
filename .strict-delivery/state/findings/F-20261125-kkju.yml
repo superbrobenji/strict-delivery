@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-kkju
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk3-tools-review-fix2.md R7-1
+severity: LOW
+class: "mutation: group rule conditions of pre_agent._in_group killed: mine is not None (pre_agent.py:98, no killing test; mutant X6); members theirs is not None, mine[0] == stream, theirs[0] == group, mine[1] == theirs[1], mine[2] == theirs[2], the ValueError branch are killed (X1-X5)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: b36e4d082d2d7f1ac03ca79b2c008f6b2bc2cd1f
+    by: stream-hooks-3
+review_round: 7
+caused_by_change: false
+dimension: "mutation: group rule conditions killed"

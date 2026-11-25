@@ -1,0 +1,38 @@
+schema: finding/1
+id: F-20261124-npuq
+status: fixed-unpinned
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c1-review-2.md R2-1
+severity: LOW
+class: "store untouched when nothing is surfaced: members (a) no matching record (vyet, tested), (b) only matching record has an unusable applies_to (found non-empty, ids empty), (c) only matching record superseded/not in force (search)"
+siblings: []
+cites:
+  - file: gates/hooks/pre_edit.py
+    lines: "190"
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.1
+pin: null
+ruling: null
+evidence:
+  - ab2b1025f705877d6be12062a230a22ae5cac219
+  - "ab2b1025f705877d6be12062a230a22ae5cac219:tests/test_hook_edit.py"
+  - 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+history:
+  - status: open
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: stream-hooks-1
+  - status: planned
+    sha: ab2b1025f705877d6be12062a230a22ae5cac219
+    by: implementer
+  - status: in-progress
+    sha: ab2b1025f705877d6be12062a230a22ae5cac219
+    by: implementer
+  - status: fixed-unpinned
+    sha: ab2b1025f705877d6be12062a230a22ae5cac219
+    by: implementer
+review_round: 2
+caused_by_change: false
+dimension: "surfacing: no surfaced id"
