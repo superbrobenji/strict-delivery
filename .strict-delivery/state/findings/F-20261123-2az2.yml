@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261123-2az2
+status: open
+source: 5c.1 task review 1 (records/5c.1-review-1.md, F1)
+severity: MEDIUM
+class: "test isolation: a test asserts a global, machine-shared state (the system temp listing): test_no_resources_left (tests/test_drift_lib.py:1389-1397, row R8)"
+siblings: []
+cites:
+  - file: tests/test_drift_lib.py
+    lines: 1389-1397
+    sha: 0f01f20
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 0f01f20259f4f6aeaaca9ce14e566c97f567ebdf
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: test isolation
