@@ -493,12 +493,16 @@ def _lines(root: object) -> list:
     installed = False
     unsafe = False
     try:
-        installed = _hooks_installed(root)
+        # owner Q-RC14-3, 2026-11-25 (Note H-2): "D-1: judge only the hooks dir git actually uses; with hooksPath
+        # outside the root and no shim there, report 'not installed', no FAIL, even if old shims sit in .git/hooks. D-2:
+        # an outside dir holding the shims also reports 'not installed', no FAIL": a hooks directory outside the root
+        # and the git common dir (`_locate` None) is never read, and the default .git/hooks is then not looked at
+        found = _locate(root, gitinfo.hooks_dir(root))
+        installed = found is not None and _hooks_installed(root)
         # F-20261125-h7nn (CD17 "a symlink anywhere is a conflict"; Amendment H H4/H7 fail closed): an unsafe hooks
         # directory is reported `foreign` per hook whatever the installed gate says; owner Q-RC14-2 (b), 2026-11-25: only
         # one inside the repository (below the root or the git common dir): "A hooksPath outside the root with no shim
         # reports 'not installed', with no FAIL"
-        found = _locate(root, gitinfo.hooks_dir(root))
         unsafe = found is not None and not _dir_safe(found[0], found[1])
         lines.append(_extras(installed, ci))
     except Exception as e:

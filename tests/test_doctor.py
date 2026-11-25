@@ -736,11 +736,14 @@ class TestHooksDirParents(Base):
         os.makedirs(empty_out)
         put(os.path.join(self.r, "afile"), b"not a directory\n")
         os.makedirs(os.path.join(self.r, "emptyhooks"))
-        for value, want in ((empty_out, "foreign"), ("afile/sub", "foreign"), ("afile", "foreign"),
+        for value, want in ((empty_out, None), ("afile/sub", "foreign"), ("afile", "foreign"),
                             ("emptyhooks", "missing")):  # the last: a safe, existing directory without the hooks
             git(self.r, "config", "core.hooksPath", value)
             lines = [ln for ln in self.lines() if "githooks" in ln or "doctor.extras" in ln]
             with self.subTest(hooks_path=value):
+                if want is None:  # owner Q-RC14-3 (2026-11-25) D-1: outside the root, the shims in .git/hooks are ignored
+                    self.assertEqual(lines, [NEITHER_TEXT])
+                    continue
                 self.assertEqual(lines, [installed, "FAIL doctor.githooks.pre-commit: " + want,
                                          "FAIL doctor.githooks.pre-push: " + want,
                                          "FAIL doctor.githooks.hooks-path: core.hooksPath is set (%s); unset it to install the hooks" % value])
@@ -818,10 +821,90 @@ class TestHooksDirParents(Base):
                                  "FAIL doctor.githooks.pre-commit: foreign", "FAIL doctor.githooks.pre-push: foreign",
                                  "FAIL doctor.githooks.hooks-path: core.hooksPath is set (myhooks); unset it to install the hooks"])
         git(self.r, "config", "core.hooksPath", out)  # H7: the real directory outside the root, an absolute path
+        # owner Q-RC14-3 (2026-11-25) D-1/D-2: the outside directory git uses is judged alone; the shims in .git/hooks
+        # are ignored: not installed, no doctor.githooks.* line
         lines = [ln for ln in self.lines() if "githooks" in ln or "doctor.extras" in ln]
-        self.assertEqual(lines, ["PASS doctor.extras: git hooks: installed; CI: not installed",
-                                 "FAIL doctor.githooks.pre-commit: foreign", "FAIL doctor.githooks.pre-push: foreign",
-                                 "FAIL doctor.githooks.hooks-path: core.hooksPath is set (%s); unset it to install the hooks" % out])
+        self.assertEqual(lines, [NEITHER_TEXT])
+
+    # ---- owner Q-RC14-3 (2026-11-25; Note H-2): doctor judges only the hooks directory git uses
+    def default_hooks(self, shims):
+        """The default `.git/hooks` with the framework shims (``shims``) or without any hook file; no core.hooksPath."""
+        self.shims()
+        if not shims:
+            for n in githooks.NAMES:
+                os.unlink(os.path.join(self.r, ".git", "hooks", n))
+
+    def assert_outside_not_installed(self, value):
+        # Owner Q-RC14-3 (2026-11-25): "D-1: judge only the hooks dir git actually uses; with hooksPath outside the root
+        # and no shim there, report 'not installed', no FAIL, even if old shims sit in .git/hooks. D-2: an outside dir
+        # holding the shims also reports 'not installed', no FAIL". Hand-written: exit 1 (the fixture has no CLAUDE.md),
+        # the run's ids are exactly ROOT_ID (no doctor.githooks.* line), the extras line is the NEITHER text.
+        for shims in (False, True):
+            with self.subTest(hooks_path=value, default_shims=shims):
+                self.default_hooks(shims)
+                git(self.r, "config", "core.hooksPath", value)
+                code, out, err = self.run_doctor()
+                git(self.r, "config", "--unset", "core.hooksPath")
+                lines = out.splitlines()
+                self.assertEqual((code, err), (1, ""))
+                self.assertEqual([ln.split(":")[0].split(" ", 1)[1] for ln in lines], ROOT_ID)
+                self.assertEqual(lines[4], NEITHER_TEXT)
+
+    def test_q_rc14_3_outside_empty_directory(self):
+        d = os.path.join(self.tmp, "empty-outside")
+        os.makedirs(d)
+        self.assert_outside_not_installed(d)
+
+    def test_q_rc14_3_outside_through_a_link(self):
+        os.makedirs(os.path.join(self.tmp, "empty-outside"))
+        os.symlink(os.path.join(self.tmp, "empty-outside"), os.path.join(self.tmp, "outside-link"))
+        self.assert_outside_not_installed(os.path.join(self.tmp, "outside-link"))
+
+    def test_q_rc14_3_outside_through_a_link_and_sub(self):
+        os.makedirs(os.path.join(self.tmp, "empty-outside", "sub"))
+        os.symlink(os.path.join(self.tmp, "empty-outside"), os.path.join(self.tmp, "outside-link"))
+        self.assert_outside_not_installed(os.path.join(self.tmp, "outside-link", "sub"))
+
+    def test_q_rc14_3_outside_parent_of_the_root(self):  # `..`: the directory holding the root (no hook file in it)
+        self.assertFalse(os.path.lexists(os.path.join(os.path.dirname(self.r), "pre-commit")))
+        self.assert_outside_not_installed("..")
+
+    def test_q_rc14_3_outside_holding_the_shims(self):  # D-2, with and without the old shims in .git/hooks
+        d = self.outside_shims()  # the shims install writes, moved to a directory outside the root
+        for n in githooks.NAMES:
+            with open(os.path.join(d, n), "rb") as fh:
+                self.assertEqual(fh.read().split(b"\n")[1], githooks.HEADER.encode("utf-8"))
+        self.assert_outside_not_installed(d)
+
+    def assert_in_repo_foreign(self, value, extras=NEITHER_TEXT):
+        """R2-1 (xs22) and CD17 stand inside the repository (Note H-2): foreign x2, the hooks-path FAIL, exit 1."""
+        git(self.r, "config", "core.hooksPath", value)
+        self.assert_unsafe(value, extras)
+
+    def test_r4_1_hooks_path_below_a_regular_file_default_empty(self):  # F-20261125-y5ty (R4-1); kills D148
+        self.default_hooks(False)
+        put(os.path.join(self.r, "afile"), b"not a directory\n")
+        self.assert_in_repo_foreign("afile/sub")
+
+    def test_r4_1_hooks_path_a_regular_file_default_empty(self):  # F-20261125-y5ty (R4-1); kills D148
+        self.default_hooks(False)
+        put(os.path.join(self.r, "afile"), b"not a directory\n")
+        self.assert_in_repo_foreign("afile")
+
+    def test_linked_worktree_common_hooks_symlinked_is_foreign(self):  # in the repository: the common dir (CD17)
+        commit_all(self.r, "x")
+        wt = os.path.join(self.tmp, "wt")
+        git(self.r, "worktree", "add", "-q", "--detach", "--", wt)
+        self.shims()
+        hooks = os.path.join(self.r, ".git", "hooks")
+        real = os.path.join(self.tmp, "real-hooks")
+        os.rename(hooks, real)
+        os.symlink(real, hooks)
+        code, out, err = self.run_doctor("--root", wt)
+        lines = out.splitlines()
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual([ln for ln in lines if "doctor.extras" in ln], [NEITHER_TEXT])
+        self.assertEqual([ln for ln in lines if "githooks" in ln], self.unsafe_lines())
 
 
 # ---------------------------------------------------------------------------------------------------- context.yml
