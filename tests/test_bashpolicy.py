@@ -372,6 +372,10 @@ def ids(lines):
     return [ln.split(":", 1)[0][len("FAIL "):] for ln in lines]
 
 
+WAY = "run it with the ! prefix if you must, or ask the owner"  # hand-written, not read from bashpolicy._WAY
+BANG = "the human can run the command with the ! prefix"
+
+
 class Recorder:
     def __init__(self, fails=()):
         self.calls = []
@@ -399,10 +403,12 @@ class ConstantsTest(unittest.TestCase):
                           "state_access"])
 
     def test_no_unicode_db_calls(self):  # V2d
-        with open(bp.__file__.replace(".pyc", ".py"), encoding="utf-8") as fh:
-            src = fh.read()
-        for banned in (".lower(", ".casefold(", ".isprintable(", "unicodedata"):
-            self.assertNotIn(banned, src)
+        for module in (bp, pre_bash):  # R1-5: the Unicode-database predicates too, in both 3b.2 modules
+            with open(module.__file__.replace(".pyc", ".py"), encoding="utf-8") as fh:
+                src = fh.read()
+            for banned in (".lower(", ".casefold(", ".isprintable(", "unicodedata", ".isalnum(", ".isalpha(", ".isdigit(",
+                           ".isidentifier(", ".isnumeric(", ".isdecimal("):
+                self.assertNotIn(banned, src, (module.__name__, banned))
 
 
 class TextRefusalsTest(unittest.TestCase):
@@ -676,7 +682,8 @@ class CommitRefusalsTest(Repo):
         with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
             fh.write("two\n")
         out, rec = self.run_lines("git commit -m m", pol(root=d, cfg=None, cfg_error="bad key\nx"))
-        self.assertEqual(out, ["FAIL hook.bash.config: bad key\\nx; no commit runs until the config loads"])
+        self.assertEqual(out, ["FAIL hook.bash.config: bad key\\nx; no commit runs until the config loads; fix the "
+                               "config file, or the human can run the command with the ! prefix"])
         self.assertEqual(rec.calls, [])
 
     def test_unstaged_unmerged_path_once(self):  # CU18, CD10: one line per path, also for an unmerged path
@@ -726,7 +733,7 @@ class CommitRefusalsTest(Repo):
         def boom(root):
             raise GateError("gates broke\nhere")
         self.assertEqual(bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), boom),
-                         ["FAIL hook.bash.gates: gates broke\\nhere"])
+                         ["FAIL hook.bash.gates: gates broke\\nhere; " + BANG])
         empty = lambda root: Result("g")  # noqa: E731
         self.assertEqual(bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), empty), [])
         out = bp.commit_refusals("git commit -m m", pol(root=os.path.join(d, "a.txt")), empty)
@@ -788,8 +795,8 @@ class TargetRealpathTest(Repo):
             self.assertEqual(bp.target_root(shellscan.scan("git commit"), named, p), (real, []), named)
         root, fails = bp.target_root(shellscan.scan("git commit"), olink, p)
         self.assertIsNone(root)
-        self.assertEqual(fails, ["FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
-                                 % (os.path.realpath(other), real)])
+        self.assertEqual(fails, ["FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s); %s"
+                                 % (os.path.realpath(other), real, WAY)])
         dangling = os.path.join(self.tmp, "dangling")
         os.symlink(os.path.join(self.tmp, "nowhere"), dangling)
         root, fails = bp.target_root(shellscan.scan("git commit"), dangling, p)
@@ -829,7 +836,7 @@ class GitWritesMembersTest(Repo):
                 root, fails = bp.target_root(scan, call.argv_C, p)
                 self.assertIsNone(root, text)
                 self.assertEqual(fails, ["FAIL hook.bash.target: %s is not a worktree this caller may write in "
-                                         "(allowed: %s)" % (os.path.realpath(x), real)], text)
+                                         "(allowed: %s); %s" % (os.path.realpath(x), real, WAY)], text)
             scan = shellscan.scan("git -C %s %s" % (w, sub))
             self.assertEqual(bp.target_root(scan, w, p), (real, []), sub)
 
@@ -946,8 +953,8 @@ class HandleShapeTest(Repo):
         git(d, "worktree", "add", "-q", "-b", "wb", w)
         out = pre_bash.handle(self.ctx(d, "GIT_DIR=x git -C %s commit -m m" % w))
         want_assignment = "FAIL hook.bash.target: GIT_DIR is refused; run it with the ! prefix if you must, or ask the owner"
-        want_target = ("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
-                       % (os.path.realpath(w), os.path.realpath(d)))
+        want_target = ("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s); %s"
+                       % (os.path.realpath(w), os.path.realpath(d), WAY))
         self.assertIn(want_assignment, out.deny)
         self.assertIn(want_target, out.deny)
         self.assertEqual(ids(out.deny), ["hook.bash.target"] * len(out.deny))
@@ -995,6 +1002,231 @@ class EffectiveWordsTextKindsTest(unittest.TestCase):
         for bad in (b"git commit", None, 3):
             with self.assertRaises(TypeError):
                 bp.effective_words(bad, {})
+
+
+# ---- fix round 1, group FB: R1-3 (nr5d), R1-5 (tsuc), R1-6 (29qa), R1-7 (rmrd), R1-10 (m5rq) ----
+import ast  # noqa: E402
+
+ALIAS_LINE = ("FAIL hook.bash.alias: a git alias that runs a shell command holding commit is refused, its commit "
+              "cannot be checked; " + BANG)
+
+
+class AliasExpansionTest(Repo):
+    """R1-3 (F-20261125-nr5d): an alias expansion, plain or ``!``, is read by the bypass checks and by every
+    ``text_refusals`` member as the command text is (plan :3697 "``alias.x = !git commit`` used as ``git x`` (refused)";
+    table CD7). Every case runs on a CLEAN tree: no unstaged path can refuse it."""
+
+    def lines(self, text, aliases, agent="session"):
+        if getattr(self, "clean", None) is None:
+            self.clean = self.repo()  # one clean repository per test
+        d = self.clean
+        self.assertEqual(git(d, "status", "--porcelain"), "")
+        rec = Recorder()
+        out = bp.commit_refusals(text, pol(root=d, cwd=d, aliases=aliases, agent_key=agent), rec)
+        return out, rec
+
+    def refused(self, text, aliases, want, agent="session"):
+        out, rec = self.lines(text, aliases, agent)
+        self.assertEqual(ids(out), want, (text, aliases, out))
+        self.assertEqual(rec.calls, [], (text, aliases))
+        return out
+
+    def test_plain_alias_members(self):
+        for member, value, agent, want in (
+                ("no-verify", "commit --no-verify", "session", ["hook.bash.bypass.no-verify"]),
+                ("n-flag", "commit -n", "session", ["hook.bash.bypass.n-flag"]),
+                ("hooks-path", "-c core.hooksPath=/dev/null commit", "session", ["hook.bash.bypass.hooks-path"]),
+                ("git-config-env", "--config-env=a.b=C commit", "session", ["hook.bash.bypass.git-config-env"]),
+                ("home", "commit HOME=/tmp", "session", ["hook.bash.bypass.home"]),
+                ("decide", "commit decision decide", "a1", ["hook.bash.decide"])):
+            with self.subTest(member=member):
+                self.refused("git x -m m", {"x": value}, want, agent)
+
+    def test_plain_alias_decide_is_for_agents_only(self):
+        out, rec = self.lines("git x -m m", {"x": "commit decision decide"})
+        self.assertEqual(out, [])  # the main session: no refusal, the gates ran once
+        self.assertEqual(len(rec.calls), 1)
+
+    def test_shell_alias_members(self):
+        for member, value, agent, want in (
+                ("no-verify", "!git commit --no-verify", "session", ["hook.bash.bypass.no-verify", "hook.bash.alias"]),
+                ("n-flag", "!git commit -n -m x", "session", ["hook.bash.bypass.n-flag", "hook.bash.alias"]),
+                ("hooks-path", "!git -c core.hooksPath=/dev/null commit", "session",
+                 ["hook.bash.bypass.hooks-path", "hook.bash.alias"]),
+                ("git-config-env", "!git --config-env=a.b=C commit", "session",
+                 ["hook.bash.bypass.git-config-env", "hook.bash.alias"]),
+                ("home", "!HOME=/tmp git commit", "session", ["hook.bash.bypass.home", "hook.bash.alias"]),
+                ("decide", "!git commit; python3 -m gates decisions decide", "a1",
+                 ["hook.bash.decide", "hook.bash.alias"])):
+            with self.subTest(member=member):
+                self.refused("git x -m m", {"x": value}, want, agent)
+
+    def test_shell_alias_with_a_commit_word_is_refused_on_a_clean_tree(self):  # plan :3697
+        out = self.refused("git x -m m", {"x": "!git commit"}, ["hook.bash.alias"])
+        self.assertEqual(out, [ALIAS_LINE])
+        self.refused("git x", {"x": "!git commit"}, ["hook.bash.alias"])
+        self.refused("git X", {"x": "!git commit"}, ["hook.bash.alias"])  # git resolves an alias name case-insensitively
+        self.refused("git a", {"a": "b", "b": "!git commit"}, ["hook.bash.alias"])  # a chain ends at the shell alias
+        self.refused("git a", {"a": "b", "b": "commit --no-verify"}, ["hook.bash.bypass.no-verify"])
+        self.refused("git a", {"a": "b", "b": "-c core.hooksPath=x commit"}, ["hook.bash.bypass.hooks-path"])
+
+    def test_shell_alias_without_a_commit_word_keeps_the_gates(self):  # EW7: the words commit/push/merge are added
+        out, rec = self.lines("git x", {"x": "!echo hi"})
+        self.assertEqual(out, [])
+        self.assertEqual(len(rec.calls), 1)
+        out, rec = self.lines("git ci -m m", {"ci": "commit"})
+        self.assertEqual((out, len(rec.calls)), ([], 1))
+
+    def test_alias_line_once_per_alias_and_not_doubled_with_the_command_text(self):
+        out = self.refused("git cv", {"cv": "commit --no-verify"}, ["hook.bash.bypass.no-verify"])
+        self.assertEqual(len(out), 1)
+        out, _rec = self.lines("git --no-verify cv", {"cv": "commit --no-verify"})
+        self.assertEqual(ids(out).count("hook.bash.bypass.no-verify"), 0)  # the option line is global-option, once
+        self.assertIn("hook.bash.global-option.--no-verify", ids(out))
+
+
+class UnicodeEnvNameTest(Repo):
+    """R1-5 (F-20261125-tsuc): ``env NAME=V`` reads NAME with an ASCII-only test, so the line is the same on every
+    interpreter (table CD6, V2d)."""
+
+    def run_lines(self, text):
+        rec = Recorder()
+        return bp.commit_refusals(text, pol(), rec), rec
+
+    def test_env_operand_unicode_names_give_the_same_line(self):
+        want = ["FAIL hook.bash.not-git: the program is not git; " + WAY]
+        for name in ("Ꟁ", "\U0001e030", "é", "٣", "aꟀ"):  # U+A7C0 (Unicode 14), U+1E030 (15), e-acute, Arabic 3
+            with self.subTest(name=name):
+                out, rec = self.run_lines('env "%s=1" git commit -m m' % name)
+                self.assertEqual((out, rec.calls), (want, []))
+                self.assertNotIn(name, "".join(out))
+
+    def test_env_operand_ascii_names_are_unchanged(self):
+        out, _rec = self.run_lines("env FOO_1=1 git commit -m m")
+        self.assertEqual(out, ["FAIL hook.bash.not-git: env operand FOO_1 is refused; " + WAY])
+        out, _rec = self.run_lines("env GIT_DIR=x git commit -m m")
+        self.assertEqual(ids(out), ["hook.bash.target"])
+        out, _rec = self.run_lines("env 1x=1 git commit -m m")
+        self.assertEqual(out, ["FAIL hook.bash.not-git: env operand 1x is refused; " + WAY])
+        out, _rec = self.run_lines("env '=1' git commit -m m")  # no name: the word is the program, which is not git
+        self.assertEqual(out, ["FAIL hook.bash.not-git: the program is not git; " + WAY])
+
+
+class UnstagedNonUtf8Test(Repo):
+    """R1-6 (F-20261125-29qa), row HR6: a tracked unstaged path whose name is not UTF-8 gives one ``unstaged`` line
+    through ``safe_text``; the other dirty paths stay listed."""
+
+    def add_bad_name(self, d, name):
+        sha = git(d, "hash-object", "-w", "a.txt")
+        entry = b"100644 " + sha.encode("ascii") + b"\t" + name + b"\n"
+        p = subprocess.run(["git", "-C", d, "update-index", "--add", "--index-info"], input=entry,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def unstaged(self, name):
+        return "FAIL hook.bash.unstaged: %s: tracked file has unstaged changes; stage it or stash it, so the gates " \
+               "read the tree being committed" % name
+
+    def test_non_utf8_unstaged_path_listed_with_the_others(self):
+        d = self.repo()
+        self.add_bad_name(d, b"bad\xffname.txt")
+        with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("two\n")
+        rec = Recorder()
+        out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), rec)
+        self.assertEqual(out, [self.unstaged("a.txt"), self.unstaged("bad\\udcffname.txt")])
+        self.assertEqual(rec.calls, [])
+
+    def test_non_utf8_unstaged_path_alone_and_twice(self):
+        d = self.repo()
+        self.add_bad_name(d, b"\xc3(\xfe.txt")
+        self.add_bad_name(d, b"z\xffz.txt")
+        rec = Recorder()
+        out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), rec)
+        self.assertEqual(out, [self.unstaged("z\\udcffz.txt"), self.unstaged("\\udcc3(\\udcfe.txt")])  # git's byte order
+        self.assertEqual(rec.calls, [])
+
+    def test_utf8_names_are_unchanged(self):
+        d = self.repo()
+        with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("two\n")
+        self.add_bad_name(d, "café ü.txt".encode("utf-8"))
+        out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), Recorder())
+        self.assertEqual(out, [self.unstaged("a.txt"), self.unstaged("café ü.txt")])
+
+    def test_submodule_still_listed_beside_a_non_utf8_name(self):  # the bytes read keeps --ignore-submodules=none (R-G1-1)
+        d = self.repo()
+        src = self.repo("subsrc")
+        git(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", src, "sub")
+        git(d, "commit", "-q", "-m", "sub")
+        with open(os.path.join(d, "sub", "untracked.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        self.add_bad_name(d, b"bad\xffname.txt")
+        out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), Recorder())
+        self.assertEqual(out, [self.unstaged("bad\\udcffname.txt"), self.unstaged("sub")])
+
+    def test_git_failure_is_still_a_gates_line(self):
+        out = bp.commit_refusals("git commit -m m", pol(root=os.path.join(self.repo(), "a.txt")), Recorder())
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].startswith("FAIL hook.bash.gates: ") and out[0].endswith("; " + BANG), out)
+
+
+class WayOutTailTest(Repo):
+    """R1-7 (F-20261125-rmrd), ruling R2: every hook-originated ``FAIL hook.bash.*`` line of bashpolicy ends with its
+    way out; the gate lines passed through from block 2 stay verbatim."""
+
+    def test_target_not_allowed_lines(self):
+        w = self.repo("w")
+        other = self.repo("o")
+        p = pol(cwd=w, state_access=lambda: (frozenset({os.path.realpath(w)}), ["this agent has no bound worktree (x)"],
+                                             None))
+        root, fails = bp.target_root(shellscan.scan("git commit"), other, p)
+        self.assertIsNone(root)
+        self.assertEqual(fails, ["FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s); %s"
+                                 % (os.path.realpath(other), os.path.realpath(w), WAY),
+                                 "FAIL hook.bash.target: this agent has no bound worktree (x); " + WAY])
+
+    def test_config_line(self):
+        d = self.repo()
+        out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d, cfg=None, cfg_error="bad"), Recorder())
+        self.assertEqual(out, ["FAIL hook.bash.config: bad; no commit runs until the config loads; fix the config file, "
+                               "or the human can run the command with the ! prefix"])
+
+    def test_gates_error_lines(self):
+        d = self.repo()
+        out = bp.commit_refusals("git commit -m m", pol(root=os.path.join(d, "a.txt")), Recorder())
+        self.assertTrue(len(out) == 1 and out[0].endswith("; " + BANG), out)  # the unstaged read failed
+        self.assertEqual(bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), lambda root: None),
+                         ["FAIL hook.bash.gates: the gate runner returned no result; " + BANG])
+
+    def test_gate_lines_pass_through_verbatim(self):
+        d = self.repo()
+        out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), Recorder([("githook.test", "exited 3")]))
+        self.assertEqual(out, ["FAIL hook.bash.gates: githook.test: exited 3"])
+
+    def test_every_hook_line_literal_names_a_way_out(self):  # the sweep over every "FAIL hook.bash literal of the module
+        with open(bp.__file__.replace(".pyc", ".py"), encoding="utf-8") as fh:
+            src = fh.read()
+        tree = ast.parse(src)
+        parent = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parent[child] = node
+        checked = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and type(node.value) is str and node.value.startswith("FAIL hook.bash"):
+                stmt = node
+                while not isinstance(stmt, ast.stmt):
+                    stmt = parent[stmt]
+                segment = ast.get_source_segment(src, stmt)
+                checked.append(node.value)
+                if node.value == "FAIL hook.bash.gates: %s: %s":
+                    continue  # the one pass-through of a block 2 gate line
+                self.assertTrue(any(m in segment for m in ("_WAY", "_BANG", "UNSTAGED_REASON"))
+                                or any(m in node.value for m in ("with the ! prefix", "stage it or stash it")),
+                                (node.value, segment))
+        self.assertGreaterEqual(len(checked), 25)
+        self.assertEqual(checked.count("FAIL hook.bash.gates: %s: %s"), 1)
 
 
 if __name__ == "__main__":

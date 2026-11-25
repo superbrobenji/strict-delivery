@@ -45,6 +45,8 @@ _LOWER = shellscan._LOWER
 _TOKEN = shellscan._TOKEN_CLASS
 _SEPARATORS = frozenset(";&|\n()")
 _WAY = "run it with the ! prefix if you must, or ask the owner"
+_BANG = "the human can run the command with the ! prefix"
+_ASCII_ALNUM = frozenset("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 UNSTAGED_REASON = "tracked file has unstaged changes; stage it or stash it, so the gates read the tree being committed"
 
 
@@ -234,6 +236,7 @@ class GitCall:
     sub: Optional[str]
     args: list
     expansion_words: list
+    expansions: list = dataclasses.field(default_factory=list)  # the alias values followed, in order (R1-3)
 
 
 def _env_unwrap(argv: tuple, lines: list) -> tuple:
@@ -250,8 +253,8 @@ def _env_unwrap(argv: tuple, lines: list) -> tuple:
         elif word.startswith("-"):
             lines.append("FAIL hook.bash.not-git: env option %s is refused; %s" % (safe_text(_option_word(word)), _WAY))
             return (), operands
-        elif "=" in word and word[0] not in "=" and word.split("=", 1)[0].replace("_", "a").isalnum():
-            name = word.split("=", 1)[0]
+        elif "=" in word and word[0] != "=" and all(ch in _ASCII_ALNUM or ch == "_" for ch in word.split("=", 1)[0]):
+            name = word.split("=", 1)[0]  # ASCII only: no Unicode-database call (CD6, V2d)
             if name not in _ENV_NAMES:
                 lines.append("FAIL hook.bash.not-git: env operand %s is refused; %s" % (safe_text(name), _WAY))
                 return (), operands
@@ -263,23 +266,26 @@ def _env_unwrap(argv: tuple, lines: list) -> tuple:
 
 
 def _resolve(sub: str, rest: list, aliases: dict) -> tuple:
-    """The alias-resolved ``(subcommand, words)``; the words of an expansion come first. A ``!`` alias gives ``None``."""
+    """The alias-resolved ``(subcommand, words, expansions)``; the words of an expansion come first and ``expansions``
+    holds each alias value followed, in order. A ``!`` alias gives ``None`` for the subcommand."""
     seen = set()
     extra: list = []
+    followed: list = []
     while sub != "commit" and _fold(sub) in aliases and _fold(sub) not in seen:
         seen.add(_fold(sub))
         expansion = aliases[_fold(sub)]
+        followed.append(expansion)
         if expansion.startswith("!"):
-            return None, extra + rest
+            return None, extra + rest, followed
         words = list(shellscan.scan(expansion).words)
         n = 0
         while n < len(words) and words[n].startswith("-"):
             n += 2 if words[n] in _VALUE_OPTIONS else 1
         if n >= len(words):
-            return None, extra + rest
+            return None, extra + rest, followed
         sub = words[n]
         extra = words[n + 1:] + extra
-    return sub, extra + rest
+    return sub, extra + rest, followed
 
 
 def git_call(scan, aliases: dict) -> Optional[GitCall]:
@@ -332,9 +338,9 @@ def git_call(scan, aliases: dict) -> Optional[GitCall]:
         n += 1
     if n >= len(words):
         return GitCall(lines, argv_C, None, [], [])
-    sub, args = _resolve(words[n], words[n + 1:], aliases)
+    sub, args, followed = _resolve(words[n], words[n + 1:], aliases)
     expansion = args[:len(args) - len(words[n + 1:])] if sub is not None else []
-    return GitCall(lines, argv_C, sub, args, expansion)
+    return GitCall(lines, argv_C, sub, args, expansion, followed)
 
 
 def n_flag(args) -> bool:
@@ -378,13 +384,58 @@ def target_root(scan, argv_C: Optional[str], p: Policy) -> tuple:
     tops, why, _record = p.state_access()
     if top in tops:
         return top, []
-    fails = ["FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
-             % (safe_text(top), ", ".join(safe_text(t) for t in sorted(tops)) or "none")]
-    return None, fails + ["FAIL hook.bash.target: %s" % safe_text(w) for w in why]
+    fails = ["FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s); %s"
+             % (safe_text(top), ", ".join(safe_text(t) for t in sorted(tops)) or "none", _WAY)]
+    return None, fails + ["FAIL hook.bash.target: %s; %s" % (safe_text(w), _WAY) for w in why]
 
 
-def _expansion_bypass(words) -> bool:
-    return any(t.startswith("--no-v") for w in words for t in _runs(_fold(w)))
+def _has_word(text: str, word: str) -> bool:
+    return any(word in _runs(view) for view in _views(text))
+
+
+def _alias_lines(call: GitCall, p: Policy, out: list) -> list:
+    """The lines for the alias values ``call`` followed (R1-3, plan :3697, table CD7): each value, plain or ``!``, is read
+    by every ``text_refusals`` member as the command text is; a ``!`` value that holds a ``commit`` word is refused, since
+    the shell command it runs cannot be checked, and its ``-n`` is read as the command's is. ``out`` holds the lines of the
+    earlier steps: an alias ``--no-verify`` line is not added beside a ``no-verify`` line of ``out``."""
+    agent = None if p.agent_key == "session" else p.agent_key
+    lines: list = []
+
+    def add(line: str) -> None:
+        if line not in lines:
+            lines.append(line)
+    for value in call.expansions:
+        shell = value.startswith("!")
+        body = value[1:] if shell else value
+        for line in text_refusals(body, agent):
+            if line.split(":", 1)[0].endswith(".no-verify"):
+                if not any("no-verify" in ln for ln in out):
+                    add("FAIL hook.bash.bypass.no-verify: an alias holds --no-verify; " + _BANG)
+            else:
+                add(line)
+        if shell and _has_word(body, "commit"):
+            if n_flag(list(shellscan.scan(body).words)):
+                add("FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; " + _BANG)
+            add("FAIL hook.bash.alias: a git alias that runs a shell command holding commit is refused, its commit "
+                "cannot be checked; " + _BANG)
+    return lines
+
+
+def _unstaged_paths(root: str) -> list:
+    """``gitinfo.unstaged_paths(root)``; when that raises (a tracked path whose name is not UTF-8, row HR6, is the only
+    cause git's own success hides), the same ``git diff --name-only -z`` is read as bytes and each name decoded with
+    ``surrogateescape``, so ``safe_text`` shows it as ``\\udcXX`` and the other paths stay listed (R1-6). A second
+    failure raises the first error."""
+    try:
+        return gitinfo.unstaged_paths(root)
+    except GateError as first:
+        try:
+            p = gitinfo._run(root, "diff --name-only", ["diff", "--no-color", "--name-only", "-z", "--no-ext-diff",
+                                                        "--no-textconv", "--ignore-submodules=none"],
+                             opts=gitinfo.FSMONITOR_OFF)
+        except GateError:
+            raise first from None
+        return [raw.decode("utf-8", "surrogateescape") for raw in p.stdout.split(b"\0") if raw]
 
 
 def commit_refusals(text: str, p: Policy, run_gates: Callable, stop: bool = False) -> list:
@@ -410,27 +461,26 @@ def commit_refusals(text: str, p: Policy, run_gates: Callable, stop: bool = Fals
         if n_flag(call.args) or n_flag(call.expansion_words):
             out.append("FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; the human can run the command "
                        "with the ! prefix")
-    if _expansion_bypass(call.expansion_words) and not any("no-verify" in ln for ln in out):
-        out.append("FAIL hook.bash.bypass.no-verify: an alias holds --no-verify; the human can run the command with "
-                   "the ! prefix")
+    out = out + _alias_lines(call, p, out)
     if stop:
         return out
     if p.cfg_error is not None:
-        out.append("FAIL hook.bash.config: %s; no commit runs until the config loads" % safe_text(p.cfg_error))
+        out.append("FAIL hook.bash.config: %s; no commit runs until the config loads; fix the config file, or %s"
+                   % (safe_text(p.cfg_error), _BANG))
     if out:
         return out
     try:
-        paths = gitinfo.unstaged_paths(p.root)
+        paths = _unstaged_paths(p.root)
     except GateError as e:
-        return ["FAIL hook.bash.gates: %s" % safe_text(e)]
+        return ["FAIL hook.bash.gates: %s; %s" % (safe_text(e), _BANG)]
     paths = list(dict.fromkeys(paths))  # an unmerged path is listed twice by git diff: one line per path (CD10)
     if paths:
         return ["FAIL hook.bash.unstaged: %s: %s" % (safe_text(path), UNSTAGED_REASON) for path in paths]
     try:
         result = run_gates(p.root)
     except GateError as e:
-        return ["FAIL hook.bash.gates: %s" % safe_text(e)]
+        return ["FAIL hook.bash.gates: %s; %s" % (safe_text(e), _BANG)]
     if not isinstance(result, Result):
-        return ["FAIL hook.bash.gates: the gate runner returned no result"]
+        return ["FAIL hook.bash.gates: the gate runner returned no result; " + _BANG]
     return ["FAIL hook.bash.gates: %s: %s" % (safe_text(ln.id), safe_text(ln.reason))
             for ln in result.lines if ln.status == "FAIL"]
