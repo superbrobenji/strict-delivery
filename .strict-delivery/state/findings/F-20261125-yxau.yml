@@ -14,11 +14,19 @@ owner:
 pin: null
 ruling: null
 evidence:
-  - "fixed in bf961bd272704776574ec3b3bcce15b55ba313b5; killing test: tests.test_hook_agent FinalReview.test_write_failure_on_exit_keeps_every_fail_line (7 members; mutant F1 KILLED); R3 survivor killed by d3fc8476886a1852ea32e72a6fa4d98ab6caa3bd test_unavailable_inside_locked_body_is_reraised"
+  - bf961bd272704776574ec3b3bcce15b55ba313b5
+  - "bf961bd272704776574ec3b3bcce15b55ba313b5:tests/test_hook_agent.py"
+  - d3fc8476886a1852ea32e72a6fa4d98ab6caa3bd
 history:
   - status: open
     sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
     by: stream-hooks-2
+  - status: planned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
+  - status: in-progress
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
   - status: fixed-unpinned
     sha: bf961bd272704776574ec3b3bcce15b55ba313b5
     by: implementer

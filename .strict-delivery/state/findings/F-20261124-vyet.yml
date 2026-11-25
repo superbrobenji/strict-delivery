@@ -17,11 +17,18 @@ owner:
 pin: null
 ruling: null
 evidence:
-  - "fixed in 71970f9afb22c5b10ff92bc978d58690ca1dfac4; killing test: tests.test_hook_edit test_no_match_leaves_store_unchanged"
+  - 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+  - "71970f9afb22c5b10ff92bc978d58690ca1dfac4:tests/test_hook_edit.py"
 history:
   - status: open
     sha: bc32f50613d258334c1d0235e83bfc2001130690
     by: stream-hooks-1
+  - status: planned
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
+  - status: in-progress
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
   - status: fixed-unpinned
     sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
     by: implementer

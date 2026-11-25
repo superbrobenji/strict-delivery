@@ -14,11 +14,17 @@ owner:
 pin: null
 ruling: null
 evidence:
-  - "the 16 records of 3c.1 and 3c.2 set to fixed-unpinned with the fix shas 71970f9, ab2b102, b4e0d2c, bfa08a3 and the six new ones with bf961bd272704776574ec3b3bcce15b55ba313b5 (sha of the records commit itself cannot be known before it; the fix commit is cited as the brief says); checks: gates check schema and check register exit 0"
+  - bf961bd272704776574ec3b3bcce15b55ba313b5
 history:
   - status: open
     sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
     by: stream-hooks-2
+  - status: planned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
+  - status: in-progress
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
   - status: fixed-unpinned
     sha: bf961bd272704776574ec3b3bcce15b55ba313b5
     by: implementer

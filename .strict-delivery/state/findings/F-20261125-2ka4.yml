@@ -14,11 +14,18 @@ owner:
 pin: null
 ruling: null
 evidence:
-  - "fixed in bf961bd272704776574ec3b3bcce15b55ba313b5; tests.test_hook_edit test_hardening_swap_after_check_is_stated_limit now re-reads the store after the swap; fails with mark_surfaced skipped (AssertionError, surfaced [] != [DEC-20261101-k3f9])"
+  - bf961bd272704776574ec3b3bcce15b55ba313b5
+  - "bf961bd272704776574ec3b3bcce15b55ba313b5:tests/test_hook_edit.py"
 history:
   - status: open
     sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
     by: stream-hooks-2
+  - status: planned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
+  - status: in-progress
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
   - status: fixed-unpinned
     sha: bf961bd272704776574ec3b3bcce15b55ba313b5
     by: implementer
