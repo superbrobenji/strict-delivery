@@ -848,6 +848,75 @@ class BaseTest(RunAllCase):
 
 
 
+class EvidenceBaseTest(RunAllCase):
+    """Task R2.3, Rq-6-4 (Q-B6plan-1 (a)): ``--base`` reaches ``evidence`` exactly, like the other BASE_GATES."""
+
+    def test_base_forwarded_to_evidence(self):  # B1
+        self.all_pass()
+        for profile in ("standard", "strict"):
+            with self.subTest(profile=profile):
+                del self.seen[:]
+                root = self.fixture(profile)
+                self.run_main(["--root", root, "--base", "x"])
+                self.assertEqual(self.args_of()["evidence"], ["--root=" + root, "--base=x"])
+
+    def test_no_base_gives_evidence_no_base(self):  # B2
+        self.all_pass()
+        root = self.fixture()
+        self.run_main(["--root", root])
+        self.assertEqual(self.args_of()["evidence"], ["--root=" + root])
+
+    def test_base_values_forwarded_exactly_to_evidence(self):  # B3
+        self.all_pass()
+        root = self.fixture()
+        for value in ("", " ", " x ", "-x", "main~1", "\U0001f6dd", "a=b"):
+            with self.subTest(value=value):
+                del self.seen[:]
+                self.run_main(["--root", root, "--base=" + value])
+                self.assertEqual(self.args_of()["evidence"], ["--root=" + root, "--base=" + value])
+
+    def test_pc1_numeric_base_forwarded_to_every_base_gate(self):  # P1
+        self.all_pass()
+        root = self.fixture()
+        for n in (4300, 4301):
+            with self.subTest(digits=n):
+                del self.seen[:]
+                self.run_main(["--root", root, "--base", "7" * n])
+                got = self.args_of()
+                for g in ("decisions", "register", "claims", "evidence"):
+                    self.assertEqual(got[g], ["--root=" + root, "--base=" + "7" * n], g)
+
+    def test_pc1_unicode_base_forwarded_byte_identical(self):  # P2
+        # U+1F6DD is Cn (unassigned) on 3.9 (Unicode 13) and So on 3.13 (Unicode 15.1); the value is forwarded either way
+        self.all_pass()
+        root = self.fixture()
+        ch = "\U0001f6dd"
+        self.run_main(["--root", root, "--base", ch])
+        self.assertEqual(self.args_of()["evidence"][1].encode("utf-8"), b"--base=\xf0\x9f\x9b\x9d")
+
+    def test_pc1_evidence_baseexception_propagates(self):  # P3, G12 semantics
+        if hasattr(builtins, "BaseExceptionGroup"):
+            def boom(args):
+                raise BaseExceptionGroup("g", [KeyboardInterrupt()])
+            want = BaseExceptionGroup
+        else:
+            self.assertFalse(hasattr(builtins, "BaseExceptionGroup"))   # Python < 3.11: use a BaseException subclass
+
+            class Odd(BaseException):
+                pass
+
+            def boom(args):
+                raise Odd()
+            want = Odd
+        self.all_pass()
+        self.fake("evidence", boom)
+        root = self.fixture()
+        with self.assertRaises(want):
+            run_all.check(["--root", root])
+        with self.assertRaises(want):
+            self.run_main(["--root", root])
+
+
 class ArgvTest(RunAllCase):
     def test_json_first(self):  # A1
         self.all_pass(claims=[Line("FAIL", "claims.x", "a\\b\nc")])
