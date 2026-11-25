@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-yje7
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-x-mutants-run.txt X2
+severity: LOW
+class: "group-rule conditions of pre_agent._in_group without a killing test: theirs[0] == group (X2 SURVIVED both); siblings mine[0] == stream, mine[1] == theirs[1] (X1 KILLED), mine[2] == theirs[2] (X3 KILLED), parse ValueError branch"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 3e3f5fd16c89ce41f752b3c6044c006836369ff3
+    by: stream-hooks-2
+review_round: 6
+caused_by_change: true
+dimension: "mutation: group rule conditions killed"
