@@ -1349,6 +1349,42 @@ class Fix1(Base):
             self.assertEqual(verdict(other, "20261102-y/s1/main")[0], other)    # same program and stream: allowed
             self.assertEqual(verdict(other)[0], "")
 
+    # ---- yje7: each condition of pre_agent._in_group has its own killing test
+    def group_verdict(self, target, rec_branch, rec_wt=None):
+        self.sub("a1", "stream prompt")
+        st = {"dispatches": []}
+        session.add_dispatch(st, session.prompt_sha("stream prompt"), "stream_controller", 1, "session",
+                             rec_wt or self.stream_wt, rec_branch)
+        return pre_agent.worktree_of(self.hand(agent_id="a1"), real_prompt("implementer", task="t\nworktree: %s" % target),
+                                     {"id": "stream_controller"}, st)
+
+    def test_group_rule_stream_target_not_recorded_worktree_refused(self):   # yje7 X2: theirs[0] == "group"
+        self.program()
+        dup = os.path.join(self.work, "dup-stream")
+        git(self.R, "worktree", "add", "-q", "-f", dup, NAME + "/s1/main")     # the stream branch again, at another path
+        dup = real(dup)
+        self.assertEqual(pre_agent.worktrees.bound_branch(dup), NAME + "/s1/main")
+        self.assertEqual(self.group_verdict(self.stream_wt, NAME + "/s1/main"), (self.stream_wt, []))   # control
+        self.assertEqual(self.group_verdict(dup, NAME + "/s1/main"),
+                         ("", ["hook.agent.worktree: %s is not one of the dispatcher's worktrees" % dup]))
+
+    def test_group_rule_group_record_binds_no_sibling_group(self):   # yje7 X4: mine[0] == "stream"
+        self.program()
+        grp = self.add_wt("g1", "-b", NAME + "/s1/g1")
+        sib = self.add_wt("g2", "-b", NAME + "/s1/g2")
+        self.assertEqual(self.group_verdict(grp, NAME + "/s1/g1", grp), (grp, []))      # its own recorded worktree
+        self.assertEqual(self.group_verdict(sib, NAME + "/s1/g1", grp),
+                         ("", ["hook.agent.worktree: %s is not one of the dispatcher's worktrees" % sib]))
+
+    def test_group_rule_malformed_branch_refused(self):   # yje7 X5: the ValueError branch
+        self.program()
+        bad = self.add_wt("badg", "-b", NAME + "/s1/G9")                  # program-like name, invalid group id
+        self.assertEqual(self.group_verdict(bad, NAME + "/s1/main"),
+                         ("", ["hook.agent.worktree: %s is not one of the dispatcher's worktrees" % bad]))
+        ok = self.add_wt("okg2", "-b", NAME + "/s1/g1")
+        self.assertEqual(self.group_verdict(ok, NAME + "/s1/main"), (ok, []))      # control
+        self.assertEqual(self.group_verdict(ok, NAME + "/s1/G9")[0], "")           # malformed recorded branch
+
     def add_wt_existing(self, name, branch):
         path = os.path.join(self.work, name)
         git(self.R, "worktree", "add", "-q", path, branch)
