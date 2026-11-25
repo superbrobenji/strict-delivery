@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-m5rq
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-10
 severity: LOW
 class: "paths read through githooks.status_result without a hardening row: hooks dir pre-commit and pre-push as symlink, directory, FIFO; core.hooksPath equal to or nested in .git/hooks"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 8d437f896b5d1f12f17f7d8cd12f7cd4b3c88ea5
+  - 8d437f896b5d1f12f17f7d8cd12f7cd4b3c88ea5:tests/test_bashpolicy.py
 history:
   - status: open
     sha: 9cdf3697606f00a0908453466a22861766ac7fbf
     by: stream-hooks-3
+  - status: planned
+    sha: 8d437f896b5d1f12f17f7d8cd12f7cd4b3c88ea5
+    by: implementer
+  - status: in-progress
+    sha: 8d437f896b5d1f12f17f7d8cd12f7cd4b3c88ea5
+    by: implementer
+  - status: fixed-unpinned
+    sha: 8d437f896b5d1f12f17f7d8cd12f7cd4b3c88ea5
+    by: implementer
 review_round: 1
 caused_by_change: true
 dimension: "hardening: hooks paths"

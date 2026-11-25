@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-tsuc
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-5
 severity: MEDIUM
 class: "Unicode-database predicates in 3b.2 code: bashpolicy.py:253 isalnum in _env_unwrap (only member)"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - d326b376a600d7df0ef9843b86c1d3cd3690ee74
+  - d326b376a600d7df0ef9843b86c1d3cd3690ee74:tests/test_bashpolicy.py
 history:
   - status: open
     sha: 9cdf3697606f00a0908453466a22861766ac7fbf
     by: stream-hooks-3
+  - status: planned
+    sha: d326b376a600d7df0ef9843b86c1d3cd3690ee74
+    by: implementer
+  - status: in-progress
+    sha: d326b376a600d7df0ef9843b86c1d3cd3690ee74
+    by: implementer
+  - status: fixed-unpinned
+    sha: d326b376a600d7df0ef9843b86c1d3cd3690ee74
+    by: implementer
 review_round: 1
 caused_by_change: true
 dimension: "PC1 version rows: Unicode database"
