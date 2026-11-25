@@ -420,12 +420,15 @@ def _plan_block(root: str, kind: str, body: str, version: str, notes: list, writ
     writes.append(managed.Write(path, body, kind))
 
 
-def _context_overlap(ctx: str, dirs: list, files: list) -> list:
+def _context_overlap(ctx: str, dirs: list, files: list, state: str) -> list:
     """H5: conflicts for ``paths.context`` ``ctx`` equal to, or nested with, another path init plans: a state directory
     (``dirs``), an ancestor directory of a planned directory or file (so a state directory below ``ctx`` is this case),
     or a planned file (``files``). Texts are managed's own: ``<path>: two writes name the same path`` and
     ``<path>: parent <p> is not a directory`` (``ctx`` below a planned file)."""
-    taken = set(dirs) | set(files)
+    for d in dirs + [state]:  # controller decision (owner delegation 2026-11-09): equal to or inside a state directory
+        if ctx == d or ctx.startswith(d + "/"):
+            return ["%s: inside the state directory %s" % (ctx, d)]
+    taken = set(files)
     for p in dirs + files:
         parts = p.split("/")
         taken.update("/".join(parts[:i]) for i in range(1, len(parts)))
@@ -514,7 +517,7 @@ def _build(root: str, answers: dict) -> tuple:
             writes.append(set_write)
         extra.context_path = cfg["paths"]["context"]
         planned_files = [config.CONFIG_PATH, "CLAUDE.md", ".gitignore", SETTINGS] + ([CI_PATH] if answers["ci"] else [])
-        overlap = _context_overlap(extra.context_path, paths, planned_files)
+        overlap = _context_overlap(extra.context_path, paths, planned_files, cfg["paths"]["state"])
         if overlap:  # H5: no write is planned for a path equal to or nested with another planned path
             dir_conflicts = dir_conflicts + overlap
         elif managed._inspect(root, extra.context_path)[0] != "text":  # CX1, CX2: a present file is never rewritten

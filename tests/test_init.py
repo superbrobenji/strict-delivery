@@ -2835,6 +2835,7 @@ class TestContextYml(More):
 
 SAME = "%s: two writes name the same path"
 PARENT = "%s: parent %s is not a directory"
+INSIDE = "%s: inside the state directory %s"
 
 
 class TestReview2(More):
@@ -2854,33 +2855,71 @@ class TestReview2(More):
             self.assertEqual(snapshot(self.root), before, (ctx, sub))
 
     # --- R2-1: equal to a state directory (STATE_KEYS), to the state parent, to an ancestor directory ------------
-    def test_ctx_equals_state_decisions(self):  # H5; kills r-o1
+    # Decision (controller, owner delegation 2026-11-09): equal to or inside a state directory is one conflict line
+    # ``<ctx>: inside the state directory <dir>``.
+    def test_ctx_equals_state_decisions(self):  # H5; kills r-i1
         d = ".strict-delivery/state/decisions"
-        self.overlap(d, SAME % d)
+        self.overlap(d, INSIDE % (d, d))
 
-    def test_ctx_equals_state_findings(self):  # H5; kills r-o1
+    def test_ctx_equals_state_findings(self):  # H5; kills r-i1
         d = ".strict-delivery/state/findings"
-        self.overlap(d, SAME % d)
+        self.overlap(d, INSIDE % (d, d))
 
-    def test_ctx_equals_state_claims(self):  # H5; kills r-o1
+    def test_ctx_equals_state_claims(self):  # H5; kills r-i1
         d = ".strict-delivery/state/claims"
-        self.overlap(d, SAME % d)
+        self.overlap(d, INSIDE % (d, d))
 
-    def test_ctx_equals_state_plans(self):  # H5; kills r-o1
+    def test_ctx_equals_state_plans(self):  # H5; kills r-i1
         d = ".strict-delivery/state/plans"
-        self.overlap(d, SAME % d)
+        self.overlap(d, INSIDE % (d, d))
 
-    def test_ctx_equals_state_programs(self):  # H5; kills r-o1
+    def test_ctx_equals_state_programs(self):  # H5; kills r-i1
         d = ".strict-delivery/state/programs"
-        self.overlap(d, SAME % d)
+        self.overlap(d, INSIDE % (d, d))
 
-    def test_ctx_equals_playbooks(self):  # H5; kills r-o1
+    def test_ctx_equals_playbooks(self):  # H5; kills r-i1
         d = ".strict-delivery/playbooks"
-        self.overlap(d, SAME % d)
+        self.overlap(d, INSIDE % (d, d))
 
-    def test_ctx_equals_state_parent(self):  # H5; kills r-o2
+    def test_ctx_equals_state_parent(self):  # H5; kills r-i2
         d = ".strict-delivery/state"
-        self.overlap(d, SAME % d)
+        self.overlap(d, INSIDE % (d, d))
+
+    def test_ctx_inside_state_decisions(self):  # H5; kills r-i1, r-i3
+        d = ".strict-delivery/state/decisions"
+        self.overlap(d + "/ctx.yml", INSIDE % (d + "/ctx.yml", d))
+
+    def test_ctx_inside_state_findings(self):  # H5; kills r-i1, r-i3
+        d = ".strict-delivery/state/findings"
+        self.overlap(d + "/ctx.yml", INSIDE % (d + "/ctx.yml", d))
+
+    def test_ctx_inside_state_claims(self):  # H5; kills r-i1, r-i3
+        d = ".strict-delivery/state/claims"
+        self.overlap(d + "/ctx.yml", INSIDE % (d + "/ctx.yml", d))
+
+    def test_ctx_inside_state_plans(self):  # H5; kills r-i1, r-i3
+        d = ".strict-delivery/state/plans"
+        self.overlap(d + "/ctx.yml", INSIDE % (d + "/ctx.yml", d))
+
+    def test_ctx_inside_state_programs(self):  # H5; kills r-i1, r-i3
+        d = ".strict-delivery/state/programs"
+        self.overlap(d + "/ctx.yml", INSIDE % (d + "/ctx.yml", d))
+
+    def test_ctx_inside_playbooks(self):  # H5; kills r-i1, r-i3
+        d = ".strict-delivery/playbooks"
+        self.overlap(d + "/ctx.yml", INSIDE % (d + "/ctx.yml", d))
+
+    def test_ctx_inside_state_parent(self):  # H5; kills r-i2, r-i3
+        d = ".strict-delivery/state"
+        self.overlap(d + "/ctx.yml", INSIDE % (d + "/ctx.yml", d))
+
+    def test_ctx_deep_inside_state_dir(self):  # H5; kills r-i3 (two levels down)
+        d = ".strict-delivery/state/claims"
+        self.overlap(d + "/a/b.yml", INSIDE % (d + "/a/b.yml", d))
+
+    def test_ctx_sibling_of_state_dir_name_passes(self):  # H5; kills r-i3 (a name that only shares the prefix)
+        self.init_config(paths={"context": ".strict-delivery/state-x.yml"})
+        self.assertEqual(self.cmd("plan")[0], 0)
 
     def test_ctx_equals_strict_delivery_dir(self):  # H5; kills r-o2
         d = ".strict-delivery"
@@ -2895,14 +2934,20 @@ class TestReview2(More):
     def test_ctx_equals_github_workflows_dir(self):  # H5; kills r-o2 (ci true)
         self.overlap(".github/workflows", SAME % ".github/workflows", ci=True)
 
-    def test_ctx_equals_configured_state_dir(self):  # H5; kills r-o1 (a configured, not a default, directory)
-        self.overlap("rec/dec", SAME % "rec/dec", decisions="rec/dec")
+    def test_ctx_equals_configured_state_dir(self):  # H5; kills r-i1 (a configured, not a default, directory)
+        self.overlap("rec/dec", INSIDE % ("rec/dec", "rec/dec"), decisions="rec/dec")
+
+    def test_ctx_inside_configured_state_dir(self):  # H5; kills r-i1 (a configured directory)
+        self.overlap("rec/dec/c.yml", INSIDE % ("rec/dec/c.yml", "rec/dec"), decisions="rec/dec")
+
+    def test_ctx_inside_configured_state_parent(self):  # H5; kills r-i2 (paths.state configured)
+        self.overlap("st/c.yml", INSIDE % ("st/c.yml", "st"), state="st")
 
     # --- R2-1: equal to, or below, a planned file --------------------------------------------------------------
-    def test_ctx_equals_claude_md(self):  # H5; kills r-o3
+    def test_ctx_equals_claude_md(self):  # H5; kills r-o1, r-o9
         self.overlap("CLAUDE.md", SAME % "CLAUDE.md")
 
-    def test_ctx_equals_claude_md_present(self):  # H5; kills r-o3 (the file exists with the block: no write is planned)
+    def test_ctx_equals_claude_md_present(self):  # H5; kills r-o1, r-o9 (the file exists with the block: no write is planned)
         self.assertEqual(self.cmd("apply", git_hooks=False)[0], 0)
         self.init_config(paths={"context": "CLAUDE.md"})
         before = snapshot(self.root)
@@ -2914,19 +2959,19 @@ class TestReview2(More):
     def test_ctx_below_claude_md(self):  # H5; kills r-o4
         self.overlap("CLAUDE.md/x.yml", PARENT % ("CLAUDE.md/x.yml", "CLAUDE.md"))
 
-    def test_ctx_equals_gitignore(self):  # H5; kills r-o3
+    def test_ctx_equals_gitignore(self):  # H5; kills r-o1, r-o9
         self.overlap(".gitignore", SAME % ".gitignore")
 
     def test_ctx_below_gitignore(self):  # H5; kills r-o4
         self.overlap(".gitignore/x.yml", PARENT % (".gitignore/x.yml", ".gitignore"))
 
-    def test_ctx_equals_settings(self):  # H5; kills r-o3
+    def test_ctx_equals_settings(self):  # H5; kills r-o1, r-o9
         self.overlap(".claude/settings.json", SAME % ".claude/settings.json")
 
     def test_ctx_below_settings(self):  # H5; kills r-o4
         self.overlap(".claude/settings.json/x.yml", PARENT % (".claude/settings.json/x.yml", ".claude/settings.json"))
 
-    def test_ctx_equals_ci_workflow(self):  # H5; kills r-o3 (ci true)
+    def test_ctx_equals_ci_workflow(self):  # H5; kills r-o1, r-o9 (ci true)
         p = ".github/workflows/strict-delivery.yml"
         self.overlap(p, SAME % p, ci=True)
 
@@ -2934,7 +2979,7 @@ class TestReview2(More):
         p = ".github/workflows/strict-delivery.yml"
         self.overlap(p + "/x.yml", PARENT % (p + "/x.yml", p), ci=True)
 
-    def test_ctx_equals_config(self):  # H5; kills r-o3
+    def test_ctx_equals_config(self):  # H5; kills r-o1, r-o9
         p = ".strict-delivery/config.yml"
         self.overlap(p, SAME % p)
 
@@ -2954,7 +2999,7 @@ class TestReview2(More):
 
     # --- R2-1: a ``paths.context`` that overlaps nothing is still accepted ----------------------------------------
     def test_ctx_unrelated_paths_pass(self):  # H5: the default and siblings of planned paths
-        for ctx in (".strict-delivery/context.yml", ".strict-delivery/state/ctx.yml", "ctx/context.yml",
+        for ctx in (".strict-delivery/context.yml", ".strict-delivery/statex.yml", "ctx/context.yml",
                     ".github/ctx.yml", ".claude/ctx.yml"):
             self.init_config(paths={"context": ctx})
             code, out, _ = self.cmd("plan")
