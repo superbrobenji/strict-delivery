@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-xs22
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d3-review-2.md R2-1
+severity: LOW
+class: "reason text for a hooks directory doctor refuses to read: members: core.hooksPath an empty directory outside the root, core.hooksPath below a regular file, core.hooksPath a regular file"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e07593e9c647994bc403a2eeff823f83f1be354c
+    by: stream-config
+review_round: 2
+caused_by_change: true
+dimension: input-domain reason text for an unusable hooks directory

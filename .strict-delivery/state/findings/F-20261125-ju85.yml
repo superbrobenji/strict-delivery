@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-ju85
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d3-review-2.md R2-3
+severity: LOW
+class: "fix-round conditions without a test or mutant id: members: _tracked os.path.join(root, idx) for a relative GIT_INDEX_FILE, _dir_safe except OSError return False, _dir_safe base-open return False, _has_header data is None, _common_dir abspath, _locate abspath"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e07593e9c647994bc403a2eeff823f83f1be354c
+    by: stream-config
+review_round: 2
+caused_by_change: true
+dimension: input-domain rows without a test or mutant
