@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261125-9us5
+status: open
+source: task-CI3-review-1.md F1 (CI3 r1)
+severity: MEDIUM
+class: "T6 protected set completeness: files the runner's tests import are not protected; members: tests/__init__.py, tests/helpers.py, tests/test_self_adoption.py"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: 55-56
+    sha: f8b7e5df48056d83ca9d1a735f8170f004685fbc
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f8b7e5df48056d83ca9d1a735f8170f004685fbc
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: T6 protected set completeness
