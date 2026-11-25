@@ -83,3 +83,11 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Optional `timeuse.targets` in config: a share outside target prints WARN, never fails a gate.
 - One time-use line in each checkpoint/handoff; the program status page shows the latest shares; two days outside target is suggested as an owner process question.
 - An unrecognised transcript shape prints "transcript format not recognised" instead of numbers. The HTML pie page stays this repository's local convenience.
+
+### Stage C, the recorded fixes (2026-11-26)
+
+- Owner: "yes git 2.30, plain fixes for the rest".
+- V2-10: one shared safe-read helper for the "file read by path after a check" class (UF-1, UF-3, UF-4, U6, U8), one test per member.
+- V2-11..22, V2-21, V2-23: plain fix tasks grouped by area (shell quoting of the printed git command; unmerged path listed once; identical help heading on 3.9 and 3.13; parser argument by keyword; table renderer code span; run_all import-check order; decisions scanner grammar; integers over 4300 digits; output stream; import failure kind; breakdown syntax; stale skill prose; the docs claim about agents kept alive). Full case lists and hardening rows; no behaviour change beyond the fix.
+- V2-39..42: the four approved, never-scheduled tasks carried in as written with their existing findings.
+- V2-36: the minimum git version is 2.30; `doctor` reports an older git and the gates refuse with a clear message.
