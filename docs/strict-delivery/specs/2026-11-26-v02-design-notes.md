@@ -12,7 +12,7 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 ## Success and failure (2026-11-26)
 
 - Failure, owner's words: "if it takes as long as v0.1 did, if it made no improvements to delivery time while maintaining quality standards, if i have to change the spec halfway through due to improper planning that wasn't thorough enough."
-- Target: under one week from the approved plan and breakdown (step 6) to the v0.2 tag, excluding usage-limit stops, with an extra week of leeway. Steps 1-6 (conversation, design spec, reviewer check, owner approval, plan with every coverage table, breakdown, owner approval) are planning.
+- Target: under one week from the start of v0.2 work to the v0.2 tag, excluding usage-limit stops, with an extra week of leeway. Steps 1-6 (conversation, design spec, reviewer check, owner approval, plan with every coverage table, breakdown, owner approval) are planning. Owner 2026-11-26: "v0.2 will only start after v0.1 so if all planning finishes before v0.1 then the clock only starts when the v0.2 work starts": the clock starts at the later of the plan-and-breakdown approval and the v0.1 tag, when the first v0.2 task is dispatched.
 - Quality bar unchanged: the same gates, zero-bug rule, task and final reviews, mutation evidence, verifier pass. Speed comes from B, F and better planning only.
 - Time-use targets (this build's `time-targets.md`) also apply to v0.2 and are reported daily; planned-versus-actual is tracked from day one; a spec change after approval is an owner question with its cause recorded.
 - Every new feature is discussed and planned properly with the owner before it enters the spec.
