@@ -1,0 +1,19 @@
+schema: finding/1
+id: F-20261124-cfhv
+status: open
+source: "6K.2 implementer GO9 run (records/6K.2-impl.md; stream-records-7-log.md); owner answer Q-RC7-2 (a), 2026-11-24: 'Merge 6K.2; I fix handoff'; owner: the program controller, through its docs PR"
+severity: LOW
+class: "live plan state: the framework plan's handoff.md (.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/handoff.md) predates handoff/1, so check checkpoint --plan 2026-10-31-strict-delivery-framework prints FAIL checkpoint.handoff (spec, base, 13 required keys, in_progress_outside_plan); owner: program controller rewrites it to handoff/1 (Q-RC7-2 (a)); not a 6K.2 finding"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2c6b65f08c36bb02e5a8b90aee574cf7ecc8768a
+    by: stream-records
