@@ -152,3 +152,10 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 
 - Owner: "i think we can defer that rule. running on pr is ok even for strict mode".
 - Not in v0.2. For every profile, pre-commit runs `run_all` only; the tests run on the PR (CI, or the local fallback record). The v0.2 spec amends the v0.1 spec sentence for the strict cell accordingly. Tracked in the v0.3 candidate list as deferred.
+
+### V2-37 Checks on merge and cherry-pick commits (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- init and upgrade install a `pre-merge-commit` hook running the pre-commit checks; a merge that would break run_all is refused before its commit exists.
+- The Bash hook refuses a plain `git cherry-pick` (and `git revert`, `git commit --amend` reusing a commit without checks) and names the form that runs the checks: `--no-commit` then `git commit`.
+- A human cherry-pick outside an agent still skips local checks; CI's process-gates job catches it on the PR, and doctor documents the gap.
