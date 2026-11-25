@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-vign
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-review-fix1.md R5-1
+severity: LOW
+class: "finding record fix sha: F-20261125-2vdv cites bf961bd (touches no record) instead of the records commit 465fb20/2bf1f3e; the other 21 records checked correct"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2bf1f3e74b580e5277712aeecf5c560fd4d2de46
+    by: stream-hooks-2
+review_round: 5
+caused_by_change: true
+dimension: "finding record lifecycle: fix recorded"
