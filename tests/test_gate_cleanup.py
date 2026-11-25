@@ -109,7 +109,8 @@ class ArgvTests(Gx):
         self.assertEqual(gate_cleanup.PRODUCES, ())
         self.assertEqual(producers.PRODUCER_MODULES, ("gates.tools.index", "gates.tools.decisions_cli",
                                                       "gates.tools.findings_cli", "gates.tools.claims_cli",
-                                                      "gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context"))
+                                                      "gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context",
+                                                      "gates.gate_evidence"))
 
     def test_cleanup_main_shape(self):  # AV2
         self.assertIsNone(inspect.signature(gate_cleanup.main).parameters["argv"].default)

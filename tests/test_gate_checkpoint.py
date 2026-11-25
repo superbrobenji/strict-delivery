@@ -1659,7 +1659,7 @@ class Registration(unittest.TestCase):
         self.assertTrue(all(type(x) is str for x in gate_checkpoint.PRODUCES))
 
     def test_checkpoint_in_producer_modules(self):  # DC2, D-Q23
-        self.assertEqual(producers.PRODUCER_MODULES[-3:], ("gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context"))  # Rq-5-2 appends last
+        self.assertEqual(producers.PRODUCER_MODULES[-4:], ("gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context", "gates.gate_evidence"))  # Rq-5-2, Rq-6-2 append last
         self.assertEqual(producers.PRODUCER_MODULES[2], "gates.tools.findings_cli")
 
     def test_handoff_and_ledger_unproduced_not_checked(self):  # DC3

@@ -36,7 +36,7 @@ VERSION_PASS = "PASS run_all.version\n"   # Task 3d.1: the last line; config fra
 # the 32 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
 REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
              "PASS schema.request\nPASS schema.streams\nPASS schema.context\nPASS schema.status\nPASS schema.sync-log\nPASS schema.merged-log\nPASS schema.breakdown\n"
-             "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\n"
+             "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\nPASS schema.mutation-transcript\nPASS schema.review-report\n"
              "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
              "PASS register.evidence\nPASS register.epic\nPASS register.report\n"
              "PASS decisions.schema\nPASS decisions.store\nPASS decisions.base\nPASS decisions.landed\n"
@@ -976,7 +976,7 @@ class ArgvTest(RunAllCase):
                 self.assertEqual(got, want)
         out, code = self.sub(["--root", root, "--base", "HEAD"])
         self.assertEqual(code, 0)
-        self.assertEqual(len(out.splitlines()), 40)   # the 39 real-gate lines (six more kinds, P2.2; the context kind, Rq-5-2) and the version line
+        self.assertEqual(len(out.splitlines()), 42)   # the 41 real-gate lines (six more kinds, P2.2; the context kind, Rq-5-2; the two evidence kinds, Rq-6-2) and the version line
 
 
 class ConfigTest(RunAllCase):
@@ -1043,7 +1043,7 @@ class OutputTest(RunAllCase):
                 "PASS schema.request\nPASS schema.streams\nPASS schema.context\nPASS schema.status\nPASS schema.sync-log\n"
                 "PASS schema.merged-log\nPASS schema.breakdown\n"
                 "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
-                "PASS schema.finding-index\n"
+                "PASS schema.finding-index\nPASS schema.mutation-transcript\nPASS schema.review-report\n"
                 "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
                 "PASS register.evidence\nPASS register.epic\nPASS register.report\n"
                 "PASS decisions.schema\nPASS decisions.store\nPASS decisions.base\nPASS decisions.landed\n"
@@ -1284,7 +1284,7 @@ class Pc1Test(RunAllCase):
                      "PASS schema.request\nPASS schema.streams\nPASS schema.context\nPASS schema.status\nPASS schema.sync-log\n"
                      "PASS schema.merged-log\nPASS schema.breakdown\n"
                      "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
-                     "PASS schema.finding-index\n")
+                     "PASS schema.finding-index\nPASS schema.mutation-transcript\nPASS schema.review-report\n")
         cites_ok = "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n"
         why = "ref must not hold more than 40 hex digits in a row"
         want = (schema_ok + "FAIL register.input: %s\nFAIL decisions.input: %s\nFAIL claims.input: %s\n"
