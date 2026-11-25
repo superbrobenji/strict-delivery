@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-rmrd
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-7
+severity: MEDIUM
+class: "Ruling R2 way-out tail: bashpolicy.py:381, :383, :419, :425, :432, :434"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9cdf3697606f00a0908453466a22861766ac7fbf
+    by: stream-hooks-3
+review_round: 1
+caused_by_change: true
+dimension: "Ruling R2: deny lines name a way out"

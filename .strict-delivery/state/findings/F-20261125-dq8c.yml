@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-dq8c
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-11
+severity: LOW
+class: "version rows with one caller form tested: V5 subagent form (worktree list fails)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9cdf3697606f00a0908453466a22861766ac7fbf
+    by: stream-hooks-3
+review_round: 1
+caused_by_change: true
+dimension: "version rows: caller forms"

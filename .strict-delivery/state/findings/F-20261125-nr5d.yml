@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-nr5d
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-3
+severity: MEDIUM
+class: "alias expansion text: ! alias with -n, ! alias with --no-verify, ! alias with -c core.hooksPath, plain alias with -c core.hooksPath; text_refusals members not applied to expansions: hooks-path, git-config-env, home, decide"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9cdf3697606f00a0908453466a22861766ac7fbf
+    by: stream-hooks-3
+review_round: 1
+caused_by_change: true
+dimension: "alias expansion: bypass and text checks"

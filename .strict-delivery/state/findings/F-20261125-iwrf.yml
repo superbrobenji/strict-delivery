@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-iwrf
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-9
+severity: MEDIUM
+class: "caller x target cross product: {session, subagent bound R, subagent bound W, subagent bound nested} x {-C R, -C nested, -C nested/sub, -C other repo, -C /, cd form}; only the diagonal and the subagent column tested"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9cdf3697606f00a0908453466a22861766ac7fbf
+    by: stream-hooks-3
+review_round: 1
+caused_by_change: true
+dimension: "pair matrix: caller x target"
