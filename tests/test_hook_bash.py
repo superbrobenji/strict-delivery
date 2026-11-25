@@ -379,6 +379,17 @@ class TargetTest(HookCase):
         self.refused(r, "target")
         self.assertIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.R, W), r.stderr)
 
+    def test_refused_target_commit_stops_before_config_unstaged_gates(self):   # M43: the refused target's policy is not the target's
+        W = self.worktree("W", "-b", "wb")
+        agent = self.agent(W)
+        self.dirty()   # the main checkout (the refused target) has an unstaged path
+        r = self.B("git commit -m m", agent=agent)
+        self.refused(r, "target", absent=("unstaged", "config", "gates"))
+        write(os.path.join(self.R, ".strict-delivery", "config.yml"), "schema: [\n")   # and a config that does not load
+        r = self.B("git commit -m m", agent=agent)
+        self.refused(r, "target", absent=("unstaged", "config", "gates"))
+        self.assertFalse(self.gates_ran())
+
     def test_other_worktree_and_other_repo_refused(self):   # TR4, TR21, HR7
         W = self.worktree("W", "-b", "wb")
         W2 = self.worktree("W2", "-b", "wb2")
