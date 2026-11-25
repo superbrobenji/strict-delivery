@@ -177,14 +177,27 @@ class TestExtras(Base):
         self.assertEqual(self.line("ci"), "FAIL doctor.ci: pin %s differs from v0.1.0" % SHA40)
         text = self.managed_ci()
         self.assertEqual(self.line("ci"), "PASS doctor.ci")
-        for name, edited in (("deleted", text.replace("\n", "", 1) if False else "\n".join(text.split("\n")[:-3]) + "\n"),
+        for name, edited in (("deleted", "\n".join(text.split("\n")[:-3]) + "\n"),
                              ("added", text + "# x\n"), ("space", text.replace("\n", " \n", 6).replace(" \n", "\n", 1)),
                              ("nofinal", text.rstrip("\n")),
                              ("tab", text.replace("  ", "\t", 1))):
             self.write(WF, edited)
             with self.subTest(edit=name):
-                got = self.line("ci") if "managed" else ""
-                self.assertIn(got, ("FAIL doctor.ci: stale",) if name not in ("crlf",) else (got,))
+                self.assertEqual(self.line("ci"), "FAIL doctor.ci: stale")
+        # CI13: an older template, the current render with the P3 step "Create the local base branch" removed
+        step = "      - name: Create the local base branch\n"
+        self.assertEqual(text.count(step), 2)  # the matrix job and the pull-request job each hold one (E16 :28-33, :54-58)
+        rows = text.split("\n")
+        at = [i for i, ln in enumerate(rows) if ln + "\n" == step]
+        self.assertEqual(len(at), 2)
+        self.assertEqual(rows[at[0] + 1], "        if: github.event_name == 'pull_request'")
+        self.assertIn("git branch", rows[at[0] + 5])
+        for name, drop in (("first", at[:1]), ("second", at[1:]), ("both", at)):
+            kept = [ln for i, ln in enumerate(rows) if not any(a <= i < a + 6 for a in drop)]
+            self.assertEqual(len(rows) - len(kept), 6 * len(drop))
+            self.write(WF, "\n".join(kept))
+            with self.subTest(removed=name):
+                self.assertEqual(self.line("ci"), "FAIL doctor.ci: stale")
         self.write(WF, text.replace("v0.1.0", "v0.0.9") + "# edit\n")  # CI10: the pin message wins
         self.assertEqual(self.line("ci"), "FAIL doctor.ci: pin v0.0.9 differs from v0.1.0")
         lines = text.split("\n")

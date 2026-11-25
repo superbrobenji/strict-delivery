@@ -476,8 +476,27 @@ class TestRowsLate(Base):
         git(other, "add", "-f", "--", key)
         with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": os.path.join(other, ".git", "index")}):
             self.assertEqual(self.line("generated-tracked"), "FAIL doctor.generated-tracked: " + key)
-        # the table expects a nonexistent file to make ls-files fail; measured: git reads it as an empty index
-        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": os.path.join(self.tmp, "nonexistent-index")}):
+        # GT13 (Q-RC13-2 (a), fix round 1): a nonexistent file is `cannot be checked` (git alone reads it as an empty index)
+        gone = os.path.join(self.tmp, "nonexistent-index")
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": gone}):
+            self.assertEqual(self.line("generated-tracked"), self.cannot(gone))
+
+    def cannot(self, value):
+        return "FAIL doctor.generated-tracked: cannot be checked: GIT_INDEX_FILE %s is not a regular file" % value
+
+    def test_doctor_generated_git_index_file_not_regular(self):  # GT13 (Q-RC13-2 (a)): directory, symlink, FIFO; regular file control
+        copy = os.path.join(self.tmp, "index-copy")
+        shutil.copy(os.path.join(self.r, ".git", "index"), copy)
+        d = os.path.join(self.tmp, "index-dir")
+        os.mkdir(d)
+        link = os.path.join(self.tmp, "index-link")
+        os.symlink(copy, link)
+        fifo = os.path.join(self.tmp, "index-fifo")
+        os.mkfifo(fifo)
+        for value in (d, link, fifo):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {"GIT_INDEX_FILE": value}):
+                self.assertEqual(self.line("generated-tracked"), self.cannot(value))
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": copy}):  # control: a regular file keeps today's verdict
             self.assertEqual(self.line("generated-tracked"), "PASS doctor.generated-tracked")
 
     def test_doctor_generated_single_ls_files(self):  # GT14

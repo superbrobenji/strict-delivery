@@ -272,6 +272,21 @@ class TestPythonInputVersion(Base):
                 if want:
                     self.assertEqual(lines[1], "FAIL doctor.input: " + want)
 
+    def test_doctor_config_integers_4300_4301_digits(self):  # VR1 (d), IN6: killed by D101 (the input verdict dropped for a ValueError)
+        cfgp = os.path.join(self.r, ".strict-delivery", "config.yml")
+        head = "schema: config/2\nframework_version: 0.1.0\nprofile: strict\n"  # the integer is on line 5
+        for limit in INT_LIMITS:
+            with int_limit(limit):
+                for n in (4300, 4301):
+                    for block in ("drift:\n  estimate_factor_pct: ", "limits:\n  max_depth: "):
+                        with self.subTest(limit=limit, digits=n, key=block.split(":")[0]):
+                            with open(cfgp, "w", encoding="utf-8") as fh:
+                                fh.write(head + block + "1" * n + "\n")
+                            code, out, err = self.run_doctor()
+                            self.assertEqual((code, err), (1, ""))
+                            self.assertEqual(out.splitlines(), ["PASS doctor.python",
+                                             "FAIL doctor.input: .strict-delivery/config.yml: integer too large (line 5)"])
+
     def test_doctor_input_pass_and_loaded_once(self):  # IN1, IN8, VE8
         with mock.patch.object(config, "load", wraps=config.load) as ld, \
                 mock.patch.object(plugin, "version", wraps=plugin.version) as pv:
@@ -618,6 +633,98 @@ class TestSwapAfterCheck(Base):
             os.mkfifo(os.path.join(hooks, name))
         with self.lie({n: reg for n in githooks.NAMES}), self.no_block():
             self.assertIn("neither extra installed", self.line("extras"))
+
+
+NEITHER_TEXT = "PASS doctor.extras: neither extra installed: this repository is gated only inside Claude sessions"
+
+
+class TestHooksDirParents(Base):
+    """H4 and H7 for the hooks directory (F-20261125-wch7): ``core.hooksPath`` leading through a symlinked parent, or to a
+    directory outside the root, never makes a shim there count. Row EX9 gives the verdict of a hook that is not a regular
+    file below the root: ``foreign``, and not installed unless the other directory holds a shim."""
+
+    def outside_shims(self):
+        """Real shims copied into a directory outside the root; the repository's own shims are removed."""
+        self.shims()
+        hooks = os.path.join(self.r, ".git", "hooks")
+        out = os.path.join(self.tmp, "outside-hooks")
+        os.makedirs(out)
+        for n in githooks.NAMES:
+            shutil.copyfile(os.path.join(hooks, n), os.path.join(out, n))
+            os.chmod(os.path.join(out, n), 0o755)
+            os.unlink(os.path.join(hooks, n))
+        return out
+
+    def test_h4_hooks_path_through_a_symlinked_parent_not_installed(self):  # H4 (hooksPath symlink, nested symlink)
+        out = self.outside_shims()
+        os.symlink(out, os.path.join(self.r, "myhooks"))
+        git(self.r, "config", "core.hooksPath", "myhooks")
+        self.assertEqual(self.line("extras"), NEITHER_TEXT)
+        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+        git(self.r, "config", "core.hooksPath", "a/b")  # a parent two levels up is the link
+        os.makedirs(os.path.join(self.tmp, "outside-a"))
+        os.symlink(out, os.path.join(self.tmp, "outside-a", "b"))
+        os.symlink(os.path.join(self.tmp, "outside-a"), os.path.join(self.r, "a"))
+        self.assertEqual(self.line("extras"), NEITHER_TEXT)
+        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+
+    def test_h7_hooks_path_outside_the_root_not_installed(self):  # H7: an absolute core.hooksPath outside the root
+        out = self.outside_shims()
+        git(self.r, "config", "core.hooksPath", out)
+        self.assertEqual(self.line("extras"), NEITHER_TEXT)
+        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+        for n in githooks.NAMES:
+            shutil.copyfile(os.path.join(out, n), os.path.join(os.path.dirname(self.r), n))
+            os.chmod(os.path.join(os.path.dirname(self.r), n), 0o755)
+        git(self.r, "config", "core.hooksPath", "..")
+        self.assertEqual(self.line("extras"), NEITHER_TEXT)
+        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+        inside = os.path.join(self.r, "inhooks")  # control: the same shims in a real directory below the root count
+        shutil.copytree(out, inside)
+        git(self.r, "config", "core.hooksPath", inside)
+        self.assertEqual(self.line("extras"), "PASS doctor.extras: git hooks: installed; CI: not installed")
+        self.assertEqual(self.line("githooks.pre-commit"), "PASS doctor.githooks.pre-commit")
+        for n in githooks.NAMES:  # control: hooksPath "" makes the root itself the hooks directory (GH10)
+            shutil.copyfile(os.path.join(out, n), os.path.join(self.r, n))
+            os.chmod(os.path.join(self.r, n), 0o755)
+        git(self.r, "config", "core.hooksPath", "")
+        self.assertEqual(self.line("extras"), "PASS doctor.extras: git hooks: installed; CI: not installed")
+
+    def test_hooks_header_must_be_a_complete_line_two(self):  # EX7: the header on line 2 needs its newline
+        self.shims()
+        hooks = os.path.join(self.r, ".git", "hooks")
+        for n in githooks.NAMES:
+            put(os.path.join(hooks, n), b"#!/bin/sh\n" + githooks.HEADER.encode("utf-8"))
+            os.chmod(os.path.join(hooks, n), 0o755)
+        self.assertEqual(self.line("extras"), NEITHER_TEXT)
+
+    def test_hooks_path_absent_directory_lines_are_missing(self):  # a hooks directory that does not exist: library "missing"
+        out = self.outside_shims()
+        for n in githooks.NAMES:
+            shutil.copyfile(os.path.join(out, n), os.path.join(self.r, ".git", "hooks", n))
+            os.chmod(os.path.join(self.r, ".git", "hooks", n), 0o755)
+        git(self.r, "config", "core.hooksPath", "nodir/sub")
+        lines = [ln for ln in self.lines() if "githooks" in ln or "doctor.extras" in ln]
+        self.assertEqual(lines, ["PASS doctor.extras: git hooks: installed; CI: not installed",
+                                 "FAIL doctor.githooks.pre-commit: missing", "FAIL doctor.githooks.pre-push: missing",
+                                 "FAIL doctor.githooks.hooks-path: core.hooksPath is set (nodir/sub); unset it to install the hooks"])
+
+    def test_h4_symlinked_hooks_directory_lines_are_foreign(self):  # H4 + EX9: shims elsewhere, the configured directory is a link
+        out = self.outside_shims()
+        for n in githooks.NAMES:  # the default directory keeps its shims, so the extra is installed
+            shutil.copyfile(os.path.join(out, n), os.path.join(self.r, ".git", "hooks", n))
+            os.chmod(os.path.join(self.r, ".git", "hooks", n), 0o755)
+        os.symlink(out, os.path.join(self.r, "myhooks"))
+        git(self.r, "config", "core.hooksPath", "myhooks")
+        lines = [ln for ln in self.lines() if "githooks" in ln or "doctor.extras" in ln]
+        self.assertEqual(lines, ["PASS doctor.extras: git hooks: installed; CI: not installed",
+                                 "FAIL doctor.githooks.pre-commit: foreign", "FAIL doctor.githooks.pre-push: foreign",
+                                 "FAIL doctor.githooks.hooks-path: core.hooksPath is set (myhooks); unset it to install the hooks"])
+        git(self.r, "config", "core.hooksPath", out)  # H7: the real directory outside the root, an absolute path
+        lines = [ln for ln in self.lines() if "githooks" in ln or "doctor.extras" in ln]
+        self.assertEqual(lines, ["PASS doctor.extras: git hooks: installed; CI: not installed",
+                                 "FAIL doctor.githooks.pre-commit: foreign", "FAIL doctor.githooks.pre-push: foreign",
+                                 "FAIL doctor.githooks.hooks-path: core.hooksPath is set (%s); unset it to install the hooks" % out])
 
 
 # ---------------------------------------------------------------------------------------------------- context.yml

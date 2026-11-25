@@ -43,7 +43,18 @@ def _why(e: BaseException) -> str:
 
 
 def _read(root: str, rel: str) -> Optional[str]:
-    """The text of the regular file ``rel`` under ``root``; ``None`` when it is absent. Every component is
+    """The text of the regular file ``rel`` under ``root`` (see ``_read_bytes``); non-UTF-8 is a reason."""
+    data = _read_bytes(root, rel)
+    if data is None:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise _Unreadable("is not valid UTF-8") from None
+
+
+def _read_bytes(root: str, rel: str) -> Optional[bytes]:
+    """The bytes of the regular file ``rel`` under ``root``; ``None`` when it is absent. Every component is
     ``lstat``ed (a symlink or a non-directory parent and a non-regular file are refused) and then opened from the
     descriptor of the one before it with ``O_NOFOLLOW`` (a parent also ``O_DIRECTORY``, the file also ``O_NONBLOCK``)
     and the file ``fstat``ed, so an object swapped in after its check is refused and never read outside the root and a
@@ -86,10 +97,7 @@ def _read(root: str, rel: str) -> Optional[str]:
     finally:
         if fd >= 0:
             os.close(fd)
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise _Unreadable("is not valid UTF-8") from None
+    return data
 
 
 def _parents(root: str, rel: str) -> None:
@@ -165,34 +173,73 @@ def _inside_framework(root: str) -> bool:
     return real == fw or real.startswith(fw.rstrip(os.sep) + os.sep)
 
 
-def _has_header(path: str) -> bool:
-    """True when ``path`` is a regular file whose line 2 is the shim header (the file is never opened before ``lstat``
-    says it is regular)."""
-    fd = -1
+def _common_dir(root: str) -> str:
+    """The absolute git common directory (git's own answer; the linked worktrees' hooks live in its ``hooks``)."""
+    common = gitinfo._run(root, "rev-parse --git-common-dir", ["rev-parse", "--git-common-dir"])
+    text = gitinfo._text(common.stdout, "rev-parse --git-common-dir")
+    return os.path.abspath(os.path.join(root, text[:-1] if text.endswith("\n") else text))
+
+
+def _locate(root: str, directory: str) -> Optional[tuple]:
+    """``(base, parts)``: the hooks ``directory`` below the root or below the git common directory (the only two places a
+    hooks directory may be; a linked worktree's lies outside the root), as the components under that base; ``None`` for
+    any other place (H7), which no read may reach."""
+    for base in (os.path.abspath(root), _common_dir(root)):
+        rel = os.path.relpath(directory, base)
+        if rel == ".":
+            return base, []
+        if rel != ".." and not rel.startswith(".." + os.sep):
+            return base, rel.split(os.sep)
+    return None
+
+
+def _dir_safe(base: str, parts: list) -> bool:
+    """True when every component of ``parts`` below ``base`` is a real directory or absent: each is opened from the
+    descriptor of the one before it with ``O_NOFOLLOW`` and ``O_DIRECTORY`` (H4: a symlinked parent is never followed)."""
     try:
-        if not stat.S_ISREG(os.lstat(path).st_mode):
-            return False
-        fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _NONBLOCK)  # a swap after the lstat: no symlink, no FIFO block
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return False
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1
-            fh.readline()
-            line = fh.readline()
+        fd = os.open(base, os.O_RDONLY | _DIRECTORY)
     except OSError:
         return False
-    finally:
-        if fd >= 0:
+    try:
+        for part in parts:
+            try:
+                nxt = os.open(part, os.O_RDONLY | _NOFOLLOW | _DIRECTORY, dir_fd=fd)
+            except FileNotFoundError:
+                return True
+            except OSError:
+                return False
             os.close(fd)
-    return line.rstrip(b"\n") == githooks.HEADER.encode("utf-8") and line.endswith(b"\n")
+            fd = nxt
+        return True
+    finally:
+        os.close(fd)
+
+
+def _hooks_dir_safe(root: str, directory: str) -> bool:
+    found = _locate(root, directory)
+    return found is not None and _dir_safe(found[0], found[1])
+
+
+def _has_header(root: str, directory: str, name: str) -> bool:
+    """True when ``name`` in the hooks ``directory`` is a regular file whose line 2 is the shim header. The file is read
+    by ``_read_bytes`` (every component below its base opened from the one before with ``O_NOFOLLOW``, never outside
+    the root or the common directory, a FIFO never opened blocking); any refusal means no."""
+    found = _locate(root, directory)
+    if found is None:
+        return False
+    try:
+        data = _read_bytes(found[0], "/".join(found[1] + [name]))
+    except _Unreadable:
+        return False
+    if data is None:
+        return False
+    lines = data.split(b"\n")  # line 2 must be complete: a third piece exists
+    return len(lines) >= 3 and lines[1] == githooks.HEADER.encode("utf-8")
 
 
 def _hooks_installed(root: str) -> bool:
-    dirs = [gitinfo.hooks_dir(root)]
-    common = gitinfo._run(root, "rev-parse --git-common-dir", ["rev-parse", "--git-common-dir"])
-    text = gitinfo._text(common.stdout, "rev-parse --git-common-dir")
-    dirs.append(os.path.abspath(os.path.join(root, (text[:-1] if text.endswith("\n") else text), "hooks")))
-    return any(_has_header(os.path.join(d, n)) for d in dirs for n in githooks.NAMES)
+    dirs = [gitinfo.hooks_dir(root), os.path.join(_common_dir(root), "hooks")]
+    return any(_has_header(root, d, n) for d in dirs for n in githooks.NAMES)
 
 
 class _Ci:
@@ -223,13 +270,18 @@ def _extras(hooks: bool, ci: _Ci) -> Line:
 
 def _githooks(root: str) -> list:
     out = []
-    try:
-        res = githooks.status(root, githooks.framework_dir())
-    except githooks._FrameworkError as e:
-        out.append(_fail("githooks.framework", str(e)))
+    if not _hooks_dir_safe(root, gitinfo.hooks_dir(root)):
+        # H4, H7 (EX9): the library's status reads by path and follows a symlinked parent; doctor refuses first
+        for name in githooks.NAMES:
+            out.append(_fail("githooks." + name, "foreign"))
     else:
-        for ln in res.lines:  # "githooks.<name>" restated as "doctor.githooks.<name>"
-            out.append(Line(ln.status, "doctor." + ln.id, ln.reason))
+        try:
+            res = githooks.status(root, githooks.framework_dir())
+        except githooks._FrameworkError as e:
+            out.append(_fail("githooks.framework", str(e)))
+        else:
+            for ln in res.lines:  # "githooks.<name>" restated as "doctor.githooks.<name>"
+                out.append(Line(ln.status, "doctor." + ln.id, ln.reason))
     value = githooks._hooks_path(root)
     if value is not None:
         out.append(_fail("githooks.hooks-path", "core.hooksPath is set (%s); unset it to install the hooks" % value))
@@ -466,6 +518,14 @@ def _lines(root: object) -> list:
     ok = _guarded(lines, "indexes", _indexes) is not None
 
     def _tracked() -> Line:
+        idx = os.environ.get("GIT_INDEX_FILE")  # GT13: inherited by design, but it must name a regular file (a FIFO would block git)
+        if idx is not None:
+            try:
+                regular = stat.S_ISREG(os.lstat(os.path.join(root, idx)).st_mode)
+            except (OSError, ValueError):
+                regular = False
+            if not regular:
+                raise GateError("cannot be checked: GIT_INDEX_FILE %s is not a regular file" % idx)
         tracked = gitinfo.tracked_files(root)
         hit = sorted(k for k in rendered if k in tracked)
         return _fail("generated-tracked", ", ".join(hit)) if hit else _pass("generated-tracked")
