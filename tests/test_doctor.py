@@ -746,15 +746,36 @@ class TestHooksDirParents(Base):
                                          "FAIL doctor.githooks.hooks-path: core.hooksPath is set (%s); unset it to install the hooks" % value])
         self.assertTrue(os.path.isdir(hooks))
 
+    def test_q_rc14_2_outside_the_root_empty_or_through_a_link_not_installed(self):
+        # Owner Q-RC14-2 (b), 2026-11-25: "A hooksPath outside the root with no shim reports 'not installed', with no
+        # FAIL"; the exit code and every other line are those of the run without the setting.
+        self.shims()
+        hooks = os.path.join(self.r, ".git", "hooks")
+        for n in githooks.NAMES:
+            os.unlink(os.path.join(hooks, n))
+        base = self.run_doctor()
+        self.assertEqual(base[1].splitlines()[4], NEITHER_TEXT)
+        empty_out = os.path.join(self.tmp, "empty-outside")
+        os.makedirs(os.path.join(empty_out, "sub"))
+        os.symlink(empty_out, os.path.join(self.tmp, "outside-link"))
+        for value in (empty_out, os.path.join(self.tmp, "outside-link"), os.path.join(self.tmp, "outside-link", "sub")):
+            git(self.r, "config", "core.hooksPath", value)  # absolute, outside the root, the last two through a symlink
+            with self.subTest(hooks_path=value):
+                self.assertEqual(self.run_doctor(), base)
+
     def test_h7_hooks_path_outside_the_root_not_installed(self):  # H7: an absolute core.hooksPath outside the root
+        # Owner Q-RC14-2 (b), 2026-11-25: "A hooksPath outside the root with no shim reports 'not installed', with no FAIL".
+        # A shim outside the root is never read (H7), so it does not count: the run is the run without the setting.
         out = self.outside_shims()
+        base = self.run_doctor()
         git(self.r, "config", "core.hooksPath", out)
-        self.assert_unsafe(out)
+        self.assertEqual(self.run_doctor(), base)
+        self.assertEqual(base[1].splitlines()[4], NEITHER_TEXT)
         for n in githooks.NAMES:
             shutil.copyfile(os.path.join(out, n), os.path.join(os.path.dirname(self.r), n))
             os.chmod(os.path.join(os.path.dirname(self.r), n), 0o755)
         git(self.r, "config", "core.hooksPath", "..")
-        self.assert_unsafe("..")
+        self.assertEqual(self.run_doctor(), base)
         inside = os.path.join(self.r, "inhooks")  # control: the same shims in a real directory below the root count
         shutil.copytree(out, inside)
         git(self.r, "config", "core.hooksPath", inside)
