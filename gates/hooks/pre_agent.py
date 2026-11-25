@@ -223,7 +223,7 @@ def handle(ctx: HookContext) -> Outcome:
     except session.SessionUnavailable as e:
         if entered and not done:
             raise
-        if done:                           # the write on lock exit failed: the count would be lost (Q5)
-            return Outcome(deny=["FAIL hook.agent.session: %s%s" % (safe_text(e), WAY_OUT)])
+        if done:                           # the write on lock exit failed: the count would be lost (Q5); every FAIL line stays
+            return Outcome(deny=list(outcome.deny) + ["FAIL hook.agent.session: %s%s" % (safe_text(e), WAY_OUT)])
         return _decide(ctx, prompt, required, None, str(e))
     return outcome

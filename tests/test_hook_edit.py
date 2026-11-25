@@ -20,7 +20,7 @@ import unittest
 from unittest import mock
 
 from gates.hooks import pre_edit
-from gates.lib import decisions, yamlsub
+from gates.lib import decisions, session, yamlsub
 from gates.lib.hookio import HookContext
 from gates.lib.result import GateError
 from tests.helpers import GitIsolatedTestCase, git, make_repo, minimal_config, watched, write_record
@@ -32,8 +32,10 @@ OPTS = [{"label": "yes", "cost": "none"}, {"label": "no", "cost": "some"}]
 SHA = "a1b2c3d"
 TAIL = "; the strict-delivery hook fails closed; the human can disable the plugin with /plugin, and !-prefixed commands still run"
 IN_TAIL = ("; the Edit and Write tools need a non-empty string path in the tool's own field (file_path; notebook_path "
-           "for NotebookEdit)")
+           "for NotebookEdit); the human can disable the plugin with /plugin until a fix merges, and !-prefixed commands "
+           "still run")
 TAG = "decision/%d" % decisions._schema().version
+SESSION_TAG = session.SCHEMA   # hook-session has no schema file (its reader session.state_errors checks it); Task 3a.1 ships it
 
 
 def DENY(p):
@@ -650,7 +652,7 @@ class HandleTest(Base):
 
     def test_deny_with_malformed_record(self):   # HD16
         os.makedirs(self.repo + "/" + D)
-        open(self.repo + "/" + D + "/" + DEC2 + ".yml", "w").write("schema: decision/2\nid: x\nstatus: [\n")
+        open(self.repo + "/" + D + "/" + DEC2 + ".yml", "w").write("schema: " + TAG + "\nid: x\nstatus: [\n")
         p = self.edit(self.repo + "/" + D + "/x.yml")
         self.assertEqual((p.returncode, p.stdout, p.stderr), (2, "", DENY(self.repo + "/" + D + "/x.yml")))
 
@@ -714,7 +716,7 @@ class HandleTest(Base):
 
     def test_surfacing_blocks_nothing(self):   # HS17, HS18, HD27
         self.put(dec(DEC1))
-        open(self.repo + "/" + D + "/" + DEC2 + ".yml", "w").write("schema: decision/2\nid: x\nstatus: [\n")
+        open(self.repo + "/" + D + "/" + DEC2 + ".yml", "w").write("schema: " + TAG + "\nid: x\nstatus: [\n")
         p = self.edit(self.src())
         self.assertEqual(p.returncode, 0)
         lines = ctx_lines(p)
@@ -984,7 +986,7 @@ class HandleTest(Base):
         for other, want in (([DEC1], []), (["DEC-other"], [IF(DEC1)])):
             with self.subTest(surfaced=other):
                 os.rename(os.path.join(sessions, "sess-1.yml"), os.path.join(self.tmp, "old-%s.yml" % len(other[0])))
-                write_record(sessions, "sess-1.yml", {"schema": "hook-session/1", "session": "sess-1", "dispatches": [],
+                write_record(sessions, "sess-1.yml", {"schema": SESSION_TAG, "session": "sess-1", "dispatches": [],
                                                       "surfaced": other})
                 self.assertEqual(ctx_lines(self.edit(self.src())), want)
 
@@ -1225,6 +1227,18 @@ class HandleTest(Base):
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
         self.assertLess(time.monotonic() - started, 15)
 
+    def test_input_deny_names_owner_way_out(self):   # Ruling R2, F-20261125-zeak: the exact line, every input refusal
+        want = ("FAIL hook.edit.input: tool_input.file_path is missing; the Edit and Write tools need a non-empty string "
+                "path in the tool's own field (file_path; notebook_path for NotebookEdit); the human can disable the "
+                "plugin with /plugin until a fix merges, and !-prefixed commands still run\n")
+        p = self.edit("unused", ti={})
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (2, "", want))
+        for ti, reason in (({"file_path": ""}, "is empty"), ({"file_path": 5}, "must be a string")):
+            with self.subTest(ti=ti):
+                p = self.edit("unused", ti=ti)
+                self.assertEqual((p.returncode, p.stdout), (2, ""))
+                self.assertEqual(p.stderr, "FAIL hook.edit.input: tool_input.file_path " + reason + want.split("is missing", 1)[1])
+
     def test_hardening_parent_symlink(self):   # HR4
         r = self.repo
         os.makedirs(r + "/" + D)
@@ -1235,12 +1249,14 @@ class HandleTest(Base):
         r = self.repo
         os.makedirs(r + "/" + D)
         os.makedirs(r + "/swap")
-        first = self.edit(r + "/swap/x.yml")   # checked while swap is a real directory: passes
-        self.assertEqual((first.returncode, first.stdout, first.stderr), (0, "", ""))
+        self.put(dec(DEC1, applies_to=["swap/*"]))
+        first = self.edit(r + "/swap/x.yml")   # checked while swap is a real directory: passes, surfaces DEC1
+        self.assertEqual((first.returncode, first.stderr, ctx_lines(first)), (0, "", [IF(DEC1)]))
         os.rename(r + "/swap", r + "/swap-old")
-        os.symlink(r + "/" + D, r + "/swap")   # replaced after the check: the earlier verdict cannot change
-        self.assertEqual(first.returncode, 0)
+        os.symlink(r + "/" + D, r + "/swap")   # replaced after the check: the earlier verdict's record cannot change
+        self.assertEqual(yamlsub.load(self.state_path(), "state")["surfaced"], [DEC1])   # re-read after the change
         self.assertEqual(self.edit(r + "/swap/x.yml").returncode, 2)   # a new check follows the state at check time
+        self.assertEqual(yamlsub.load(self.state_path(), "state")["surfaced"], [DEC1])   # the refusal left it as it was
 
     def test_hardening_nested_configured_paths(self):   # HR5
         for name, rel, refused, passed in (

@@ -5,6 +5,7 @@ Production path: ``python3 -m gates hook <Event>`` through ``tests.hookrun.run_h
 gate input. Expected values are written by hand from the plan and the table, never read back from the code."""
 import json
 import os
+import re
 import threading
 import unittest
 from unittest import mock
@@ -1259,7 +1260,8 @@ class More(Base):
             self.assertEqual(fh.read(), first)
 
 
-STATE_OK = ("schema: hook-session/1\nsession: s1\ndispatches:\n  - sha: %s\n    role: controller\n    depth: 1\n"
+SESSION_TAG = session.SCHEMA   # hook-session has no schema file (its reader session.state_errors checks it); Task 3a.1 ships it
+STATE_OK = ("schema: " + SESSION_TAG + "\nsession: s1\ndispatches:\n  - sha: %s\n    role: controller\n    depth: 1\n"
             "    parent: session\n    worktree: /w\n    branch: b\nsurfaced: []\n")
 SHA_A = "a" * 64
 
@@ -1621,6 +1623,85 @@ class Fix1(Base):
                 out, _ = self.seen(self.hand(cfg=config.load(self.R), agent_id=agent, tool_input=tin("P")))
             self.assertEqual(out.deny, want, name)
             self.assertEqual(self.recs(), [], name)            # nothing was recorded
+
+
+class FinalReview(Base):
+    """PR-tools final review (findings yxau r8kv): FR-1 and the plan-named tests of P:3939, P:3957 and P:3961."""
+
+    def line(self, path, role="implementer", extra=""):
+        return real_prompt(role, "opus" if role == "controller" else "sonnet", task="t\nworktree: %s\n%s" % (path, extra))
+
+    def break_write(self, sid):
+        """The store's temporary file name is a directory: the write on lock exit fails with ``SessionUnavailable``."""
+        with session.locked(self.env, sid):
+            pass
+        os.makedirs(os.path.join(self.pd, "sessions", sid + ".yml.tmp"))
+        with open(os.path.join(self.pd, "sessions", sid + ".yml"), "rb") as fh:
+            return fh.read()
+
+    def test_write_failure_on_exit_keeps_every_fail_line(self):   # HS6 (Q5 (a), plan P:3918, F-20261125-yxau)
+        sib = self.add_wt("sibw", "-b", "fw")
+        wt_line = "FAIL hook.agent.worktree: %s is not one of the dispatcher's worktrees%s" % (sib, WAY)
+        gate = ["FAIL dispatch.model: the dispatch call passes no model",
+                "FAIL dispatch.tier: not checked: dispatch.model failed",
+                "FAIL dispatch.top-tier: not checked: dispatch.tier failed"]
+        for n, (name, profile, agent, ti, keep) in enumerate((
+                ("gate required, gate FAIL lines", "strict", None, {"prompt": real_prompt("implementer"),
+                                                                    "subagent_type": "general-purpose"}, gate),
+                ("gate required, worktree FAIL line", "strict", None, tin(self.line(sib)), [wt_line]),
+                ("gate required, gate and worktree FAIL lines", "strict", None,
+                 {"prompt": self.line(sib), "subagent_type": "general-purpose"}, gate + [wt_line]),
+                ("not required, worktree FAIL line", "light", None, {"prompt": self.line(sib)}, [wt_line]),
+                ("gate required, pass", "strict", None, tin(real_prompt("implementer")), []),
+                ("not required, no program", "light", None, {"prompt": "x"}, []),
+                ("not required, unknown dispatcher", "light", "zz", {"prompt": "x"}, []))):
+            with self.subTest(name):
+                self.set_config(profile=profile)
+                sid = "w%d" % n
+                before = self.break_write(sid)
+                p = self.hk(ti, agent_id=agent, session_id=sid)
+                self.assertEqual(p.returncode, 2, p.stderr)
+                self.assertEqual(p.stdout, "")
+                lines = p.stderr.split("\n")[:-1]
+                self.assertEqual(lines[:-1], keep)                       # every computed FAIL line stays, in order
+                self.assertRegex(lines[-1], r"^FAIL hook\.agent\.session: cannot write the session state file .*%s\.yml "
+                                            r"\(.*\)%s$" % (sid, re.escape(WAY)))
+                with open(os.path.join(self.pd, "sessions", sid + ".yml"), "rb") as fh:
+                    self.assertEqual(fh.read(), before)                  # nothing was recorded
+
+    def test_nested_dispatcher_from_record(self):   # DS4 M1 M3, plan P:3939: what the gate receives
+        seed_ctl(self, "stream_controller", 1, "P0")
+        self.sub("a1", "P0")
+        out, calls = self.seen(self.hand(agent_id="a1", tool_input=tin(real_prompt("implementer"))))
+        self.assertEqual(out.deny, [])
+        self.assertEqual(calls[0][1]["dispatcher"],
+                         {"id": "stream_controller", "depth": 1, "live_children": 0, "live_total": 1})
+        self.assertIs(calls[0][1]["program_live"], False)
+
+    def test_controller_at_depth_two_cannot_open_a_level(self):   # DS5 HD3, plan P:3957 (Q-H5 (a), limit 3), entry
+        seed_ctl(self, "controller", 2, "P0")
+        self.sub("a1", "P0")
+        p = self.hk(tin(real_prompt("controller", "opus", brief="below"), model="opus"), agent_id="a1")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("FAIL dispatch.depth", p.stderr)
+        self.assertEqual(len(self.recs()), 1)                              # only the seeded record
+
+    def test_stream_cannot_bind_another_streams_worktree(self):   # WT12, plan P:3961, entry
+        self.program()
+        own = self.add_wt("grp", "-b", NAME + "/s1/g1")
+        other = self.add_wt("oth", "-b", NAME + "/s2/g1")
+        s2main = self.add_wt("s2main", "-b", NAME + "/s2/main")
+        seed_ctl(self, "stream_controller", 1, "stream prompt", wt=self.stream_wt, branch=NAME + "/s1/main")
+        self.sub("a1", "stream prompt")
+        p = self.hk(tin(self.line(own)), agent_id="a1")                    # control: its own group worktree binds
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        for w in (other, s2main):
+            with self.subTest(worktree=w):
+                p = self.hk(tin(self.line(w, extra="n%s" % w)), agent_id="a1")
+                self.assertEqual(p.returncode, 2)
+                self.assertEqual(p.stderr, "FAIL hook.agent.worktree: %s is not one of the dispatcher's worktrees%s\n"
+                                 % (w, WAY))
+        self.assertEqual([r["worktree"] for r in self.recs()], [self.stream_wt, own])
 
 
 if __name__ == "__main__":

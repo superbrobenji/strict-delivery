@@ -23,7 +23,8 @@ from gates.lib.store import Store
 MAX_PATH_BYTES = 4096
 _PATH_FIELD = {"Edit": "file_path", "Write": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 _INPUT_TAIL = ("; the Edit and Write tools need a non-empty string path in the tool's own field (file_path; "
-               "notebook_path for NotebookEdit)")
+               "notebook_path for NotebookEdit); the human can disable the plugin with /plugin until a fix merges, and "
+               "!-prefixed commands still run")
 _DENY = ("FAIL hook.edit.decisions: %s: decision records are written only by python3 -m gates decisions "
          "(owner answer Q-16 (a)); answers and withdrawals come from the human")
 
