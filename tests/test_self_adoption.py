@@ -319,7 +319,7 @@ PINS = {"actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1
         "actions/setup-python": ("6d4fd22b20465ccc0f7354476588e8df7c9ca0e0", "v7.1.0")}
 BASE_EXPRESSION = ("github.event_name == 'pull_request' && github.base_ref || "
                    "github.event.repository.default_branch")
-SUITE = "python -m unittest discover -s tests -t . -v"
+SUITE = "python -m tests.ci_shards --shards 5 --index ${{ matrix.shard }}"  # Task CI1: the suite runs as five shard jobs
 RUN_ALL = "python -m gates run_all --base origin/${{ %s }}" % BASE_EXPRESSION
 
 
@@ -375,6 +375,9 @@ def steps(text):
             continue
         if not inside or not ln:
             continue
+        if len(ln) - len(ln.lstrip()) <= 4:  # Task CI1: the next key of the job or the next job ends the steps (two matrix jobs)
+            inside = False
+            continue
         m = re.fullmatch(r"\s+-\s+(.*)", ln)
         if m and len(ln) - len(ln.lstrip()) == 6:
             out.append({})
@@ -390,8 +393,10 @@ def step_order(text):
     for st in steps(text):
         if "uses" in st:
             kinds.append(st["uses"].split("@")[0].split("/")[-1])
-        elif st.get("run", "").startswith("python -m unittest"):
-            kinds.append("unittest")
+        elif st.get("run", "").startswith("python -m tests.ci_shards"):
+            kinds.append("shard")
+        elif st.get("name") == "Require every shard":
+            kinds.append("require")
         elif st.get("run", "") == "python -m gates index":
             kinds.append("index")
         elif st.get("name") == "Create the local base branch":
@@ -422,8 +427,11 @@ def job_text(text, name):
 
 # the matrix job as Task 2b.3 wrote it plus the base branch step before run_all (FR-P3-1, plan :3038: a cleanup pull
 # request must pass CI, and the register gate needs a local base branch); the table's WF10 pins it byte for byte
+# Task CI1 (edited on purpose): the suite moved to the shard job below, the gates job gains needs, if and a first step
 GATES_JOB = (
     "  gates:\n"
+    "    needs: shard\n"
+    "    if: always()\n"
     "    runs-on: ${{ matrix.os }}\n"
     "    strategy:\n"
     "      fail-fast: false\n"
@@ -431,13 +439,18 @@ GATES_JOB = (
     "        os: [ubuntu-24.04, macos-15]\n"
     "        python-version: [\"3.9\", \"3.13\"]\n"
     "    steps:\n"
+    "      - name: Require every shard\n"
+    "        env:\n"
+    "          SHARD_RESULT: ${{ needs.shard.result }}\n"
+    "        run: |\n"
+    "          [ \"$SHARD_RESULT\" = success ] || { echo \"the shard jobs did not all succeed (result: $SHARD_RESULT)\" >&2; "
+    "exit 1; }\n"
     "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1\n"
     "        with:\n"
     "          fetch-depth: 0\n"
     "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0\n"
     "        with:\n"
     "          python-version: ${{ matrix.python-version }}\n"
-    "      - run: python -m unittest discover -s tests -t . -v\n"
     "      - run: python -m gates index\n"
     "      - name: Create the local base branch\n"
     "        if: github.event_name == 'pull_request'\n"
@@ -448,6 +461,25 @@ GATES_JOB = (
     "\"origin/$BASE_REF\"\n"
     "      - run: python -m gates run_all --base origin/${{ github.event_name == 'pull_request' && github.base_ref || "
     "github.event.repository.default_branch }}\n")
+
+# Task CI1: the shard job, byte for byte (W4, W6, W7, W8)
+SHARD_JOB = (
+    "  shard:\n"
+    "    runs-on: ${{ matrix.os }}\n"
+    "    strategy:\n"
+    "      fail-fast: false\n"
+    "      matrix:\n"
+    "        os: [ubuntu-24.04, macos-15]\n"
+    "        python-version: [\"3.9\", \"3.13\"]\n"
+    "        shard: [1, 2, 3, 4, 5]\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1\n"
+    "        with:\n"
+    "          fetch-depth: 0\n"
+    "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0\n"
+    "        with:\n"
+    "          python-version: ${{ matrix.python-version }}\n"
+    "      - run: python -m tests.ci_shards --shards 5 --index ${{ matrix.shard }}\n")
 
 
 def lookup(payload, path):
@@ -481,6 +513,7 @@ class WorkflowTest(unittest.TestCase):
     def setUpClass(cls):
         cls.text = read_text(os.path.join(REPO, WORKFLOW))
         cls.gates = job_text(cls.text, "gates")  # the matrix job: W3, W6, W7, W10 read it alone (Task P3.1, D-Q6)
+        cls.shard = job_text(cls.text, "shard")  # Task CI1: the suite's matrix job
 
     def test_workflow_is_not_a_data_file(self):  # W1
         self.assertNotIn("schema:", self.text)
@@ -492,25 +525,34 @@ class WorkflowTest(unittest.TestCase):
     def test_workflow_triggers(self):  # W2: pull_request plus push to main only (owner answer 2026-11-22), nothing looser
         self.assertEqual(top_block(self.text, "on"), ["  push:", "    branches: [main]", "  pull_request:"])
 
-    def test_workflow_matrix(self):  # W3, W4, W5 (W3 scoped to the matrix job, edited on purpose)
-        self.assertEqual(oses(self.text), [["ubuntu-24.04", "macos-15"]])
-        self.assertEqual(pythons(self.text), [['"3.9"', '"3.13"']])
+    def test_workflow_matrix(self):  # W3, W4, W5 (W3 scoped to the matrix job, edited on purpose); CI1 W1: two matrix jobs
+        self.assertEqual(oses(self.text), [["ubuntu-24.04", "macos-15"]] * 2)  # the shard job and the gates job
+        self.assertEqual(pythons(self.text), [['"3.9"', '"3.13"']] * 2)
         self.assertEqual([ln for ln in code_lines(self.gates) if "runs-on:" in ln], ["    runs-on: ${{ matrix.os }}"])
+        self.assertEqual([ln for ln in code_lines(self.shard) if "runs-on:" in ln], ["    runs-on: ${{ matrix.os }}"])
+        self.assertEqual([ln for ln in code_lines(self.gates) if ln.startswith("    name:")], [])  # CI1 W1: no job name
         self.assertNotIn("latest", self.text)
         for word in ("include:", "exclude:"):
             self.assertNotIn(word, self.text)
-        self.assertEqual([ln.strip() for ln in code_lines(self.text) if "fail-fast" in ln], ["fail-fast: false"])
+        self.assertEqual([ln.strip() for ln in code_lines(self.text) if "fail-fast" in ln], ["fail-fast: false"] * 2)
         self.assertEqual([st["python-version"] for st in steps(self.gates) if "python-version" in st],
+                         ["${{ matrix.python-version }}"])
+        self.assertEqual([st["python-version"] for st in steps(self.shard) if "python-version" in st],
                          ["${{ matrix.python-version }}"])
 
     def test_workflow_runs_suite_index_run_all_in_order(self):  # W6, W11 (scoped to the matrix job, edited on purpose)
-        self.assertEqual(step_order(self.gates), ["checkout", "setup-python", "unittest", "index", "base", "run_all"])
+        self.assertEqual(step_order(self.gates), ["require", "checkout", "setup-python", "index", "base", "run_all"])
+        self.assertEqual(step_order(self.shard), ["checkout", "setup-python", "shard"])  # CI1 W7: the suite runs in the shards only
         self.assertEqual([st["run"] for st in steps(self.gates) if "run" in st],
-                         [SUITE, "python -m gates index", "|", RUN_ALL])
+                         ["|", "python -m gates index", "|", RUN_ALL])
+        self.assertEqual([st["run"] for st in steps(self.shard) if "run" in st], [SUITE])
+        self.assertNotIn("unittest", self.text)  # the discover step is gone: the shards' union is the suite
 
     def test_workflow_full_history(self):  # W7 (scoped to the matrix job, edited on purpose)
-        self.assertEqual(steps(self.gates)[0]["fetch-depth"], "0")
+        self.assertEqual(steps(self.gates)[1]["fetch-depth"], "0")  # the first step is the shard check (Task CI1)
         self.assertEqual(sum("fetch-depth" in ln for ln in code_lines(self.gates)), 1)
+        self.assertEqual(steps(self.shard)[0]["fetch-depth"], "0")  # CI1 W8: the shards read the history too
+        self.assertEqual(sum("fetch-depth" in ln for ln in code_lines(self.shard)), 1)
 
     def test_workflow_names_no_branch(self):  # W8: no branch name literal outside the on: block (W2 pins that block exactly)
         lines, skip = [], False
@@ -540,7 +582,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(evaluate(expr, payload("push", "", "dev")), "dev")
 
     def test_actions_pinned(self):  # W10 (the matrix job's two; the pull-request job's are pinned below), WF12
-        for scope in (self.gates, job_text(self.text, "pull-request")):
+        for scope in (self.shard, self.gates, job_text(self.text, "pull-request")):  # Task CI1: the shard job's two as well
             found = uses(scope)
             self.assertEqual(len(found), 2)
             for value in found:
@@ -550,7 +592,7 @@ class WorkflowTest(unittest.TestCase):
                                                                                   "actions/setup-python")])
             for repo, (sha, tag) in PINS.items():  # the trailing comment names the tag
                 self.assertIn("uses: %s@%s  # %s\n" % (repo, sha, tag), scope)
-        self.assertEqual(len(uses(self.text)), 4)  # no other action anywhere
+        self.assertEqual(len(uses(self.text)), 6)  # no other action anywhere (CI1 W6: six in all)
 
     def test_workflow_permissions(self):  # W12
         self.assertEqual(top_block(self.text, "permissions"), ["  contents: read"])
@@ -560,7 +602,7 @@ class WorkflowTest(unittest.TestCase):
                 top_block(self.text, "on"), top_block(self.text, "permissions"))
         for digits in (4300, 4301):  # K1: a version of that many digits is text; nothing here reads a number
             text = self.text.replace('["3.9", "3.13"]', '["%s"]' % ("9" * digits))
-            self.assertEqual(pythons(text), [['"%s"' % ("9" * digits)]])
+            self.assertEqual(pythons(text), [['"%s"' % ("9" * digits)]] * 2)  # CI1: two matrix jobs
             self.assertEqual(steps(text), steps(self.text))
         text = "\n".join(ln + "  # \U0001F6DD" if ln else ln for ln in self.text.split("\n"))  # K2
         self.assertEqual((pythons(text), oses(text), uses(text), steps(text), step_order(text),
@@ -645,7 +687,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_pr_job_only_on_pull_request(self):  # WF8: github.head_ref is empty on a push, and --branch "" is refused
         self.assertIn("    if: github.event_name == 'pull_request'", code_lines(self.pr()))
-        self.assertEqual(sum("if:" in ln for ln in code_lines(self.text)), 2)
+        self.assertEqual(sum("if:" in ln for ln in code_lines(self.text)), 3)  # Task CI1: and the gates job's `if: always()`
         self.assertEqual(code_lines(self.gates).count("        if: github.event_name == 'pull_request'"), 1)  # FR-P3-1
 
     def test_pr_job_runner(self):  # WF13 and the table's D-Q6: ubuntu-24.04, one Python 3.13, nothing else
@@ -655,7 +697,10 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(top_block(self.text, "permissions"), ["  contents: read"])
 
     def test_gates_job_unchanged(self):  # WF10: the run_all job is byte for byte Task 2b.3's plus the base branch step (FR-P3-1)
-        self.assertEqual(self.gates, GATES_JOB)
+        self.assertEqual(self.gates, GATES_JOB)  # Task CI1: and its needs, if and first step; W1, W3, W5
+        self.assertEqual(self.shard, SHARD_JOB)  # CI1 W4, W6, W7, W8
+        self.assertEqual(code_lines(self.gates)[1:3], ["    needs: shard", "    if: always()"])
+        self.assertFalse([ln for ln in self.gates.split("\n") if ln.startswith("    name:")])  # W1: no name, so the check is `gates (os, py)`
         self.assertEqual(self.text.count("  gates:\n"), 1)
 
 
