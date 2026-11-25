@@ -309,7 +309,7 @@ class ProgramLines(Gate):
         bare = self.remote()
         self.advance_remote(bare)
         git(self.root, "fetch", "-q", "origin")
-        with mock.patch("gates.lib.drift.worktrees.worktree_list", return_value=[("/p\\q ࡰ", "main")]):
+        with mock.patch("gates.lib.drift._checkout_of", return_value="/p\\q ࡰ"):
             out, code = self.g()
         want = ("FAIL drift.base: update main from the remote: git -C /p\\\\q \\u0870 fetch origin, then git -C /p\\\\q \\u0870 "
                 "merge --ff-only origin/main")
