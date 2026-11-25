@@ -189,3 +189,8 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Owner: "yes that matches, go ahead".
 - `check drift --plan <slug>`: the plan branch behind the base (with the exact safe update command, the 5c/5c.3 advice text); the handoff's current block and next tasks against what is committed and merged; the plan's status rows against git; planned versus actual time in the program-view form.
 - Read-only, a short report; run by the SessionStart hook and on demand.
+
+### V2-46 context.enforced as a profile key (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- Profiles state `context.enforced` explicitly (strict true; standard and light false); a project overrides it in config like any profile key (an override decision when it loosens strict); doctor shows the effective value and its source. No behaviour change when unset.
