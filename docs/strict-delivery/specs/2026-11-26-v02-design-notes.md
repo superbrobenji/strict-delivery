@@ -66,3 +66,11 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Gate rule: `check schema` fails any file under a framework record directory (findings, decisions, claims, plan state, programs, mutation transcripts) that no registered schema covers; free-text locations are listed as exceptions in config. A new record kind cannot be committed before its schema.
 - Planning rule (plan_writer, controller, plan-review checklist): a schema and its producer registration land in the same task as the first writer of that record, or earlier, never in a later registry task.
 - Older free-form records stay excluded by name (owner Q-RS1-1 (a)).
+
+### V2-04 Handoffs written only by the tool (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- `python3 -m gates checkpoint write --plan <slug> ...` writes handoff.md from fields (block, next steps, live subagents, required reads, ...) and refuses missing or bad fields with a named error.
+- The Edit/Write hook (pre_edit, on main from PR-tools) refuses a direct edit of a handoff.md under the plan-state directory; the refusal names the command.
+- `doctor` and the checkpoint gate report a nonconforming handoff with the failing field.
+- Escape: the existing rule-override decision can allow a direct edit in an owner-recorded emergency.
