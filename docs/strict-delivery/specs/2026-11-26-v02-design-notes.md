@@ -207,3 +207,12 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Owner: "yes that matches, go ahead".
 - Closed: a command that runs a script file (`bash x.sh`, `python3 x.py`, `./x`) has the file's text checked by the same rules (refusal names file and line); `gh` passes only allow-listed subcommands (unknown subcommands, aliases, extensions refused); a git subcommand that is not git's own is refused unless allowed in config.
 - Documented as stated limits (docs and doctor): network access from inside programs, anything computed at run time. The hook is not a sandbox; the permission classifier and the user's permission settings remain the protections there.
+
+### V2-49 Clean-update rule in the spec (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- The v0.2 design spec states the rule in full: a clean update (no conflict; no changed path shared with the PR; no module named in the PR tasks' Consumes lines changed; gates pass on the merged head) needs only the gates re-run; a conflict in test literals only, each resolved as the exact union, needs a short review of the merge plus CI; anything else needs a delta final review (A1).
+
+## Conversation status
+
+- 2026-11-26: every v0.2 feature has been discussed with the owner. Next: the v0.2 design spec written from these notes, a builder check, then the owner's approval.
