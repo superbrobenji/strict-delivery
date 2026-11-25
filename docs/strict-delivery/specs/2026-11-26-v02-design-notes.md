@@ -175,3 +175,11 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - `python3 -m gates claims run` re-runs every claim at the current head and reports which still hold; the claims gate runs the ones a PR depends on, so a merge cannot rest on a claim that no longer holds.
 - Claim commands obey the Bash hook rules (read-only: no state-changing or network commands) with a per-command time limit.
 - claim/1 records stay valid as text and show "not executable" until upgraded.
+
+### V2-44 Interactive init (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- `python3 -m gates init --interactive` asks each question in the terminal with its default and the answers-file validation (re-asks until valid), saves an answers file, shows the plan and asks before apply.
+- The slash command asks the same questions in chat, one by one, from the same list.
+- One question list in code (id, text, default, validation) generates the terminal prompts, the chat prompts, the answers-file schema and the docs.
+- Without a terminal (CI, a pipe) `--interactive` refuses: "no terminal; use --answers".
