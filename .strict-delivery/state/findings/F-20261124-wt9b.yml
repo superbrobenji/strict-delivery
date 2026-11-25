@@ -1,0 +1,37 @@
+schema: finding/1
+id: F-20261124-wt9b
+status: fixed-unpinned
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c2-review-2.md R2-2
+severity: LOW
+class: "a test half that cannot fail: the oversize member of test_stop_oversize_and_surrogate_first_entry (seeded SHA never equals the big text); search the fix's other tests for the same shape"
+siblings: []
+cites:
+  - file: tests/test_hook_agent.py
+    lines: "1"
+    sha: b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence:
+  - bfa08a30e414311b869d50a66541787a1df883cc
+  - "bfa08a30e414311b869d50a66541787a1df883cc:tests/test_hook_agent.py"
+history:
+  - status: open
+    sha: b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
+    by: stream-hooks-1
+  - status: planned
+    sha: bfa08a30e414311b869d50a66541787a1df883cc
+    by: implementer
+  - status: in-progress
+    sha: bfa08a30e414311b869d50a66541787a1df883cc
+    by: implementer
+  - status: fixed-unpinned
+    sha: bfa08a30e414311b869d50a66541787a1df883cc
+    by: implementer
+review_round: 2
+caused_by_change: true
+dimension: "oracle: test can fail"

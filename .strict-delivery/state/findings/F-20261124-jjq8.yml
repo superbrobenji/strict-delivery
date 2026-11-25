@@ -1,0 +1,37 @@
+schema: finding/1
+id: F-20261124-jjq8
+status: fixed-unpinned
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c1-review-1.md R1-3
+severity: LOW
+class: "outside-root target with a malformed decision record: no test that no load line and no refusal appear"
+siblings: []
+cites:
+  - file: gates/hooks/pre_edit.py
+    lines: "182"
+    sha: bc32f50613d258334c1d0235e83bfc2001130690
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.1
+pin: null
+ruling: null
+evidence:
+  - 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+  - "71970f9afb22c5b10ff92bc978d58690ca1dfac4:tests/test_hook_edit.py"
+history:
+  - status: open
+    sha: bc32f50613d258334c1d0235e83bfc2001130690
+    by: stream-hooks-1
+  - status: planned
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
+  - status: in-progress
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
+  - status: fixed-unpinned
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
+review_round: 1
+caused_by_change: true
+dimension: "surfacing: target outside root x record load error"
