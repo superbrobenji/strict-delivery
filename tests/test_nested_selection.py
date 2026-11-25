@@ -74,3 +74,22 @@ class NestedSelectionTest(unittest.TestCase):
     def test_n1_select_pattern_is_the_rule(self):  # N1: a pattern that matches nothing selects nothing
         self.assertEqual(nested_ids(NESTED_MODULES, re.compile(r"no test says this \(")), [])
         self.assertIs(test_self_adoption.NESTED_SELECT, NESTED_SELECT)
+
+    def test_n1_every_alternative_of_the_rule_matches_its_form(self):  # N1: no alternative is dead weight
+        forms = {
+            "clone_copy": "clone = self.clone_copy('x', main=False)",
+            "gates_run_all": "code, out = self.gates_run_all(clone)",
+            "self.sub(": "out, code = self.sub([])",
+            "has_local_main": "self.assertFalse(self.has_local_main(clone))",
+            "cwd=REPO": "subprocess.run(argv, cwd=REPO)",
+            "-C REPO": 'subprocess.run(["git", "-C", REPO, "show", x])',
+            "git(REPO": 'names = git(REPO, "ls-files")',
+        }
+        for name, text in forms.items():
+            with self.subTest(name):
+                self.assertIsNotNone(NESTED_SELECT.search(text))
+                rest = NESTED_SELECT.sub("", text)
+                self.assertIsNone(NESTED_SELECT.search(rest))
+        for text in ("root = make_repo(self.work)", "out, code = self.run_main(['--root', root])",
+                     "config.load(REPO)", "os.path.join(REPO, 'gates')"):
+            self.assertIsNone(NESTED_SELECT.search(text), text)
