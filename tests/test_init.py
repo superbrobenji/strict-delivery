@@ -2833,5 +2833,221 @@ class TestContextYml(More):
         self.assertIn("CLAUDE.md, .gitignore, .claude/settings.json\n", out)
 
 
+SAME = "%s: two writes name the same path"
+PARENT = "%s: parent %s is not a directory"
+
+
+class TestReview2(More):
+    """Fix round 3 (review 2): R2-1 (H5, ``paths.context`` against every other path init plans), R2-2 (H4 swaps of the
+    context file), R2-3 (AP3 up-front recheck). Mutant ids: ch/4d1-mutants-6-table.py."""
+
+    def overlap(self, ctx, expect, ci=False, **paths):
+        """``plan`` and ``apply`` print exactly the one conflict ``expect`` and leave the tree as it was."""
+        self.init_config(paths=dict(paths, context=ctx))
+        before = snapshot(self.root)
+        fw = self.make_fw("tagged", version="0.1.0")
+        for sub in ("plan", "apply"):
+            with mock.patch.object(plugin, "framework_dir", return_value=fw), \
+                    mock.patch.object(init.gitinfo, "head_sha", side_effect=init.GitNotFound("no git")):
+                code, out, _ = helpers.within(lambda: self.cmd(sub, ci=ci))
+            self.assertEqual((code, out), (1, "FAIL init.conflict: %s\n" % expect), (ctx, sub))
+            self.assertEqual(snapshot(self.root), before, (ctx, sub))
+
+    # --- R2-1: equal to a state directory (STATE_KEYS), to the state parent, to an ancestor directory ------------
+    def test_ctx_equals_state_decisions(self):  # H5; kills r-o1
+        d = ".strict-delivery/state/decisions"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_state_findings(self):  # H5; kills r-o1
+        d = ".strict-delivery/state/findings"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_state_claims(self):  # H5; kills r-o1
+        d = ".strict-delivery/state/claims"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_state_plans(self):  # H5; kills r-o1
+        d = ".strict-delivery/state/plans"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_state_programs(self):  # H5; kills r-o1
+        d = ".strict-delivery/state/programs"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_playbooks(self):  # H5; kills r-o1
+        d = ".strict-delivery/playbooks"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_state_parent(self):  # H5; kills r-o2
+        d = ".strict-delivery/state"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_strict_delivery_dir(self):  # H5; kills r-o2
+        d = ".strict-delivery"
+        self.overlap(d, SAME % d)
+
+    def test_ctx_equals_claude_dir(self):  # H5; kills r-o2
+        self.overlap(".claude", SAME % ".claude")
+
+    def test_ctx_equals_github_dir(self):  # H5; kills r-o2 (ci true)
+        self.overlap(".github", SAME % ".github", ci=True)
+
+    def test_ctx_equals_github_workflows_dir(self):  # H5; kills r-o2 (ci true)
+        self.overlap(".github/workflows", SAME % ".github/workflows", ci=True)
+
+    def test_ctx_equals_configured_state_dir(self):  # H5; kills r-o1 (a configured, not a default, directory)
+        self.overlap("rec/dec", SAME % "rec/dec", decisions="rec/dec")
+
+    # --- R2-1: equal to, or below, a planned file --------------------------------------------------------------
+    def test_ctx_equals_claude_md(self):  # H5; kills r-o3
+        self.overlap("CLAUDE.md", SAME % "CLAUDE.md")
+
+    def test_ctx_equals_claude_md_present(self):  # H5; kills r-o3 (the file exists with the block: no write is planned)
+        self.assertEqual(self.cmd("apply", git_hooks=False)[0], 0)
+        self.init_config(paths={"context": "CLAUDE.md"})
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub, git_hooks=False)
+            self.assertEqual((code, out), (1, "FAIL init.conflict: %s\n" % (SAME % "CLAUDE.md")), sub)
+            self.assertEqual(snapshot(self.root), before, sub)
+
+    def test_ctx_below_claude_md(self):  # H5; kills r-o4
+        self.overlap("CLAUDE.md/x.yml", PARENT % ("CLAUDE.md/x.yml", "CLAUDE.md"))
+
+    def test_ctx_equals_gitignore(self):  # H5; kills r-o3
+        self.overlap(".gitignore", SAME % ".gitignore")
+
+    def test_ctx_below_gitignore(self):  # H5; kills r-o4
+        self.overlap(".gitignore/x.yml", PARENT % (".gitignore/x.yml", ".gitignore"))
+
+    def test_ctx_equals_settings(self):  # H5; kills r-o3
+        self.overlap(".claude/settings.json", SAME % ".claude/settings.json")
+
+    def test_ctx_below_settings(self):  # H5; kills r-o4
+        self.overlap(".claude/settings.json/x.yml", PARENT % (".claude/settings.json/x.yml", ".claude/settings.json"))
+
+    def test_ctx_equals_ci_workflow(self):  # H5; kills r-o3 (ci true)
+        p = ".github/workflows/strict-delivery.yml"
+        self.overlap(p, SAME % p, ci=True)
+
+    def test_ctx_below_ci_workflow(self):  # H5; kills r-o4 (ci true)
+        p = ".github/workflows/strict-delivery.yml"
+        self.overlap(p + "/x.yml", PARENT % (p + "/x.yml", p), ci=True)
+
+    def test_ctx_equals_config(self):  # H5; kills r-o3
+        p = ".strict-delivery/config.yml"
+        self.overlap(p, SAME % p)
+
+    def test_ctx_below_config(self):  # H5; kills r-o4
+        p = ".strict-delivery/config.yml"
+        self.overlap(p + "/x.yml", PARENT % (p + "/x.yml", p))
+
+    # --- R2-1: the reverse nesting, a state directory below paths.context -----------------------------------------
+    def test_state_dir_below_ctx(self):  # H5; kills r-o2 (the ancestors of a state directory)
+        self.overlap("rec", SAME % "rec", decisions="rec/dec")
+
+    def test_state_dir_below_ctx_other_key(self):  # H5; kills r-o2 (a key other than the first)
+        self.overlap("rec", SAME % "rec", playbooks="rec/pb")
+
+    def test_state_dir_deep_below_ctx(self):  # H5; kills r-o2 (two levels below)
+        self.overlap("rec/a", SAME % "rec/a", claims="rec/a/b/c")
+
+    # --- R2-1: a ``paths.context`` that overlaps nothing is still accepted ----------------------------------------
+    def test_ctx_unrelated_paths_pass(self):  # H5: the default and siblings of planned paths
+        for ctx in (".strict-delivery/context.yml", ".strict-delivery/state/ctx.yml", "ctx/context.yml",
+                    ".github/ctx.yml", ".claude/ctx.yml"):
+            self.init_config(paths={"context": ctx})
+            code, out, _ = self.cmd("plan")
+            self.assertEqual(code, 0, (ctx, out))
+
+    # --- R2-2: H4 swap after plan; each member passes on the parent commit and is killed by r-s1 or r-s2 --------
+    def swap_after(self, trigger_path, swap):
+        """Run ``apply``; ``swap`` runs once, right after the write of ``trigger_path``."""
+        real = managed.apply
+
+        def wrapper(root, actions):
+            res = real(root, actions)
+            if any(a[0] == trigger_path for a in actions):
+                swap(root)
+            return res
+        with mock.patch.object(managed, "apply", wrapper):
+            return self.cmd("apply", git_hooks=False)
+
+    def test_ctx_file_swapped_to_symlink_after_plan(self):  # H4, H1; kills r-s1
+        outside = os.path.join(self.tmp, "outside.yml")
+        code, out, _ = self.swap_after(".claude/settings.json", lambda r: os.symlink(outside, os.path.join(r, CTX)))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: apply refused: %s: is a symlink\n" % CTX, out)
+        self.assertFalse(os.path.exists(outside))
+
+    def test_ctx_file_swapped_to_directory_after_plan(self):  # H4, H2; kills r-s1
+        code, out, _ = self.swap_after(".claude/settings.json", lambda r: os.mkdir(os.path.join(r, CTX)))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: apply refused: %s: exists and is not framework-managed\n" % CTX, out)
+        self.assertEqual(os.listdir(os.path.join(self.root, CTX)), [])
+
+    def test_ctx_file_swapped_to_fifo_after_plan(self):  # H4, H3; kills r-s1
+        code, out, _ = self.swap_after(".claude/settings.json", lambda r: os.mkfifo(os.path.join(r, CTX)))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: apply refused: %s: exists and is not framework-managed\n" % CTX, out)
+        self.assertTrue(stat.S_ISFIFO(os.lstat(os.path.join(self.root, CTX)).st_mode))
+
+    def test_ctx_parent_swapped_to_symlink_after_plan(self):  # H4; kills r-s1
+        outside = os.path.join(self.tmp, "outside-sd")
+        os.mkdir(outside)
+
+        def swap(r):
+            os.rename(os.path.join(r, ".strict-delivery"), os.path.join(r, ".strict-delivery.old"))
+            os.symlink(outside, os.path.join(r, ".strict-delivery"))
+        code, out, _ = self.swap_after(".claude/settings.json", swap)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: apply refused: %s: parent .strict-delivery is not a directory\n" % CTX, out)
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_state_dir_swapped_to_file_after_plan(self):  # H4 (the non-directory branch of the recheck); kills r-s2
+        def swap(r):
+            with open(os.path.join(r, ".strict-delivery", "state"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+        code, out, _ = self.swap_after(".strict-delivery/config.yml", swap)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: .strict-delivery/state: exists and is not a directory\n", out)
+        self.assertEqual(self.read(".strict-delivery/state"), "x")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "CLAUDE.md")))
+
+    # --- R2-3: AP3, the group (CLAUDE.md, .gitignore) is checked before the first write, and again before each ----
+    def swapped_after_build(self, name):
+        outside = os.path.join(self.tmp, "outside.txt")
+        real_build = init._build
+        snap = []
+
+        def build(root, answers):
+            res = real_build(root, answers)
+            os.symlink(outside, os.path.join(root, name))  # after the plan, before the first write
+            snap.append(snapshot(root))
+            return res
+        with mock.patch.object(init, "_build", build):
+            code, out, _ = self.cmd("apply")
+        self.assertEqual((code, out), (1, "FAIL init.write: apply refused: %s: is a symlink\nwritten: \n" % name))
+        self.assertEqual(snapshot(self.root), snap[0])
+        self.assertFalse(os.path.exists(os.path.join(self.root, ".strict-delivery")))
+        self.assertFalse(os.path.exists(outside))
+
+    def test_gitignore_swapped_after_plan_nothing_is_written(self):  # AP3; red on the parent, kills r-a1
+        self.swapped_after_build(".gitignore")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "CLAUDE.md")))
+
+    def test_claude_md_swapped_after_plan_nothing_is_written(self):  # AP3; red on the parent, kills r-a1 (the other action)
+        self.swapped_after_build("CLAUDE.md")
+        self.assertFalse(os.path.exists(os.path.join(self.root, ".gitignore")))
+
+    def test_gitignore_swapped_between_the_two_writes_is_refused(self):  # AP3; kills r-s1
+        outside = os.path.join(self.tmp, "outside.txt")
+        code, out, _ = self.swap_after("CLAUDE.md", lambda r: os.symlink(outside, os.path.join(r, ".gitignore")))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL init.write: apply refused: .gitignore: is a symlink\nwritten: ", out)
+        self.assertTrue(out.rstrip("\n").endswith("CLAUDE.md"), out)
+        self.assertFalse(os.path.exists(outside))
+
+
 if __name__ == "__main__":
     unittest.main()

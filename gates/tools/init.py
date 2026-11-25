@@ -420,6 +420,20 @@ def _plan_block(root: str, kind: str, body: str, version: str, notes: list, writ
     writes.append(managed.Write(path, body, kind))
 
 
+def _context_overlap(ctx: str, dirs: list, files: list) -> list:
+    """H5: conflicts for ``paths.context`` ``ctx`` equal to, or nested with, another path init plans: a state directory
+    (``dirs``), an ancestor directory of a planned directory or file (so a state directory below ``ctx`` is this case),
+    or a planned file (``files``). Texts are managed's own: ``<path>: two writes name the same path`` and
+    ``<path>: parent <p> is not a directory`` (``ctx`` below a planned file)."""
+    taken = set(dirs) | set(files)
+    for p in dirs + files:
+        parts = p.split("/")
+        taken.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    if ctx in taken:
+        return ["%s: two writes name the same path" % ctx]
+    return ["%s: parent %s is not a directory" % (ctx, f) for f in files if ctx.startswith(f + "/")]
+
+
 def _hooks_dir_blocked(hooks: str) -> bool:
     """CD17: the hooks directory exists as a link or as anything but a directory (``lstat``, never followed)."""
     return os.path.lexists(hooks) and (os.path.islink(hooks) or not os.path.isdir(hooks))
@@ -499,7 +513,11 @@ def _build(root: str, answers: dict) -> tuple:
         if set_write is not None:
             writes.append(set_write)
         extra.context_path = cfg["paths"]["context"]
-        if managed._inspect(root, extra.context_path)[0] != "text":  # CX1, CX2: a present file is never rewritten
+        planned_files = [config.CONFIG_PATH, "CLAUDE.md", ".gitignore", SETTINGS] + ([CI_PATH] if answers["ci"] else [])
+        overlap = _context_overlap(extra.context_path, paths, planned_files)
+        if overlap:  # H5: no write is planned for a path equal to or nested with another planned path
+            dir_conflicts = dir_conflicts + overlap
+        elif managed._inspect(root, extra.context_path)[0] != "text":  # CX1, CX2: a present file is never rewritten
             writes.append(managed.Write(extra.context_path, templates.render(CONTEXT_TEMPLATE, {}), "file"))
         actions, m_conflicts = managed.plan(root, writes, version)
         # write order: config, directories, blocks, CI, settings, hooks (PL3)
@@ -597,6 +615,13 @@ def _apply(root: str, plan: InitPlan, extra: _Extra, written: list) -> list:
 
     def failed(path: str, verb: str, e: OSError) -> GateError:
         return GateError("%s: %s (%s)" % (path, verb, e.strerror or type(e).__name__))
+    problems = []  # AP3: every block action is re-checked before the first write, and again before its own write
+    for path, new in [a for a in extra.actions if a[0] in ("CLAUDE.md", ".gitignore")]:
+        reason = managed._recheck(root, path, new)
+        if reason is not None:
+            problems.append("%s: %s" % (path, reason))
+    if problems:
+        raise GateError("apply refused: " + "; ".join(problems))
     group((config.CONFIG_PATH,))
     for d in extra.dirs:
         path = os.path.join(root, d)
