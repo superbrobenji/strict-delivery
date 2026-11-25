@@ -130,3 +130,11 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Cross-stream test-literal edits stay exact unions: a merge with a test-literal conflict keeps every line of both sides.
 - Reports carry their required sections (status, claims, findings, budget): the report schema is checked at commit.
 - Tests call the production path: stays a reviewer judgment, plus a warning when a test imports a private helper of the code under test.
+
+### V2-29 Config keys become required (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- `config/3`: every key whose reader exists is required; keys nothing reads are refused (a typo cannot silently do nothing). New v0.2 keys: `ci`, `cleanup.history_retention`, `timeuse.targets`, `bash.forbidden`, runner limits.
+- `upgrade` migrates config/2: fills defaults, asks for the init-asked keys (history retention, CI), shows the diff before writing (managed.py overwrite, 4e.1).
+- Until upgraded, gates read config/2 with defaults filled and doctor says "config/2: run /strict-delivery:upgrade".
+- Rule: a key enters config in the task that adds its reader (as V2-03 for schemas).
