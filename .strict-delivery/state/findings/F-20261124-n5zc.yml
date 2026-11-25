@@ -1,0 +1,37 @@
+schema: finding/1
+id: F-20261124-n5zc
+status: fixed-unpinned
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c1-review-1.md R1-5
+severity: LOW
+class: "table rows without a test of their own values: HC9 (5000-character id), HD18 (Read tool with a decisions path; the row's Bash member is wrong, Bash routes to pre_bash)"
+siblings: []
+cites:
+  - file: tests/test_hook_edit.py
+    lines: "1"
+    sha: bc32f50613d258334c1d0235e83bfc2001130690
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.1
+pin: null
+ruling: null
+evidence:
+  - 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+  - "71970f9afb22c5b10ff92bc978d58690ca1dfac4:tests/test_hook_edit.py"
+history:
+  - status: open
+    sha: bc32f50613d258334c1d0235e83bfc2001130690
+    by: stream-hooks-1
+  - status: planned
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
+  - status: in-progress
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
+  - status: fixed-unpinned
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
+review_round: 1
+caused_by_change: true
+dimension: "table rows: values not tested"
