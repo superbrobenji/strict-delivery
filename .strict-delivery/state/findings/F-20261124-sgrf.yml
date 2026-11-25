@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-sgrf
+status: open
+source: PR-5c final review 1 (records/PR-5c-final-review.md, F1)
+severity: MEDIUM
+class: "worktree placement of the base branch in the drift.base update command (plan :5446 'the checkout that has the base branch'; gates/lib/drift.py:124-132 names main_worktree): in the main checkout, in a linked worktree, in no worktree (main checkout on another branch), detached main checkout"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 3e4a9314cf6cdfaf4462f01f9e871270b6cbcc69
+    by: stream-records
+review_round: 4
+caused_by_change: true
+dimension: base branch checkout placement
