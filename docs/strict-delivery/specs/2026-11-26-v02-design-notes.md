@@ -74,3 +74,12 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - The Edit/Write hook (pre_edit, on main from PR-tools) refuses a direct edit of a handoff.md under the plan-state directory; the refusal names the command.
 - `doctor` and the checkpoint gate report a nonconforming handoff with the failing field.
 - Escape: the existing rule-override decision can allow a direct edit in an owner-recorded emergency.
+
+### V2-05 gates timeuse (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- Reads the project's local Claude Code transcripts only (never sent anywhere), with the rules of this build's timeuse.py: tool calls timed and categorised, model turns attributed by role, controller waits on children not double-counted, suspended time counted as idle.
+- `python3 -m gates timeuse [--day YYYY-MM-DD | --since ...] [--json]` prints the agent-hour shares and the flow measures (budget endings, controller start-up, fix rounds per task, late findings from V2-06).
+- Optional `timeuse.targets` in config: a share outside target prints WARN, never fails a gate.
+- One time-use line in each checkpoint/handoff; the program status page shows the latest shares; two days outside target is suggested as an owner process question.
+- An unrecognised transcript shape prints "transcript format not recognised" instead of numbers. The HTML pie page stays this repository's local convenience.
