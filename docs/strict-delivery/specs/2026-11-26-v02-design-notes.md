@@ -201,3 +201,9 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Orphans: an agent recorded started by the Agent/SubagentStop hooks with no handback whose parent has ended; an agent a handoff lists live that the hooks show finished or silent past a limit; a runner job whose state file (V2-27) shows it running with its owner gone.
 - Checked at session start, at every checkpoint/handoff write, and by doctor; each orphan printed with role, task, last activity and the suggested action (resume, wait, let its job finish). A handoff cannot be written while an orphan of that controller is unexplained.
 - Never kills or stops anything; ending work stays a controller or owner decision.
+
+### V2-48 Bash hook limits (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- Closed: a command that runs a script file (`bash x.sh`, `python3 x.py`, `./x`) has the file's text checked by the same rules (refusal names file and line); `gh` passes only allow-listed subcommands (unknown subcommands, aliases, extensions refused); a git subcommand that is not git's own is refused unless allowed in config.
+- Documented as stated limits (docs and doctor): network access from inside programs, anything computed at run time. The hook is not a sandbox; the permission classifier and the user's permission settings remain the protections there.
