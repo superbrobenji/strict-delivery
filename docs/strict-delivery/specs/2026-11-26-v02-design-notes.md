@@ -167,3 +167,11 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - One row per stream: stream, now (task and step), state (building, in review, fix round k, PR open, CI running, waiting, done), waiting on (owner question id, CI run, mutation slot, another PR), open PR and its CI, open findings by severity, last merge, planned versus actual.
 - Below: the merge queue in order, main's latest CI result, and a done list (each merged PR with its tasks, merge time and merge sha, newest first).
 - Everything derived from git, the records, the handoffs and CI; nothing maintained by hand. `python3 -m gates program status` prints it; the index tool renders it into the program status page.
+
+### V2-43 Executable claims, claim/2 (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- A claim/2 record stores the direct check (command, expected result) and the disproof check (command, the result that would show the claim false); results match by exit code and a pattern, not exact text.
+- `python3 -m gates claims run` re-runs every claim at the current head and reports which still hold; the claims gate runs the ones a PR depends on, so a merge cannot rest on a claim that no longer holds.
+- Claim commands obey the Bash hook rules (read-only: no state-changing or network commands) with a per-command time limit.
+- claim/1 records stay valid as text and show "not executable" until upgraded.
