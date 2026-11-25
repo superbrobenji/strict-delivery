@@ -183,3 +183,9 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - The slash command asks the same questions in chat, one by one, from the same list.
 - One question list in code (id, text, default, validation) generates the terminal prompts, the chat prompts, the answers-file schema and the docs.
 - Without a terminal (CI, a pipe) `--interactive` refuses: "no terminal; use --answers".
+
+### V2-45 Drift for plain plans (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- `check drift --plan <slug>`: the plan branch behind the base (with the exact safe update command, the 5c/5c.3 advice text); the handoff's current block and next tasks against what is committed and merged; the plan's status rows against git; planned versus actual time in the program-view form.
+- Read-only, a short report; run by the SessionStart hook and on demand.
