@@ -491,12 +491,16 @@ def _lines(root: object) -> list:
                                % (cfg["framework_version"], pv)))
     ci = _Ci(root)
     installed = False
+    unsafe = False
     try:
         installed = _hooks_installed(root)
+        # F-20261125-h7nn (CD17 "a symlink anywhere is a conflict"; Amendment H H4/H7 fail closed): an unsafe hooks
+        # directory is reported `foreign` per hook whatever the installed gate says
+        unsafe = not _hooks_dir_safe(root, gitinfo.hooks_dir(root))
         lines.append(_extras(installed, ci))
     except Exception as e:
         lines.append(_fail("extras", "cannot be checked: %s" % _why(e)))
-    if installed:
+    if installed or unsafe:
         _guarded(lines, "githooks", lambda: _githooks(root))
     if ci.kind == "managed":
         if pv is None:

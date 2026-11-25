@@ -659,26 +659,102 @@ class TestHooksDirParents(Base):
         out = self.outside_shims()
         os.symlink(out, os.path.join(self.r, "myhooks"))
         git(self.r, "config", "core.hooksPath", "myhooks")
-        self.assertEqual(self.line("extras"), NEITHER_TEXT)
-        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+        self.assert_unsafe("myhooks")
         git(self.r, "config", "core.hooksPath", "a/b")  # a parent two levels up is the link
         os.makedirs(os.path.join(self.tmp, "outside-a"))
         os.symlink(out, os.path.join(self.tmp, "outside-a", "b"))
         os.symlink(os.path.join(self.tmp, "outside-a"), os.path.join(self.r, "a"))
-        self.assertEqual(self.line("extras"), NEITHER_TEXT)
-        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+        self.assert_unsafe("a/b")
+
+    def unsafe_lines(self, hooks_path=None):
+        """F-20261125-h7nn (CD17 'a symlink anywhere is a conflict'; Amendment H H4/H7 'fail closed'): an unsafe hooks
+        directory is `foreign` for each hook whatever the installed gate says, and the run exits 1."""
+        out = ["FAIL doctor.githooks.pre-commit: foreign", "FAIL doctor.githooks.pre-push: foreign"]
+        if hooks_path is not None:
+            out.append("FAIL doctor.githooks.hooks-path: core.hooksPath is set (%s); unset it to install the hooks" % hooks_path)
+        return out
+
+    def assert_unsafe(self, hooks_path=None, extras=NEITHER_TEXT):
+        code, out, err = self.run_doctor()
+        lines = out.splitlines()
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual([ln for ln in lines if "doctor.extras" in ln], [extras])
+        self.assertEqual([ln for ln in lines if "githooks" in ln], self.unsafe_lines(hooks_path))
+
+    def test_h4_default_hooks_directory_symlinked_is_foreign(self):  # F-20261125-h7nn: `.git/hooks` a link to a real directory
+        self.shims()
+        hooks = os.path.join(self.r, ".git", "hooks")
+        real = os.path.join(self.tmp, "real-hooks")
+        os.rename(hooks, real)
+        os.symlink(real, hooks)
+        self.assert_unsafe()
+
+    def test_h4_git_directory_symlinked_is_foreign(self):  # F-20261125-h7nn: `.git` a link to the real git directory
+        self.shims()
+        real = os.path.join(self.tmp, "real-git")
+        os.rename(os.path.join(self.r, ".git"), real)
+        os.symlink(real, os.path.join(self.r, ".git"))
+        self.assert_unsafe()
+
+    def test_h4_hooks_path_absolute_through_a_link_is_foreign(self):  # F-20261125-h7nn: absolute core.hooksPath, a link in it
+        out = self.outside_shims()
+        os.symlink(out, os.path.join(self.r, "myhooks"))
+        absolute = os.path.join(self.r, "myhooks")
+        git(self.r, "config", "core.hooksPath", absolute)
+        self.assert_unsafe(absolute)
+        real = os.path.join(self.tmp, "outside-dir")  # a link in the middle of an absolute path
+        os.makedirs(os.path.join(real, "sub"))
+        os.symlink(real, os.path.join(self.r, "mid"))
+        nested = os.path.join(self.r, "mid", "sub")
+        git(self.r, "config", "core.hooksPath", nested)
+        self.assert_unsafe(nested)
+
+    def test_h4_base_of_the_hooks_walk_unopenable_is_foreign(self):  # kills D137: the base open failure refuses (fail closed)
+        self.shims()  # fault injection on the production path: the open of the walk's base (the root) alone fails
+        real_open = os.open
+        base = os.path.abspath(self.r)
+
+        def fake(path, flags, *a, **kw):
+            if path == base and sys._getframe(1).f_code.co_name == "_dir_safe":
+                raise PermissionError(13, "Permission denied")
+            return real_open(path, flags, *a, **kw)
+        with mock.patch("os.open", new=fake):  # a plain function: its caller frame is the doctor function
+            code, out, err = self.run_doctor()
+        lines = out.splitlines()
+        self.assertEqual((code, err), (1, ""))
+        self.assertIn("PASS doctor.extras: git hooks: installed; CI: not installed", lines)
+        self.assertEqual([ln for ln in lines if "githooks" in ln], self.unsafe_lines())
+
+    def test_r21_unusable_hooks_directory_hooks_are_foreign_safe_one_is_missing(self):
+        # F-20261125-xs22 decision (owner delegation 2026-11-09): a hooks directory doctor refuses to read (outside the root
+        # and the git common dir, below or equal to a non-directory, through a symlinked component) gives
+        # `FAIL doctor.githooks.<name>: foreign` for each hook; `missing` stays for a safe directory lacking the hook (EX11).
+        self.shims()
+        hooks = os.path.join(self.r, ".git", "hooks")  # shims stay in the default directory: the extra is installed
+        installed = "PASS doctor.extras: git hooks: installed; CI: not installed"
+        empty_out = os.path.join(self.tmp, "empty-outside")
+        os.makedirs(empty_out)
+        put(os.path.join(self.r, "afile"), b"not a directory\n")
+        os.makedirs(os.path.join(self.r, "emptyhooks"))
+        for value, want in ((empty_out, "foreign"), ("afile/sub", "foreign"), ("afile", "foreign"),
+                            ("emptyhooks", "missing")):  # the last: a safe, existing directory without the hooks
+            git(self.r, "config", "core.hooksPath", value)
+            lines = [ln for ln in self.lines() if "githooks" in ln or "doctor.extras" in ln]
+            with self.subTest(hooks_path=value):
+                self.assertEqual(lines, [installed, "FAIL doctor.githooks.pre-commit: " + want,
+                                         "FAIL doctor.githooks.pre-push: " + want,
+                                         "FAIL doctor.githooks.hooks-path: core.hooksPath is set (%s); unset it to install the hooks" % value])
+        self.assertTrue(os.path.isdir(hooks))
 
     def test_h7_hooks_path_outside_the_root_not_installed(self):  # H7: an absolute core.hooksPath outside the root
         out = self.outside_shims()
         git(self.r, "config", "core.hooksPath", out)
-        self.assertEqual(self.line("extras"), NEITHER_TEXT)
-        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+        self.assert_unsafe(out)
         for n in githooks.NAMES:
             shutil.copyfile(os.path.join(out, n), os.path.join(os.path.dirname(self.r), n))
             os.chmod(os.path.join(os.path.dirname(self.r), n), 0o755)
         git(self.r, "config", "core.hooksPath", "..")
-        self.assertEqual(self.line("extras"), NEITHER_TEXT)
-        self.assertEqual([ln for ln in self.lines() if "githooks" in ln], [])
+        self.assert_unsafe("..")
         inside = os.path.join(self.r, "inhooks")  # control: the same shims in a real directory below the root count
         shutil.copytree(out, inside)
         git(self.r, "config", "core.hooksPath", inside)

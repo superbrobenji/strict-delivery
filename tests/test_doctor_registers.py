@@ -499,6 +499,25 @@ class TestRowsLate(Base):
         with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": copy}):  # control: a regular file keeps today's verdict
             self.assertEqual(self.line("generated-tracked"), "PASS doctor.generated-tracked")
 
+    def test_doctor_generated_git_index_file_relative(self):  # GT13 (F-20261125-ju85); kills D135 (the join to the root dropped)
+        # git applies `-C root` before it reads GIT_INDEX_FILE, so a relative value names a file under the root; doctor
+        # resolves it the same way and never against the process cwd.
+        shutil.copy(os.path.join(self.r, ".git", "index"), os.path.join(self.r, "idxcopy"))
+        cwd_only = os.path.join(self.tmp, "cwd")
+        os.mkdir(cwd_only)
+        shutil.copy(os.path.join(self.r, ".git", "index"), os.path.join(cwd_only, "cwdonly"))
+        old = os.getcwd()
+        os.chdir(cwd_only)  # the process cwd holds `cwdonly` and not `idxcopy`; the root holds the opposite
+        try:
+            for value in ("idxcopy", "./idxcopy"):
+                with self.subTest(value=value), mock.patch.dict(os.environ, {"GIT_INDEX_FILE": value}):
+                    self.assertEqual(self.line("generated-tracked"), "PASS doctor.generated-tracked")
+            for value in ("cwdonly", "absent-everywhere"):
+                with self.subTest(value=value), mock.patch.dict(os.environ, {"GIT_INDEX_FILE": value}):
+                    self.assertEqual(self.line("generated-tracked"), self.cannot(value))
+        finally:
+            os.chdir(old)
+
     def test_doctor_generated_single_ls_files(self):  # GT14
         from gates.lib import gitinfo
         with mock.patch.object(gitinfo, "_run", wraps=gitinfo._run) as run:
