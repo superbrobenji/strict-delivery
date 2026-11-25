@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-ninr
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-3.md R3-1
+severity: MEDIUM
+class: "hardening H5: paths.context equal to or below a hook file init writes: members: .git/hooks/pre-commit, .git/hooks/pre-push, a path below each (and the hooks directory of core.hooksPath)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1d5bf08739996bef92f2c1e1bb6de09c669b554d
+    by: stream-config
+review_round: 3
+caused_by_change: false
+dimension: H5 equal or nested configured paths (context vs hook shims)
