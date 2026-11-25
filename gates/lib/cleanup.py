@@ -15,6 +15,7 @@ from typing import List, Optional
 from gates.lib import checkpoints, claims, findings, gitinfo, ids, programs, store
 from gates.lib.merge import merged_errors
 from gates.lib.result import GateError
+from gates.lib import tipread
 
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 _FILE_MODES = ("100644", "100755")
@@ -60,6 +61,9 @@ def plan_ledger(root: str, cfg: dict, plan: str) -> Optional[str]:
     except OSError as e:
         raise GateError("%s: cannot read (%s)" % (rel, e.strerror or type(e).__name__)) from None
     if mode is None:
+        now = tipread.show_file(root, "HEAD", rel)  # a symlink, tree or gitlink at HEAD is refused, never read as absent
+        if now is not None:
+            return now
         return gitinfo.last_text(root, "HEAD", rel)
     if not stat.S_ISREG(mode):
         raise GateError("%s: is not a regular file" % rel)
@@ -125,7 +129,7 @@ def _other_specs(root: str, cfg: dict, plan: str) -> Optional[set]:
         if mode != _TREE or posixpath.basename(path) == plan:
             continue
         try:
-            text = gitinfo.show(root, ref, path + "/handoff.md")
+            text = tipread.show_file(root, ref, path + "/handoff.md")
             if text is None:
                 continue
             specs = _spec_list(text)
@@ -140,7 +144,7 @@ def _other_specs(root: str, cfg: dict, plan: str) -> Optional[set]:
 def _own_specs(root: str, cfg: dict, plan: str, at: str) -> List[str]:
     """The ``spec`` paths of the plan's own handoff at ``at`` (none when it is absent); a bad item is a GateError."""
     rel = "%s/%s/handoff.md" % (_cfg_text(cfg, "paths", "plan_state"), plan)
-    text = gitinfo.show(root, at, rel)
+    text = tipread.show_file(root, at, rel)
     if text is None:
         return []
     try:
@@ -188,7 +192,7 @@ def plan_effort(root: str, cfg: dict, plan: str, at: str) -> list:
         raise GateError("at: %s is not a commit in this repository" % at)
     out: set = set()
     plan_md = "%s/%s.md" % (plans, plan)
-    if gitinfo.blob_exists(root, at, plan_md):
+    if tipread.show_file(root, at, plan_md) is not None:  # a symlink, tree or gitlink plan file is refused, never left out
         out.add(plan_md)
     out.update(_walk(root, at, "%s/%s" % (plan_state, plan)))
     out.update(_walk(root, at, "%s/%s" % (reviews, plan)))
@@ -281,7 +285,7 @@ def cited_decisions(root: str, paths: list, at: str, prefix: str) -> list:
     found: set = set()
     for path in paths:
         gitinfo._check_norm(path, "path")
-        text = gitinfo.show(root, at, path)
+        text = tipread.show_file(root, at, path)
         if text is None:
             continue
         for m in pattern.finditer(text):

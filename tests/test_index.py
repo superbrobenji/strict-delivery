@@ -2042,7 +2042,10 @@ class Overview2(Ov):
             fh.write("o\n")
         os.symlink(out, os.path.join(self.work, "docs", "out"))
         os.symlink(os.path.join(out, "sub"), os.path.join(self.work, "docs", "sub"))
-        for key, other, val in (("specs", "plans", "docs/out"), ("plans", "specs", "docs/out"),
+        os.makedirs(self.work + "-x")  # G1 (F-20261124-ymag): a sibling whose real path has the root's real path as a string prefix
+        os.symlink(self.work + "-x", os.path.join(self.work, "docs", "sib"))
+        for key, other, val in (("specs", "plans", "docs/sib"), ("plans", "specs", "docs/sib"),
+                                ("specs", "plans", "docs/out"), ("plans", "specs", "docs/out"),
                                 ("specs", "plans", "docs/out/sub"), ("specs", "plans", "docs/sub"),
                                 ("specs", "plans", "docs/out/absent")):
             with self.subTest(key=key, value=val):

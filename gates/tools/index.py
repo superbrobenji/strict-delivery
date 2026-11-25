@@ -15,6 +15,7 @@ from typing import Optional
 
 from gates.lib import checkpoints, cleanup, config, decisions, findings, gitinfo, ids, programs, yamlsub
 from gates.lib.result import GateError, gate_args, repo_root, safe_text
+from gates.lib import tipread
 from gates.lib.store import Store, store_errors
 
 PRODUCES = ("decision-index", "finding-index", "in-force", "overview")
@@ -238,9 +239,6 @@ def _program_streams(cfg: dict, prog: programs.Program) -> list:
     return out
 
 
-_TIP_REGULAR = ("100644", "100755")  # the git modes of a regular file (``gitinfo._REGULAR``)
-
-
 def _same_dir(root: str, a: str, b: str) -> bool:
     """True when ``a`` and ``b`` (repo-relative) both exist and are one file system object (a symlink, a symlinked
     parent or a case-folding file system; ``samefile`` stats and resolves every component, it opens nothing); an
@@ -297,10 +295,7 @@ def _specs_and_plans(root: str, cfg: dict, progs: list) -> list:
                 continue
             hpath = "%s/%s/handoff.md" % (plan_state, splan[len(prefix):-3])
             ref = "refs/heads/" + branch
-            for mode, _, entry in gitinfo.ls_tree_entries(root, ref, posixpath.dirname(hpath)):
-                if entry == hpath and mode not in _TIP_REGULAR:  # a symlink, tree or gitlink is no handoff file
-                    raise GateError("%s:%s: cannot be read as a UTF-8 regular file (not a regular file)" % (ref, hpath))
-            text = gitinfo.show(root, ref, hpath)
+            text = tipread.show_file(root, ref, hpath)  # a symlink, tree or gitlink is no handoff file: refused by name
             if text is not None:
                 named.update(_handoff(text, "refs/heads/%s:%s" % (branch, hpath))[1])
     todo, doing, done = {}, {}, {}

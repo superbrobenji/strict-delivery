@@ -14,6 +14,7 @@ from gates.lib.result import GateError
 from gates.lib.yamlsub import emit
 from tests.helpers import (INT_LIMITS, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, int_limit,
                            make_repo, minimal_config, root_forms)
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PS = ".strict-delivery/state/plans"
@@ -816,6 +817,117 @@ class CitedTests(Cx):
         for text, want in zip(texts, expected):
             at = self.at({"docs/r.md": text})
             self.assertEqual(cited_decisions(self.root, ["docs/r.md"], at, "DEC"), want, repr(text))
+
+
+class TipKindTests(Cx):
+    """Task 5b.3 rows F2, F3, F4, F21, F24 (class: non-regular entry at a branch tip read as absent)."""
+    MAIN = "refs/heads/main"
+
+    def handoff_text(self, specs):
+        return "---\n" + emit({"schema": "handoff/1", "plan": "p", "spec": specs}) + "---\nbody\n"
+
+    def test_other_specs_tip_handoff_entry_kinds(self):  # F2: None under D-Q11 through the except GateError
+        hp = PS + "/q/handoff.md"
+        set_entry(self.root, self.MAIN, PS + "/q/other.md", "regular")
+        with self.subTest("regular"):
+            set_entry(self.root, self.MAIN, hp, "regular", self.handoff_text([SPECS + "/s.md"]))
+            self.assertEqual(cleanup._other_specs(self.root, self.cfg, "p"), {SPECS + "/s.md"})
+        with self.subTest("absent"):
+            set_entry(self.root, self.MAIN, hp, "absent")
+            self.assertEqual(cleanup._other_specs(self.root, self.cfg, "p"), set())
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, self.MAIN, hp, kind, self.handoff_text([SPECS + "/s.md"]))
+                self.assertEqual(cleanup._other_specs(self.root, self.cfg, "p"), None)
+
+    def test_own_specs_tip_handoff_entry_kinds(self):  # F3: GateError naming <at>:<rel>, never []
+        hp = PS + "/p/handoff.md"
+        set_entry(self.root, self.MAIN, SPECS + "/s.md", "regular")
+        for kind in ("regular", "executable"):
+            with self.subTest(kind):
+                at = set_entry(self.root, self.MAIN, hp, kind, self.handoff_text([SPECS + "/s.md"]))
+                self.assertEqual(cleanup._own_specs(self.root, self.cfg, "p", at), [SPECS + "/s.md"])
+        with self.subTest("absent"):
+            at = set_entry(self.root, self.MAIN, hp, "absent")
+            self.assertEqual(cleanup._own_specs(self.root, self.cfg, "p", at), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                at = set_entry(self.root, self.MAIN, hp, kind, self.handoff_text([SPECS + "/s.md"]))
+                with self.assertRaises(GateError) as cm:
+                    cleanup._own_specs(self.root, self.cfg, "p", at)
+                self.assertEqual(str(cm.exception), refusal(at, hp))
+
+    def test_id_scan_entry_kinds(self):  # F4: a listed path that is not a regular file is a GateError, never skipped
+        path = "docs/a.md"
+        with self.subTest("regular"):
+            at = set_entry(self.root, self.MAIN, path, "regular", "see %s\n" % D1)
+            self.assertEqual(cited_decisions(self.root, [path], at, "DEC"), [D1])
+        with self.subTest("absent"):
+            at = set_entry(self.root, self.MAIN, path, "absent")
+            self.assertEqual(cited_decisions(self.root, [path], at, "DEC"), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                at = set_entry(self.root, self.MAIN, path, kind, "see %s\n" % D1)
+                with self.assertRaises(GateError) as cm:
+                    cited_decisions(self.root, [path], at, "DEC")
+                self.assertEqual(str(cm.exception), refusal(at, path))
+
+    def test_last_text_caller_entry_kinds(self):  # F21; the working-tree branch (cleanup.py:69-70) refuses a symlink or directory
+        rel = LEDGER
+        with self.subTest("regular"):
+            set_entry(self.root, self.MAIN, rel, "regular", LEDGER_HEAD)
+            self.assertEqual(plan_ledger(self.root, self.cfg, "p"), LEDGER_HEAD)
+        with self.subTest("absent, never existed"):
+            self.assertIsNone(plan_ledger(self.root, self.cfg, "r"))
+        with self.subTest("absent, deleted: the history version is read (existing)"):
+            set_entry(self.root, self.MAIN, rel, "absent")
+            self.assertEqual(plan_ledger(self.root, self.cfg, "p"), LEDGER_HEAD)
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):  # at HEAD; an older regular ledger in history must not be read instead
+                set_entry(self.root, self.MAIN, rel, "regular", LEDGER_HEAD)
+                set_entry(self.root, self.MAIN, rel, kind, LEDGER_HEAD)
+                with self.assertRaises(GateError) as cm:
+                    plan_ledger(self.root, self.cfg, "p")
+                self.assertEqual(str(cm.exception), refusal("HEAD", rel))
+
+    def test_plan_effort_plan_file_entry_kinds(self):  # F28: the plan file at `at` (cleanup.plan_effort), never left out
+        plan_md = "%s/p.md" % PG
+        for kind in ("regular", "executable"):
+            with self.subTest(kind):
+                at = set_entry(self.root, self.MAIN, plan_md, kind, "plan\n")
+                self.assertEqual(plan_effort(self.root, self.cfg, "p", at), [plan_md])
+        with self.subTest("absent"):
+            at = set_entry(self.root, self.MAIN, plan_md, "absent")
+            self.assertEqual(plan_effort(self.root, self.cfg, "p", at), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                at = set_entry(self.root, self.MAIN, plan_md, kind, "plan\n")
+                with self.assertRaises(GateError) as cm:
+                    plan_effort(self.root, self.cfg, "p", at)
+                self.assertEqual(str(cm.exception), refusal(at, plan_md))
+
+    def test_walk_entry_kinds(self):  # F24: _walk refuses a symlink or gitlink, walks a tree; :124 skips a non-tree folder
+        d = PS + "/p"
+        for kind, mode in (("symlink", "120000"), ("gitlink", "160000")):
+            with self.subTest(kind):
+                at = set_entry(self.root, self.MAIN, d + "/x", kind)
+                with self.assertRaises(GateError) as cm:
+                    plan_effort(self.root, self.cfg, "p", at)
+                self.assertEqual(str(cm.exception), "%s/x: is a symlink or a gitlink (mode %s); a per-effort directory "
+                                 "holds regular files only" % (d, mode))
+        with self.subTest("tree"):
+            at = set_entry(self.root, self.MAIN, d + "/x", "tree")
+            self.assertEqual(plan_effort(self.root, self.cfg, "p", at), [d + "/x/inner"])
+        with self.subTest("regular"):
+            at = set_entry(self.root, self.MAIN, d + "/x", "regular")
+            self.assertEqual(plan_effort(self.root, self.cfg, "p", at), [d + "/x"])
+        with self.subTest("absent"):
+            at = set_entry(self.root, self.MAIN, d + "/x", "absent")
+            self.assertEqual(plan_effort(self.root, self.cfg, "p", at), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest("other-folder " + kind):  # :124 keeps T7 parity: a non-tree folder is skipped
+                set_entry(self.root, self.MAIN, PS + "/q", kind)
+                self.assertEqual(cleanup._other_specs(self.root, self.cfg, "p"), set())
 
 
 class VersionTests(unittest.TestCase):

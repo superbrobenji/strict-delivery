@@ -20,8 +20,9 @@ from unittest import mock
 
 from gates import __main__ as gates_main
 from gates import gate_dispatch, producers
-from gates.lib import config, decisions, dispatch, gitinfo, ids, programs, yamlsub
+from gates.lib import config, decisions, dispatch, gitinfo, ids, programs, tipread, yamlsub
 from gates.tools import continue_cli, index, questions_cli
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config,
                            root_forms, write_record)
 
@@ -887,6 +888,19 @@ class TestQuestions(Fx):
 
 # =====================================================================================================================
 class TestLedger(Fx):
+    def test_read_text_tip_entry_kinds(self):  # 5b.3 F5: a non-regular state file at the ref is a problem, never "missing at"
+        ref = "refs/heads/main"
+        with self.subTest("regular"):
+            set_entry(self.root, ref, LP, "regular", "text\n")
+            self.assertEqual(continue_cli._read_text(self.root, ref, LP), ("text\n", ""))
+        with self.subTest("absent"):
+            set_entry(self.root, ref, LP, "absent")
+            self.assertEqual(continue_cli._read_text(self.root, ref, LP), (None, "%s: missing at %s" % (LP, ref)))
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, ref, LP, kind, "text\n")
+                self.assertEqual(continue_cli._read_text(self.root, ref, LP), (None, "%s: %s" % (LP, refusal(ref, LP))))
+
     def test_ledger_tail_none(self):  # LG1
         self.led("")
         out = self.ok()
@@ -1716,7 +1730,7 @@ class TestVersion(Fx):
         commit_all(self.root, "state")
         f = os.path.join(self.tmp, "grp.json")
         for exc in (builtins.ExceptionGroup("x", [ValueError()]), builtins.BaseExceptionGroup("x", [KeyboardInterrupt()])):
-            for target in ((gitinfo, "show"),):
+            for target in ((tipread, "show_file"),):
                 with self.subTest(type(exc).__name__), mock.patch.object(*target, side_effect=exc):
                     out = io.StringIO()
                     with contextlib.redirect_stdout(out), self.assertRaises(type(exc)):

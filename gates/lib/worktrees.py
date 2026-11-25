@@ -12,6 +12,7 @@ from typing import Optional
 
 from gates.lib import gitinfo, programs, session, transcript
 from gates.lib.result import GateError, GitNotFound, safe_text
+from gates.lib import tipread
 
 _HEADS = "refs/heads/"
 
@@ -125,7 +126,7 @@ def _status_cells(root: str, cfg: dict, name: str, known: set, tops: set, fails:
     name an existing worktree of this repository; every other cell adds a fail line, an empty or ``-`` one nothing."""
     page = "%s/%s/status.md" % (programs._programs_dir(cfg), name)
     try:
-        text = gitinfo.show(root, _HEADS + name + "/integration", page)
+        text = tipread.show_file(root, _HEADS + name + "/integration", page)
     except GateError as e:
         fails.append("program %s: status page unreadable (%s)" % (name, safe_text(e)))
         return

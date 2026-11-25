@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from gates import __main__ as gates_main
-from gates.lib import checkpoints, config, dispatch, findings, gitinfo, ids, migrations, schema, store, yamlsub
+from gates.lib import checkpoints, config, dispatch, findings, gitinfo, ids, migrations, schema, store, tipread, yamlsub
 from gates.lib.checkpoints import (checkpoint_lines, handoff_errors, ledger_errors, merged_lines, parse_handoff,
                                    plan_slug, question_errors, resume_line)
 from gates.lib.schema import files_of, load_schema, validate_front_matter, validate_markdown
@@ -21,6 +21,7 @@ from gates.lib.checkpoints import (cap_errors, last_line_errors, ledger_rulings,
                                    records_at)
 from gates.lib.result import GateError
 from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, make_repo, minimal_config, write_record
+from tests.tipkinds import BAD_KINDS, set_entry
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HANDOFF_YML = os.path.join(schema.SCHEMAS_DIR, "handoff.yml")
@@ -1311,6 +1312,13 @@ class CheckpointLines(unittest.TestCase):
                     t = LH + "CHECKPOINT a b head=abcdef1 tests=%s/1 gates=n/a next=c\n" % ("9" * n)
                     self.assertEqual(checkpoint_lines(t), [])
                     self.assertEqual(len(ledger_errors(t, cfg())), 1)
+                    t = LH + "CHECKPOINT a b head=abcdef1 tests=1/%s gates=n/a next=c\n" % ("9" * n)  # V1b `tests=1/<n>` (F-20261124-v88h)
+                    self.assertEqual(checkpoint_lines(t), [])
+                    self.assertEqual(len(ledger_errors(t, cfg())), 1)
+                got = checkpoint_lines(LH + "CHECKPOINT a b head=abcdef1 tests=%s/1 gates=n/a next=c\n" % big)  # n = 600: conforms
+                self.assertEqual((got[0]["passed"], got[0]["total"]), (int(big), 1))
+                got = checkpoint_lines(LH + "CHECKPOINT a b head=abcdef1 tests=1/%s gates=n/a next=c\n" % big)
+                self.assertEqual((got[0]["passed"], got[0]["total"]), (1, int(big)))
 
     def test_checkpoint_lines_real_ledger(self):  # CP9, LE16
         path = os.path.join(REPO, ".strict-delivery", "state", "plans", "2026-10-31-strict-delivery-framework", "ledger.md")
@@ -2571,6 +2579,23 @@ class RecordsAt(GitIsolatedTestCase):
                         with self.assertRaisesRegex(GateError, "%s: not a directory" % re.escape(rel)):
                             records_at(root, config.load(root), "HEAD", "decision")
 
+    def test_ref_listing_entry_kinds(self):  # 5b.3 F23: records_at is mode-aware already; a non-regular record name is a refusal
+        name = "%s/%s.yml" % (self.dir, D6)
+        ref = "refs/heads/main"
+        text = "id: %s\nstatus: open\n" % D6
+        with self.subTest("regular"):
+            set_entry(self.root, ref, name, "regular", text)
+            self.assertEqual([r.file for r in self.read(ref)], [name])
+        with self.subTest("absent"):
+            set_entry(self.root, ref, name, "absent")
+            self.assertEqual(self.read(ref), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, ref, name, kind, text)
+                with self.assertRaises(GateError) as cm:
+                    self.read(ref)
+                self.assertEqual(str(cm.exception), "%s:%s: not a regular file named <id>.yml" % (ref, name))
+
     def test_records_at_unparsable_file(self):  # RA7
         cases = (("a: [\n", "unterminated flow sequence"), ("", "the top level must be a mapping"),
                  ("- a\n", "the top level must be a mapping"), ("x\n", "the top level must be a mapping"),
@@ -2771,7 +2796,7 @@ class RecordsAt(GitIsolatedTestCase):
         self.put(D6 + ".yml")
         self.commit()
         for exc in (beg("x", [KeyboardInterrupt()]), eg("x", [ValueError()])):
-            for mod, name in ((gitinfo, "ls_tree_entries"), (gitinfo, "ls_tree"), (gitinfo, "show"), (yamlsub, "parse")):
+            for mod, name in ((gitinfo, "ls_tree_entries"), (tipread, "show_file"), (gitinfo, "show"), (yamlsub, "parse")):
                 with self.subTest(exc=type(exc).__name__, call=name):
                     with mock.patch.object(mod, name, side_effect=exc):
                         with self.assertRaises(beg) as cm:

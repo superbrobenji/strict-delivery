@@ -19,6 +19,7 @@ from gates.lib.store import Store
 from gates.tools import decisions_cli
 from tests.helpers import E128, TOP, GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
 from tests.test_fold_table import FORTY
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEC = ".strict-delivery/state/decisions"
@@ -1005,6 +1006,33 @@ class Batch(Base):
         c1 = git(self.root, "rev-parse", "HEAD")
         self.put(dec(DB, "open"), commit=True)
         return c1
+
+    def test_since_cut_entry_kinds(self):  # 5b.3 F22: a non-regular record entry at the cut is a refusal, never "not at the cut"
+        self.put(dec(DA, "open"), dec(DB, "open"), commit=True)
+        path = "%s/%s.yml" % (DEC, DB)
+        text = git(self.root, "show", "HEAD:" + path) + "\n"
+        for kind in ("regular", "executable"):
+            with self.subTest(kind):
+                cut = set_entry(self.root, "refs/heads/main", path, kind, text)
+                set_entry(self.root, "refs/heads/main", path, "regular", text)
+                out = self.ok("--since", cut)
+                self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+        with self.subTest("absent"):
+            cut = set_entry(self.root, "refs/heads/main", path, "absent")
+            set_entry(self.root, "refs/heads/main", path, "regular", text)
+            out = self.ok("--since", cut)
+            self.assertEqual((new_ids(out), also_ids(out)), ([DB], [DA]))
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                cut = set_entry(self.root, "refs/heads/main", path, kind, text)
+                set_entry(self.root, "refs/heads/main", path, "regular", text)
+                self.refused(("batch", "--since", cut), refusal(cut, path))
+            with self.subTest(kind + " with a non-record name"):  # stays ignored: not a record file
+                set_entry(self.root, "refs/heads/main", DEC + "/notes.txt", kind, text)
+                cut = set_entry(self.root, "refs/heads/main", path, "regular", text)
+                out = self.ok("--since", cut)
+                self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+                set_entry(self.root, "refs/heads/main", DEC + "/notes.txt", "absent")
 
     def test_batch_since_ancestor_splits_new_and_also_open(self):  # C3, C4, C28, C35, C37
         c1 = self.two_commits()
