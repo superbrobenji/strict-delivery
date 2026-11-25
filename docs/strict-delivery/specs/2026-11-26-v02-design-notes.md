@@ -147,3 +147,8 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Judged mechanically from the transcript's actions (forbidden merge or command run, step skipped, second tool used, or the stop and owner question written); no model grader.
 - `python3 -m gates scenarios` on demand, and automatically before a release and when a prompt block or the skill text changes; opt-in (token cost), never per PR.
 - Every new rule break seen in a real build becomes a scenario.
+
+### V2-35 Strict pre-commit test cell (2026-11-26)
+
+- Owner: "i think we can defer that rule. running on pr is ok even for strict mode".
+- Not in v0.2. For every profile, pre-commit runs `run_all` only; the tests run on the PR (CI, or the local fallback record). The v0.2 spec amends the v0.1 spec sentence for the strict cell accordingly. Tracked in the v0.3 candidate list as deferred.
