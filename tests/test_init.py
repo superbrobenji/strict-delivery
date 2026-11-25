@@ -3100,8 +3100,8 @@ HOOKS_PATH = "core.hooksPath is set (%s); unset it to install the hooks"
 
 class TestReview3(More):
     """Fix round 4 (review 3): R3-1 (F-20261125-ninr, the hook files init plans are planned files for H5), R3-2
-    (F-20261125-4fji, the ``/`` boundary: a sibling name is accepted). R3-3 (F-20261125-5x5w, the case fold) waits for
-    a ruling: it diverges from table row VR4. Mutant ids: ch/4d1-mutants-7-table.py (t7-*)."""
+    (F-20261125-4fji, the ``/`` boundary: a sibling name is accepted), R3-3 (F-20261125-5x5w, the H5 compare under
+    one explicit ASCII map of ``A``-``Z`` to ``a``-``z``, Note H-1). Mutant ids: ch/4d1-mutants-7-table.py (t7-*)."""
 
     overlap = TestReview2.overlap
 
@@ -3218,6 +3218,126 @@ class TestReview3(More):
 
     def test_ctx_sibling_of_pre_push_hook_passes(self):  # pin (passes on the parent); kills t7-b2
         self.accepted_ctx(".git/hooks/pre-pushx")
+
+    # --- R3-3 (5x5w, Note H-1): equal under the ASCII map to a planned file -----------------------------------------
+    def test_ctx_folds_to_claude_md(self):  # H5; red on the parent; kills t7-f1, t7-f4
+        self.overlap("claude.md", SAME % "claude.md")
+
+    def test_ctx_folds_to_gitignore(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".GITIGNORE", SAME % ".GITIGNORE")
+
+    def test_ctx_folds_to_settings(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".claude/Settings.json", SAME % ".claude/Settings.json")
+
+    def test_ctx_folds_to_ci_workflow(self):  # H5; red on the parent; kills t7-f1, t7-f2 (ci true)
+        p = ".github/workflows/STRICT-delivery.yml"
+        self.overlap(p, SAME % p, ci=True)
+
+    def test_ctx_folds_to_config(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        p = ".strict-delivery/Config.yml"
+        self.overlap(p, SAME % p)
+
+    def test_ctx_folds_to_pre_commit_hook(self):  # H5; red on the parent; kills t7-f1, t7-f8
+        p = ".GIT/hooks/PRE-COMMIT"
+        self.overlap(p, SAME % p)
+
+    def test_ctx_folds_to_pre_push_hook(self):  # H5; red on the parent; kills t7-f1, t7-f8
+        p = ".git/hooks/Pre-Push"
+        self.overlap(p, SAME % p)
+
+    def test_ctx_folds_to_ancestor_dir(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".CLAUDE", SAME % ".CLAUDE")
+
+    # --- R3-3: equal under the map to each state directory and to the state parent -----------------------------------
+    def test_ctx_folds_to_state_decisions(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".strict-delivery/state/DECISIONS",
+                     INSIDE % (".strict-delivery/state/DECISIONS", ".strict-delivery/state/decisions"))
+
+    def test_ctx_folds_to_state_findings(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".strict-delivery/state/Findings",
+                     INSIDE % (".strict-delivery/state/Findings", ".strict-delivery/state/findings"))
+
+    def test_ctx_folds_to_state_claims(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".strict-delivery/state/CLAIMS",
+                     INSIDE % (".strict-delivery/state/CLAIMS", ".strict-delivery/state/claims"))
+
+    def test_ctx_folds_to_state_plans(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".strict-delivery/state/Plans",
+                     INSIDE % (".strict-delivery/state/Plans", ".strict-delivery/state/plans"))
+
+    def test_ctx_folds_to_state_programs(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".strict-delivery/state/PROGRAMS",
+                     INSIDE % (".strict-delivery/state/PROGRAMS", ".strict-delivery/state/programs"))
+
+    def test_ctx_folds_to_playbooks(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".strict-delivery/PLAYBOOKS", INSIDE % (".strict-delivery/PLAYBOOKS", ".strict-delivery/playbooks"))
+
+    def test_ctx_folds_to_state_parent(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        self.overlap(".strict-delivery/STATE", INSIDE % (".strict-delivery/STATE", ".strict-delivery/state"))
+
+    # --- R3-3: nested under the map; the configured side in upper case -----------------------------------------------
+    def test_ctx_folds_below_claude_md(self):  # H5; red on the parent; kills t7-f1, t7-f7
+        self.overlap("Claude.md/x.yml", PARENT % ("Claude.md/x.yml", "CLAUDE.md"))
+
+    def test_ctx_folds_inside_state_dir(self):  # H5; red on the parent; kills t7-f1, t7-f2
+        p = ".strict-delivery/STATE/decisions/c.yml"
+        self.overlap(p, INSIDE % (p, ".strict-delivery/state/decisions"))
+
+    def test_configured_state_dir_folds_to_ctx(self):  # H5; red on the parent; kills t7-f3, t7-f6
+        self.overlap("rec/dec/c.yml", INSIDE % ("rec/dec/c.yml", "Rec/Dec"), decisions="Rec/Dec")
+
+    def test_configured_state_dir_ancestor_folds_to_ctx(self):  # H5; red on the parent; kills t7-f3
+        self.overlap("rec", SAME % "rec", decisions="Rec/Dec")
+
+    def test_configured_state_parent_folds_to_ctx(self):  # H5; red on the parent; kills t7-f5
+        self.overlap("rec", INSIDE % ("rec", "Rec"), state="Rec")
+
+    def test_ctx_inside_two_state_dirs_equal_under_the_map(self):  # H5; the first configured spelling; kills t7-f13
+        self.overlap("rec/x/c.yml", INSIDE % ("rec/x/c.yml", "Rec/X"), claims="Rec/X", plan_state="rec/x")
+
+    # --- R3-3: the hook side in upper case (a separate git directory named GD inside the root) ----------------------
+    def sep_repo_upper(self):
+        p = os.path.join(self.tmp, "sepu")
+        return self.repo("sepu", flags=("--separate-git-dir", os.path.join(p, "GD")))
+
+    def test_ctx_folds_to_hook_in_upper_case_git_dir(self):  # H5; red on the parent; kills t7-f1, t7-f9
+        root = self.sep_repo_upper()
+        self.refused_at(root, "gd/hooks/pre-commit", [SAME % "gd/hooks/pre-commit"])
+
+    def test_ctx_folds_below_hook_in_upper_case_git_dir(self):  # H5; red on the parent; kills t7-f9, t7-f11
+        root = self.sep_repo_upper()
+        self.refused_at(root, "gd/hooks/pre-push/x", [PARENT % ("gd/hooks/pre-push/x", "GD/hooks/pre-push")])
+
+    def test_ctx_folds_to_absent_hooks_dir_in_upper_case_git_dir(self):  # H5; red on the parent; kills t7-f10
+        root = self.sep_repo_upper()
+        os.rename(os.path.join(root, "GD", "hooks"), os.path.join(root, "GD", "hooks.old"))
+        self.refused_at(root, "gd/hooks", [SAME % "gd/hooks"])
+
+    # --- R3-3: what the map leaves apart, and what never reaches it -------------------------------------------------
+    def test_ctx_differing_after_fold_passes(self):  # control (passes on the parent); kills t7-f12
+        self.accepted_ctx("Claude.mdx")
+
+    def test_ctx_nfd_refused_before_the_compare(self):  # Note H-1: non-ASCII never reaches the compare; pin
+        # an NFD-spelled context against an NFC state directory: managed refuses the non-ASCII context (init.input)
+        self.init_config(paths={"decisions": "réc", "context": "réc/c.yml"})
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            code, out, _ = self.cmd(sub)
+            self.assertEqual((code, out), (1, "FAIL init.input: path: must be a relative path inside the root\n"), sub)
+            self.assertEqual(snapshot(self.root), before, sub)
+
+    def test_ua7c0_path_refused_before_the_compare(self):  # PC1, VR4, VR5 (both interpreters); pin
+        # U+A7C0 is not printable at Unicode 13 (print_table): config refuses it in every path the compare reads.
+        for key in ("state",) + STATE_KEYS + ("context",):
+            self.init_config(paths={key: "Ꟁ/c"})
+            before = snapshot(self.root)
+            for sub in ("plan", "apply"):
+                code, out, _ = self.cmd(sub)
+                self.assertEqual((code, out), (1, "FAIL init.config: .strict-delivery/config.yml: paths.%s: must be a "
+                                                  "non-empty normalised repo-relative path of printable characters; "
+                                                  "run /strict-delivery:doctor and /strict-delivery:upgrade\n" % key),
+                                 (key, sub))
+                self.assertEqual(snapshot(self.root), before, (key, sub))
 
 
 if __name__ == "__main__":

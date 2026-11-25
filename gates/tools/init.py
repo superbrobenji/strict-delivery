@@ -420,21 +420,37 @@ def _plan_block(root: str, kind: str, body: str, version: str, notes: list, writ
     writes.append(managed.Write(path, body, kind))
 
 
+_ASCII_FOLD = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")  # Note H-1: the one map
+
+
+def _fold(path: str) -> str:
+    """Note H-1 (VR4 amended for the H5 compare only): ``path`` with ``A``-``Z`` mapped to ``a``-``z`` by one explicit
+    table, the same on every Unicode version; every other character is kept (a non-ASCII path never gets here:
+    managed refuses it)."""
+    return path.translate(_ASCII_FOLD)
+
+
 def _context_overlap(ctx: str, dirs: list, files: list, state: str) -> list:
     """H5: conflicts for ``paths.context`` ``ctx`` equal to, or nested with, another path init plans: a state directory
     (``dirs``), an ancestor directory of a planned directory or file (so a state directory below ``ctx`` is this case),
     or a planned file (``files``). Texts are managed's own: ``<path>: two writes name the same path`` and
-    ``<path>: parent <p> is not a directory`` (``ctx`` below a planned file)."""
+    ``<path>: parent <p> is not a directory`` (``ctx`` below a planned file). Every path is compared under the ASCII
+    map (Note H-1, F-20261125-5x5w); a conflict names the configured spellings."""
+    shown, ctx = ctx, _fold(ctx)
+    dir_name, file_name = {}, {_fold(f): f for f in files}
+    for p in [*dirs, state]:
+        dir_name.setdefault(_fold(p), p)  # the first configured spelling of a folded directory
+    dirs, files, state = [_fold(d) for d in dirs], [_fold(f) for f in files], _fold(state)
     for d in dirs + [state]:  # controller decision (owner delegation 2026-11-09): equal to or inside a state directory
         if ctx == d or ctx.startswith(d + "/"):
-            return ["%s: inside the state directory %s" % (ctx, d)]
+            return ["%s: inside the state directory %s" % (shown, dir_name[d])]
     taken = set(files)
     for p in dirs + files:
         parts = p.split("/")
         taken.update("/".join(parts[:i]) for i in range(1, len(parts)))
     if ctx in taken:
-        return ["%s: two writes name the same path" % ctx]
-    return ["%s: parent %s is not a directory" % (ctx, f) for f in files if ctx.startswith(f + "/")]
+        return ["%s: two writes name the same path" % shown]
+    return ["%s: parent %s is not a directory" % (shown, file_name[f]) for f in files if ctx.startswith(f + "/")]
 
 
 def _hook_overlap(root: str, ctx: str, hooks: str, names: list) -> list:
@@ -442,12 +458,15 @@ def _hook_overlap(root: str, ctx: str, hooks: str, names: list) -> list:
     ``ctx`` equal to one, or to the hooks directory when init creates it (absent), is ``two writes name the same
     path``; below one is ``parent <f> is not a directory``. A present hooks directory or git directory is managed's own
     conflict for the context write. Hooks outside ``root`` (a linked worktree's common git directory) get a ``..``
-    path, which ``ctx`` never names (config: no ``..`` component)."""
+    path, which ``ctx`` never names (config: no ``..`` component). Compared under the ASCII map (Note H-1)."""
     rel = os.path.relpath(hooks, root)
     hook_files = [rel + "/" + n for n in names]
+    hook_name = {_fold(h): h for h in hook_files}
+    shown, ctx, rel = ctx, _fold(ctx), _fold(rel)
+    hook_files = [_fold(h) for h in hook_files]
     if ctx in hook_files + ([] if os.path.lexists(hooks) else [rel]):
-        return ["%s: two writes name the same path" % ctx]
-    return ["%s: parent %s is not a directory" % (ctx, h) for h in hook_files if ctx.startswith(h + "/")]
+        return ["%s: two writes name the same path" % shown]
+    return ["%s: parent %s is not a directory" % (shown, hook_name[h]) for h in hook_files if ctx.startswith(h + "/")]
 
 
 def _hooks_dir_blocked(hooks: str) -> bool:
