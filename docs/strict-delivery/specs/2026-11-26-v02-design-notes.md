@@ -44,3 +44,11 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 ### V2-24 This repository's nonconforming handoffs (2026-11-26)
 
 - Owner: "yes both match". Treated as v0.1 data clean-up (the program controller's owed handoff/1 rewrites, docs PR); V2-04 (handoffs written only by the checkpoint tool) prevents a recurrence in v0.2.
+
+### V2-01 Class members in the finding record (2026-11-26)
+
+- Owner: "yes that matches, go with members in the record".
+- `findings new` takes each class member explicitly (`--member <text>`, repeatable), found by a search, not only the case hit; `gate_register` refuses a finding whose class has no members.
+- The record holds `members: [{id, text, test, status, found_by, found_in}]`. A member is resolved when it names its test; the finding cannot close (V2-08) until every member is resolved, so class-completeness is checked by the tools.
+- A member found by a later review is added to the same record with its own `found_by` and `found_in` (it feeds the late-findings measure); it does not become a new finding.
+- Records without a member list (older ones) stay valid and count as one member until edited.
