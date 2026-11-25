@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261124-i2xx
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c2-review-1.md R1-5
 severity: LOW
 class: swap-after-check stated-limit test cannot fail
@@ -16,11 +16,15 @@ owner:
   task: 3c.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - "fixed in b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6; killing test: tests.test_hook_agent test_hardening_swap_after_check_is_stated_limit"
 history:
   - status: open
     sha: 7c53f2135d068934bf90b8422319502d18d03d74
     by: stream-hooks-1
+  - status: fixed-unpinned
+    sha: b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
+    by: implementer
 review_round: 1
 caused_by_change: true
 dimension: "hardening: swap after check"

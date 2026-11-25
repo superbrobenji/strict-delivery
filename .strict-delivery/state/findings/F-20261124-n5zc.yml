@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261124-n5zc
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c1-review-1.md R1-5
 severity: LOW
 class: "table rows without a test of their own values: HC9 (5000-character id), HD18 (Read tool with a decisions path; the row's Bash member is wrong, Bash routes to pre_bash)"
@@ -16,11 +16,15 @@ owner:
   task: 3c.1
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - "fixed in 71970f9afb22c5b10ff92bc978d58690ca1dfac4; killing tests: tests.test_hook_edit test_long_id_5000_characters, test_read_tool_with_decisions_path_silent"
 history:
   - status: open
     sha: bc32f50613d258334c1d0235e83bfc2001130690
     by: stream-hooks-1
+  - status: fixed-unpinned
+    sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
+    by: implementer
 review_round: 1
 caused_by_change: true
 dimension: "table rows: values not tested"

@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-yxau
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-1
 severity: LOW
 class: "deny paths that discard FAIL lines already computed: pre_agent.py:227 (members checked by search: :187 :190 :203 :213, pre_edit.py :170 :174 are not)"
@@ -13,11 +13,15 @@ owner:
   task: 3c.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - "fixed in bf961bd272704776574ec3b3bcce15b55ba313b5; killing test: tests.test_hook_agent FinalReview.test_write_failure_on_exit_keeps_every_fail_line (7 members; mutant F1 KILLED); R3 survivor killed by d3fc8476886a1852ea32e72a6fa4d98ab6caa3bd test_unavailable_inside_locked_body_is_reraised"
 history:
   - status: open
     sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
     by: stream-hooks-2
+  - status: fixed-unpinned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
 review_round: 4
 caused_by_change: true
 dimension: "deny content: every computed FAIL line kept (plan :3918, Q5)"

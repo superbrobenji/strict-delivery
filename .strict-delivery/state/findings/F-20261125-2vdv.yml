@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-2vdv
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-6
 severity: LOW
 class: "this PR's finding records that do not record their landed fix: 3c.1 se42 jjq8 vyet n5zc npuq; 3c.2 wfhu kafz yas4 9xky i2xx vmks hkwy vbkd wt9b ztbx dq53"
@@ -13,11 +13,15 @@ owner:
   task: 3c.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - "the 16 records of 3c.1 and 3c.2 set to fixed-unpinned with the fix shas 71970f9, ab2b102, b4e0d2c, bfa08a3 and the six new ones with bf961bd272704776574ec3b3bcce15b55ba313b5 (sha of the records commit itself cannot be known before it; the fix commit is cited as the brief says); checks: gates check schema and check register exit 0"
 history:
   - status: open
     sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
     by: stream-hooks-2
+  - status: fixed-unpinned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
 review_round: 4
 caused_by_change: true
 dimension: "finding record lifecycle: fix recorded"

@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261124-npuq
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c1-review-2.md R2-1
 severity: LOW
 class: "store untouched when nothing is surfaced: members (a) no matching record (vyet, tested), (b) only matching record has an unusable applies_to (found non-empty, ids empty), (c) only matching record superseded/not in force (search)"
@@ -16,11 +16,15 @@ owner:
   task: 3c.1
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - "fixed in ab2b1025f705877d6be12062a230a22ae5cac219 (tests; production behaviour from 71970f9afb22c5b10ff92bc978d58690ca1dfac4); killing tests: tests.test_hook_edit test_unusable_applies_to_leaves_store_unchanged, test_not_in_force_leaves_store_unchanged"
 history:
   - status: open
     sha: 71970f9afb22c5b10ff92bc978d58690ca1dfac4
     by: stream-hooks-1
+  - status: fixed-unpinned
+    sha: ab2b1025f705877d6be12062a230a22ae5cac219
+    by: implementer
 review_round: 2
 caused_by_change: false
 dimension: "surfacing: no surfaced id"

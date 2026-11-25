@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-dwq5
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-4
 severity: LOW
 class: "literal schema tags in fixtures written by this PR (plan :32): test_hook_edit.py:653, :717, :987; test_hook_agent.py:1262 (3c.2's member)"
@@ -13,11 +13,15 @@ owner:
   task: 3c.1
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - "fixed in bf961bd272704776574ec3b3bcce15b55ba313b5; literal tags replaced in test_hook_edit.py (TAG, SESSION_TAG) and test_hook_agent.py (SESSION_TAG); no test can fail on a tag, check: git grep -n -e hook-session/1 -e decision/2 tests/test_hook_edit.py tests/test_hook_agent.py"
 history:
   - status: open
     sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
     by: stream-hooks-2
+  - status: fixed-unpinned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
 review_round: 3
 caused_by_change: true
 dimension: "fixtures: no literal schema tags (plan :32)"

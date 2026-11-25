@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261124-dq53
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c2-review-2.md R2-4
 severity: LOW
 class: "HN13 digit-edge test uses max_children.session not max_children.controller: members each limits key the plan names for the dispatcher role (controller, stream_controller, session)"
@@ -16,11 +16,15 @@ owner:
   task: 3c.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - "fixed in bfa08a30e414311b869d50a66541787a1df883cc; killing test: tests.test_hook_agent test_limits_digit_edge_role_keys"
 history:
   - status: open
     sha: b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
     by: stream-hooks-1
+  - status: fixed-unpinned
+    sha: bfa08a30e414311b869d50a66541787a1df883cc
+    by: implementer
 review_round: 2
 caused_by_change: true
 dimension: "PC1 numeric text: limits keys"
