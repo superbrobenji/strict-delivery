@@ -119,7 +119,7 @@ _REPO_SHAPING = frozenset(("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OB
                            "GIT_EXEC_PATH", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
                            "GIT_CONFIG_SYSTEM"))
 _TEMPLATE_LOCK = threading.Lock()
-_TEMPLATES: dict = {}  # (emitted config text, PATH) -> directory of the template repository
+_TEMPLATES: dict = {}  # (emitted config text, PATH, umask, GIT_* environment) -> directory of the template repository
 _TEMPLATE_ROOT: list = []  # [private temporary directory], created on first use, removed at process exit
 _HISTORY_ROOT: list = []  # the same for ``cached_history`` (a build runs there, so ``make_repo`` inside it is not an overlap)
 
@@ -144,6 +144,22 @@ def _template_root() -> str:
     return _private_root(_TEMPLATE_ROOT, "sd-fixture-template-")
 
 
+def _overlaps(real: str, root: str) -> bool:
+    """True when the real paths ``real`` and ``root`` are equal, or one lies inside the other, compared case-folded:
+    on a case-insensitive file system ``/T/SD-FIXTURE`` is the same directory as ``/T/sd-fixture``, and ``realpath``
+    does not fold case. A case-folded alias is refused on a case-sensitive file system too (fail closed; no such
+    path is a legitimate fixture directory). The filesystem root contains every root."""
+    real, root = real.casefold().rstrip(os.sep), root.casefold().rstrip(os.sep)
+    return real == root or real.startswith(root + os.sep) or root.startswith(real + os.sep)
+
+
+def _umask() -> int:
+    """The process umask (no read-only getter exists: set it to 0 and put it back at once)."""
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
 def _fast_path_ok(tmp: str, root: str) -> bool:
     """True when ``tmp`` is a real (not symlinked), empty directory on the template's file system, outside the
     template root, under the isolated git environment."""
@@ -163,16 +179,16 @@ def _fast_path_ok(tmp: str, root: str) -> bool:
 def make_repo(tmp: str, config: Optional[dict] = None) -> str:
     """Make tmp a git repository whose first branch is main, with the config committed; return tmp.
     ``maintenance.auto`` is ``false`` and ``gc.auto`` is ``0`` in every repository returned. An empty tmp under the
-    isolated git environment is a copy of a per-process template (one per emitted config text, PATH and GIT_* environment, built the slow
+    isolated git environment is a copy of a per-process template (one per emitted config text, PATH, umask and GIT_* environment, built the slow
     way, private temporary directory, removed at exit); any other tmp gets ``git init`` and the commit."""
     text = emit(config if config is not None else minimal_config())
     root = _template_root()
-    real, rroot = os.path.realpath(tmp), os.path.realpath(root)
-    if real == rroot or real.startswith(rroot + os.sep) or rroot.startswith(real + os.sep):
+    if _overlaps(os.path.realpath(tmp), os.path.realpath(root)):
         raise ValueError("make_repo: %s overlaps the fixture template directory" % tmp)
     if not _fast_path_ok(tmp, root):
         return _make_repo_slow(tmp, config)
-    key = (text, os.environ.get("PATH", ""), tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("GIT_"))))
+    key = (text, os.environ.get("PATH", ""), _umask(),
+           tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("GIT_"))))
     with _TEMPLATE_LOCK:
         tpl = _TEMPLATES.get(key)
         if tpl is None:
@@ -186,7 +202,7 @@ def make_repo(tmp: str, config: Optional[dict] = None) -> str:
 
 
 _HISTORY_LOCK = threading.Lock()
-_HISTORIES: dict = {}  # (key, PATH, GIT_* environment) -> (directory of the built history, facts)
+_HISTORIES: dict = {}  # (key, PATH, umask, GIT_* environment) -> (directory of the built history, facts)
 
 
 def cached_history(key, dest: str, build):
@@ -196,17 +212,18 @@ def cached_history(key, dest: str, build):
     content (the same key must mean the same ``build``). Returns ``(dest, facts)``: ``dest`` is a real copy of the
     built directory (``copytree``: no hard links, no alternates, no shared object store), the facts a deep copy.
     Under the same conditions as ``make_repo``'s fast path (an empty, real ``dest`` on the template's file system,
-    the isolated git environment) the build runs once per key, PATH and GIT_* environment; otherwise ``build(dest)``
+    the isolated git environment) the build runs once per key, PATH, umask and GIT_* environment; otherwise ``build(dest)``
     runs on ``dest`` itself. Use only for a test that never depends on fresh history (the commit dates are the fixed
     ``_IDENTITY`` ones; the copy keeps every mtime, the index included)."""
     root = _template_root()
     real = os.path.realpath(dest)
     for rroot in (os.path.realpath(root), os.path.realpath(_private_root(_HISTORY_ROOT, "sd-fixture-history-"))):
-        if real == rroot or real.startswith(rroot + os.sep) or rroot.startswith(real + os.sep):
+        if _overlaps(real, rroot):
             raise ValueError("cached_history: %s overlaps the fixture template directory" % dest)
     if not _fast_path_ok(dest, root):
         return dest, build(dest)
-    full = (key, os.environ.get("PATH", ""), tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("GIT_"))))
+    full = (key, os.environ.get("PATH", ""), _umask(),
+            tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("GIT_"))))
     with _HISTORY_LOCK:  # not _TEMPLATE_LOCK: a build calls make_repo
         hit = _HISTORIES.get(full)
         if hit is None:

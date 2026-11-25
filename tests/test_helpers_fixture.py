@@ -4,9 +4,11 @@ and index oracles (rows L1, L2).
 
 Expected values are built here with raw ``git`` commands (an oracle independent of ``helpers``): the same commands the
 slow path ran before this task, never a second call of the code under test."""
+import ast
 import hashlib
 import inspect
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -115,6 +117,24 @@ class Base(GitIsolatedTestCase):
         d = os.path.join(self.tmp, name)
         os.mkdir(d)
         return d
+
+    def sandbox(self):
+        """SAFETY (a test of a refusal guard must never reach a real shared directory if the guard fails): from here
+        to the end of the test, the template and history roots are made fresh, inside a private ``box`` under this
+        test's own temporary directory (``tempfile.tempdir`` is ``box``, the registries are empty, nothing is
+        registered with the real ``atexit``; the roots are removed by this test's cleanup). The roots, their parent
+        (``box``) and every path built from them lie inside ``self.tmp``; so a guard that fails writes there only.
+        Returns ``box``."""
+        box = os.path.realpath(tempfile.mkdtemp(prefix="box-", dir=self.tmp))
+        exits = []
+        for p in (mock.patch.object(tempfile, "tempdir", box), mock.patch.object(helpers, "_TEMPLATE_ROOT", []),
+                  mock.patch.object(helpers, "_HISTORY_ROOT", []), mock.patch.object(helpers, "_TEMPLATES", {}),
+                  mock.patch.object(helpers, "_HISTORIES", {}),
+                  mock.patch.object(helpers, "atexit", types.SimpleNamespace(register=exits.append))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(lambda: [fn() for fn in exits])  # runs before the patches stop and before self.tmp is removed
+        return box
 
     def no_copy(self):
         """Patch that fails the test if the fast path (a copy of the template) is taken."""
@@ -547,16 +567,18 @@ class HistoryTemplateTest(Base):
                 self.assertEqual(facts(dest), facts(slow_build(self.fresh("s%x" % ord(ch)), helpers.emit(cfg))))
 
     def test_h5_history_and_template_directories_are_never_a_target(self):  # H5
+        box = self.sandbox()  # the roots and their parent are private to this test (F-20261125-hqt5)
         calls, build = self.counting()
         helpers.cached_history("k-h5", self.fresh("warm"), build)
         for root in (helpers._TEMPLATE_ROOT[0], helpers._HISTORY_ROOT[0]):
-            before = tree_state(root)
+            self.assertEqual(os.path.dirname(root), box)
+            before = tree_state(box)
             for label, path in (("root", root), ("inside", os.path.join(root, "x")), ("parent", os.path.dirname(root)),
                                 ("a built history", calls[0])):
                 with self.subTest(root=root, label=label), self.assertRaises(ValueError) as cm:
                     helpers.cached_history("k-h5", path, build)
                 self.assertIn("overlaps the fixture template directory", str(cm.exception))
-            self.assertEqual(tree_state(root), before)
+            self.assertEqual(tree_state(box), before)  # nothing written anywhere in the sandbox
         self.assertEqual(len(calls), 1)
 
     def test_h7_history_root_is_private_and_outside_the_checkout(self):  # H7
@@ -697,17 +719,19 @@ class InputDomainTest(Base):
         self.assertEqual(facts(os.path.join(real, "sub")), facts(slow_build(self.fresh("slow"))))
 
     def test_h5_template_directory_is_never_a_target(self):  # H5
+        box = self.sandbox()  # the root and its parent are private to this test (F-20261125-hqt5)
         make_repo(self.fresh("warm"))
         root = helpers._TEMPLATE_ROOT[0]
+        self.assertEqual(os.path.dirname(root), box)
         tpl = next(iter(helpers._TEMPLATES.values()))
-        before = tree_state(root)
+        before = tree_state(box)
         inner = os.path.join(tpl, "subdir")
         for label, path in (("root itself", root), ("template", tpl), (".git of the template", os.path.join(tpl, ".git")),
                             ("missing under it", inner), ("parent of the root", os.path.dirname(root))):
             with self.subTest(label), self.assertRaises(ValueError) as cm:
                 make_repo(path)
             self.assertIn("overlaps the fixture template directory", str(cm.exception))
-        self.assertEqual(tree_state(root), before)
+        self.assertEqual(tree_state(box), before)  # nothing written anywhere in the sandbox
         self.assertFalse(os.path.exists(inner))
 
     def test_h6_unusual_names_in_an_existing_directory(self):  # H6
@@ -761,6 +785,303 @@ class InputDomainTest(Base):
             self.assertFalse(root.startswith(under + os.sep), under)
         for tpl in helpers._TEMPLATES.values():
             self.assertTrue(tpl.startswith(root + os.sep))
+
+
+TAINT = ("_TEMPLATE_ROOT", "_HISTORY_ROOT", "_template_root", "_private_root", "gettempdir", "REPO", "HOME", "expanduser")
+GUARDED_CALLS = ("make_repo", "cached_history")
+
+
+def unsandboxed_guard_tests(tests_dir):
+    """Row H5 safety (F-20261125-hqt5), the class: ``{"file::Class.test"}`` of every test function in ``tests_dir`` that
+    hands ``make_repo`` or ``cached_history`` a path derived (through assignments and loops of the function) from a shared
+    root (``_TEMPLATE_ROOT``, ``_HISTORY_ROOT``, ``gettempdir``, ``REPO``, ``HOME``), and does not call ``self.sandbox(``."""
+    found = set()
+    for name in sorted(os.listdir(tests_dir)):
+        if not (name.startswith("test_") and name.endswith(".py")):
+            continue
+        with open(os.path.join(tests_dir, name), encoding="utf-8") as fh:
+            text = fh.read()
+        lines = text.split("\n")
+        for qual, node in test_functions(ast.parse(text)):
+            src = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            if not any(g + "(" in src for g in GUARDED_CALLS):
+                continue
+            tainted = set()
+            changed = True
+            while changed:
+                changed = False
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Assign):
+                        targets, value = sub.targets, sub.value
+                    elif isinstance(sub, ast.For):
+                        targets, value = [sub.target], sub.iter
+                    else:
+                        continue
+                    vtext = ast.get_source_segment(text, value) or ""
+                    if any(t in vtext for t in TAINT) or any(re.search(r"\b%s\b" % v, vtext) for v in tainted):
+                        for t in targets:
+                            for n in ast.walk(t):
+                                if isinstance(n, ast.Name) and n.id not in tainted:
+                                    tainted.add(n.id)
+                                    changed = True
+            hit = False
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and getattr(sub.func, "attr", getattr(sub.func, "id", "")) in GUARDED_CALLS:
+                    atext = " ".join(ast.get_source_segment(text, a) or "" for a in sub.args)
+                    if any(t in atext for t in TAINT) or any(re.search(r"\b%s\b" % v, atext) for v in tainted):
+                        hit = True
+            if hit and "self.sandbox(" not in src:
+                found.add(name + "::" + qual)
+    return found
+
+
+def test_functions(tree):
+    """``(qualified name, node)`` of every function whose name starts with ``test`` (classes and nesting in the name)."""
+    out = []
+
+    def walk(node, prefix):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, ast.ClassDef):
+                walk(ch, prefix + ch.name + ".")
+            elif isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if ch.name.startswith("test"):
+                    out.append((prefix + ch.name, ch))
+                walk(ch, prefix + ch.name + ".")
+    walk(tree, "")
+    return out
+
+
+class OverlapMatrixTest(Base):
+    """Row H5, the pair matrix (F-20261125-zgnj, F-20261125-hqt5): {template root, history root} x {equal, below,
+    above} x {exact, case-folded} for ``make_repo`` and ``cached_history``, all inside ``self.sandbox()``. Case-folded
+    aliases are refused on a case-sensitive file system too (chosen: fail closed and simpler); on a case-insensitive
+    one (macOS APFS) the alias really is the same directory (checked with ``samefile`` where it exists)."""
+    MSG = "overlaps the fixture template directory"
+
+    def cells(self):
+        """The cross product, generated: ``(guard, root name, relation, spelling, path)``. ``below`` is an existing empty
+        directory inside the root, ``above`` the parent of the root (the sandbox)."""
+        roots = {"template": helpers._TEMPLATE_ROOT[0], "history": helpers._HISTORY_ROOT[0]}
+        out = []
+        for guard in ("make_repo", "cached_history"):
+            for rname in sorted(roots):
+                root = roots[rname]
+                sub = os.path.join(root, "below")
+                if not os.path.isdir(sub):
+                    os.mkdir(sub)
+                for rel, path in (("equal", root), ("below", sub), ("above", os.path.dirname(root))):
+                    for spelling in ("exact", "folded"):
+                        out.append((guard, rname, rel, spelling, path if spelling == "exact" else path.upper()))
+        return out
+
+    @staticmethod
+    def refused(guard, rname, rel):
+        """The invariant of a cell: ``cached_history`` refuses both roots; ``make_repo`` refuses the template root and
+        every directory above it, and leaves the history root and what is below it alone (a history build runs there)."""
+        return guard == "cached_history" or rname == "template" or rel == "above"
+
+    def test_h5_pair_matrix(self):
+        box = self.sandbox()
+        make_repo(self.fresh("warm"))
+        warm_calls = []
+        helpers.cached_history("k-matrix", self.fresh("warm2"), lambda root: warm_calls.append(root) or {})
+        cells = self.cells()
+        self.assertEqual(len(cells), 2 * 2 * 3 * 2)
+        self.assertEqual(len({c[:4] for c in cells}), 24)
+        before = tree_state(box)
+        for guard, rname, rel, spelling, path in cells:
+            with self.subTest(guard=guard, root=rname, relation=rel, spelling=spelling):
+                if spelling == "folded":
+                    exact = next(c[4] for c in cells if c[:3] == (guard, rname, rel) and c[3] == "exact")
+                    self.assertNotEqual(path, exact)  # a different spelling
+                    if os.path.exists(path):  # case-insensitive file system: the alias is the same directory
+                        self.assertTrue(os.path.samefile(path, exact))
+                built = []
+                if guard == "make_repo":
+                    run = lambda: make_repo(path)  # noqa: E731
+                else:
+                    run = lambda: helpers.cached_history("k-cell", path, lambda root: built.append(root) or {})  # noqa: E731
+                if self.refused(guard, rname, rel):
+                    with self.assertRaises(ValueError) as cm:
+                        run()
+                    self.assertTrue(str(cm.exception).startswith(guard + ": "), str(cm.exception))
+                    self.assertIn(self.MSG, str(cm.exception))
+                else:  # not a target of the guard: nothing is written either (the slow path is stubbed)
+                    with mock.patch.object(helpers, "_fast_path_ok", return_value=False), \
+                            mock.patch.object(helpers, "_make_repo_slow", side_effect=lambda t, c: t) as slow:
+                        self.assertEqual(run(), path)
+                    self.assertEqual(slow.call_count, 1)
+                self.assertEqual(built, [])
+                self.assertEqual(tree_state(box), before)  # invariant of every cell: the sandbox is unchanged
+        self.assertEqual(len(warm_calls), 1)  # only the warm-up built anything
+
+    def test_h5_filesystem_root_contains_every_root(self):
+        """``/`` lies above every root; a ``realpath`` that says ``/`` for a directory of the sandbox is refused (the
+        directory itself is private, so a failing guard writes only there)."""
+        box = self.sandbox()
+        make_repo(self.fresh("warm"))
+        helpers.cached_history("k-warm", self.fresh("warm2"), lambda root: {})  # both roots exist before the snapshot
+        target = os.path.join(box, "claims-to-be-the-filesystem-root")
+        os.mkdir(target)
+        real_realpath = os.path.realpath
+
+        def fake(path, *a, **kw):
+            return "/" if path == target else real_realpath(path, *a, **kw)
+        before = tree_state(box)
+        with mock.patch.object(os.path, "realpath", side_effect=fake):
+            for guard, run in (("make_repo", lambda: make_repo(target)),
+                               ("cached_history", lambda: helpers.cached_history("k-slash", target, lambda r: {}))):
+                with self.subTest(guard), self.assertRaises(ValueError) as cm:
+                    run()
+                self.assertIn("overlaps the fixture template directory", str(cm.exception))
+        self.assertEqual(tree_state(box), before)
+
+    def test_h5_sandbox_keeps_every_root_and_parent_private(self):
+        box = self.sandbox()
+        self.assertTrue(box.startswith(self.tmp + os.sep), box)
+        self.assertEqual(os.path.realpath(tempfile.gettempdir()), box)
+        make_repo(self.fresh("w1"))
+        helpers.cached_history("k-priv", self.fresh("w2"), lambda root: {})
+        for root in (helpers._TEMPLATE_ROOT[0], helpers._HISTORY_ROOT[0]):
+            self.assertEqual(os.path.dirname(root), box)
+            self.assertTrue(root.startswith(self.tmp + os.sep), root)
+        self.assertIsInstance(helpers.atexit, types.SimpleNamespace)  # nothing is registered with the real atexit
+
+    def test_h5_every_guard_test_is_sandboxed(self):  # the class: a test that hands a guard a path from a shared root
+        self.assertEqual(unsandboxed_guard_tests(os.path.join(REPO, "tests")), set())
+
+    def test_h5_every_guard_test_is_sandboxed_has_teeth(self):
+        bad = ("class T:\n    def test_a(self):\n        root = helpers._TEMPLATE_ROOT[0]\n"
+               "        make_repo(os.path.dirname(root))\n"
+               "    def test_b(self):\n        for p in (tempfile.gettempdir(),):\n            helpers.cached_history('k', p, b)\n"
+               "    def test_c(self):\n        make_repo(os.path.join(REPO, 'x'))\n")
+        good = ("class T:\n    def test_a(self):\n        self.sandbox()\n        root = helpers._TEMPLATE_ROOT[0]\n"
+                "        make_repo(os.path.dirname(root))\n"
+                "    def test_b(self):\n        make_repo(self.fresh('x'))\n")
+        with tempfile.TemporaryDirectory(dir=self.tmp) as d:
+            self.write(d, "test_bad.py", bad.encode())
+            self.write(d, "test_good.py", good.encode())
+            self.assertEqual(unsandboxed_guard_tests(d), {"test_bad.py::T.test_a", "test_bad.py::T.test_b",
+                                                          "test_bad.py::T.test_c"})
+
+
+class UmaskTest(Base):
+    """Row F4, process state not in the template key (F-20261125-ix2g): a copy equals the slow build made under the
+    caller's umask, whichever umask built the template first; two umasks in both orders, for ``make_repo`` and
+    ``cached_history``. The expected tree is built with raw git in this test."""
+
+    def modes(self, top):
+        return {rel: v[:2] for rel, v in tree_state(top).items()}
+
+    def umask(self, value):
+        old = os.umask(value)
+        self.addCleanup(os.umask, old)
+
+    @staticmethod
+    def raw_history(root):
+        slow_build(root)
+        os.makedirs(os.path.join(root, "d", "e"))
+        for rel, data in (("a.txt", b"alpha\n"), ("d/e/f.txt", b"f\n"), ("run", b"#!/bin/sh\n")):
+            with open(os.path.join(root, rel), "wb") as fh:
+                fh.write(data)
+        os.chmod(os.path.join(root, "run"), 0o755)
+        os.symlink("a.txt", os.path.join(root, "ln"))
+        rawok(root, "add", "-A")
+        rawok(root, "commit", "-q", "--allow-empty", "-m", "one")
+        rawok(root, "commit", "-q", "--allow-empty", "-m", "two")
+
+    def test_f4_umask_make_repo_both_orders(self):
+        seen = {}
+        for order in ((0o077, 0o022), (0o022, 0o077)):
+            self.sandbox()  # a fresh template registry per order: the first caller's umask builds the template
+            for um in order:
+                with self.subTest(order=order, umask=oct(um)):
+                    self.umask(um)
+                    tag = "%o-%o" % (order[0], um)
+                    fast = make_repo(self.fresh("f" + tag))
+                    slow = slow_build(self.fresh("s" + tag))
+                    self.assertEqual(self.modes(fast), self.modes(slow))
+                    self.assertEqual(facts(fast), facts(slow))
+                    seen[um] = self.modes(fast)[".git"]
+        self.assertEqual(seen[0o077], (stat.S_IFDIR, 0o700))  # the two umasks really give different trees
+        self.assertEqual(seen[0o022], (stat.S_IFDIR, 0o755))
+
+    def test_f4_umask_cached_history_both_orders(self):
+        for order in ((0o077, 0o022), (0o022, 0o077)):
+            self.sandbox()
+            for um in order:
+                with self.subTest(order=order, umask=oct(um)):
+                    self.umask(um)
+                    tag = "%o-%o" % (order[0], um)
+                    fast, _ = helpers.cached_history("k-umask", self.fresh("f" + tag), history_build)
+                    slow = self.fresh("s" + tag)
+                    self.raw_history(slow)
+                    self.assertEqual(self.modes(fast), self.modes(slow))
+                    self.assertEqual(rawok(fast, "rev-list", "--count", "HEAD"), "3")
+
+    def test_f4_umask_is_part_of_both_keys(self):
+        self.sandbox()
+        self.umask(0o077)
+        make_repo(self.fresh("a"))
+        helpers.cached_history("k-key", self.fresh("b"), history_build)
+        before = (len(helpers._TEMPLATES), len(helpers._HISTORIES))
+        self.umask(0o022)
+        make_repo(self.fresh("c"))
+        helpers.cached_history("k-key", self.fresh("d"), history_build)
+        self.assertGreater(len(helpers._TEMPLATES), before[0])
+        self.assertEqual(len(helpers._HISTORIES), before[1] + 1)
+
+
+class HistorySymlinkTest(Base):
+    """Rows F5/F11 (F-20261125-fiw5): symlinks inside a cached history are copied as symlinks, never followed. One test
+    per member: a top-level symlink to a directory, a dangling symlink, a symlink to a directory below a directory. The
+    expected tree is built with raw git in the test; the copy must equal it entry by entry."""
+
+    def check(self, label, extra, links):
+        """``extra(root)`` adds files and links to a repository; ``links`` is the hand-written ``{path: target}``."""
+        def build(root):
+            make_repo(root)
+            extra(root)
+            helpers.commit_all(root, "links")
+            return {}
+        dest, _ = helpers.cached_history("k-sym-" + label, self.fresh("copy-" + label), build)
+        want = self.fresh("want-" + label)
+        slow_build(want)
+        extra(want)
+        rawok(want, "add", "-A")
+        rawok(want, "commit", "-q", "--allow-empty", "-m", "links")
+        for rel, target in links.items():
+            path = os.path.join(dest, rel)
+            self.assertTrue(os.path.islink(path), rel)
+            self.assertEqual(os.readlink(path), target)
+            self.assertEqual(rawok(dest, "ls-files", "-s", "--", rel).split()[0], "120000")
+        got_tree, want_tree = tree_state(dest), tree_state(want)
+        self.assertEqual(got_tree.pop(".git/index")[:2], want_tree.pop(".git/index")[:2])
+        self.assertEqual(got_tree, want_tree)
+        self.assertEqual(rawok(dest, "ls-files", "-s"), rawok(want, "ls-files", "-s"))
+        self.assertEqual(rawok(dest, "status", "--porcelain", "--untracked-files=all"), "")
+
+    def test_top_level_symlink_to_a_directory(self):
+        def extra(root):
+            os.makedirs(os.path.join(root, "realdir"))
+            with open(os.path.join(root, "realdir", "inner.txt"), "wb") as fh:
+                fh.write(b"inner\n")
+            os.symlink("realdir", os.path.join(root, "dirlink"))
+        self.check("topdir", extra, {"dirlink": "realdir"})
+
+    def test_dangling_symlink(self):
+        def extra(root):
+            os.symlink("no-such-target", os.path.join(root, "dangling"))
+        self.check("dangling", extra, {"dangling": "no-such-target"})
+
+    def test_nested_symlink_to_a_directory(self):
+        def extra(root):
+            os.makedirs(os.path.join(root, "a", "b"))
+            with open(os.path.join(root, "a", "b", "f.txt"), "wb") as fh:
+                fh.write(b"f\n")
+            os.symlink("b", os.path.join(root, "a", "blink"))
+            os.symlink("gone", os.path.join(root, "a", "b", "dangling"))
+        self.check("nested", extra, {"a/blink": "b", "a/b/dangling": "gone"})
 
 
 class OptionalLocksTest(Base):
@@ -817,6 +1138,15 @@ class MemberOracleTest(Base):
         status with explicit optional locks off, HEAD, index st_mtime_ns)
      13 test_drift_cli.py: test_report_writes_nothing (drift_fx.snapshot: sha256 of every path, .git included)
      14 test_gate_drift_rows.py: test_gate_writes_nothing (the same snapshot)
+     15-22 test_claims_lib.py StagedBlobIdTests: test_conversion_cases_match_git_add, test_f1_reproducer_crlf_in_index_is_fresh,
+        test_lf_file_and_spaces_and_dash, test_non_regular_is_stale_and_never_staged (found by the search: it also goes
+        through ``verdict``), test_tab_and_newline_paths, test_no_index_entry_yet,
+        test_index_from_git_index_file_is_read_and_unchanged, test_temp_index_removed_on_every_exit (index bytes
+        before and after the production call, ``index_bytes``/``verdict``)
+     23 test_context_cli.py Process.test_cli_leaves_index_alone (C46: ``ls-files --stage`` and the GIT_INDEX_FILE copy)
+     Members 15-23 are checked by running the real test itself on a stat-dirty fixture (``run_real``). The complete list,
+     per test with the checked non-members and their reasons, is LISTED_TESTS; ``test_member_list_is_complete`` compares
+     it per test (a test that names an oracle pattern itself or through a helper of its file), not per file.
      Member 8 is also pinned to its real test's source and teeth by test_member8_real_test_is_the_measured_one.
     ``git diff`` is not a status probe: it refreshes a stat-dirty index even under GIT_OPTIONAL_LOCKS=0 (measured, and
     noted at test_gitinfo.py CP14), so no member's setup may probe with ``diff`` between its two measurements.
@@ -930,35 +1260,236 @@ class MemberOracleTest(Base):
         self.write(root, "new.txt", b"x")
         self.assertNotEqual(snap(), before)
 
-    def test_member_list_is_complete(self):  # the grep that produced the list: every file naming an oracle over .git
-        self.assertEqual(unlisted_oracle_files(os.path.join(REPO, "tests")), set())
+    # Members 15-23 (F-20261125-765j): the real test is run on a fixture whose tracked files are all stat-dirty (so a
+    # plain ``git status`` would rewrite ``.git/index``), unchanged, through its own oracle; one test per member.
+    def run_real(self, module, cls, name):
+        """Run ``module.cls.name`` itself (its own fixture, its own oracle, no assertion changed) with every tracked
+        file of its repository made stat-dirty right after ``setUp``; the fixture is proven dirty (a plain status
+        rewrites the index) before the test body runs. Fails unless that one test ran and passed."""
+        parent = getattr(module, cls)
 
-    def test_member_list_has_teeth(self):  # a new test file that names a pattern is found and fails the list
-        for pattern in ("st_mtime", "getmtime", ".git/index", '".git", "index"', "drift_fx"):
+        class Dirty(parent):
+            def setUp(self):
+                super().setUp()
+                dirty(self.root)
+                before = index_state(self.root)[0]
+                rc, _, _ = raw(self.root, "status", "--porcelain")  # plain: refreshes (the teeth of the fixture)
+                assert rc == 0 and index_state(self.root)[0] != before, "the fixture is not stat-dirty"
+                dirty(self.root)
+
+        result = unittest.TestResult()
+        Dirty(name).run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual((result.failures, result.errors, result.skipped), ([], [], []), result.failures + result.errors)
+
+    def test_member15_claims_lib_conversion_cases(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_conversion_cases_match_git_add")
+
+    def test_member16_claims_lib_f1_reproducer(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_f1_reproducer_crlf_in_index_is_fresh")
+
+    def test_member17_claims_lib_lf_spaces_dash(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_lf_file_and_spaces_and_dash")
+
+    def test_member18_claims_lib_non_regular(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_non_regular_is_stale_and_never_staged")
+
+    def test_member19_claims_lib_tab_and_newline_paths(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_tab_and_newline_paths")
+
+    def test_member20_claims_lib_no_index_entry_yet(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_no_index_entry_yet")
+
+    def test_member21_claims_lib_git_index_file(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_index_from_git_index_file_is_read_and_unchanged")
+
+    def test_member22_claims_lib_temp_index_removed(self):
+        from tests import test_claims_lib
+        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_temp_index_removed_on_every_exit")
+
+    def test_member23_context_cli_leaves_index_alone(self):
+        from tests import test_context_cli
+        self.run_real(test_context_cli, "Process", "test_cli_leaves_index_alone")
+
+    def test_members_15_23_oracles_see_a_plain_status(self):
+        """Teeth of 15-23: their oracles (``StagedBlobIdTests.index_bytes``, the ``ls-files --stage`` and copy bytes of
+        member 23) do see the rewrite a plain status makes, so a green member means the probe-free run left it alone."""
+        from tests import test_claims_lib
+        root = self.stat_dirty_repo()
+        case = types.SimpleNamespace(root=root)
+        before = test_claims_lib.StagedBlobIdTests.index_bytes(case)
+        git(root, "status", "--porcelain")
+        self.assertEqual(test_claims_lib.StagedBlobIdTests.index_bytes(case), before)
+        self.assertEqual(raw(root, "status", "--porcelain")[0], 0)
+        self.assertNotEqual(test_claims_lib.StagedBlobIdTests.index_bytes(case), before)
+
+    def test_member_list_is_complete(self):  # per test, not per file: an unlisted test of a listed file fails here
+        self.assertEqual(unlisted_oracle_tests(os.path.join(REPO, "tests")), set())
+
+    def test_member_list_is_exact_about_its_labels(self):  # every label is a member number or a checked non-member reason
+        for key, label in LISTED_TESTS.items():
+            with self.subTest(key):
+                self.assertRegex(label, r"^(M\d+|N-(env|own-mtime|plain-dir|tree-without-git|exists))$")
+        self.assertEqual(sorted({int(v[1:]) for v in LISTED_TESTS.values() if v.startswith("M")}), list(range(1, 24)))
+
+    def test_member_list_has_teeth(self):  # a new test that names a pattern is found, in a new file or a listed one
+        for pattern in ORACLE_PATTERNS:
+            body = "class T:\n    def helper(self):\n        return %r\n    def test_new(self):\n        self.helper()\n" % pattern
             with self.subTest(pattern=pattern), tempfile.TemporaryDirectory(dir=self.tmp) as d:
-                self.write(d, "test_new_oracle.py", ("# " + pattern + "\n").encode())
-                self.write(d, "test_quiet.py", b"# nothing\n")
-                self.write(d, "test_gitinfo.py", b"# st_mtime\n")  # a listed member is accepted
-                self.assertEqual(unlisted_oracle_files(d), {"test_new_oracle.py"})
+                self.write(d, "test_new_oracle.py", body.encode())
+                self.write(d, "test_quiet.py", b"class T:\n    def test_q(self):\n        pass\n")
+                # a listed file: its listed test is accepted, a new test next to it is found
+                self.write(d, "test_gitinfo.py", (
+                    "class DirtyPaths:\n    def test_dirty_paths_does_not_write_the_index(self):\n        x = %r\n"
+                    "    def test_added_later(self):\n        x = %r\n" % (pattern, pattern)).encode())
+                self.assertEqual(unlisted_oracle_tests(d), {"test_new_oracle.py::T.test_new",
+                                                            "test_gitinfo.py::DirtyPaths.test_added_later"})
+        with tempfile.TemporaryDirectory(dir=self.tmp) as d:  # the drift_fx snapshot is an oracle of ``.git`` bytes
+            self.write(d, "test_drifty.py", b"from tests.drift_fx import snapshot\n\nclass T:\n    def test_d(self):\n"
+                                            b"        snapshot('.')\n")
+            self.write(d, "test_plain.py", b"class T:\n    def test_d(self):\n        snapshot('.')\n")
+            self.assertEqual(unlisted_oracle_tests(d), {"test_drifty.py::T.test_d"})
 
 
-ORACLE_PATTERNS = ("st_mtime", "getmtime", ".git/index", '".git", "index"', "drift_fx")
-LISTED_FILES = {"test_gate_index.py", "test_claims_lib.py", "test_gitinfo.py", "test_gate_context.py",
-                "test_detect.py", "test_claims_cli.py", "test_context_cli.py", "test_githooks.py",
-                "test_hookio.py", "test_program_merged.py", "test_drift_lib.py", "test_hook_entry.py",
-                "test_gate_cleanup.py", "test_self_adoption.py", "test_gate_streams.py",
-                "test_drift_cli.py", "test_gate_drift_rows.py", "test_gate_drift.py"}
+ORACLE_PATTERNS = ("st_mtime", "getmtime", ".git/index", '".git", "index"', "GIT_OPTIONAL_LOCKS", "writes_nothing")
 
 
-def unlisted_oracle_files(tests_dir):
-    """Test files under ``tests_dir`` that name an oracle pattern (an mtime, ``.git/index``, or the ``drift_fx`` hashing
-    snapshot of ``.git``) and are neither a member nor a checked non-member listed above."""
-    found = set()
+def dirty(root):
+    """Make every tracked file of ``root`` stat-dirty with equal content (mtime 1)."""
+    for rel in rawok(root, "ls-files").splitlines():
+        os.utime(os.path.join(root, rel), (1, 1))
+
+
+def oracle_tests(tests_dir):
+    """``{"file::Class.test": patterns}``: every test function of every ``test_*.py`` under ``tests_dir`` (this file
+    excepted) whose own source, or the source of any function of the same file it calls by name (transitively, helpers
+    of its class or of the module), names an oracle pattern (an mtime, ``.git/index``, ``GIT_OPTIONAL_LOCKS``, a
+    "writes nothing" test) or, in a file importing ``tests.drift_fx``, calls its ``snapshot`` (a hash of ``.git``)."""
+    out = {}
     for name in sorted(os.listdir(tests_dir)):
         if not (name.startswith("test_") and name.endswith(".py")) or name == "test_helpers_fixture.py":
             continue
         with open(os.path.join(tests_dir, name), encoding="utf-8") as fh:
             text = fh.read()
-        if any(p in text for p in ORACLE_PATTERNS):
-            found.add(name)
-    return found - LISTED_FILES
+        lines = text.split("\n")
+        defs = []
+
+        def walk(node, prefix, cls):
+            for ch in ast.iter_child_nodes(node):
+                if isinstance(ch, ast.ClassDef):
+                    walk(ch, prefix + ch.name + ".", ch.name)
+                elif isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    defs.append((prefix + ch.name, cls, ch))
+                    walk(ch, prefix + ch.name + ".", cls)
+        walk(ast.parse(text), "", None)
+        by_simple = {}
+        for q, c, n in defs:
+            by_simple.setdefault(n.name, []).append((q, c))
+        direct, calls = {}, {}
+        for q, c, n in defs:
+            seg = "\n".join(lines[n.lineno - 1:n.end_lineno])
+            direct[q] = [p for p in ORACLE_PATTERNS if p in seg]
+            calls[q] = set()
+            for sub in ast.walk(n):
+                if isinstance(sub, ast.Call):
+                    calls[q].add(getattr(sub.func, "attr", getattr(sub.func, "id", "")))
+            if "snapshot" in calls[q] and "tests.drift_fx" in text:
+                direct[q].append("drift_fx.snapshot")
+        for q, c, n in defs:
+            if not n.name.startswith("test"):
+                continue
+            seen, todo, hit = set(), [q], set()
+            while todo:
+                cur = todo.pop()
+                if cur in seen:
+                    continue
+                seen.add(cur)
+                hit.update(direct[cur])
+                for called in calls[cur]:
+                    todo.extend(q2 for q2, c2 in by_simple.get(called, []) if c2 == c or c2 is None or c is None)
+            if hit:
+                out[name + "::" + q] = sorted(hit)
+    return out
+
+
+def unlisted_oracle_tests(tests_dir):
+    return set(oracle_tests(tests_dir)) - set(LISTED_TESTS)
+
+
+# Every test that names an oracle pattern, with its member number (M) or the reason it is a checked non-member:
+# N-env: sets or copies ``.git/index`` as an input (``GIT_INDEX_FILE``), compares no index bytes or mtimes across a probe;
+# N-own-mtime: the test sets the mtime itself; N-plain-dir: snapshot of a plain directory or of a tree without ``.git``;
+# N-tree-without-git: a snapshot that skips ``.git``; N-exists: only the existence of a file in a repository of its own.
+LISTED_TESTS = {
+    "test_gate_index.py::Writes.test_gate_writes_nothing": "M1",
+    "test_hook_entry.py::PostReadTest.test_post_read_writes_nothing": "M2",
+    "test_claims_lib.py::ArgvChunkTests.test_failure_in_a_later_chunk": "M3",
+    "test_claims_lib.py::ArgvChunkTests.test_invariants_hold_across_chunks": "M3",
+    "test_claims_lib.py::ArgvChunkTests.test_large_claim_file_gives_verdicts": "M3",
+    "test_gitinfo.py::DirtyPaths.test_dirty_paths_does_not_write_the_index": "M4",
+    "test_gitinfo.py::P23dGitinfoTest.test_does_not_write_the_index": "M5",
+    "test_gitinfo.py::ChangedPaths.test_changed_paths_index_settings": "M6",
+    "test_checkpoints_lib.py::RecordsAt.test_records_at_writes_nothing": "M7",
+    "test_gate_context.py::Receipts.test_gate_writes_nothing": "M8",
+    "test_gate_cleanup.py::OutputTests.test_cleanup_gate_writes_nothing": "M9",
+    "test_gate_evidence.py::InputFailures.test_gate_writes_nothing": "M9",
+    "test_gate_streams.py::RowsD.test_inside_pre_commit_hook_environment": "M10",
+    "test_self_adoption.py::CopyTest.test_hooks_in_a_disposable_clone": "M11",
+    "test_drift_lib.py::Arguments.test_stream_errors_writes_nothing": "M12",
+    "test_drift_lib.py::Arguments.test_status_probe_writes_nothing": "M12",
+    "test_drift_cli.py::Report.test_report_writes_nothing": "M13",
+    "test_gate_drift_rows.py::ProgramLines.test_gate_writes_nothing": "M14",
+    "test_claims_lib.py::StagedBlobIdTests.test_conversion_cases_match_git_add": "M15",
+    "test_claims_lib.py::StagedBlobIdTests.test_f1_reproducer_crlf_in_index_is_fresh": "M16",
+    "test_claims_lib.py::StagedBlobIdTests.test_lf_file_and_spaces_and_dash": "M17",
+    "test_claims_lib.py::StagedBlobIdTests.test_non_regular_is_stale_and_never_staged": "M18",
+    "test_claims_lib.py::StagedBlobIdTests.test_tab_and_newline_paths": "M19",
+    "test_claims_lib.py::StagedBlobIdTests.test_no_index_entry_yet": "M20",
+    "test_claims_lib.py::StagedBlobIdTests.test_index_from_git_index_file_is_read_and_unchanged": "M21",
+    "test_claims_lib.py::StagedBlobIdTests.test_temp_index_removed_on_every_exit": "M22",
+    "test_context_cli.py::Process.test_cli_leaves_index_alone": "M23",
+    "test_claims_lib.py::StagedBlobIdTests.test_racy_entry_is_rehashed": "N-own-mtime",
+    "test_claims_lib.py::StagedBlobIdTests.test_repository_without_index_file": "N-exists",
+    "test_claims_cli.py::VerifyTests.test_verify_idempotent": "N-own-mtime",
+    "test_claims_cli.py::AddFlagTests.test_add_without_contradiction_writes_nothing": "N-tree-without-git",
+    "test_decisions_cli.py::Batch.test_batch_writes_nothing": "N-tree-without-git",
+    "test_decisions_cli.py::Overrides.test_ask_fixed_override_writes_nothing": "N-tree-without-git",
+    "test_decisions_cli.py::PlanTests.test_ask_one_option_writes_nothing": "N-tree-without-git",
+    "test_questions_cli.py::ListOutput.test_list_writes_nothing": "N-tree-without-git",
+    "test_index.py::Overview2.test_regenerate_writes_nothing_on_refusal": "N-tree-without-git",
+    "test_index.py::Overview2.test_render_writes_nothing_overview_2": "N-tree-without-git",
+    "test_store.py::LoadTest.test_symlinked_register_path_refused_by_create_and_writes_nothing": "N-tree-without-git",
+    "test_detect.py::OrderAndEffectTests.test_detect_has_no_side_effects": "N-plain-dir",
+    "test_detect.py::OrderAndEffectTests.test_no_side_effects_on_problem_paths": "N-plain-dir",
+    "test_detect.py::OrderTests.test_no_side_effects_on_problem_paths": "N-plain-dir",
+    "test_detect.py::OrderTests.test_no_side_effects_with_every_source": "N-plain-dir",
+    "test_drift_lib.py::MergedAt.test_merged_at_with_git_index_file": "N-env",
+    "test_gate_cleanup.py::OutputTests.test_cleanup_in_hook_environment": "N-env",
+    "test_gate_context.py::Lists.test_git_config_noise_has_no_effect": "N-env",
+    "test_gate_index.py::CleanAndArgs.test_index_with_git_index_file": "N-env",
+    "test_githooks.py::CommandsTestTest.test_commands_test_environment": "N-env",
+    "test_githooks.py::FlaggedPathsTest.test_flagged_paths_git_failure": "N-env",
+    "test_githooks.py::FlaggedPathsTest.test_flagged_paths_index_file": "N-env",
+    "test_githooks.py::PreCommitTest.test_fsmonitor_hidden_change_refuses_commit": "N-env",
+    "test_githooks.py::PreCommitTest.test_index_file_forms": "N-env",
+    "test_githooks.py::PreCommitTest.test_relative_index_file_with_cd_shim": "N-env",
+    "test_githooks.py::PreCommitTest.test_shim_under_each_posix_shell": "N-env",
+    "test_githooks.py::UnstagedPathsTest.test_unstaged_paths_git_failure": "N-env",
+    "test_githooks.py::UnstagedPathsTest.test_unstaged_paths_index_file": "N-env",
+    "test_gitinfo.py::DirtyPaths.test_dirty_paths_call_form": "N-env",
+    "test_gitinfo.py::DirtyPaths.test_dirty_paths_inherits_git_index_file": "N-env",
+    "test_gitinfo.py::EnvAndFlagsTest.test_repository_env_names_cleared": "N-env",
+    "test_gitinfo.py::LastTextTests.test_last_text_call_shape": "N-env",
+    "test_gitinfo.py::P23dGitinfoTest.test_ignores_user_config_and_index_file": "N-env",
+    "test_gitinfo.py::TrackedFilesTest.test_git_index_file_is_honoured": "N-env",
+    "test_gitinfo.py::UpstreamOfTests.test_upstream_of_inherits_index_env": "N-env",
+    "test_hook_entry.py::SilentTest.test_inherited_git_env_ignored": "N-env",
+    "test_hookio.py::ContextTest.test_inherited_git_env_ignored": "N-env",
+}

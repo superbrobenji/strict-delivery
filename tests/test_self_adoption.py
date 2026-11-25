@@ -282,6 +282,8 @@ class CopyTest(CopyCase):
         # clone of it (nested_ids), not the fixture-only tests of the two modules, which never read the clone's refs
         ids = nested_ids()
         self.assertTrue(ids)  # an empty list would make unittest discover and run everything
+        from tests.test_nested_selection import EXPECTED  # row N1: the whole selection runs, this test included
+        self.assertEqual(sorted(ids), EXPECTED)  # (a slice would still exit 0 and "Ran" its own length)
         p = subprocess.run([sys.executable, "-m", "unittest"] + ids,
                            cwd=clone, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT)
