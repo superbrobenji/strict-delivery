@@ -108,3 +108,14 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Never automatic: a dirty worktree or a branch with commits not on the base is reported, never deleted; nothing the framework did not create is touched.
 - Standing sweep: `doctor` and `gates cleanup --check` list stale items anywhere (worktrees of merged branches, merged branches, old framework temp dirs, untracked files in record directories); `gates cleanup` removes the safe ones.
 - History retention: `cleanup.history_retention` (default 6 months; `forever`; `0` = at merge), asked by init. When it passes, the sweep opens a cleanup PR that removes the merged plan's ledger, finding and decision records and mutation transcripts from the working tree (git history keeps them; doctor shows how to look one up). Never removed: in-force decisions, open findings, and records a live plan still references. The clock starts at the plan's MERGED line date.
+
+### V2-27 Role rules gated before they break (2026-11-26)
+
+- Owner: "all of those, gate every one of them"; "yes that matches, go ahead".
+- Forbidden shell forms: the Bash hook refuses heredocs, `$(...)` other than mktemp, backticks, `<(...)`, rm, `sed -i`, `python3 -c` and `python3 -`, direct `python3 -m unittest`; config `bash.forbidden` (strict profile defaults to this list); each refusal names the rule and the allowed alternative and is logged.
+- Placeholders: the Agent hook's dispatch check refuses placeholder text (PLACEHOLDER, TODO, <...>, FILL IN and the like) in a brief.
+- Coverage table: implementer and reviewer briefs must name the task's input-domain table by path and sha256; missing or mismatched is refused.
+- Stopping runs: the runners write a per-job state file (waiting / started); the hook refuses stopping a started run and allows stopping a waiting one.
+- Foreign checkouts: each dispatch names the agent's worktree; the Bash hook refuses state-changing git commands (merge, checkout, commit, reset, stash, branch) aimed at any other checkout, by cd, `git -C` or the working directory.
+- Finding states by role: `findings` commands check the caller's role from its dispatch (implementers cannot close or pin their own findings; only reviewers record findings; only controllers repoint owner.task); the role table lives in the base playbook.
+- Every refusal names rule and alternative and is counted in time-use; an owner override decision can lift one refusal.
