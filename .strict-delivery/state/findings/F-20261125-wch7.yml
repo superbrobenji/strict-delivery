@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-wch7
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d3-review-1.md R1-1
+severity: LOW
+class: "H4 a path read below the root opened with its parents unchecked: members: doctor.py _has_header (hooks dir parents, core.hooksPath symlinked outside the root), githooks.status/_state as called at doctor.py:227, doctor.py _parents (:95-108, lstat by path then library read)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bc46b65cb95fc6bee6230abf40ca7075e14854a5
+    by: stream-config
+review_round: 1
+caused_by_change: true
+dimension: H4 parent component a symlink or swapped after the check

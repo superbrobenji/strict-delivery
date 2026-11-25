@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-ftqk
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d3-review-1.md R1-2
+severity: LOW
+class: "input-domain rows without a test: members: VR1 (d) 4300/4301-digit integer in config.yml"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bc46b65cb95fc6bee6230abf40ca7075e14854a5
+    by: stream-config
+review_round: 1
+caused_by_change: true
+dimension: "PC1 version rows: numeric text at 4300 and 4301 digits"

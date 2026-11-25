@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-a2wx
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d3-review-1.md R1-4
+severity: LOW
+class: "doctor-side double read: members: doctor.py:155/:158 context.yml read by _read then re-read by context.load by path; the fcbaab5 claim 'opens every file it reads' wider than the code (config.yml at :418-422 is a library read, U6)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bc46b65cb95fc6bee6230abf40ca7075e14854a5
+    by: stream-config
+review_round: 1
+caused_by_change: true
+dimension: "H4 swap after check: read once through the descriptor"
