@@ -59,3 +59,10 @@ Status: working notes, not the spec. Each decision is quoted or paraphrased from
 - Every input-domain table has a fixed hardening section listing the standard cases (symlink target; directory; FIFO or special file; a parent swapped after the check; equal or nested configured paths; non-UTF-8 names and contents; outside the root). Each case is a row with its test or `not applicable: <reason>`.
 - `check dispatch` warns (does not fail) when the section is missing or a case is unanswered, naming the cases; the warning shows in the dispatch result and the ledger. The reviewer checks every "not applicable" reason.
 - The standard case list lives once, in the base playbook, so a new case updates every checklist.
+
+### V2-03 Schemas from the first record (2026-11-26)
+
+- Owner: "yes that matches, go ahead".
+- Gate rule: `check schema` fails any file under a framework record directory (findings, decisions, claims, plan state, programs, mutation transcripts) that no registered schema covers; free-text locations are listed as exceptions in config. A new record kind cannot be committed before its schema.
+- Planning rule (plan_writer, controller, plan-review checklist): a schema and its producer registration land in the same task as the first writer of that record, or earlier, never in a later registry task.
+- Older free-form records stay excluded by name (owner Q-RS1-1 (a)).
