@@ -1,6 +1,8 @@
 """Shared test helpers: fixture repositories built with plain git, isolated from the user's git config."""
+import atexit
 import contextlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -77,10 +79,13 @@ def minimal_config() -> dict:
 
 
 def git(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -> str:
-    """Run git in root with a fixed identity and date; return stripped stdout."""
+    """Run git in root with a fixed identity and date; return stripped stdout. ``GIT_OPTIONAL_LOCKS=0`` is the
+    default, as in ``gates/lib/gitinfo.py``: a probe such as ``git status`` never rewrites ``.git/index`` (a test that
+    compares the index across its own probe would see the probe's write); an explicit ``env`` entry wins."""
     full_env = dict(os.environ)
     full_env.update(_IDENTITY)
     full_env["LC_ALL"] = "C"
+    full_env["GIT_OPTIONAL_LOCKS"] = "0"
     if env:
         full_env.update(env)
     p = subprocess.run(["git", "-C", root] + list(args), env=full_env, check=False,
@@ -90,8 +95,7 @@ def git(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -
     return p.stdout.decode("utf-8").strip()
 
 
-def make_repo(tmp: str, config: Optional[dict] = None) -> str:
-    """Make tmp a git repository whose first branch is main, with the config committed; return tmp."""
+def _make_repo_slow(tmp: str, config: Optional[dict]) -> str:
     git(tmp, "init", "-q", "-b", "main")
     git(tmp, "config", "user.email", "fixture@example.invalid")
     git(tmp, "config", "user.name", "Fixture")
@@ -100,6 +104,77 @@ def make_repo(tmp: str, config: Optional[dict] = None) -> str:
     git(tmp, "config", "gc.auto", "0")
     write_record(tmp, ".strict-delivery/config.yml", config if config is not None else minimal_config())
     commit_all(tmp, "fixture")
+    return tmp
+
+
+# The git environment ``GitIsolatedTestCase`` gives every test: no system or global git config. A fixture is copied from
+# a template only under it: both names set to these values, none of the names that move or reshape a repository
+# (the CLEARED_ENV names, a template directory, a hash or ref format, GIT_EXEC_PATH, any other GIT_CONFIG_* name);
+# every other GIT_* name is part of the template's key, so a template is always built under the environment it serves.
+_ISOLATED_GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
+_REPO_SHAPING = frozenset(("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                           "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+                           "GIT_INDEX_FILE", "GIT_TEMPLATE_DIR", "GIT_DEFAULT_HASH", "GIT_DEFAULT_REF_FORMAT",
+                           "GIT_EXEC_PATH", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+                           "GIT_CONFIG_SYSTEM"))
+_TEMPLATE_LOCK = threading.Lock()
+_TEMPLATES: dict = {}  # (emitted config text, PATH) -> directory of the template repository
+_TEMPLATE_ROOT: list = []  # [private temporary directory], created on first use, removed at process exit
+
+
+def _template_root() -> str:
+    if not _TEMPLATE_ROOT:
+        root = os.path.realpath(tempfile.mkdtemp(prefix="sd-fixture-template-"))
+        _TEMPLATE_ROOT.append(root)
+
+        def _remove() -> None:
+            def _writable(fn, path, _exc):  # git objects are read-only
+                os.chmod(os.path.dirname(path), 0o700)
+                os.chmod(path, 0o700)
+                fn(path)
+            shutil.rmtree(root, onerror=_writable)
+        atexit.register(_remove)
+    return _TEMPLATE_ROOT[0]
+
+
+def _fast_path_ok(tmp: str, root: str) -> bool:
+    """True when ``tmp`` is a real (not symlinked), empty directory on the template's file system, outside the
+    template root, under the isolated git environment."""
+    names = {k for k in os.environ if k.startswith("GIT_")}
+    if any(os.environ.get(k) != v for k, v in _ISOLATED_GIT_ENV.items()):
+        return False
+    if names & _REPO_SHAPING or any(k.startswith("GIT_CONFIG_KEY_") or k.startswith("GIT_CONFIG_VALUE_") for k in names):
+        return False
+    try:
+        if os.path.islink(tmp) or not os.path.isdir(tmp) or os.listdir(tmp):
+            return False
+        return os.stat(tmp).st_dev == os.stat(root).st_dev
+    except OSError:
+        return False
+
+
+def make_repo(tmp: str, config: Optional[dict] = None) -> str:
+    """Make tmp a git repository whose first branch is main, with the config committed; return tmp.
+    ``maintenance.auto`` is ``false`` and ``gc.auto`` is ``0`` in every repository returned. An empty tmp under the
+    isolated git environment is a copy of a per-process template (one per emitted config text, PATH and GIT_* environment, built the slow
+    way, private temporary directory, removed at exit); any other tmp gets ``git init`` and the commit."""
+    text = emit(config if config is not None else minimal_config())
+    root = _template_root()
+    real, rroot = os.path.realpath(tmp), os.path.realpath(root)
+    if real == rroot or real.startswith(rroot + os.sep) or rroot.startswith(real + os.sep):
+        raise ValueError("make_repo: %s overlaps the fixture template directory" % tmp)
+    if not _fast_path_ok(tmp, root):
+        return _make_repo_slow(tmp, config)
+    key = (text, os.environ.get("PATH", ""), tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("GIT_"))))
+    with _TEMPLATE_LOCK:
+        tpl = _TEMPLATES.get(key)
+        if tpl is None:
+            tpl = os.path.join(root, "t%d" % len(_TEMPLATES))
+            os.mkdir(tpl)
+            _make_repo_slow(tpl, config)
+            _TEMPLATES[key] = tpl
+    for name in os.listdir(tpl):
+        shutil.copytree(os.path.join(tpl, name), os.path.join(tmp, name), symlinks=True)
     return tmp
 
 

@@ -39,6 +39,32 @@ CLEAN = "hookfixture-clean.txt"
 STAGED = "hookfixture-staged.txt"
 
 
+# Task CI2: a test of tests.test_run_all or tests.test_self_adoption whose source runs git or the gates on this checkout
+# (``cwd=REPO``, ``-C REPO``, ``git(REPO``, ``self.sub(``) or on a clone of it (``clone_copy``, ``gates_run_all``), or asks
+# whether it has a local main, can resolve a base branch or ``main`` of the clone; every other test of the two modules
+# builds its own fixture repository under a temporary directory and never reads the clone's refs.
+NESTED_MODULES = ("tests.test_run_all", "tests.test_self_adoption")
+NESTED_SELECT = re.compile(r"clone_copy|gates_run_all|self\.sub\(|has_local_main|cwd=REPO|\"-C\", REPO|git\(REPO")
+
+
+def nested_ids(modules=NESTED_MODULES, select=NESTED_SELECT):
+    """The test ids of ``modules`` whose method source matches ``select`` (inherited methods included), in load order."""
+    import importlib
+    ids = []
+
+    def walk(suite):
+        for item in suite:
+            if isinstance(item, unittest.TestSuite):
+                walk(item)
+            else:
+                fn = getattr(type(item), item._testMethodName)
+                if select.search(inspect.getsource(fn)):
+                    ids.append(item.id())
+    for name in modules:
+        walk(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(name)))
+    return ids
+
+
 def read_text(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
@@ -252,10 +278,16 @@ class CopyTest(CopyCase):
         self.assertFalse(self.has_local_main(clone))
         env = self.env()
         env[NESTED] = "1"
-        p = subprocess.run([sys.executable, "-m", "unittest", "tests.test_run_all", "tests.test_self_adoption"],
+        # CI2 (suite speed): the nested run holds the tests whose path runs git or the gates on this checkout or on a
+        # clone of it (nested_ids), not the fixture-only tests of the two modules, which never read the clone's refs
+        ids = nested_ids()
+        self.assertTrue(ids)  # an empty list would make unittest discover and run everything
+        p = subprocess.run([sys.executable, "-m", "unittest"] + ids,
                            cwd=clone, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT)
-        self.assertEqual(p.returncode, 0, p.stdout.decode("utf-8", "replace")[-3000:])
+        text = p.stdout.decode("utf-8", "replace")
+        self.assertEqual(p.returncode, 0, text[-3000:])
+        self.assertIn("\nRan %d test%s in " % (len(ids), "" if len(ids) == 1 else "s"), text)
 
     def test_run_all_shallow_clone_fails_closed(self):  # H7
         full = self.clone_copy("full", main=True)
