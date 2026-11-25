@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-fqg3
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-4.md R4-2
+severity: LOW
+class: "round-4 conditions without a mutant id: members: [*dirs, state] composition, file_name key fold, hook_name key fold, stale table header comment"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 4b6cc8f657efdf8d311c6c291146209e24c20ad8
+    by: stream-config
+review_round: 4
+caused_by_change: true
+dimension: input-domain mutant ids

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-5bb3
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-4.md R4-4
+severity: MEDIUM
+class: "H5 state key vs planned file, equal and below: members: each of decisions, findings, claims, plan_state, programs, playbooks and paths.state against CLAUDE.md, .gitignore, .claude/settings.json, .git/hooks/pre-commit, .git/hooks/pre-push, the CI workflow (ci true), exact and under the ASCII map"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 4b6cc8f657efdf8d311c6c291146209e24c20ad8
+    by: stream-config
+review_round: 4
+caused_by_change: false
+dimension: H5 two configured paths are equal or one contains the other

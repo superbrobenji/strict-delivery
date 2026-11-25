@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-5x5w
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-3.md R3-3
+severity: LOW
+class: "case-insensitive file systems: members: paths.context equal to a planned file up to case (claude.md, .GITIGNORE, .Claude/settings.json, the workflow)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1d5bf08739996bef92f2c1e1bb6de09c669b554d
+    by: stream-config
+review_round: 3
+caused_by_change: false
+dimension: "H6 unusual names: case folding on macOS"

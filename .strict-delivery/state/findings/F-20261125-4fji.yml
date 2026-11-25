@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261125-4fji
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-3.md R3-2
+severity: LOW
+class: "path boundary untested: members: init.py:437 ctx.startswith(f + '/') for each planned file (CLAUDE.md, .gitignore, .claude/settings.json, the CI workflow)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1d5bf08739996bef92f2c1e1bb6de09c669b554d
+    by: stream-config
+review_round: 3
+caused_by_change: true
+dimension: H5 boundary of a nested path

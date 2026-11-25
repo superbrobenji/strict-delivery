@@ -921,6 +921,7 @@ class TestParserSites(unittest.TestCase):
             ("gates/tools/decisions_cli.py", "gate_args"), ("gates/tools/findings_cli.py", "_GateParser"),
             ("gates/tools/findings_cli.py", "add_parser"), ("gates/tools/findings_cli.py", "add_parser"),
             ("gates/tools/findings_cli.py", "add_subparsers"), ("gates/tools/index.py", "gate_args"),
+            ("gates/tools/init.py", "_GateParser"),  # Task 4d.1: one parser, built by _parser
             ("gates/tools/program_cli.py", "_GateParser"),
             ("gates/tools/questions_cli.py", "_GateParser"),
             ("gates/tools/receipt_cli.py", "_GateParser"), ("gates/tools/receipt_cli.py", "add_parser"),

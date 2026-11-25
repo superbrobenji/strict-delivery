@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-4vka
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-1.md R1-3
+severity: LOW
+class: "output: a questions problem reason repeats the source path: _read_settings (init.py:114) and the other _input callers"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: cebc7b51ac9c18dfd7f869fd1fc3cdfae7b664f5
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: output

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-4xja
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-1.md R1-9
+severity: MEDIUM
+class: "hardening: H7 outside the root: the six cfg paths state directories (STATE_KEYS) untested"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: cebc7b51ac9c18dfd7f869fd1fc3cdfae7b664f5
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: hardening
