@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-hu7f
+status: open
+source: 5c.2 task review 1 (records/5c.2-review-1.md, F1)
+severity: MEDIUM
+class: "output text: double escaping of text that already passed through safe_text: drift_cli.py _over GateError text printed again through _why (status-page text on stderr of drift report)"
+siblings: []
+cites:
+  - file: gates/tools/drift_cli.py
+    lines: 25-45
+    sha: 42f1741
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 42f1741c749846bb52f2dee2042d658088f03926
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: output-consistency

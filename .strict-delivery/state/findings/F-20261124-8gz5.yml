@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-8gz5
+status: open
+source: 5c.2 task re-review 2 (records/5c.2-review-2.md, F1; M4 of records/5c.2-fix-1-mutants.md survives)
+severity: LOW
+class: "input-domain-coverage: _remote_of remote name escaped once: a non-ASCII remote name (U+0870) that git accepts, printed by drift.base; no test kills M4 (safe_text restored in _remote_of)"
+siblings: []
+cites:
+  - file: gates/lib/drift.py
+    lines: 102-105
+    sha: d56d518
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d56d518b5d9302ca91a156b3c9f0d0559332faee
+    by: stream-records
+review_round: 2
+caused_by_change: true
+dimension: input-domain-coverage
