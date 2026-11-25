@@ -1006,6 +1006,8 @@ class EffectiveWordsTextKindsTest(unittest.TestCase):
 
 # ---- fix round 1, group FB: R1-3 (nr5d), R1-5 (tsuc), R1-6 (29qa), R1-7 (rmrd), R1-10 (m5rq) ----
 import ast  # noqa: E402
+import signal  # noqa: E402
+import time  # noqa: E402
 
 ALIAS_LINE = ("FAIL hook.bash.alias: a git alias that runs a shell command holding commit is refused, its commit "
               "cannot be checked; " + BANG)
@@ -1227,6 +1229,137 @@ class WayOutTailTest(Repo):
                                 (node.value, segment))
         self.assertGreaterEqual(len(checked), 25)
         self.assertEqual(checked.count("FAIL hook.bash.gates: %s: %s"), 1)
+
+
+def _shim_bytes(name):
+    return githooks.shim(name, FRAMEWORK)
+
+
+class HooksDirPathsTest(Repo):
+    """R1-10 (F-20261125-m5rq), decision D3-2, rows HR8 and HR9: the paths ``githooks.status_result`` reads. The gate
+    runner stand-in is the glue ``pre_bash`` builds (status of ``pre-commit``, then the gates): a hook that is not a
+    regular framework file reads as not healthy, so the gates run, and the commit is refused exactly when they FAIL."""
+
+    def runner(self, rec):
+        def run(root):
+            status = githooks.status_result(root, FRAMEWORK)
+            if not any(ln.status == "FAIL" and ln.id == "githooks.pre-commit" for ln in status.lines):
+                return Result("hook.bash.gates", [])
+            return rec(root)
+        return run
+
+    def commit(self, d, rec):
+        """``commit_refusals`` on ``d``, guarded: a call that blocks (a FIFO opened for reading) fails the test."""
+        def alarm(_sig, _frm):
+            raise AssertionError("the commit check blocked for 10 s")
+        old = signal.signal(signal.SIGALRM, alarm)
+        signal.alarm(10)
+        began = time.monotonic()
+        try:
+            out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), self.runner(rec))
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+        self.assertLess(time.monotonic() - began, 5)
+        return out
+
+    def install(self, hooks, name, mode=0o755):
+        os.makedirs(hooks, exist_ok=True)
+        path = os.path.join(hooks, name)
+        with open(path, "wb") as fh:
+            fh.write(_shim_bytes(name))
+        os.chmod(path, mode)
+
+    def make_form(self, hooks, name, form):
+        os.makedirs(hooks, exist_ok=True)
+        path = os.path.join(hooks, name)
+        if form == "symlink":
+            target = os.path.join(self.tmp, "outside-" + name)
+            with open(target, "wb") as fh:
+                fh.write(_shim_bytes(name))
+            os.chmod(target, 0o755)
+            os.symlink(target, path)
+        elif form == "directory":
+            os.mkdir(path)
+        else:
+            os.mkfifo(path)
+
+    def test_pre_commit_forms_run_the_gates(self):  # HR8
+        for form in ("symlink", "directory", "fifo"):
+            with self.subTest(form=form):
+                d = self.repo(form)
+                hooks = gitinfo.hooks_dir(d)
+                self.install(hooks, "pre-push")
+                self.make_form(hooks, "pre-commit", form)
+                status = githooks.status_result(d, FRAMEWORK).render(False)
+                self.assertEqual(status, "FAIL githooks.pre-commit: foreign\nPASS githooks.pre-push\n")
+                rec = Recorder()
+                self.assertEqual(self.commit(d, rec), [])
+                self.assertEqual(rec.calls, [d])
+                rec = Recorder([("run_all.x", "bad")])
+                self.assertEqual(self.commit(d, rec), ["FAIL hook.bash.gates: run_all.x: bad"])
+
+    def test_pre_push_forms_do_not_decide_a_commit(self):  # HR8: pre-push is not a commit hook (CR6)
+        for form in ("symlink", "directory", "fifo"):
+            with self.subTest(form=form):
+                d = self.repo(form)
+                hooks = gitinfo.hooks_dir(d)
+                self.install(hooks, "pre-commit")
+                self.make_form(hooks, "pre-push", form)
+                status = githooks.status_result(d, FRAMEWORK).render(False)
+                self.assertEqual(status, "PASS githooks.pre-commit\nFAIL githooks.pre-push: foreign\n")
+                rec = Recorder([("run_all.x", "bad")])
+                self.assertEqual(self.commit(d, rec), [])
+                self.assertEqual(rec.calls, [])
+
+    def test_pre_push_form_with_pre_commit_missing_runs_the_gates(self):  # HR8
+        for form in ("symlink", "directory", "fifo"):
+            with self.subTest(form=form):
+                d = self.repo(form)
+                self.make_form(gitinfo.hooks_dir(d), "pre-push", form)
+                rec = Recorder()
+                self.assertEqual(self.commit(d, rec), [])
+                self.assertEqual(rec.calls, [d])
+
+    def test_hooks_path_equal_to_the_default_reads_as_unset(self):  # HR9
+        for spelling in ("absolute", "relative"):
+            with self.subTest(spelling=spelling):
+                d = self.repo(spelling)
+                default = os.path.join(d, ".git", "hooks")
+                value = default if spelling == "absolute" else ".git/hooks"
+                unset = githooks.status_result(d, FRAMEWORK).render(False)
+                git(d, "config", "core.hooksPath", value)
+                self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False), unset)
+                rec = Recorder()
+                self.assertEqual(self.commit(d, rec), [])
+                self.assertEqual(rec.calls, [d])  # nothing installed: the gates run
+                self.install(default, "pre-commit")
+                self.install(default, "pre-push")
+                self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+                                 "PASS githooks.pre-commit\nPASS githooks.pre-push\n")
+                rec = Recorder([("run_all.x", "bad")])
+                self.assertEqual(self.commit(d, rec), [])
+                self.assertEqual(rec.calls, [])  # installed there: git runs them itself
+                git(d, "config", "--unset", "core.hooksPath")
+                self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+                                 "PASS githooks.pre-commit\nPASS githooks.pre-push\n")
+
+    def test_hooks_path_nested_in_the_default_is_judged_at_that_path(self):  # HR9
+        d = self.repo()
+        default = os.path.join(d, ".git", "hooks")
+        nested = os.path.join(default, "nested")
+        git(d, "config", "core.hooksPath", nested)
+        self.install(default, "pre-commit")  # installed in the default directory only: not where git looks
+        self.install(default, "pre-push")
+        self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+                         "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
+        rec = Recorder([("run_all.x", "bad")])
+        self.assertEqual(self.commit(d, rec), ["FAIL hook.bash.gates: run_all.x: bad"])
+        self.install(nested, "pre-commit")
+        self.install(nested, "pre-push")
+        rec = Recorder([("run_all.x", "bad")])
+        self.assertEqual(self.commit(d, rec), [])
+        self.assertEqual(rec.calls, [])
 
 
 if __name__ == "__main__":
