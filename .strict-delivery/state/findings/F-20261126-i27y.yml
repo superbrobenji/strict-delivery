@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-i27y
+status: open
+source: task-CI2-review-2.md finding 6 (CI2 r2)
+severity: LOW
+class: "transcript file:line cites: F-20261125-fiw5 (tests/helpers.py:218, now 235)"
+siblings: []
+cites:
+  - file: .strict-delivery/state/plans/2026-10-31-strict-delivery-framework/mutations/F-20261125-fiw5.md
+    lines: "4"
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+    by: stream-ci
+review_round: 2
+caused_by_change: true
+dimension: mutation transcripts

@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-hk6k
+status: open
+source: task-CI2-review-2.md finding 1 (CI2 r2)
+severity: MEDIUM
+class: "L2 members 15-23 oracle teeth (run_real ignores the real test's failures; mutant B2 survives): test_member15_claims_lib_conversion_cases, test_member16_claims_lib_f1_reproducer, test_member17_claims_lib_lf_spaces_dash, test_member18_claims_lib_non_regular, test_member19_claims_lib_tab_and_newline_paths, test_member20_claims_lib_no_index_entry_yet, test_member21_claims_lib_git_index_file, test_member22_claims_lib_temp_index_removed, test_member23_context_cli_leaves_index_alone"
+siblings: []
+cites:
+  - file: tests/test_helpers_fixture.py
+    lines: 1265-1283
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+    by: stream-ci
+review_round: 2
+caused_by_change: true
+dimension: L2 .git index oracles

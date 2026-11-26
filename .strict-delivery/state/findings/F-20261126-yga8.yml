@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-yga8
+status: open
+source: task-CI2-review-2.md finding 2 (CI2 r2)
+severity: LOW
+class: "cached_history key completeness, commit part unpinned (mutants R6, R8 survive): tests/test_gate_register.py:121 commit, tests/test_index.py:155 commit"
+siblings: []
+cites:
+  - file: tests/test_gate_register.py
+    lines: "121"
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+    by: stream-ci
+review_round: 2
+caused_by_change: false
+dimension: F11 cached_history keys

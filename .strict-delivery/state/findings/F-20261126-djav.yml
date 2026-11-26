@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-djav
+status: open
+source: task-CI2-review-2.md finding 5 (CI2 r2)
+severity: LOW
+class: "unsandboxed_guard_tests scan spellings of a shared root: os.path.dirname(self.tmp), '/', tempfile.tempdir, os.environ TMPDIR, os.getcwd(), os.path.dirname(__file__), helper-method return values"
+siblings: []
+cites:
+  - file: tests/test_helpers_fixture.py
+    lines: 790-794
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e8463b42f6a4528974aa16ec8ae4c04ac908121c
+    by: stream-ci
+review_round: 2
+caused_by_change: true
+dimension: H5 guard tests sandboxed
