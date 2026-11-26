@@ -309,10 +309,13 @@ class ProgramLines(Gate):
         bare = self.remote()
         self.advance_remote(bare)
         git(self.root, "fetch", "-q", "origin")
-        with mock.patch("gates.lib.drift.worktrees.worktree_list", return_value=[("/p\\q ࡰ", "main")]):
-            out, code = self.g()
-        want = ("FAIL drift.base: update main from the remote: git -C /p\\\\q \\u0870 fetch origin, then git -C /p\\\\q \\u0870 "
-                "merge --ff-only origin/main")
+        git(self.root, "checkout", "-q", "-b", "elsewhere")
+        wt = os.path.join(self.tmp, "p\\q ࡰ")  # a real linked worktree: the listing, the prunable and isdir rules run
+        git(self.root, "worktree", "add", "-q", wt, "main")
+        out, code = self.g()
+        esc = self.tmp + "/p\\\\q \\u0870"  # written by hand: the backslash doubled once, U+0870 as ࡰ
+        want = ("FAIL drift.base: update main from the remote: git -C %s fetch origin, then git -C %s "
+                "merge --ff-only origin/main" % (esc, esc))
         self.assertEqual(out.splitlines()[0], want)
 
     def test_base_reason_text_through_main(self):  # B2, B3, B5, B8 (5c.1 r4): the reason text, once, through gate_drift.main
