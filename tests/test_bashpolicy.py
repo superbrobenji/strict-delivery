@@ -1618,5 +1618,140 @@ class GlobalCRuleTest(unittest.TestCase):
         self.assertEqual(out, ["git b", "git a", "git b"])   # the body, then the values of b and a it reaches (each once)
 
 
+# Task 3b.2 fix round 3 part D: exact-type rows (Q-RS4-1 (A))
+from gates.lib import config as _config  # noqa: E402
+
+_ROOT_ERR = "root must be a string"   # rows ET4, ET6, ET7 (as gitinfo._need_root); hand-written
+_TOP_ERR = "git rev-parse --show-toplevel: root must be the repository top level"
+_UPDATES_ERR = "updates must be a list of (ref, sha, ref) tuples of str"   # row ET8
+_DIGITS = "9" * 4301   # V1: past 3.11's default int digit limit; text, never an int()
+_NEW_CP = "Ꟁ"   # V1: Cn in 3.9's Unicode 13, Lu in 3.13's Unicode 15
+
+
+class _ListSub(list):
+    pass
+
+
+class _TupleSub(tuple):
+    pass
+
+
+class _DictSub(dict):
+    pass
+
+
+class ExactTypesGithooksTest(Repo):
+    """Rows ET4-ET8 and ET19 (table revision 2, draft section 4, "today" NO), the ET5 pin and the ET1-ET3 cases no
+    earlier test pins (ET1/ET2: ``None``, ``int``; ET3: every case): the exact type is accepted, every listed other case
+    is refused with the row's error. D-H: the hardening rows of these roots stay pinned by HooksDirPathsTest (HR8, HR9)
+    and tests/test_hook_bash.py ``test_hardening_*`` (HR1-HR7), unchanged."""
+
+    def run_main(self, argv):
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(b""))), contextlib.redirect_stdout(out):
+            code = githooks.main(argv)
+        return code, out.getvalue()
+
+    def bad_roots(self, d):
+        return (("str subclass", _StrSub(d)), ("bytes", d.encode("utf-8")), ("None", None), ("empty", ""))
+
+    def assert_root_refused(self, call, d):
+        for label, bad in self.bad_roots(d):
+            with self.subTest(root=label):
+                with self.assertRaises(GateError) as cm:
+                    call(bad)
+                self.assertEqual(str(cm.exception), _ROOT_ERR)
+        sub = os.path.join(d, "sub")
+        os.makedirs(sub, exist_ok=True)
+        with self.subTest(root="subdirectory"):   # as today
+            with self.assertRaises(GateError) as cm:
+                call(sub)
+            self.assertEqual(str(cm.exception), _TOP_ERR)
+
+    def test_exact_types_status_result(self):  # ET4 (status returns status_result)
+        d = self.repo()
+        for fn in (githooks.status_result, githooks.status):
+            with self.subTest(fn=fn.__name__):
+                self.assertEqual(fn(d, FRAMEWORK).render(False),
+                                 "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
+                self.assert_root_refused(lambda r: fn(r, FRAMEWORK), d)
+
+    def test_exact_types_status_framework_pin(self):  # ET5 (pin): the framework path, as today
+        d = self.repo()
+        for bad in (_StrSub(FRAMEWORK), FRAMEWORK.encode("utf-8"), None, "relative/path"):
+            for fn in (githooks.status_result, githooks.status):
+                with self.subTest(fn=fn.__name__, framework=repr(bad)):
+                    with self.assertRaises(githooks._FrameworkError) as cm:
+                        fn(d, bad)
+                    self.assertEqual(str(cm.exception), "the framework path must be absolute and hold no control character")
+
+    def test_exact_types_pre_commit_result(self):  # ET6
+        d = self.repo(profile="standard")
+        code, out = self.run_main(["pre-commit", "--root", d])
+        self.assertEqual((code, githooks.pre_commit_result(d).render(False)), (0, out))
+        self.assert_root_refused(githooks.pre_commit_result, d)
+
+    def test_exact_types_pre_push_result_root(self):  # ET7
+        d = self.repo()
+        self.assertTrue(githooks.pre_push_result(d, []).ok())
+        self.assert_root_refused(lambda r: githooks.pre_push_result(r, []), d)
+
+    def test_exact_types_pre_push_result_updates(self):  # ET8
+        d = self.repo()
+        head = git(d, "rev-parse", "HEAD")
+        good = [("refs/heads/feat", head, "refs/heads/feat")]
+        self.assertEqual(githooks.pre_push_result(d, good).render(False), githooks.pre_push_result(d, []).render(False))
+        self.assertEqual(githooks.pre_push_result(d, [("refs/heads/feat", head, "refs/heads/main")]).render(False),
+                         "FAIL githook.base: main is protected; open a pull request\n")
+        for label, bad in (("list subclass", _ListSub(good)), ("tuple for the list", tuple(good)), ("None", None),
+                           ("str", "refs/heads/feat %s refs/heads/feat" % head),
+                           ("tuple subclass element", [_TupleSub(good[0])]), ("list element", [list(good[0])]),
+                           ("2-tuple", [("refs/heads/feat", head)]), ("4-tuple", [good[0] + ("x",)]),
+                           ("int field", [("refs/heads/feat", 1, "refs/heads/feat")]),
+                           ("bytes field", [(b"refs/heads/feat", head, "refs/heads/feat")]),
+                           ("None field", [("refs/heads/feat", head, None)]),
+                           ("str subclass field", [("refs/heads/feat", _StrSub(head), "refs/heads/feat")]),
+                           ("one good, one bad", good + [("refs/heads/x", head)])):
+            with self.subTest(updates=label):
+                with self.assertRaises(GateError) as cm:
+                    githooks.pre_push_result(d, bad)
+                self.assertEqual(str(cm.exception), _UPDATES_ERR)
+
+    def test_exact_types_run_commands_test(self):  # ET19 (private): one direct call per case, and its two callers' paths
+        d = self.repo(profile="strict", commands={"test": "true"})
+        cfg = _config.load(d)
+        for capture in (True, False):
+            line = githooks._run_commands_test(d, cfg, capture)
+            self.assertEqual((line.status, line.id), ("PASS", "githook.test"), capture)
+        line = githooks._run_commands_test(d, cfg)
+        self.assertEqual((line.status, line.id), ("PASS", "githook.test"))
+        for bad in (1, 0, None, "x", ""):
+            with self.subTest(capture=repr(bad)):
+                with self.assertRaises(TypeError) as cm:
+                    githooks._run_commands_test(d, cfg, bad)
+                self.assertEqual(str(cm.exception), "capture must be a bool")
+        last = githooks.pre_commit_result(d).lines[-1]   # caller 1: capture=True
+        self.assertEqual((last.status, last.id), ("PASS", "githook.test"))
+        code, out = self.run_main(["pre-commit", "--root", d])   # caller 2: main, capture=False
+        self.assertEqual(code, 0)
+        self.assertTrue(out.endswith("PASS githook.test\n"), out)
+
+    def test_exact_types_gitinfo_pins(self):  # ET1, ET2 (None, int), ET3 (every case): already refused, pinned here
+        d = self.repo()
+        git(d, "config", "x.k", "v")
+        for bad in (None, 3):
+            with self.subTest(root=repr(bad)):
+                for call in (gitinfo.aliases, lambda r: gitinfo.config_value(r, "x.k")):
+                    with self.assertRaises(GateError) as cm:
+                        call(bad)
+                    self.assertEqual(str(cm.exception), _ROOT_ERR)
+        self.assertEqual(gitinfo.config_value(d, "x.k"), "v")
+        for bad in (_StrSub("x.k"), b"x.k", None, 3, True):
+            with self.subTest(key=repr(bad)):
+                with self.assertRaises(GateError) as cm:
+                    gitinfo.config_value(d, bad)
+                self.assertEqual(str(cm.exception), "config key must be a string of the form section.name")
+
+
 if __name__ == "__main__":
     unittest.main()
