@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-9r6e
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md R3-5
+severity: LOW
+class: "cycle-guard tests that hang instead of failing: _reached_texts (test_shell_alias_through_an_alias_cycle_ends, new in 5a102d1) and effective_words cycle guard"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: af6bdb0d04897222009934b7972869a96aa18421
+    by: stream-hooks-4
+review_round: 3
+caused_by_change: true
+dimension: "hardening: hooks paths (HR3/HR8 time bound)"

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-w7nb
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md R3-1
+severity: MEDIUM
+class: "non-plain write detection through an alias of branch/checkout/switch with the write option in the text: git br -D x; ls, git co -b y; ls, git sw -c z; ls (the alias resolved without the text's options)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: af6bdb0d04897222009934b7972869a96aa18421
+    by: stream-hooks-4
+review_round: 3
+caused_by_change: false
+dimension: "alias resolution: plain or not (write detection)"

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-gzqn
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md R3-3
+severity: LOW
+class: "ANSI-C and locale quoting in non-plain text: $'-D', $'branch', $\"-D\" (stated expansion limit per Ruling R1 and plan :3792; to be pinned by a test)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: af6bdb0d04897222009934b7972869a96aa18421
+    by: stream-hooks-4
+review_round: 3
+caused_by_change: false
+dimension: "alias resolution: plain or not (write detection)"

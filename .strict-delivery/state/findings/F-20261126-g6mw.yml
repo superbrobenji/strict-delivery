@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-g6mw
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md U-1
+severity: MEDIUM
+class: "a ! alias whose body is a git write naming a directory: alias.g2 = !git -C <R> reset --hard run as git g2 by a subagent bound to W passes the target check"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: af6bdb0d04897222009934b7972869a96aa18421
+    by: stream-hooks-4
+review_round: 3
+caused_by_change: false
+dimension: "alias expansion: bypass and text checks"
