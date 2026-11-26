@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-pwu6
+status: open
+source: task-CI3-final-review.md F5 (review 3 note b)
+severity: LOW
+class: "docs of the path rule omit the link-count refusal: module docstring :17-19, regular_problem docstring :239"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: "239"
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: T5 docs

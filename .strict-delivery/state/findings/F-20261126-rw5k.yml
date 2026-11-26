@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-rw5k
+status: open
+source: task-CI3-final-review.md F2
+severity: LOW
+class: "T9 baseline set vs run set: every id whose KILL tuple has 2 or more modules is baselined per module (:611-622) but run as the tuple (:588)"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: 611-613
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: T9 baseline
