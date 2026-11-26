@@ -1,0 +1,37 @@
+schema: finding/1
+id: F-20261124-yas4
+status: fixed-unpinned
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk1-3c2-review-1.md R1-3
+severity: LOW
+class: empty prompt (HT2) untested
+siblings: []
+cites:
+  - file: tests/test_hook_agent.py
+    lines: "1"
+    sha: 7c53f2135d068934bf90b8422319502d18d03d74
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence:
+  - b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
+  - "b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6:tests/test_hook_agent.py"
+history:
+  - status: open
+    sha: 7c53f2135d068934bf90b8422319502d18d03d74
+    by: stream-hooks-1
+  - status: planned
+    sha: b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
+    by: implementer
+  - status: in-progress
+    sha: b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
+    by: implementer
+  - status: fixed-unpinned
+    sha: b4e0d2c5ac6dfa08d496a1815e258a5528e42fa6
+    by: implementer
+review_round: 1
+caused_by_change: true
+dimension: "tool input: prompt values"
