@@ -223,12 +223,9 @@ def load(root: str, cfg: dict) -> dict:
     gitinfo._require_toplevel(root)
     rel = cfg["paths"]["context"]
     if isinstance(rel, str) and type(rel) is not str:
-        # a str subclass that overrides neither __str__ nor __format__ reads as its own text (load_text takes exactly
-        # str); one that overrides either was shown differently by the old %s and f-string uses, so it is refused
-        if type(rel).__str__ is not str.__str__ or type(rel).__format__ is not str.__format__:
-            raise TypeError("rel: a str subclass that overrides __str__ or __format__ is refused, got %s"
-                            % type(rel).__name__)
-        rel = str.__str__(rel)
+        # exactly str, as load_text takes it: a subclass can change how the path is joined, formatted or read, and
+        # config.load never yields one; non-str values are left to os.path.join, as before
+        raise TypeError("rel: a str subclass is refused, got %s" % type(rel).__name__)
     path = os.path.join(root, rel)
     if not os.path.lexists(path):
         raise GateError("%s: missing; run /strict-delivery:init" % rel)

@@ -311,15 +311,32 @@ class SStrFmtSub(str):      # __str__ gives an instance of a subclass that has i
         return FmtText("x.yml")
 
 
+class SRadd(str):           # overrides neither __str__ nor __format__, but os.path.join uses its __radd__
+    def __radd__(self, other):
+        return other + "radd/" + str.__str__(self)
+
+
+class SFspath(str):         # os.path.join may call its __fspath__
+    def __fspath__(self):
+        return "elsewhere.yml"
+
+
+class SAttr(str):           # a plain subclass whose instance carries an attribute that shadows a str method
+    def __new__(cls, value):
+        inst = str.__new__(cls, value)
+        inst.startswith = lambda *args, **kwargs: False
+        return inst
+
+
 SCHEMA_ERR = ": schema: expected context/1, got context/2; run /strict-delivery:upgrade"
 
 
 class LoadRelSubclass(Base):
-    """RS: ``load`` with a ``str``-subclass ``paths.context``. A plain subclass (RS-a) gives the pre-request ``load``'s
-    row or text on every path (measured against the code before request 78ff2e6, on both interpreters); a subclass
-    that overrides ``__str__`` or ``__format__`` (RS-o) is refused with a ``TypeError`` before anything is read. The
-    expected values are written by hand."""
-    REFUSED = "rel: a str subclass that overrides __str__ or __format__ is refused, got %s"
+    """RS: ``load`` with a ``paths.context`` that is an instance of a ``str`` subclass (RS-s): every such member, on every
+    path, is refused with a ``TypeError`` naming ``rel`` and the type before anything is looked up or read; an exact
+    ``str`` is passed on unchanged (RS-x); a non-str value is left as it was (RS-n). The expected values are written by
+    hand."""
+    REFUSED = "rel: a str subclass is refused, got %s"
 
     def via_load(self, cls, data, name=REL):
         cfg = copy.deepcopy(self.cfg)
@@ -340,33 +357,26 @@ class LoadRelSubclass(Base):
             with self.subTest(member=cls.__name__, path=label):
                 self.assertEqual(self.via_load(cls, data, name), want[label])
 
-    def test_plain_subclass(self):  # RS-a: the pre-request load's row or text on every path
-        self.check(S, {"valid": ("ok", ROW),
-                       "schema": ("err", REL + SCHEMA_ERR),
-                       "yaml": ("err", REL + ": " + REL + ": unterminated flow sequence (line 1)"),
-                       "nonutf8": ("err", REL + ": " + REL + ": not valid UTF-8"),
-                       "missing": ("err", "nothing.yml: missing; run /strict-delivery:init")})
-
-    def test_plain_subclass_hands_load_text_an_exact_str(self):  # RS-a: the conversion, observed at the call
+    def test_exact_str_reaches_load_text_unchanged(self):  # RS-x: the same object, no conversion
         self.put(TAG)
         cfg = copy.deepcopy(self.cfg)
-        cfg["paths"]["context"] = S(REL)
         with mock.patch.object(context, "load_text", wraps=load_text) as spy:
             self.assertEqual(load(self.root, cfg), ROW)
         self.assertEqual(spy.call_count, 1)
-        self.assertIs(type(spy.call_args[0][1]), str)
+        self.assertIs(spy.call_args[0][1], cfg["paths"]["context"])
         self.assertEqual(spy.call_args[0][1], REL)
 
-    MEMBERS = (  # RS-o: b __str__ other str, c non-str, d a str subclass, e raises; f __format__ other str, g non-str,
-        ("b", SOther), ("c", SNonStr), ("d", SSubText), ("e", SRaises),   # h raises; i __str__ gives a subclass that
-        ("f", SFmtOther), ("g", SFmtNonStr), ("h", SFmtRaises), ("i", SStrFmtSub))   # has its own __format__
+    MEMBERS = (  # RS-s: a plain; b __str__ other str, c non-str, d a str subclass, e raises; f __format__ other str,
+        ("a", S), ("b", SOther), ("c", SNonStr), ("d", SSubText), ("e", SRaises),   # g non-str, h raises; i __str__ gives
+        ("f", SFmtOther), ("g", SFmtNonStr), ("h", SFmtRaises), ("i", SStrFmtSub),   # a subclass with its own __format__;
+        ("radd", SRadd), ("fspath", SFspath), ("attr", SAttr))   # other dunders; an instance attribute over a str method
 
-    def test_overriding_subclasses_are_refused(self):  # RS-o: every member, every path, the same text
+    def test_every_str_subclass_is_refused(self):  # RS-s: every member, every path, the same text
         for _, cls in self.MEMBERS:
             err = ("TypeError", self.REFUSED % cls.__name__)
             self.check(cls, {"valid": err, "schema": err, "yaml": err, "nonutf8": err, "missing": err})
 
-    def test_overriding_subclasses_are_refused_before_any_read(self):  # RS-o: nothing is looked up or read
+    def test_every_str_subclass_is_refused_before_any_read(self):  # RS-s: nothing is looked up or read
         self.put(TAG)
         for letter, cls in self.MEMBERS:
             cfg = copy.deepcopy(self.cfg)
@@ -383,7 +393,8 @@ class LoadRelSubclass(Base):
     def test_non_str_rel_is_unchanged(self):  # RS-n: today's os.path.join refusal (same text before request 78ff2e6, 3.9 and 3.13)
         self.put(TAG)
         join = "join() argument must be str, bytes, or os.PathLike object, not '%s'"
-        for value, want in ((None, join % "NoneType"), (5, join % "int"),
+        for value, want in ((None, join % "NoneType"), (5, join % "int"), (bytearray(b"x"), join % "bytearray"),
+                            (1.5, join % "float"), (["a"], join % "list"),
                             (REL.encode(), "Can't mix strings and bytes in path components")):
             cfg = copy.deepcopy(self.cfg)
             cfg["paths"]["context"] = value
@@ -392,7 +403,7 @@ class LoadRelSubclass(Base):
             self.assertEqual(str(cm.exception), want)
 
     def test_load_text_still_refuses_subclass(self):  # T4 unchanged: load_text itself is not widened
-        for cls in (S, SOther, SNonStr, SSubText, SRaises, SFmtOther, SFmtNonStr, SFmtRaises, SStrFmtSub):
+        for _, cls in self.MEMBERS:
             with self.subTest(cls=cls.__name__), self.assertRaises(TypeError) as cm:
                 load_text(TAG, cls(REL), self.cfg)
             self.assertEqual(str(cm.exception), "rel must be str, got %s" % cls.__name__)
