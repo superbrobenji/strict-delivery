@@ -9,5 +9,6 @@ Status: a list to keep track of, not a design. Owner, 2026-11-26: "E can be v0.3
 | V2-32 | CI systems other than GitHub Actions (GitLab CI "until users need it") | v0.1 design spec non-goals |
 | V2-33 | Optional language-specific lint adapters (for example Power of 10 for C) | v0.1 design spec ("arrive later") |
 | V2-35 | Strict pre-commit cell: run_all plus the touched tests on every supported runtime (deferred by the owner 2026-11-26: "running on pr is ok even for strict mode") | v0.1 design spec; v0.2 design notes |
+| V3-01 | Starter tests for a project that has none: the framework creates tests of the project's own kind when `commands.test` is missing (owner 2026-11-26: "just mark it as a v0.3 candidate, but I think it'll be dropped") | owner, 2026-11-26 |
 
 Not candidates for any framework release: hardware tuning of this repository's machine (inventory V2-53: suite and mutant slots, locks, worker cap, slot cleanup), the two items dropped as build-state workarounds (V2-54), and the lap-timer migration (V2-55, a separate project).
