@@ -1818,5 +1818,137 @@ class ExactTypesPolicyTest(unittest.TestCase):
         self.assertEqual(pol(root="/" + _NEW_CP, cwd="/" + _DIGITS).root, "/" + _NEW_CP)
 
 
+import dataclasses  # noqa: E402
+
+
+class _PolicySub(bp.Policy):
+    pass
+
+
+def _duck_policy():
+    return types.SimpleNamespace(**dataclasses.asdict(pol()))
+
+
+def _scan_sub(text):
+    s = shellscan.scan(text)
+    return type("_ScanSub", (shellscan.Scan,), {})(*[getattr(s, f.name) for f in dataclasses.fields(s)])
+
+
+def _scan_duck(text):
+    s = shellscan.scan(text)
+    return types.SimpleNamespace(**{f.name: getattr(s, f.name) for f in dataclasses.fields(s)})
+
+
+_NO_TOP = "FAIL hook.bash.target: /nonexistent-root has no git top level; " + WAY
+
+
+class ExactTypesFunctionsTest(unittest.TestCase):
+    """Rows ET10, ET14-ET18, ET26-ET28, ET30-ET32 (each "NO" row narrowed at the function's entry) and the cases of the
+    "yes" rows ET9, ET11-ET13, ET29 no earlier test pins (ET9/ET11/ET29: a ``str`` subclass text; ET29 also ``bytes`` and
+    ``None``; ET12: a ``dict`` subclass, a mappingproxy, a ``str``-subclass key or value, a ``None`` value; ET13: a ``str``
+    subclass). Expected errors are the rows' texts, written by hand."""
+
+    def raises(self, call, msg, label=""):
+        with self.subTest(case=label):
+            with self.assertRaises(TypeError) as cm:
+                call()
+            self.assertEqual(str(cm.exception), msg)
+
+    def test_exact_types_text_refusals_agent_id(self):  # ET10
+        text = "decision decide x"
+        self.assertEqual(ids(bp.text_refusals(text)), [])
+        self.assertEqual(ids(bp.text_refusals(text, None)), [])
+        for agent in ("a1", _DIGITS, _NEW_CP):
+            self.assertEqual(ids(bp.text_refusals(text, agent)), ["hook.bash.decide"], agent[:8])
+        for bad in (b"a1", 1, 0, True, False, "", _StrSub("a1"), ["a1"]):
+            self.raises(lambda: bp.text_refusals(text, bad), "agent_id must be None or a non-empty str", repr(bad))
+            self.raises(lambda: bp.text_refusals("ls", bad), "agent_id must be None or a non-empty str", repr(bad))
+
+    def test_exact_types_yes_row_pins(self):  # ET9, ET11, ET12, ET13, ET29: already refused, pinned here
+        self.raises(lambda: bp.text_refusals(_StrSub("ls")), "text must be str, not _StrSub", "ET9")
+        self.raises(lambda: bp.effective_words(_StrSub("git commit"), {}), "text must be str, not _StrSub", "ET11")
+        for bad in (_DictSub(), types.MappingProxyType({})):
+            self.raises(lambda: bp.effective_words("git commit", bad), "aliases must be a dict", "ET12 " + repr(bad))
+        for bad in ({_StrSub("ci"): "commit"}, {"ci": _StrSub("commit")}, {"ci": None}):
+            self.raises(lambda: bp.effective_words("git ci", bad), "aliases must map str to str", "ET12 " + repr(bad))
+        self.raises(lambda: bp.is_git_write(_StrSub("commit"), []), "subcommand must be a str", "ET13")
+        for bad in (_StrSub("git commit"), b"git commit", None):
+            self.raises(lambda: bp.commit_refusals(bad, pol(), lambda r: None),
+                        "text must be str, not %s" % type(bad).__name__, "ET29 " + repr(bad))
+
+    def test_exact_types_is_git_write(self):  # ET14
+        self.assertIs(bp.is_git_write("branch", ["-D", "x"]), True)
+        self.assertIs(bp.is_git_write("branch", ["--list"]), False)
+        self.assertIs(bp.is_git_write("commit", []), True)
+        self.assertIs(bp.is_git_write("branch", [_DIGITS, _NEW_CP]), False)
+        for bad in (("-D",), _ListSub(["-D"]), (w for w in ["-D"]), "-D", None, [_StrSub("-D")], [b"-D"], ["-D", None],
+                    [_StrSub(_DIGITS)]):
+            self.raises(lambda: bp.is_git_write("branch", bad), "git words must be a list of str", repr(bad))
+            self.raises(lambda: bp.is_git_write("commit", bad), "git words must be a list of str", repr(bad))
+
+    def test_exact_types_write_option_in_text(self):  # ET15
+        self.assertIs(bp.write_option_in_text(("git branch -D x", "git branch -D x")), True)
+        self.assertIs(bp.write_option_in_text(("git branch --list", "git branch --list")), False)
+        self.assertIs(bp.write_option_in_text((_DIGITS, _NEW_CP)), False)
+        for bad in (["git branch -D x", "git branch -D x"], "git branch -D x", None,
+                    _TupleSub(("git branch -D x", "git branch -D x")), (b"git branch -D x", "git branch -D x"),
+                    ("git branch -D x", _StrSub("git branch -D x")), (), ("git branch -D x",),
+                    ("a", "b", "c"), ("a", None)):
+            self.raises(lambda: bp.write_option_in_text(bad), "views must be a tuple of two str", repr(bad))
+
+    def test_exact_types_n_flag(self):  # ET16
+        self.assertIs(bp.n_flag(["-n"]), True)
+        self.assertIs(bp.n_flag(["-m", "-n"]), False)
+        self.assertIs(bp.n_flag([]), False)
+        self.assertIs(bp.n_flag(["-m", _DIGITS, _NEW_CP]), False)
+        for bad in (("-n",), _ListSub(["-n"]), "-n", None, [b"-n"], [None], [_StrSub("-n")], ["-m", _StrSub("x")]):
+            self.raises(lambda: bp.n_flag(bad), "args must be a list of str", repr(bad))
+
+    def test_exact_types_git_call(self):  # ET17, ET18
+        call = bp.git_call(shellscan.scan("git -C w ci -n"), {"ci": "commit"})
+        self.assertEqual((call.argv_C, call.sub, call.args), ("w", "commit", ["-n"]))
+        self.assertIsNone(bp.git_call(shellscan.scan(""), {}))
+        for bad in (_scan_sub("git commit"), _scan_duck("git commit"), None, "git commit"):
+            self.raises(lambda: bp.git_call(bad, {}), "scan must be a shellscan.Scan", repr(bad))
+        for bad in (_DictSub(), types.MappingProxyType({}), None, [], [("ci", "commit")]):
+            self.raises(lambda: bp.git_call(shellscan.scan("git status"), bad), "aliases must be a dict", repr(bad))
+        for bad in ({_StrSub("ci"): "commit"}, {"ci": _StrSub("commit")}, {"ci": None}, {1: "commit"}):
+            self.raises(lambda: bp.git_call(shellscan.scan("git status"), bad), "aliases must map str to str", repr(bad))
+
+    def test_exact_types_target_root(self):  # ET26, ET27, ET28
+        scan = shellscan.scan("git commit")
+        self.assertEqual(bp.target_root(scan, None, pol()), (None, [_NO_TOP]))
+        self.assertEqual(bp.target_root(scan, "", pol()),   # T:139, kept
+                         (None, ["FAIL hook.bash.target: an empty directory has no git top level; " + WAY]))
+        self.assertEqual(bp.target_root(scan, _DIGITS, pol()),
+                         (None, ["FAIL hook.bash.target: /nonexistent-root/%s has no git top level; %s" % (_DIGITS, WAY)]))
+        root, fails = bp.target_root(scan, _NEW_CP, pol())
+        self.assertEqual((root, len(fails), fails[0].startswith("FAIL hook.bash.target: /nonexistent-root/")), (None, 1, True))
+        for bad in (_scan_sub("git commit"), _scan_duck("git commit"), None, "git commit"):
+            self.raises(lambda: bp.target_root(bad, None, pol()), "scan must be a shellscan.Scan", repr(bad))
+        for bad in (_StrSub("w"), b"w", 3, _StrSub(_DIGITS)):
+            self.raises(lambda: bp.target_root(scan, bad, pol()), "argv_C must be None or a str", repr(bad))
+        for bad in (_PolicySub(**dataclasses.asdict(pol())), _duck_policy(), None):
+            self.raises(lambda: bp.target_root(scan, None, bad), "p must be a Policy", repr(type(bad)))
+
+    def test_exact_types_commit_refusals(self):  # ET30, ET31, ET32
+        def run(root):
+            raise AssertionError("the gates must not run")
+        n_line = ("FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; the human can run the command with the ! "
+                  "prefix")
+        self.assertEqual(bp.commit_refusals("ls", pol(), run), [])
+        self.assertEqual(bp.commit_refusals("ls", pol(), run, False), [])
+        self.assertEqual(bp.commit_refusals("git commit -n -m m", pol(), run, True), [n_line])
+        self.assertEqual(bp.commit_refusals("git commit -m " + _DIGITS, pol(), run, True), [])
+        self.assertEqual(ids(bp.commit_refusals("git commit -m " + _NEW_CP, pol(), run, True)), ["hook.bash.compound"])
+        for text in ("ls", "git commit -n -m m"):   # every check runs at the entry, also when no commit word is read
+            for bad in (_PolicySub(**dataclasses.asdict(pol())), _duck_policy(), None):
+                self.raises(lambda: bp.commit_refusals(text, bad, run), "p must be a Policy", text + repr(type(bad)))
+            for bad in (None, "run"):
+                self.raises(lambda: bp.commit_refusals(text, pol(), bad), "run_gates must be callable", text + repr(bad))
+            for bad in (1, 0, None, "yes", ""):
+                self.raises(lambda: bp.commit_refusals(text, pol(), run, bad), "stop must be a bool", text + repr(bad))
+
+
 if __name__ == "__main__":
     unittest.main()
