@@ -1796,5 +1796,894 @@ class EnvUnwrapSurvivorTest(unittest.TestCase):
         self.assertIs(bp.git_call(shellscan.scan("env -x"), {}).env_refused, True)
 
 
+# ---- fix round 3, part C (hooks stream controller 6; table revision 2, draft section 3.2; owner answer Q-HK5-2 (a)): the
+# seeded generators G1-G5, L tier (the public functions in process). Every dimension is listed whole below; the draw is
+# random.Random(GEN_SEED) (CDP7); a failure prints the seed, the dimension values and the command, so one line reproduces
+# it. The oracle code between the two G-ORACLE markers names neither the code under test nor the hook (row C6,
+# GeneratorReviewChecksTest); its sources are the rule's sentences (draft section 0, T:690, T:691, P:3670, P:3672,
+# P:3673), shellscan (3b.1's closed grammar: the R1 views and the `<reason>`), and git itself (O3, O6).
+import functools  # noqa: E402
+import itertools  # noqa: E402
+import random  # noqa: E402
+import re  # noqa: E402
+
+GEN_SEED = 20261126
+GEN_SEED_2 = 20261127
+GEN_SHOW = 12   # mismatches printed by a failing generator
+# Q-HK4-1 (a), Q-HK5-3 (a): the stated limits beside plan P:3792; a member of them is pinned PASS, never refused
+GEN_STATED_LIMIT = ("stated limit (plan P:3792; owner answers Q-HK4-1 (a), Q-HK5-3 (a)): a text with no git token (a "
+                    "shell alias of git defined before the session), and an alias defined only in the repository named by "
+                    "-C or cd used in text that is not plain, are not recognised")
+
+# ---- G-ORACLE BEGIN
+O_WAY = "run it with the ! prefix if you must, or ask the owner"
+O_BANG = "the human can run the command with the ! prefix"
+O_WLINE = "FAIL hook.bash.compound: a git write runs as its own command (%s); " + O_WAY
+O_CLINE = "FAIL hook.bash.global-option.-c: git option -c before the subcommand is refused; " + O_WAY
+O_NOT_GIT = "the program is not git"
+O_WRITES = ("commit", "push", "merge", "pull", "rebase", "cherry-pick", "revert", "am", "reset", "update-ref", "tag",
+            "stash", "worktree")                                                  # ruling (3b), plan :3336
+O_WORDS = O_WRITES + ("branch", "checkout", "switch", "fetch")                    # section 0 INDICATOR; Q-HK5-4 (a)
+O_EWORDS = ("commit", "push", "merge", "pull")                                    # decision Q2's effective words
+O_VALUE_OPTIONS = ("-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source")
+O_ALLOW = ("GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "LANG", "LC_ALL", "TZ")
+O_TARGET_NAMES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")
+O_N_LONG = ("message", "file", "author", "date", "template", "reuse-message", "reedit-message", "fixup", "squash",
+            "cleanup", "pathspec-from-file", "trailer")
+
+
+def o_fold(s):
+    return "".join(chr(ord(ch) + 32) if "A" <= ch <= "Z" else ch for ch in s)
+
+
+def o_tokens(text):
+    return [t for t in re.split(r"[^0-9A-Za-z_-]+", text) if t]
+
+
+@functools.lru_cache(maxsize=4096)
+def o_scan(text):
+    return shellscan.scan(text)
+
+
+def o_views(text):   # ruling R1: the raw text and the space-joined quote-removed words of the scanner
+    return (text, " ".join(o_scan(text).words))
+
+
+def o_git_in(text):
+    return any("git" in [o_fold(t) for t in o_tokens(v)] for v in o_views(text))
+
+
+def o_indicated(text, aliases):   # section 0: a `git` token (ASCII fold) and an INDICATOR token, either view
+    names = {o_fold(n) for n in aliases}
+    return o_git_in(text) and any(t in O_WORDS or o_fold(t) in names for v in o_views(text) for t in o_tokens(v))
+
+
+def o_c_after_git(text):   # ruling N1: a whole token `-c` after a `git` token, either view
+    for v in o_views(text):
+        toks = o_tokens(v)
+        folded = [o_fold(t) for t in toks]
+        if "git" in folded and "-c" in toks[folded.index("git") + 1:]:
+            return True
+    return False
+
+
+def o_plain_git(text):   # section 0: NP is not this: scanner-plain text whose program word is `git` by basename
+    s = o_scan(text)
+    return s.plain and bool(s.argv) and s.argv[0].rsplit("/", 1)[-1] == "git"
+
+
+def o_reason(text):   # section 0 `<reason>`: the scanner's reason, `the program is not git` for plain text
+    s = o_scan(text)
+    return s.reason if not s.plain else O_NOT_GIT
+
+
+def o_has_commit(text):
+    return any("commit" in [o_fold(t) for t in o_tokens(v)] for v in o_views(text))
+
+
+def o_names_after_git(text, aliases):
+    out = []
+    for v in o_views(text):
+        folded = [o_fold(t) for t in o_tokens(v)]
+        if "git" in folded:
+            out += [t for t in folded[folded.index("git") + 1:] if t in aliases]
+    return out
+
+
+def o_effective(text, aliases):   # decision Q2: words with a git token; alias names after it, chains, `!` adds three
+    found = set()
+    for v in o_views(text):
+        toks = o_tokens(v)
+        folded = [o_fold(t) for t in toks]
+        if "git" not in folded:
+            continue
+        found |= {w for w in O_EWORDS if w in toks}
+        todo = [t for t in folded[folded.index("git") + 1:] if t in aliases]
+        seen = set()
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            value = aliases[name]
+            if value.startswith("!"):
+                found |= {"commit", "push", "merge"}
+                continue
+            for vv in o_views(value):
+                vt = o_tokens(vv)
+                found |= {w for w in O_EWORDS if w in vt}
+                todo += [o_fold(t) for t in vt if o_fold(t) in aliases]
+    return found
+
+
+def o_followed(sub, aliases):   # the alias values a plain `git <sub>` follows (decision R1-3), cycles end
+    out, seen = [], set()
+    while sub != "commit" and o_fold(sub) in aliases and o_fold(sub) not in seen:
+        seen.add(o_fold(sub))
+        value = aliases[o_fold(sub)]
+        out.append(value)
+        if value.startswith("!"):
+            break
+        words = list(o_scan(value).words)
+        n = 0
+        while n < len(words) and words[n].startswith("-"):
+            n += 2 if words[n] in O_VALUE_OPTIONS else 1
+        if n >= len(words):
+            break
+        sub = words[n]
+    return out
+
+
+def o_reached(body, aliases):   # decision R2-2: the alias texts a `!` body names after its git token, chains followed
+    out, seen = [], set()
+    todo = o_names_after_git(body, aliases)
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        value = aliases[name]
+        if value.startswith("!"):
+            out.append(value[1:])
+            todo += o_names_after_git(value[1:], aliases)
+        else:
+            out.append(value)
+            todo += [o_fold(t) for v in o_views(value) for t in o_tokens(v) if o_fold(t) in aliases]
+    return out
+
+
+def o_rule_a(text, aliases, sub=None):
+    """The expected ``write_text_refusals``: section 0 (RULE-A) for text that is not one plain git command (``sub`` None),
+    T:690 for the ``!`` bodies a plain ``git <sub>`` reaches; T:691: commit text keeps its own line (here ``[]``)."""
+    if sub is None:
+        if "commit" in o_effective(text, aliases):
+            return []
+        texts, reason = [text], o_reason(text)
+    else:
+        texts = []
+        for value in o_followed(sub, aliases):
+            if value.startswith("!"):
+                texts += [value[1:]] + o_reached(value[1:], aliases)
+        if any(o_has_commit(t) for t in texts):
+            return []
+        reason = O_NOT_GIT
+    if not any(o_indicated(t, aliases) for t in texts):
+        return []
+    return ([O_CLINE] if any(o_c_after_git(t) for t in texts) else []) + [O_WLINE % reason]
+
+
+def o_unquote(text):   # O5: the test's own quote remover (single quotes literal; double quotes and backslash escapes)
+    out, i, q = [], 0, None
+    while i < len(text):
+        ch = text[i]
+        if q == "'":
+            q = None if ch == "'" else q
+            out += [] if ch == "'" else [ch]
+        elif ch == "\\" and i + 1 < len(text) and (q is None or text[i + 1] in '$`"\\\n'):
+            i += 1
+            out += [] if text[i] == "\n" else [text[i]]
+        elif q == '"':
+            q = None if ch == '"' else q
+            out += [] if ch == '"' else [ch]
+        elif ch in "'\"":
+            q = ch
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def o_n_flag(args):   # P:3672-P:3673: clusters read left to right; m F c C t take the rest or the next word
+    n = 0
+    while n < len(args):
+        word = args[n]
+        n += 1
+        if word.startswith("--"):
+            name = word[2:].split("=", 1)[0]
+            if "=" not in word and name and any(v.startswith(name) for v in O_N_LONG):
+                n += 1
+        elif word.startswith("-") and len(word) > 1:
+            for k, ch in enumerate(word[1:]):
+                if ch == "n":
+                    return True
+                if ch in "mFcCt":
+                    n += 1 if k == len(word) - 2 else 0
+                    break
+    return False
+
+
+def o_global_ids(words):   # P:3672: -C first and with one directory; any option but --no-pager, -P, -C refused by name
+    ids, n, seen, named = [], 0, False, False
+    while n < len(words) and words[n].startswith("-"):
+        word = words[n]
+        if word == "-C":
+            if n + 1 >= len(words) or seen or named:
+                ids.append("hook.bash.global-option.-C")
+                if seen or named:
+                    ids.append("hook.bash.target")
+            named = named or (n + 1 < len(words) and not seen)
+            n += 2
+            continue
+        if word not in ("--no-pager", "-P"):
+            ids.append("hook.bash.global-option." + word.split("=", 1)[0])
+            n += 1 if word in O_VALUE_OPTIONS else 0
+        seen = True
+        n += 1
+    return ids
+
+
+def o_toplevel(where):   # O3: git itself
+    p = subprocess.run(["git", "-C", os.path.realpath(where), "rev-parse", "--show-toplevel"], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+    return os.path.realpath(p.stdout.decode().rstrip("\n")) if p.returncode == 0 else None
+
+
+def o_git_aliases(root):   # O6: git itself, the table's U7 model (first newline splits, last wins, not UTF-8 refused)
+    p = subprocess.run(["git", "-C", root, "config", "-z", "--get-regexp", "^alias\\."], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+    if p.returncode == 1 and not p.stdout:
+        return {}
+    out = {}
+    for raw in p.stdout.split(b"\0"):
+        if raw:
+            key, _sep, value = raw.decode("utf-8").partition("\n")   # UnicodeDecodeError: the reader must refuse
+            out[key[len("alias."):]] = value
+    return out
+
+
+def o_git_config(root, key):   # O6: git itself, `--null --get`, only the trailing NUL removed; exit 1 is unset
+    p = subprocess.run(["git", "-C", root, "config", "--null", "--get", "--", key], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+    if p.returncode == 1 and not p.stdout:
+        return None
+    text = p.stdout.decode("utf-8")
+    return text[:-1] if text.endswith("\0") else text
+# ---- G-ORACLE END
+
+
+def gen_fail(test, name, seed, bad, total):
+    if bad:
+        test.fail("%s seed %d: %d of %d cases differ; first %d:\n%s" % (name, seed, len(bad), total, min(len(bad), GEN_SHOW),
+                                                                    "\n".join(bad[:GEN_SHOW])))
+
+
+# G1 (draft 3.2): write text that is not one plain git command (RULE-A); dimensions A-G whole
+G1_A = O_WRITES + ("branch", "checkout", "switch", "fetch", "br", "co", "sw", "st", "rs", "bl", "ci", "pp", "xx", None)
+G1_NONE = "status"   # the subcommand of the A member `none`
+G1_ALIASES = {"br": "branch", "co": "checkout", "sw": "switch", "st": "status", "rs": "reset --hard", "bl": "branch --list",
+              "ci": "commit", "pp": "pull --rebase", "xx": "log"}
+G1_B = ("git", "GIT", "/usr/bin/git", 'gi""t', "'git'", '"git"', "g\\it", '"git"x', None)   # None: no git token
+G1_B_NEG = ("gitk", "legit", "git-x", "git_x")
+G1_C = ("plain", "single", "double", "split", "backslash", "ansi", "backslash-newline", "suffix", "prefix", "neighbour")
+G1_C_NEG = ("suffix", "prefix")
+G1_D = (("operator ;", ("@; ls", "ls; @", "@;")), ("operator &&", ("@ && ls", "ls && @", "@ &&")),
+        ("operator ||", ("@ || ls", "ls || @", "@ ||")), ("operator |", ("@ | cat", "ls | @", "@ |")),
+        ("operator &", ("@ &", "ls & @", "@ & ls")), ("newline", ("@\nls", "ls\n@", "@\n")),
+        ("subshell", ("(@)",)), ("substitution", ("echo $(@)",)), ("backticks", ("echo `@`",)), ("group", ("{ @; }",)),
+        ("comment", ("@ # c",)), ("redirection", ("@ > f",)), ("2>&1", ("@ 2>&1",)), ("heredoc", ("@ <<EOF\nx\nEOF",)),
+        ("$x", ("@ $x",)), ("*", ("@ *",)), ("{a,b}", ("@ {a,b}",)), ("~", ("@ ~",)), ("unbalanced quote", ("@ 'a",)),
+        ("NUL", ("@ \x00",)), ("non-ASCII", ("@ \u00e9",)), ("FOO=1", ("FOO=1 @",)), ("PATH=x", ("PATH=x @",)),
+        ("SHELL=", ("SHELL=/bin/bash @",)), ("if", ("if @; then :; fi",)), ("time", ("time @",)),
+        ("command", ("command @",)), ("exec", ("exec @",)), ("coproc", ("coproc @",)), ("builtin", ("builtin @",)),
+        ("echo", ("echo @",)), ("grep", ('grep -n "@" notes.md',)), ("bash -c", ("bash -c '@'",)), ("sh -c", ('sh -c "@"',)),
+        ("zsh -c", ("zsh -c '@'",)), ("nice", ("nice @",)), ("nohup", ("nohup @",)), ("xargs", ("xargs @",)),
+        ("sudo", ("sudo @",)), ("env -S", ("env -S '@'",)), ("env FOO=1", ("env FOO=1 @",)))
+G1_WRAPPERS = ("echo", "grep", "bash -c", "sh -c", "zsh -c", "nice", "nohup", "xargs", "sudo", "env -S", "env FOO=1")
+G1_E = (None, "-C", "--git-dir", "--work-tree", "cd", "pushd", "export GIT_DIR", "GIT_DIR=", "-c")
+G1_DVAL = ("R", "W", "X", "sub")
+G1_F = (("session at R", "session"), ("subagent bound to W at R", "a1"), ("subagent bound to W at W", "a1"))
+G1_G = (None, ("GIT_DIR", "v"), ("GIT_DIR", ""), ("GIT_WORK_TREE", "v"), ("GIT_WORK_TREE", ""), ("GIT_INDEX_FILE", "v"),
+        ("GIT_INDEX_FILE", ""))
+G1_CLASSES = ("refused", "refused with -c", "commit text", "no git token or no indicator", "one plain git command")
+
+
+def g1_members(kind, word):
+    return {"split": len(word) - 1, "backslash": len(word) - 1, "backslash-newline": len(word) - 1, "suffix": 4,
+            "prefix": 4, "neighbour": 4}.get(kind, 1)
+
+
+def g1_render(word, kind, k):
+    cut = k + 1
+    return {"plain": word, "single": "'%s'" % word, "double": '"%s"' % word,
+            "split": word[:cut] + '""' + word[cut:], "backslash": word[:cut] + "\\" + word[cut:], "ansi": "$'%s'" % word,
+            "backslash-newline": word[:cut] + "\\\n" + word[cut:], "suffix": word + "x-_9"[k % 4],
+            "prefix": "x-_9"[k % 4] + word,
+            "neighbour": (word + ".txt", "a/" + word, "x=" + word, "a:" + word)[k % 4]}[kind]
+
+
+def g1_text(word, b, c, k, tpl, e, dv):
+    pre, opt = "", ""
+    if e in ("-C", "--git-dir", "--work-tree"):
+        opt = ("-C %s " if e == "-C" else e + "=%s ") % dv
+    elif e == "-c":
+        opt = "-c a=b "
+    elif e in ("cd", "pushd"):
+        pre = "%s %s && " % (e, dv)
+    elif e == "export GIT_DIR":
+        pre = "export GIT_DIR=%s; " % dv
+    elif e == "GIT_DIR=":
+        pre = "GIT_DIR=%s " % dv
+    return tpl.replace("@", pre + (b + " " if b else "") + opt + g1_render(word, c, k))
+
+
+def o1_lines(text, dname, aliases=G1_ALIASES):
+    """O1 for the L tier: NP (scanner not plain, or a plain other program by construction) and a git token and an
+    INDICATOR -> the -c line (N1) and the compound write line; commit text -> [] (its own line, T:691)."""
+    if o_plain_git(text):
+        return []   # the scanner accepts it as one plain git command (`git reset\n`): not RULE-A's
+    return o_rule_a(text, aliases)
+
+
+def o1_class(text, dname, want):
+    if o_plain_git(text):
+        return "one plain git command"
+    if want:
+        return "refused with -c" if len(want) == 2 else "refused"
+    return "commit text" if o_indicated(text, G1_ALIASES) else "no git token or no indicator"
+
+
+def g1_case(rng):
+    a = rng.choice(G1_A)
+    b = rng.choice(G1_B + G1_B_NEG)
+    c = rng.choice(G1_C)
+    word = a or G1_NONE
+    k = rng.randrange(g1_members(c, word))
+    dname, tpls = rng.choice(G1_D)
+    tpl = rng.choice(tpls)
+    e, dv, f, g = rng.choice(G1_E), rng.choice(G1_DVAL), rng.choice(G1_F), rng.choice(G1_G)
+    return (a, b, c, k, dname, tpls.index(tpl), e, dv, f[0], g), g1_text(word, b, c, k, tpl, e, dv), dname, f[1]
+
+
+def g1_run(test, seed, n):
+    rng = random.Random(seed)
+    bad, classes = [], {}
+    for _ in range(n):
+        dims, text, dname, key = g1_case(rng)
+        want = o1_lines(text, dname)
+        got = bp.write_text_refusals(text, dict(G1_ALIASES), key)
+        classes.setdefault(o1_class(text, dname, want), set()).add(got == want)
+        if got != want:
+            bad.append("seed=%d dims=%r text=%r want=%r got=%r" % (seed, dims, text, want, got))
+    gen_fail(test, "G1", seed, bad, n)
+    return classes
+
+
+class G1RuleAGeneratedTest(unittest.TestCase):
+    """G1, L tier: 20000 cases drawn over A x B x C x D x E x F x G (G does not reach ``write_text_refusals``: the
+    inherited lines are the hook's, H tier), and the exhaustive stratum A x D at plain rendering with `git`."""
+
+    def test_seeded(self):
+        classes = g1_run(self, GEN_SEED, 20000)
+        self.assertEqual(classes, {k: {True} for k in G1_CLASSES})
+
+    def test_exhaustive_A_x_D(self):
+        bad, n = [], 0
+        for a in G1_A:
+            for dname, tpls in G1_D:
+                for tpl in tpls:
+                    text = g1_text(a or G1_NONE, "git", "plain", 0, tpl, None, "R")
+                    want, got = o1_lines(text, dname), bp.write_text_refusals(text, dict(G1_ALIASES), "session")
+                    n += 1
+                    if got != want:
+                        bad.append("stratum A x D: a=%r d=%r text=%r want=%r got=%r" % (a, dname, text, want, got))
+        gen_fail(self, "G1 A x D", GEN_SEED, bad, n)
+        self.assertEqual(n, 27 * 35 + 27 * 18)
+
+    def test_member_labels_of_the_draft(self):   # O1's construction labels: B and C positives and negatives (draft 3.2)
+        for b in G1_B + G1_B_NEG:
+            for c in G1_C:
+                for k in range(g1_members(c, "reset")):
+                    text = g1_text("reset", b, c, k, "@; ls", None, "R")
+                    label = b in G1_B[:8] and c not in G1_C_NEG
+                    with self.subTest(text=text):
+                        self.assertEqual(o_indicated(text, {}), label)
+                        self.assertEqual(bp.write_text_refusals(text, {}, "session"),
+                                         [O_WLINE % o_reason(text)] if label else [])
+
+    def test_second_seed(self):   # row C7 (CDP7): the same verdict per oracle class with seed 20261127
+        classes = g1_run(self, GEN_SEED_2, 20000)
+        self.assertEqual(classes, {k: {True} for k in G1_CLASSES})
+
+    def test_V1_digits_in_a_command(self):   # row V1: 4300/4301-digit words (int-max-str-digits differs by version)
+        for n in (4300, 4301):
+            self.assertEqual(bp.write_text_refusals("git reset %s; ls" % ("9" * n), {}, "session"), [O_WLINE % "operator ;"])
+            self.assertEqual(bp.write_text_refusals("git %s; ls" % ("9" * n), {}, "session"), [])
+
+
+# G2 (draft 3.2): aliases (resolution, chains, `!` bodies, the alias NAME as indicator)
+G2_V1 = ("commit", "commit -n", "commit --no-verify", "-c core.hooksPath=x commit", "reset --hard", "branch -D", "checkout -b",
+         "switch -c", "tag", "status", "log --oneline", "branch --list", "", "")   # the last: valueless, read as "" (G5)
+G2_V2_GIT = ("git", None, 'gi""t')
+G2_V2_IND = ("reset", "branch", "b", None)   # a GIT_WRITES name, bare branch, an alias name of the dict, none
+G2_V2_TARGET = (None, "-C", "--git-dir", "cd", "GIT_DIR=")
+G2_NAMES = ("a", "b", "c")
+G2_V4 = ("git @", "git @ zq", "git --no-pager @", "git -C d @", "GIT @", 'git "@"', "git @; ls", "ls | git @")
+G2_V4_PLAIN = ("git @", "git @ zq", "git --no-pager @", "git -C d @", 'git "@"')
+G2_CYCLES = ({"a": "a", "b": "b", "c": "c"}, {"a": "b", "b": "a", "c": "status"}, {"a": "!git b", "b": "!git a", "c": "c"},
+             {"a": "!git b", "b": "c", "c": "!git a"}, {"a": "b", "b": "!git c", "c": "a"})
+
+
+def g2_body(g, ind, target):
+    head = (g or "echo") + " "
+    word = ind or "status"
+    return "!" + {None: head + word, "-C": head + "-C d " + word, "--git-dir": head + "--git-dir=d " + word,
+                  "cd": "cd d && " + head + word, "GIT_DIR=": "GIT_DIR=d " + head + word}[target]
+
+
+G2_V2 = tuple(g2_body(g, i, t) for g in G2_V2_GIT for i in G2_V2_IND for t in G2_V2_TARGET)
+
+
+def g2_check(aliases, tpl, name, key, why, bad):
+    text = tpl.replace("@", name)
+    sub = name if tpl in G2_V4_PLAIN else None
+    want_words, want = o_effective(text, aliases), o_rule_a(text, aliases, sub)
+    got_words, got = bp.effective_words(text, dict(aliases)), bp.write_text_refusals(text, dict(aliases), key)
+    if (got_words, got) != (want_words, want):
+        bad.append("%s aliases=%r text=%r want=%r %r got=%r %r" % (why, aliases, text, sorted(want_words), want,
+                                                                 sorted(got_words), got))
+
+
+class G2AliasGeneratedTest(unittest.TestCase):
+    """G2, L tier: the 2744 dicts of 3 names over the 14 V1 values x the 8 invocations (21952 cases), 5000 seeded V2/V3
+    chains, and the cycles under the 60 s bound (R3-5). Oracle O2: ``effective_words`` and ``write_text_refusals``."""
+
+    def test_V1_dicts_x_V4(self):
+        bad, n = [], 0
+        for i, values in enumerate(itertools.product(G2_V1, repeat=3)):
+            aliases = dict(zip(G2_NAMES, values))
+            for tpl in G2_V4:
+                g2_check(aliases, tpl, "A" if i % 2 else "a", ("session", "a1")[i % 2], "V1 dict %d" % i, bad)
+                n += 1
+        self.assertEqual(n, 21952)
+        gen_fail(self, "G2 V1 x V4", GEN_SEED, bad, n)
+
+    def test_seeded_chains(self):
+        rng = random.Random(GEN_SEED)
+        bad = []
+        for i in range(5000):
+            pool = G2_V1 + tuple(rng.sample(G2_V2, 6)) + G2_NAMES
+            aliases = {name: rng.choice(pool) for name in G2_NAMES}
+            name = rng.choice(G2_NAMES)
+            g2_check(aliases, rng.choice(G2_V4), name.upper() if rng.random() < 0.5 else name, rng.choice(("session", "a1")),
+                     "seed=%d case %d" % (GEN_SEED, i), bad)
+        gen_fail(self, "G2 V2/V3", GEN_SEED, bad, 5000)
+
+    def test_cycles_end(self):   # V3 cycles a->a, a->b->a, `!git b` <-> `!git a`, under the R3-5 bound
+        bad = []
+
+        def run():
+            for aliases in G2_CYCLES:
+                for tpl in G2_V4:
+                    for name in G2_NAMES:
+                        g2_check(aliases, tpl, name, "session", "cycle", bad)
+        bounded(run, CYCLE_BOUND, CYCLE_WHAT)
+        gen_fail(self, "G2 cycles", GEN_SEED, bad, len(G2_CYCLES) * 24)
+
+
+# G3 (draft 3.2): the plain git command grammar and the target matrix
+G3A_OPTIONS = ("-c a=b", "--config-env=a=B", "--git-dir=x", "--git-dir x", "--work-tree=x", "--namespace=x",
+               "--super-prefix=x", "--exec-path", "--exec-path=x", "--bare", "--paginate", "-p", "--no-replace-objects",
+               "--no-optional-locks", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
+               "--no-lazy-fetch", "--attr-source=x", "--list-cmds=x", "--html-path", "--man-path", "--info-path",
+               "--version", "--help", "-h", "-v", "--no-advice", "--no-pager=x")   # CG5, the 30 refused options
+G3A_C_KEYS = ("color.ui", "alias.zz", "include.path", "includeIf.onbranch:feat.path", "core.x", "")
+G3A_OTHER = ("-CW", "-C=W", "-cx=y", "-C W", "--no-pager -C W", "-P --no-pager -C W", "-P -P --no-pager -C W", "-C W -C W",
+             "--no-pager -c a=b -C W", "-c --no-verify", "--no-pager", "-P")
+G3B_ACTORS = ("session, no program", "session, program live", "subagent bound to W", "subagent bound to R",
+              "unbound (no record)", "store unavailable")
+G3B_FORMS = (None, "-C", "cd", "-C and cd")
+G3B_DIRS = ("R", "R/sub", "W", "W/sub", "W2", "X", "X/sub", "link to W", "link to X", "../W", "missing", "file", "fifo",
+            "", ".")
+G3C_OPTIONS = ("-i", "-u A", "-S", "-C", "-0", "-v", "-P", "--", "-iu", "--ignore-environment", "--unset=A", "-uA", "-h")
+G3C_OPERANDS = O_ALLOW + ("PATH", "GIT_EXEC_PATH", "LD_PRELOAD", "FOO", "\u00c9")
+G3C_POSITIONS = ("before", "after NAME=V", "nested env env")
+# draft rule unclear (report, Decision needed): `-i` after a NAME=V operand is read as an option by the code; env(1) reads
+# options only before the first operand, so there `-i` is the program word. Stopped member, not asserted.
+G3C_UNDECIDED = (("-i", "after NAME=V"),)
+G3D_LETTERS = "nmFcCtasN1"
+G3D_CONTEXTS = ((), ("-m", "x"), ("-m",), ("--",), ("-F", "f"))
+G3E_NAMES = O_ALLOW + ("GIT_CONFIG_X", "FOO", "git_dir")
+G3F_PROGRAMS = ("git", "/usr/bin/git", "./git", "GIT", "Git", "git.exe", "gitk", "'git'", '"git"', "g\\it")
+
+
+class G3GrammarGeneratedTest(Repo):
+    """G3, L tier: G3a global options (each member before status and log, and a 3000-case seeded draw of sequences), G3b
+    the target matrix (6 x 4 x 15 = 360 cells through ``target_root``, hand-built Policy, stub ``state_access``), G3c the
+    ``env`` unwrap (13 x 13 x 3), G3d the ``-n`` clusters (1110 x 5 = 5550), G3e leading assignments, G3f the program
+    word. Oracles O3 (git itself for the top level) and O4 (second implementations from P:3670, P:3672, P:3673)."""
+
+    def test_G3a_global_options(self):
+        members = G3A_OPTIONS + tuple("-c %s=v" % k for k in G3A_C_KEYS) + G3A_OTHER
+        rng = random.Random(GEN_SEED)
+        cases = [(m, s) for m in members for s in ("status", "log")]
+        cases += [(" ".join(rng.choice(members) for _ in range(rng.randint(1, 3))), rng.choice(("status", "log", "reset")))
+                  for _ in range(3000)]
+        bad = []
+        for opts, sub in cases:
+            text = "git %s %s" % (opts, sub)
+            scan = shellscan.scan(text)
+            if not scan.plain:   # the scanner's grammar refuses it as one plain command (`-c =v`): RULE-A's (G1)
+                want, got = o_rule_a(text, {}), bp.write_text_refusals(text, {}, "session")
+            else:
+                want, got = o_global_ids(text.split()[1:]), ids(bp.git_call(scan, {}).lines)
+            if got != want:
+                bad.append("seed=%d opts=%r text=%r want=%r got=%r" % (GEN_SEED, opts, text, want, got))
+        gen_fail(self, "G3a", GEN_SEED, bad, len(cases))
+
+    def g3b_tree(self):
+        R = self.repo("R")
+        W, W2 = os.path.join(self.tmp, "W"), os.path.join(self.tmp, "W2")
+        git(R, "worktree", "add", "-q", "-b", "wb", W)
+        git(R, "worktree", "add", "-q", "-b", "wb2", W2)
+        X = self.repo("X")
+        for d in (R, W, X):
+            os.mkdir(os.path.join(d, "sub"))
+        os.symlink(W, os.path.join(self.tmp, "lw"))
+        os.symlink(X, os.path.join(self.tmp, "lx"))
+        with open(os.path.join(self.tmp, "file"), "w") as fh:
+            fh.write("x\n")
+        os.mkfifo(os.path.join(self.tmp, "fifo"))
+        path = {"R": R, "R/sub": R + "/sub", "W": W, "W/sub": W + "/sub", "W2": W2, "X": X, "X/sub": X + "/sub",
+                "link to W": self.tmp + "/lw", "link to X": self.tmp + "/lx", "../W": "../W", "missing": self.tmp + "/no",
+                "file": self.tmp + "/file", "fifo": self.tmp + "/fifo", "": "", ".": "."}
+        access = {"session, no program": ({R, W, W2}, []), "session, program live": ({R}, []),
+                  "subagent bound to W": ({W}, []), "subagent bound to R": ({R}, []),
+                  "unbound (no record)": (set(), ["no dispatch record names this subagent"]),
+                  "store unavailable": (set(), ["the session store is unavailable"])}
+        return R, path, access
+
+    def test_G3b_target_matrix(self):
+        R, path, access = self.g3b_tree()
+        bad, n = [], 0
+
+        def run():
+            nonlocal n
+            for actor, form, dname in itertools.product(G3B_ACTORS, G3B_FORMS, G3B_DIRS):
+                n += 1
+                tops, why = access[actor]
+                real = {os.path.realpath(t) for t in tops}
+                d = path[dname]
+                cwd = os.path.join(R, d) if form is None else R
+                p = pol(root=R, cwd=cwd, state_access=lambda real=real, why=why: (frozenset(real), list(why), None))
+                q = d or "''"
+                text = {None: "git reset --hard", "-C": "git -C %s reset --hard" % q, "cd": "cd %s && git reset --hard" % q,
+                        "-C and cd": "cd %s && git -C %s reset --hard" % (q, q)}[form]
+                scan = shellscan.scan(text)
+                if not scan.plain:   # the scanner's grammar refuses it as one plain command: RULE-A's (G1)
+                    got, want = bp.write_text_refusals(text, {}, "a1"), [O_WLINE % scan.reason]
+                else:
+                    root, fails = bp.target_root(scan, d if form in ("-C", "-C and cd") else None, p)
+                    top = None if form == "-C and cd" or (form and d == "") else o_toplevel(
+                        cwd if form is None else os.path.join(R, d))
+                    ok = top is not None and top in real
+                    want = (top if ok else None, not ok, top is not None and not ok)
+                    got = (root, bool(fails), all(w in " ".join(fails) for w in why) and bool(fails) and top is not None)
+                if got != want:
+                    bad.append("actor=%r form=%r d=%r text=%r want=%r got=%r" % (actor, form, dname, text, want, got))
+        bounded(run, 120, "a target check blocked")
+        self.assertEqual(n, 360)
+        gen_fail(self, "G3b", GEN_SEED, bad, n)
+
+    def test_G3c_env_unwrap(self):
+        bad, n = [], 0
+        for opt, name, pos in itertools.product(G3C_OPTIONS, G3C_OPERANDS, G3C_POSITIONS):
+            if (opt, pos) in G3C_UNDECIDED:
+                continue
+            n += 1
+            operand = name + "=1"
+            text = {"before": "env %s %s git reset", "after NAME=V": "env %s %s git reset", "nested env env":
+                    "env env %s %s git reset"}[pos] % ((operand, opt) if pos == "after NAME=V" else (opt, operand))
+            scan = shellscan.scan(text)
+            if not scan.plain:
+                got, want = bp.write_text_refusals(text, {}, "session"), [O_WLINE % scan.reason]
+            else:
+                # P:3670: any env option other than -i, -u NAME and NAME=V is refused; env(1) reads its options before
+                # the first operand only; a NAME off the allow-list is refused; one level (`env env` runs env, not git)
+                accepted = opt in ("-i", "-u A") and pos == "before" and name in O_ALLOW
+                call = bp.git_call(scan, {})
+                refused = call.env_refused or any(ln.startswith("FAIL hook.bash.not-git") for ln in call.lines)
+                want = (not accepted, ["hook.bash.target"] if accepted and name in O_TARGET_NAMES
+                        else ["hook.bash.index"] if accepted and name == "GIT_INDEX_FILE" else [])
+                got = (refused, ids(call.lines) if accepted else [])
+            if got != want:
+                bad.append("opt=%r operand=%r pos=%r text=%r want=%r got=%r" % (opt, name, pos, text, want, got))
+        self.assertEqual(n, 13 * 13 * 3 - 13)
+        gen_fail(self, "G3c", GEN_SEED, bad, n)
+
+    def test_G3d_n_clusters(self):
+        bad, n = [], 0
+        for size in (1, 2, 3):
+            for letters in itertools.product(G3D_LETTERS, repeat=size):
+                for ctx in G3D_CONTEXTS:
+                    args = list(ctx) + ["-" + "".join(letters)]
+                    n += 1
+                    if bp.n_flag(args) != o_n_flag(args):
+                        bad.append("args=%r want=%r" % (args, o_n_flag(args)))
+        self.assertEqual(n, 5550)
+        gen_fail(self, "G3d", GEN_SEED, bad, n)
+
+    def test_G3e_assignments_and_G3f_program_word(self):
+        bad = []
+        for name, value, before in itertools.product(G3E_NAMES, ("v", ""), ("git", "env git")):
+            text = "%s=%s %s reset" % (name, value, before)
+            scan = shellscan.scan(text)
+            if (name in O_ALLOW) != scan.plain:
+                bad.append("the scanner's allow-list: %r plain=%r" % (text, scan.plain))
+            elif not scan.plain:
+                if bp.write_text_refusals(text, {}, "session") != [O_WLINE % "assignment"]:
+                    bad.append("RULE-A: %r" % text)
+            else:
+                want = (["hook.bash.target"] if name in O_TARGET_NAMES else ["hook.bash.index"] if name == "GIT_INDEX_FILE"
+                        else [])
+                call = bp.git_call(scan, {})
+                if (ids(call.lines), call.sub) != (want, "reset"):
+                    bad.append("%r want=%r got=%r" % (text, want, (ids(call.lines), call.sub)))
+        for prog in G3F_PROGRAMS:
+            text = prog + " reset"
+            scan = shellscan.scan(text)
+            if not scan.plain:
+                if bp.write_text_refusals(text, {}, "session") != [O_WLINE % scan.reason]:
+                    bad.append("RULE-A: %r" % text)
+                continue
+            not_git = scan.argv[0].rsplit("/", 1)[-1] != "git"
+            call = bp.git_call(scan, {})
+            if any(ln.startswith("FAIL hook.bash.not-git") for ln in call.lines) != not_git:
+                bad.append("program word %r: not git %r, lines %r" % (text, not_git, call.lines))
+        gen_fail(self, "G3e/G3f", GEN_SEED, bad, len(G3E_NAMES) * 4 + len(G3F_PROGRAMS))
+
+
+# G4 (draft 3.2): the text-token refusals; O5: one matcher per id on the raw text and the test's own quote removal
+G4_LINES = {
+    "no-verify": "FAIL hook.bash.bypass.no-verify: --no-verify and its abbreviations are refused; " + O_BANG,
+    "hooks-path": "FAIL hook.bash.bypass.hooks-path: core.hooksPath is refused; " + O_BANG,
+    "git-config-env": "FAIL hook.bash.bypass.git-config-env: GIT_CONFIG_* and --config-env are refused; " + O_BANG,
+    "home": "FAIL hook.bash.bypass.home: moving HOME or XDG_CONFIG_HOME is refused; " + O_BANG,
+    "decide": ("FAIL hook.bash.decide: decisions decide and withdraw come only from the human, who runs them with the ! "
+               "prefix, or from the main session recording the owner's exact words (spec \u00a77.1)")}
+G4_NO_VERIFY = ("--no-verify", "--no-veri", "--no-ver", "--no-v", "--no-verbose", "--no-valid", "--no-verify=1",
+                "--no-edit", "--no-pager", "--no-color", "--no-ff", "x--no-verify", "---no-verify")
+G4_HOOKS = ("core.hooksPath", "core.HooksPath", "core.hookspath", "CORE.HOOKSPATH", "hooksPath", "HOOKSPATH", "xhookspath",
+            "hookspathx", "hoo\u212aspath", "hook\u017fpath")
+G4_CONFIG = tuple("GIT_CONFIG_" + s for s in ("COUNT", "GLOBAL", "SYSTEM", "NOSYSTEM", "KEY_0", "PARAMETERS")) + (
+    "--config-env", "GIT_CONFIG", "GIT_CONFIGX")
+G4_HOME_FORMS = ("%s=x", "%s+=x", "export %s=x", "unset %s", "declare %s=x", "typeset %s=x", "readonly %s=x", "local %s=x",
+                 "env -u %s true", "env --unset %s true", "read %s", "printf -v %s x", "mapfile %s", "readarray %s",
+                 "getopts ab %s", "for %s in a; do :; done", "select %s in a; do :; done")
+G4_HOME_NAMES = ("HOME", "XDG_CONFIG_HOME", "home", "Home")
+G4_HOME = tuple(f % nm for f in G4_HOME_FORMS for nm in G4_HOME_NAMES) + ("MYHOME=x", "HOME_DIR=x", "echo $HOME", "echo ~")
+G4_DECIDE = tuple("python3 -m gates %s %s X" % (d, w) for w in ("decide", "withdraw")
+                  for d in ("decisions", "decision", "DECISIONS", "decisions_cli")) + (
+    "grep decide notes.md", "echo withdraw", 'git commit -m "decide"')
+G4_SPELLINGS = G4_NO_VERIFY + G4_HOOKS + G4_CONFIG + G4_HOME + G4_DECIDE
+G4_PREFIXES = ("git commit", "echo", "env", "cd /w &&", None)
+G4_QUOTES = ("none", "single", "double", "split", "backslash", "ansi", "backslash-newline")
+G4_NEIGHBOURS = (None, "x", ".")
+G4_SUFFIXES = (None, " ; ls", "x")
+G4_AGENTS = (None, "a1")
+G4_BINDERS = ("export", "unset", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray", "getopts",
+              "for", "select")
+
+
+# ---- G-ORACLE BEGIN
+def o_home_moved(v):   # TX26-TX37: an assignment, a binder or `env -u` / `printf -v` naming HOME or XDG_CONFIG_HOME
+    names = ("home", "xdg_config_home")
+    if re.search(r"(?<![0-9a-z_$-])(home|xdg_config_home)\+?=", v):
+        return True
+    for seg in re.split(r"[;&|\n()]", v):
+        toks = o_tokens(seg)
+        for i, t in enumerate(toks):
+            later = toks[i + 1:]
+            if t in G4_BINDERS and any(x in names for x in later):
+                return True
+            if t == "env" and any(x in names or (x.startswith("-u") and x[2:] in names) for x in later):
+                return True
+            if t == "printf" and any(later[j] == "-v" and later[j + 1:j + 2] and later[j + 1] in names
+                                     for j in range(len(later))):
+                return True
+    return False
+
+
+def o5_lines(text, agent):
+    views = [o_fold(text), o_fold(o_unquote(text))]
+    hit = {"no-verify": any(re.search(r"(?<![0-9a-z_-])--no-v", v) for v in views),
+           "hooks-path": any("hookspath" in v for v in views),
+           "git-config-env": any("git_config_" in v or "--config-env" in v for v in views),
+           "home": any(o_home_moved(v) for v in views),
+           "decide": agent is not None and any("decision" in v and ({"decide", "withdraw"} & set(o_tokens(v)))
+                                               for v in views)}
+    return [G4_LINES[k] for k in G4_LINES if hit[k]]
+# ---- G-ORACLE END
+
+
+def g4_quote(s, kind):
+    mid = max(1, len(s) // 2)
+    return {"none": s, "single": "'%s'" % s, "double": '"%s"' % s, "split": s[:mid] + '""' + s[mid:],
+            "backslash": s[:mid] + "\\" + s[mid:], "ansi": "$'%s'" % s, "backslash-newline": s[:mid] + "\\\n" + s[mid:]}[kind]
+
+
+def g4_text(spelling, prefix, quote, neighbour, suffix):
+    body = (neighbour or "") + g4_quote(spelling, quote) + (suffix or "")
+    return body if prefix is None else prefix + " " + body
+
+
+class G4TextTokenGeneratedTest(unittest.TestCase):
+    """G4, L tier: ``text_refusals`` over the exhaustive stratum spellings x prefixes x agents, and 20000 seeded cases
+    over spelling x prefix x quote form x neighbour x suffix x agent. TextRefusalsTest stays as written."""
+
+    def check(self, cases, name):
+        bad = []
+        for dims, text, agent in cases:
+            want, got = o5_lines(text, agent), bp.text_refusals(text, agent)
+            if got != want:
+                bad.append("seed=%d dims=%r text=%r want=%r got=%r" % (GEN_SEED, dims, text, want, got))
+        gen_fail(self, name, GEN_SEED, bad, len(cases))
+
+    def test_exhaustive_stratum(self):
+        cases = [((s, p, a), g4_text(s, p, "none", None, None), a)
+                 for s in G4_SPELLINGS for p in G4_PREFIXES for a in G4_AGENTS]
+        self.assertEqual(len(cases), len(G4_SPELLINGS) * 10)
+        self.check(cases, "G4 stratum")
+
+    def test_seeded(self):
+        rng = random.Random(GEN_SEED)
+        cases = []
+        for _ in range(20000):
+            dims = (rng.choice(G4_SPELLINGS), rng.choice(G4_PREFIXES), rng.choice(G4_QUOTES), rng.choice(G4_NEIGHBOURS),
+                    rng.choice(G4_SUFFIXES), rng.choice(G4_AGENTS))
+            cases.append((dims, g4_text(*dims[:5]), dims[5]))
+        self.check(cases, "G4 seeded")
+
+    def test_the_draft_members_are_classified(self):   # the draft's positives and negatives, through the oracle
+        for s, want in (("--no-verify", 1), ("--no-edit", 0), ("x--no-verify", 0), ("---no-verify", 0), ("xhookspath", 1),
+                        ("hoo\u212aspath", 0), ("hook\u017fpath", 0), ("GIT_CONFIG", 0), ("GIT_CONFIGX", 0),
+                        ("--config-env", 1), ("MYHOME=x", 0), ("HOME_DIR=x", 0), ("echo $HOME", 0), ("echo ~", 0),
+                        ("getopts ab HOME", 1), ("grep decide notes.md", 0)):
+            with self.subTest(spelling=s):
+                self.assertEqual(len(o5_lines(s, "a1")), want)
+
+
+# G5 (draft 3.2): the git config reader; O6: git itself through subprocess, each repository in this test's mkdtemp sandbox
+G5_NAMES = ("ci", "Cx", "dup", "e", "v", "ml", "a.b")
+G5_VALUES = ("plain", "with spaces", "with a newline", '""', "valueless", "duplicate-last", "non-UTF-8 0xff", "4301 digits")
+G5_SOURCES = ("local", "GIT_CONFIG_GLOBAL", "both")
+G5_KEYS = ("core.hooksPath", "Core.HooksPath", "x.empty", "x.bare", "x.nl", "x.dup")
+
+
+def g5_lines(name, kind):
+    """Config-file text (bytes) of one alias record."""
+    sect, _dot, key = name.rpartition(".")
+    head = b'[alias "%s"]\n' % sect.encode() if sect else b"[alias]\n"
+    k = key.encode()
+    if kind == "valueless":
+        return head + b"\t" + k + b"\n"
+    if kind == "duplicate-last":
+        return head + b"\t" + k + b" = first\n\t" + k + b" = last\n"
+    value = {"plain": b"commit", "with spaces": b"log --oneline -1", "with a newline": b'"a\\nb"', '""': b'""',
+             "non-UTF-8 0xff": b"x\xffy", "4301 digits": b"9" * 4301}[kind]
+    return head + b"\t" + k + b" = " + value + b"\n"
+
+
+class G5ConfigReaderGeneratedTest(Repo):
+    """G5: 40 seeded repositories, each with 1-4 alias records drawn over names x values x sources and the config keys
+    of ``config_value``; ``gitinfo.aliases`` and ``gitinfo.config_value`` against git itself (O6)."""
+
+    def test_seeded_repositories(self):
+        rng = random.Random(GEN_SEED)
+        bad = []
+        for i in range(40):
+            d = os.path.join(self.tmp, "g5-%d" % i)
+            os.mkdir(d)
+            git(d, "init", "-q")
+            glob = os.path.join(self.tmp, "global-%d" % i)
+            local_text, global_text = b"", b""
+            records = [(rng.choice(G5_NAMES), rng.choice(G5_VALUES), rng.choice(G5_SOURCES))
+                       for _ in range(rng.randint(1, 4))]
+            for name, kind, source in records:
+                if source in ("local", "both"):
+                    local_text += g5_lines(name, kind)
+                if source in ("GIT_CONFIG_GLOBAL", "both"):
+                    global_text += g5_lines(name, kind)
+            local_text += b'[x]\n\tempty = ""\n\tbare\n\tnl = "a\\nb"\n\tdup = 1\n\tdup = 2\n'
+            if rng.random() < 0.5:
+                local_text += b"[core]\n\thooksPath = /h\n"
+            append_config(d, local_text)
+            with open(glob, "wb") as fh:
+                fh.write(global_text)
+            with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": glob}):
+                try:
+                    want = o_git_aliases(d)
+                except UnicodeDecodeError:
+                    want = GateError
+                try:
+                    got = gitinfo.aliases(d)
+                except GateError:
+                    got = GateError
+                if got != want:
+                    bad.append("seed=%d repo %d records=%r want=%r got=%r" % (GEN_SEED, i, records, want, got))
+                for key in G5_KEYS:
+                    want_v, got_v = o_git_config(d, key), gitinfo.config_value(d, key)
+                    if got_v != want_v:
+                        bad.append("seed=%d repo %d key=%r want=%r got=%r" % (GEN_SEED, i, key, want_v, got_v))
+        gen_fail(self, "G5", GEN_SEED, bad, 40)
+
+
+class GeneratorReviewChecksTest(unittest.TestCase):
+    """Row C6 (draft 3.3): the dimension lists whole (their lengths), the oracle's independence from the code under test,
+    and the named rows and tests of the subsumed classes still present (none deleted); row V1's interpreter members."""
+
+    def test_dimension_lengths(self):
+        # the members the draft lists, counted here; where the draft's own number differs (A "26 + none", C "(11)",
+        # D "(30)", V2 "(24)") the report quotes both (divergence; the listed members are binding)
+        for lst, size in ((G1_A, 27), (G1_B, 9), (G1_B_NEG, 4), (G1_C, 10), (G1_D, 41), (G1_E, 9), (G1_DVAL, 4), (G1_F, 3),
+                          (G1_G, 7), (G2_V1, 14), (G2_V2, 60), (G2_V4, 8), (G2_NAMES, 3), (G3A_OPTIONS, 30),
+                          (G3A_C_KEYS, 6), (G3B_ACTORS, 6), (G3B_FORMS, 4), (G3B_DIRS, 15), (G3C_OPTIONS, 13),
+                          (G3C_OPERANDS, 13), (G3C_POSITIONS, 3), (G3E_NAMES, 11), (G3F_PROGRAMS, 10), (G4_HOME_FORMS, 17),
+                          (G4_PREFIXES, 5), (G4_QUOTES, 7), (G5_NAMES, 7), (G5_VALUES, 8), (G5_SOURCES, 3), (G5_KEYS, 6)):
+            with self.subTest(members=lst[:3]):
+                self.assertEqual(len(lst), size)
+        self.assertIn("fetch", G1_A)   # owner answer Q-HK5-4 (a)
+
+    def test_oracle_names_no_code_under_test(self):
+        with open(os.path.abspath(__file__), encoding="utf-8") as fh:
+            src = fh.read()
+        with open(os.path.join(SRC, "tests", "test_hook_bash.py"), encoding="utf-8") as fh:
+            hsrc = fh.read()
+        for text, tag, count in ((src, "G", 2), (hsrc, "H", 1)):
+            blocks = re.findall(r"(?ms)^# ---- %s-ORACLE BEGIN$(.*?)^# ---- %s-ORACLE END$" % (tag, tag), text)
+            self.assertEqual(len(blocks), count)
+            for block in blocks:
+                for name in ("bashpolicy", "bp.", "pre_bash", "gitinfo", "import "):
+                    self.assertNotIn(name, block)
+
+    def test_named_rows_and_tests_still_exist(self):
+        named = {"tests/test_bashpolicy.py": ("TextRefusalsTest", "test_no_verify_forms", "test_hookspath_forms",
+                                              "test_git_config_env", "test_home_moves", "test_decide_agent_only",
+                                              "EffectiveWordsTest", "AliasExpansionTest", "WriteTextRefusalsTest",
+                                              "test_shell_alias_bodies", "test_alias_cycles_end", "GlobalCRuleTest"),
+                 "tests/test_hook_bash.py": ("RuleAHookTest", "ShellAliasBodyHookTest", "StatedLimitHookTest",
+                                             "test_non_plain_write_names_no_other_worktree", "test_alias_to_write_non_plain",
+                                             "test_global_options_refused", "test_decide_and_withdraw_refused_from_subagents",
+                                             "InheritedEnvWriteTest", "InheritedClassesTest", "QuoteSplitTest",
+                                             "OptionWriteHookTest", "RefusedEnvWriteTest", "HookAliasCycleTest")}
+        for path, names in named.items():
+            with open(os.path.join(SRC, path), encoding="utf-8") as fh:
+                src = fh.read()
+            for name in names:
+                with self.subTest(path=path, name=name):
+                    self.assertRegex(src, r"(?m)^\s*(def|class) %s\b" % re.escape(name))
+
+    def test_V1_base_exception_group(self):   # row V1: BaseExceptionGroup is absent on 3.9; no production path names it
+        import builtins
+        self.assertEqual(hasattr(builtins, "BaseExceptionGroup"), sys.version_info >= (3, 11))
+        for path in ("gates/lib/bashpolicy.py", "gates/hooks/pre_bash.py", "gates/lib/gitinfo.py"):
+            with open(os.path.join(SRC, path), encoding="utf-8") as fh:
+                self.assertNotIn("ExceptionGroup", fh.read())
+
+    def test_V1_code_points(self):   # row V1: U+A7C0 (category differs between 3.9 and 3.13) in a -c key and an env operand
+        cp = "\ua7c0"
+        self.assertEqual(bp.write_text_refusals("git -c %s.x=1 reset" % cp, {}, "session"), [O_CLINE, O_WLINE % "character"])
+        self.assertEqual(bp.write_text_refusals("env %s=1 git reset" % cp, {}, "session"), [O_WLINE % "character"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2520,5 +2520,223 @@ class RuleAInterpreterRowsTest(ActorCase):
         self.exact("env %s=1 git reset --hard" % cp, lambda actor: WLINE % "character")
 
 
+# ---- fix round 3, part C (hooks stream controller 6; table revision 2, draft section 3.2): the generators' H tier, through
+# the production hook (tests.hookrun.run_hook), every repository in the test's mkdtemp sandbox. The dimension lists, the
+# seed and the L-tier oracle functions are those of tests/test_bashpolicy.py (one definition); the expected-line code
+# between the H-ORACLE markers names neither the code under test nor the hook (GeneratorReviewChecksTest).
+import random  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from tests import test_bashpolicy as gl  # noqa: E402
+
+G1_FAMILIES = (("operator ;",), ("operator &&",), ("operator ||",), ("operator |",), ("operator &",), ("newline",),
+               ("subshell", "substitution", "backticks", "group"), ("comment", "redirection", "2>&1", "heredoc"),
+               ("$x", "*", "{a,b}", "~", "unbalanced quote", "NUL", "non-ASCII"),
+               ("if", "time", "command", "exec", "coproc", "builtin"), gl.G1_WRAPPERS, ("FOO=1", "PATH=x", "SHELL="))
+G1_H_CALLS = 36
+G1_H_REFERENCE = tuple(w for w in gl.O_WRITES if w != "commit")   # the plain form of each write, subagent at R: 12 calls
+
+# ---- H-ORACLE BEGIN
+H_ENV_LINES = {"env -S": "FAIL hook.bash.not-git: env option -S is refused; " + WAY,
+               "env FOO=1": "FAIL hook.bash.not-git: env operand FOO is refused; " + WAY}
+
+
+def h_rule_a(text, dname, env_name, aliases):
+    """O1 at the hook: ``(exit, lines)``, or ``"commit"`` for commit text (its own line kept, no second compound line).
+    CDP2 order: the U1 env line, the inherited line, the -c line (ruling N1), the compound write line."""
+    want = gl.o_rule_a(text, aliases)
+    if want:
+        env = [H_ENV_LINES[dname]] if dname in H_ENV_LINES and gl.o_scan(text).plain else []
+        inherited = ["FAIL hook.bash.target: the hook inherited %s; %s" % (env_name, WAY)] if env_name else []
+        return 2, env + inherited + want
+    if "commit" in gl.o_effective(text, aliases):
+        return "commit"
+    if gl.o_git_in(text) and gl.o_c_after_git(text):
+        return 2, [gl.O_CLINE]   # ruling N1 on any text holding `git -c`
+    return 0, []
+# ---- H-ORACLE END
+
+
+class GeneratedHookCase(ActorCase):
+    def answer(self, command, actor, env=None):
+        r = self.run_actor(command, actor, env)
+        return r.returncode, r.stdout, r.stderr
+
+    def check_lines(self, got, want, why, bad):
+        if want == "commit":
+            ok = got[0] == 2 and "a git write runs as its own command" not in got[2] and (
+                "FAIL hook.bash.compound: git commit runs as its own command" in got[2] or "FAIL hook.bash.not-git" in got[2])
+        else:
+            ok = got == (want[0], "", "".join(ln + "\n" for ln in want[1]))
+        if not ok:
+            bad.append("%s want=%r got=%r" % (why, want, got))
+
+
+class G1RuleAHookGeneratedTest(GeneratedHookCase):
+    """G1, H tier: each of the 12 families of D once per actor (36 calls), A, B, C, E drawn by the seed, 3 of the 36 with
+    an inherited name; then the second reference: the plain form of each GIT_WRITES name but commit (12 calls)."""
+
+    def test_seeded_hook_calls(self):
+        for name, value in gl.G1_ALIASES.items():
+            git(self.R, "config", "alias." + name, value)
+        X = os.path.join(self.tmp, "X")
+        os.mkdir(X)
+        dvals = {"R": self.R, "W": self.W, "X": X, "sub": "sub"}
+        rng = random.Random(gl.GEN_SEED)
+        inherit = set(rng.sample(range(G1_H_CALLS), 3))
+        bad, start, n = [], time.time(), 0
+        for fam, actor in [(f, a) for f in G1_FAMILIES for a in self.actors()]:
+            while True:
+                dname = rng.choice(fam)
+                tpls = dict(gl.G1_D)[dname]
+                a, b, c = rng.choice(gl.G1_A), rng.choice(gl.G1_B + gl.G1_B_NEG), rng.choice(gl.G1_C)
+                word = a or gl.G1_NONE
+                k, tpl, e, dv = (rng.randrange(gl.g1_members(c, word)), rng.choice(tpls), rng.choice(gl.G1_E),
+                                 rng.choice(gl.G1_DVAL))
+                text = gl.g1_text(word, b, c, k, tpl, e, dvals[dv])
+                if not gl.o_plain_git(text):
+                    break   # one plain git command is G3's, not RULE-A's
+            g = rng.choice(gl.G1_G[1:]) if n in inherit else None
+            env = dict(self.env, **{g[0]: os.path.join(self.R, ".git") if g[1] else ""}) if g else None
+            want = h_rule_a(text, dname, g[0] if g else None, gl.G1_ALIASES)
+            self.check_lines(self.answer(text, actor, env), want, "seed=%d call %d dims=%r actor=%r text=%r" % (
+                gl.GEN_SEED, n, (a, b, c, k, dname, tpls.index(tpl), e, dv, g), actor[0], text), bad)
+            n += 1
+        actor = self.actors()[1]
+        for word in G1_H_REFERENCE:   # RULE-A is NP-only: the plain form keeps the target line and no compound line
+            r = self.run_actor("git " + word, actor)
+            if r.returncode != 2 or self.outside() not in r.stderr or "FAIL hook.bash.compound" in r.stderr:
+                bad.append("reference git %s: %r" % (word, (r.returncode, r.stderr)))
+        sys.stderr.write("G1 H tier: %d calls in %.1f s\n" % (n + len(G1_H_REFERENCE), time.time() - start))
+        self.assertEqual(n, G1_H_CALLS)
+        gl.gen_fail(self, "G1 H", gl.GEN_SEED, bad, n + len(G1_H_REFERENCE))
+
+
+G2_H_V1 = ("commit", "commit -n", "-c core.hooksPath=x commit", "reset --hard", "branch -D", "checkout -b", "status", "")
+G2_H_BODIES = tuple(gl.g2_body("git", "reset", t) for t in gl.G2_V2_TARGET)
+
+
+class G2AliasHookGeneratedTest(GeneratedHookCase):
+    """G2, H tier (30 calls): 8 V1 families as a plain alias against the spelled-out command (16), the 5 V2 target tokens
+    in a `!` body (5), a `!` body without an indicator against `!echo hi` (2), the 3 V4 forms that are not plain (3), the
+    Q-HK5-3 (a) stated limit (1), an inherited GIT_DIR with a body (1), `-c` in a body (1), a quote-split body (1)."""
+
+    def verdict(self, r):
+        return (r.returncode, sorted({ln.split(":", 1)[0] for ln in r.stderr.splitlines()}),
+                [ln for ln in r.stderr.splitlines() if ln.startswith("FAIL hook.bash.target")])
+
+    def test_seeded_hook_calls(self):
+        rng = random.Random(gl.GEN_SEED)
+        actors = self.actors()
+        bad, start, calls = [], time.time(), 0
+        for i, value in enumerate(G2_H_V1):
+            git(self.R, "config", "alias.a", value)
+            tpl = rng.choice(gl.G2_V4_PLAIN).replace("-C d", "-C " + self.W)
+            actor = actors[i % 3]
+            spelled = tpl.replace('"@"', "@").replace("@", value).rstrip()   # the expansion's words, unquoted
+            got, ref = self.run_actor(tpl.replace("@", "a"), actor), self.run_actor(spelled, actor)
+            calls += 2
+            if self.verdict(got) != self.verdict(ref):
+                bad.append("V1 %r form %r actor %r: alias %r spelled out %r" % (value, tpl, actor[0], self.verdict(got),
+                                                                               self.verdict(ref)))
+        for i, body in enumerate(G2_H_BODIES + ('!git -c a=b reset', '!gi""t tag t')):
+            git(self.R, "config", "alias.b", body)
+            want = ([gl.O_CLINE] if "-c" in body else []) + [gl.O_WLINE % gl.O_NOT_GIT]
+            self.check_lines(self.answer("git b", actors[i % 3]), (2, want), "body %r" % body, bad)
+            calls += 1
+        git(self.R, "config", "alias.c", "!git status")
+        git(self.R, "config", "alias.e", "!echo hi")
+        got, ref = self.answer("git c", actors[0]), self.answer("git e", actors[0])
+        calls += 2
+        if got != ref:
+            bad.append("a body without an indicator %r differs from !echo hi %r" % (got, ref))
+        git(self.R, "config", "alias.a", "reset --hard")
+        for i, form in enumerate(("git a; ls", "ls | git A", "GIT a")):
+            self.check_lines(self.answer(form, actors[i]), (2, [gl.O_WLINE % gl.o_reason(form)]), "V4 %r" % form, bad)
+            calls += 1
+        git(self.R, "config", "alias.b", "!git reset")
+        env = dict(self.env, GIT_DIR=os.path.join(self.R, ".git"))
+        self.check_lines(self.answer("git b", actors[1], env),
+                         (2, ["FAIL hook.bash.target: the hook inherited GIT_DIR; " + WAY, gl.O_WLINE % gl.O_NOT_GIT]),
+                         "inherited GIT_DIR, body", bad)
+        X = os.path.join(self.tmp, "X")
+        os.mkdir(X)
+        make_repo(X, minimal_config())
+        git(X, "config", "alias.zz", "reset --hard")
+        self.check_lines(self.answer("git -C %s zz; ls" % X, actors[2]), (0, []), gl.GEN_STATED_LIMIT, bad)
+        calls += 2
+        sys.stderr.write("G2 H tier: %d calls in %.1f s\n" % (calls, time.time() - start))
+        self.assertEqual(calls, 30)
+        gl.gen_fail(self, "G2 H", gl.GEN_SEED, bad, calls)
+
+
+class G3GrammarHookGeneratedTest(GeneratedHookCase):
+    """G3, H tier (24 calls): ruling N1's -c line for each key family (6), the target matrix for the subagent bound to W
+    (4 forms x 3 directories, 12; O3: refused iff the top level is not W), three -n clusters, three env forms."""
+
+    def test_seeded_hook_calls(self):
+        actors = self.actors()
+        bad, start, calls = [], time.time(), 0
+        for i, key in enumerate(gl.G3A_C_KEYS):
+            self.check_lines(self.answer("git -c %s=v status" % key, actors[i % 3]), (2, [gl.O_CLINE]), "N1 %r" % key, bad)
+            calls += 1
+        X = os.path.join(self.tmp, "X")
+        os.mkdir(X)
+        os.mkdir(os.path.join(self.W, "sub"))
+        agent = actors[2][2]
+        for form in (None, "-C", "cd", "-C and cd"):
+            for d in (self.R, self.W, X if form else os.path.join(self.W, "sub")):
+                text = {None: "git reset --hard", "-C": "git -C %s reset --hard" % d, "cd": "cd %s && git reset --hard" % d,
+                        "-C and cd": "cd %s && git -C %s reset --hard" % (d, d)}[form]
+                top = gl.o_toplevel(d)
+                refused = form == "-C and cd" or top != os.path.realpath(self.W)
+                r = self.B(text, cwd=d if form is None else self.R, timeout=HOOK_BOUND, **agent)
+                calls += 1
+                if (r.returncode == 2 and "FAIL hook.bash.target" in r.stderr) != refused or (
+                        not refused and (r.returncode, r.stderr) != (0, "")):
+                    bad.append("matrix form=%r d=%r: refused %r, got %r" % (form, d, refused, (r.returncode, r.stderr)))
+        for flags in ("-n", "-an", "-sn"):
+            self.check_lines(self.answer("git commit %s -m x" % flags, actors[0]), (2, [N_FLAG_LINE.rstrip("\n")]),
+                             "n cluster %r" % flags, bad)
+            calls += 1
+        for text, want in (("env TZ=x git reset --hard", (0, [])),
+                           ("env -x git reset --hard", (2, ["FAIL hook.bash.not-git: env option -x is refused; " + WAY,
+                                                            gl.O_WLINE % gl.O_NOT_GIT])),
+                           ("env -i FOO=1 git reset --hard", (2, ["FAIL hook.bash.not-git: env operand FOO is refused; " + WAY,
+                                                                  gl.O_WLINE % gl.O_NOT_GIT]))):
+            self.check_lines(self.answer(text, actors[0]), want, "env %r" % text, bad)
+            calls += 1
+        sys.stderr.write("G3 H tier: %d calls in %.1f s\n" % (calls, time.time() - start))
+        self.assertEqual(calls, 24)
+        gl.gen_fail(self, "G3 H", gl.GEN_SEED, bad, calls)
+
+
+G4_H_POSITIVE = {"no-verify": gl.G4_NO_VERIFY[:7], "hooks-path": gl.G4_HOOKS[:8], "git-config-env": gl.G4_CONFIG[:7],
+                 "home": tuple(f % "HOME" for f in gl.G4_HOME_FORMS), "decide": gl.G4_DECIDE[:8]}
+
+
+class G4TextTokenHookGeneratedTest(GeneratedHookCase):
+    """G4, H tier (24 calls): each id once per actor (15, decide for the session and the subagents), 6 seeded negatives
+    and 3 texts holding two ids; O5 at the hook (exit 2 and exactly the id lines, or exit 0 and nothing)."""
+
+    def test_seeded_hook_calls(self):
+        rng = random.Random(gl.GEN_SEED)
+        actors = self.actors()
+        negatives = [s for s in gl.G4_SPELLINGS if not gl.o5_lines(s, "a1") and "git" not in s]   # no git judgment
+        texts = [(gl.g4_text(rng.choice(G4_H_POSITIVE[i]), "echo" if i != "decide" else None, rng.choice(gl.G4_QUOTES),
+                             None, None), actor) for i in G4_H_POSITIVE for actor in actors]
+        texts += [("echo " + gl.g4_quote(rng.choice(negatives), rng.choice(gl.G4_QUOTES)), actors[k % 3]) for k in range(6)]
+        texts += [("echo --no-verify core.hooksPath", actors[0]), ("echo GIT_CONFIG_COUNT=1; export HOME=x", actors[1]),
+                  ("python3 -m gates decisions decide X --no-verify", actors[2])]
+        bad, start = [], time.time()
+        for text, actor in texts:
+            lines = gl.o5_lines(text, None if actor[0] == "session at R" else "a1")
+            self.check_lines(self.answer(text, actor), (2 if lines else 0, lines), "seed=%d actor=%r text=%r" % (
+                gl.GEN_SEED, actor[0], text), bad)
+        sys.stderr.write("G4 H tier: %d calls in %.1f s\n" % (len(texts), time.time() - start))
+        self.assertEqual(len(texts), 24)
+        gl.gen_fail(self, "G4 H", gl.GEN_SEED, bad, len(texts))
+
+
 if __name__ == "__main__":
     unittest.main()
