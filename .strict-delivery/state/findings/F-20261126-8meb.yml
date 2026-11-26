@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-8meb
+status: open
+source: Task 6R.2 review 1, residual/6R.2-review-1.md (F-6R2-4)
+severity: LOW
+class: "JSON site objects with a repeated version key: equal values (refused, tested), different values (accepted, untested; the stale first key stays)"
+siblings: []
+cites:
+  - file: scripts/release.py
+    lines: "207"
+    sha: 7f35d1807a6f4bc546bc591ebd4419a814b33e71
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6R.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7f35d1807a6f4bc546bc591ebd4419a814b33e71
+    by: stream-residual
+review_round: 1
+caused_by_change: true
+dimension: "sites: JSON"

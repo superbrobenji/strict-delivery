@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-eh2g
+status: open
+source: Task 6R.2 review 1, residual/6R.2-review-1.md (F-6R2-2)
+severity: LOW
+class: "write path of RELEASE_SITES: link at write time, parent swap at write time, atomic replace, mode kept (none pinned in tests/test_release.py; hand mutant HM1, a plain open() write in _write_all, survived)"
+siblings: []
+cites:
+  - file: scripts/release.py
+    lines: "315"
+    sha: 7f35d1807a6f4bc546bc591ebd4419a814b33e71
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6R.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 7f35d1807a6f4bc546bc591ebd4419a814b33e71
+    by: stream-residual
+review_round: 1
+caused_by_change: true
+dimension: "hardening H1/H4: write side"
