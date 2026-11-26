@@ -1732,6 +1732,13 @@ class WriteTextRefusalsTest(unittest.TestCase):
                            ("env %s=1 git reset --hard" % cp, [RA_LINE % "character"])):
             with self.subTest(text=text):
                 self.assertEqual(bp.write_text_refusals(text, {}, "session"), want)
+        # the code point in an alias NAME (in process: git config refuses a non-ASCII alias name, so no hook row can hold one):
+        # the name is an indicator; the same texts without the alias hold none
+        for text, reason in (("git %sx; ls" % cp, "character"), ("git %sx" % cp, "character"),
+                             ("ls | git %sx" % cp, "operator |")):   # the construct at the smallest position names the reason
+            with self.subTest(alias_name=text):
+                self.assertEqual(bp.write_text_refusals(text, {cp + "x": "log"}, "session"), [RA_LINE % reason])
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), [])
 
     def test_linear(self):   # C4-1 / HR3: one pass over the text per indicator and alias name
         for unit in ("git ", "reset ", "a; ", "git reset; "):
