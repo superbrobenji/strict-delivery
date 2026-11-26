@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261124-c4v5
-status: open
+status: closed
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-4c-3.md FR-4 (PR-4c delta final review; fixed at 52c5ab1, reviewed CLEAN)
 severity: LOW
 class: "cross-task seam: every test on ff3dd3a that loads a strict-profile fixture and reads or sets a strict-preset key; members: tests/test_checkpoints_lib.py:2103 (cfg()/cfgx() with four tasks), tests/test_checkpoints_lib.py:2237 (search: git grep -n -e max_tasks -e minimal_config ff3dd3a -- tests)"
@@ -13,11 +13,19 @@ owner:
   task: 4a.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 52c5ab1e449b901545e7aa90bfacc96eb12211f9
+  - 52c5ab1e449b901545e7aa90bfacc96eb12211f9:tests/test_checkpoints_lib.py
+  - 2323006824515b790a619fa489b37019793932f8
+  - 2323006824515b790a619fa489b37019793932f8:tests/test_gate_checkpoint.py
 history:
   - status: open
     sha: 995395cfdedb0c05fcdbf8afc83488a28789e66d
     by: stream-config
+  - status: closed
+    sha: 2323006824515b790a619fa489b37019793932f8
+    by: "stream-config-16: class fixed at 52c5ab1 (test_checkpoints_lib, reviewed CLEAN) and its update-merge members at 2323006 (FR5-1, F-20261126-rmqn); status read 11:20 (owner answer: read-only check allowed)"
 review_round: 2
 caused_by_change: true
 dimension: "cross-task seam: strict profile presets vs main's 6K.1 cap fixtures"
+resolved_by: 2026-10-31-strict-delivery-framework
