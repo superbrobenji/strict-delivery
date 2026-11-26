@@ -4,6 +4,7 @@ read with plain ``git`` in the test (``rev-parse``, ``log --first-parent``), nev
 import builtins
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -877,6 +878,17 @@ class Fresh(GitIsolatedTestCase):
         (_, reason), = drift.base_errors(self.root, self.cfg)
         self.assertNotIn("--ff-only", reason)
 
+    @staticmethod
+    def listing_raises(exc):
+        "A ``gitinfo._run`` stand-in that raises ``exc`` for the ``git worktree`` call and runs every other call."
+        real = gitinfo._run
+
+        def run(r, name, args, *a, **k):
+            if args[0] == "worktree":
+                raise exc
+            return real(r, name, args, *a, **k)
+        return run
+
     def test_base_reason_skeleton_rows(self):
         "B11: numeric and non-ASCII branch names, the interrupt and the group propagate"
         self.ahead()
@@ -892,15 +904,15 @@ class Fresh(GitIsolatedTestCase):
                                          "so no update command is given" % (name, name))
                 git(self.root, "branch", "-q", "-m", name, "main")
         git(self.root, "checkout", "-q", "-b", "elsewhere")
-        with mock.patch("gates.lib.worktrees.worktree_list", side_effect=KeyboardInterrupt):
+        with mock.patch("gates.lib.gitinfo._run", side_effect=self.listing_raises(KeyboardInterrupt)):
             with self.assertRaises(KeyboardInterrupt):
                 drift.base_errors(self.root, self.cfg)
         group = getattr(builtins, "BaseExceptionGroup", None)
         if group is not None:
-            with mock.patch("gates.lib.worktrees.worktree_list", side_effect=group("g", [KeyboardInterrupt()])):
+            with mock.patch("gates.lib.gitinfo._run", side_effect=self.listing_raises(group("g", [KeyboardInterrupt()]))):
                 with self.assertRaises(group):
                     drift.base_errors(self.root, self.cfg)
-        with mock.patch("gates.lib.worktrees.worktree_list", side_effect=GateError("boom\n")):
+        with mock.patch("gates.lib.gitinfo._run", side_effect=self.listing_raises(GateError("boom\n"))):
             (_, reason), = drift.base_errors(self.root, self.cfg)
         self.assertEqual(reason, "update main from the remote: the worktrees cannot be listed: boom\n, "
                                  "so no update command is given")
@@ -949,6 +961,266 @@ class Fresh(GitIsolatedTestCase):
         for sid in ("a", "b", "c"):
             got = drift.stream_errors(self.root, self.cfg, program([stream(sid)]), row(sid, "ready"), stream(sid))
             self.assertNotIn("base", suffixes(got))
+
+    # -- Task 5c.3 (F-20261124-9bes, -mev2, -9v77): rows U1-U14, W1-W7, H1-H7, K1-K4 of records/task-5c.3-domain.md
+    def case(self, name, base="main", remote="origin"):
+        """A repository <tmp>/<name> on branch ``base`` with a bare remote called ``remote`` and a clone that pushed one
+        more commit to it: the local base is behind its remote branch, which is not fetched yet. (root, bare, other)."""
+        root = os.path.join(self.tmp, name)
+        os.mkdir(root)
+        make_repo(root)
+        if base != "main":
+            git(root, "checkout", "-q", "-b", base)
+        bare = os.path.join(self.tmp, name + ".git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", bare)
+        git(root, "remote", "add", remote, bare)
+        git(root, "push", "-q", "-u", remote, base)
+        other = os.path.join(self.tmp, name + "-other")
+        git(self.tmp, "clone", "-q", "-b", base, bare, other)
+        git(other, "config", "user.email", "o@example.invalid")
+        git(other, "config", "user.name", "O")
+        commit_file(other, "o.txt", "o\n")
+        git(other, "push", "-q", "origin", base)
+        return root, bare, other
+
+    def verdict(self, root, want, base="main", follow=False):
+        """``base_errors`` equals ``want``; with ``follow`` the two git commands the reason prints are run in the
+        fixture (U14) and ``base_errors`` is then ``[]``."""
+        cfg = dict(config.load(root), base_branch=base)
+        got = drift.base_errors(root, cfg)
+        self.assertEqual(got, want)
+        if follow:
+            m = re.fullmatch(r"update (.+) from the remote: git -C (.+) fetch (.+), then git -C (.+) merge --ff-only (.+)",
+                             got[0][1], re.S)
+            self.assertIsNotNone(m)
+            git(m.group(2), "fetch", "-q", m.group(3))
+            git(m.group(4), "merge", "-q", "--ff-only", m.group(5))
+            self.assertEqual(drift.base_errors(root, cfg), [])
+
+    def refusal(self, upstream, remote, name="main"):
+        return [("base", "update %s from its upstream %s: it is not %s/%s, so no update command is given"
+                 % (name, upstream, remote, name))]
+
+    def test_base_upstream_forms(self):
+        "U2, U6-U11, U13, U14, K1: the upstream git resolves decides, not the config values"
+        with self.subTest("same-name"):
+            root, bare, other = self.case("same")
+            git(root, "fetch", "-q", "origin")
+            self.verdict(root, [("base", self.cmd(root))], follow=True)
+        with self.subTest("renamed"):
+            root, bare, other = self.case("renamed")
+            git(root, "remote", "rename", "origin", "upstream")
+            git(root, "fetch", "-q", "upstream")
+            self.verdict(root, [("base", self.cmd(root, "upstream"))], follow=True)
+        with self.subTest("multi-merge"):
+            root, bare, other = self.case("multi")
+            git(other, "push", "-q", "origin", "main:dev")
+            git(root, "fetch", "-q", "origin")
+            git(root, "config", "--unset-all", "branch.main.merge")
+            git(root, "config", "--add", "branch.main.merge", "refs/heads/dev")
+            git(root, "config", "--add", "branch.main.merge", "refs/heads/main")
+            self.verdict(root, self.refusal("origin/dev", "origin"))
+        with self.subTest("refspec"):
+            root, bare, other = self.case("refspec")
+            git(root, "remote", "rename", "origin", "upstream")
+            git(root, "config", "remote.upstream.fetch", "+refs/heads/*:refs/remotes/mirror/*")
+            git(root, "fetch", "-q", "upstream")
+            self.verdict(root, self.refusal("mirror/main", "upstream"))
+        with self.subTest("legacy-remotes"):
+            root, bare, other = self.case("legrem")
+            git(root, "remote", "remove", "origin")
+            os.mkdir(os.path.join(root, ".git", "remotes"))
+            with open(os.path.join(root, ".git", "remotes", "leg"), "w") as fh:
+                fh.write("URL: %s\nPull: refs/heads/main:refs/remotes/leg/main\n" % bare)
+            git(root, "config", "branch.main.remote", "leg")
+            git(root, "config", "branch.main.merge", "refs/heads/main")
+            git(root, "fetch", "-q", "leg")
+            self.verdict(root, [("base", self.cmd(root, "leg"))], follow=True)
+        with self.subTest("legacy-branches"):
+            root, bare, other = self.case("legbr")
+            git(root, "remote", "remove", "origin")
+            os.mkdir(os.path.join(root, ".git", "branches"))
+            with open(os.path.join(root, ".git", "branches", "leg"), "w") as fh:
+                fh.write("%s#main\n" % bare)
+            git(root, "config", "branch.main.remote", "leg")
+            git(root, "config", "branch.main.merge", "refs/heads/main")
+            git(root, "fetch", "-q", "leg")
+            self.verdict(root, self.refusal("leg", "leg"))
+        with self.subTest("url-remote"):
+            root, bare, other = self.case("url")
+            git(root, "fetch", "-q", "origin")
+            git(root, "config", "branch.main.remote", bare)
+            self.verdict(root, [])
+        with self.subTest("slash-remote"):
+            root, bare, other = self.case("slashrem", remote="a/b")
+            git(root, "fetch", "-q", "a/b")
+            self.verdict(root, [("base", self.cmd(root, "a/b"))], follow=True)
+        with self.subTest("slash-remote-refspec"):
+            root, bare, other = self.case("slashref", remote="a/b")
+            git(root, "config", "remote.a/b.fetch", "+refs/heads/*:refs/remotes/c/*")
+            git(root, "fetch", "-q", "a/b")
+            self.verdict(root, self.refusal("c/main", "a/b"))
+        with self.subTest("slash-base"):
+            root, bare, other = self.case("slashbase", base="release/1")
+            git(root, "fetch", "-q", "origin")
+            self.verdict(root, [("base", self.cmd(root, "origin", "release/1"))], base="release/1", follow=True)
+        # K1: git cannot resolve @{u} through a remote name of 256 or more bytes (a ref path component is a file name:
+        # ENAMETOOLONG, measured with git 2.50.1): 40 and 255 digits give the command, 4300 and 4301 give no upstream
+        for n in (40, 255):
+            with self.subTest(digits=n):
+                name = "9" * n
+                root, bare, other = self.case("digits%d" % n, remote=name)
+                git(root, "fetch", "-q", name)
+                self.verdict(root, [("base", self.cmd(root, name))], follow=True)
+        for n in (4300, 4301):
+            with self.subTest(digits=n):
+                name = "9" * n
+                root, bare, other = self.case("digits%d" % n)
+                git(root, "fetch", "-q", "origin")
+                git(root, "config", "remote.%s.url" % name, bare)
+                git(root, "config", "remote.%s.fetch" % name, "+refs/heads/*:refs/remotes/%s/*" % name)
+                git(root, "config", "branch.main.remote", name)
+                self.verdict(root, [])
+
+    def wcase(self, name):
+        "A fetched repository whose main checkout is on ``elsewhere``; returns its root (main is checked out nowhere)."
+        root, bare, other = self.case(name)
+        git(root, "fetch", "-q", "origin")
+        git(root, "checkout", "-q", "-b", "elsewhere")
+        return root
+
+    def test_base_worktree_entry_states(self):
+        "W3-W5, W7, W12, H1, H3-H6, K2: the state of the worktree entry that has the base branch"
+        with self.subTest("locked-present"):
+            root = self.wcase("lp")
+            wt = os.path.join(self.tmp, "lp-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            git(root, "worktree", "lock", wt)
+            self.verdict(root, [("base", self.cmd(wt))])
+        with self.subTest("prunable"):
+            root = self.wcase("pr")
+            wt = os.path.join(self.tmp, "pr-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            os.rename(wt, wt + ".moved")
+            self.assertIn("prunable", git(root, "worktree", "list", "--porcelain"))
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("git-file-gone"):
+            # W12: the directory is present, its .git file is renamed away: git lists the entry prunable while isdir holds
+            root = self.wcase("gg")
+            wt = os.path.join(self.tmp, "gg-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            os.rename(os.path.join(wt, ".git"), os.path.join(wt, ".git.gone"))
+            self.assertTrue(os.path.isdir(wt))
+            self.assertRegex(git(root, "worktree", "list", "--porcelain"), r"(?m)^prunable .+$")
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("locked-missing"):
+            root = self.wcase("lm")
+            wt = os.path.join(self.tmp, "lm-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            git(root, "worktree", "lock", wt)
+            os.rename(wt, wt + ".moved")
+            self.assertNotIn("prunable", git(root, "worktree", "list", "--porcelain"))
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("symlink-dir"):
+            root = self.wcase("sd")
+            wt = os.path.join(self.tmp, "sd-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            os.rename(wt, wt + ".real")
+            os.symlink(wt + ".real", wt)
+            self.verdict(root, [("base", self.cmd(wt))])
+        with self.subTest("file"):
+            root = self.wcase("fi")
+            wt = os.path.join(self.tmp, "fi-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            os.rename(wt, wt + ".moved")
+            with open(wt, "w") as fh:
+                fh.write("x\n")
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("fifo"):
+            root = self.wcase("ff")
+            wt = os.path.join(self.tmp, "ff-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            os.rename(wt, wt + ".moved")
+            os.mkfifo(wt)
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("symlink-parent"):
+            root = self.wcase("sp")
+            real = os.path.join(self.tmp, "sp-real")
+            os.mkdir(real)
+            os.symlink(real, os.path.join(self.tmp, "sp-link"))
+            wt = os.path.join(self.tmp, "sp-link", "wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            listed = subprocess.run(["git", "-C", root, "worktree", "list", "--porcelain", "-z"],
+                                    stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
+            path = [f[len("worktree "):] for f in listed if f.startswith("worktree ")][-1]
+            self.verdict(root, [("base", self.cmd(path))])
+        with self.subTest("nested"):
+            root = self.wcase("ne")
+            wt = os.path.join(root, "nested-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            self.verdict(root, [("base", self.cmd(wt))])
+        with self.subTest("odd-path"):
+            root = self.wcase("od")
+            wt = os.path.join(self.tmp, "od aࡰb")
+            git(root, "worktree", "add", "-q", wt, "main")
+            self.verdict(root, [("base", self.cmd(wt))])
+        with self.subTest("bare-main-linked"):
+            # W8: the main entry is a bare repository (field `bare`, no branch); a linked worktree has main
+            root = self.wcase("bl")
+            wt = os.path.join(self.tmp, "bl-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            git(root, "config", "core.bare", "true")
+            self.assertIn("bare", git(wt, "worktree", "list", "--porcelain").split())
+            self.verdict(wt, [("base", self.cmd(wt))])
+        with self.subTest("bare-main-none"):
+            # W8: a bare main entry, and no entry has main
+            root = self.wcase("bn")
+            wt = os.path.join(self.tmp, "bn-wt")
+            git(root, "worktree", "add", "-q", "--detach", wt)
+            git(root, "config", "core.bare", "true")
+            self.assertIn("bare", git(wt, "worktree", "list", "--porcelain").split())
+            self.verdict(wt, [("base", self.NOCO)])
+        with self.subTest("detached"):
+            # W9: the entry that had main is detached now: it has no branch field
+            root = self.wcase("de")
+            wt = os.path.join(self.tmp, "de-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            git(wt, "checkout", "-q", "--detach")
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("newline-path"):
+            # W10: the path as git lists it, raw
+            root = self.wcase("nl")
+            wt = os.path.join(self.tmp, "nl-wt\nx")
+            git(root, "worktree", "add", "-q", wt, "main")
+            self.verdict(root, [("base", self.cmd(wt))])
+        with self.subTest("list-fails"):
+            root = self.wcase("lf")
+            real = gitinfo._run
+
+            def run(r, name, args, *a, **k):
+                if args[0] == "worktree":
+                    raise GateError("boom\n")
+                return real(r, name, args, *a, **k)
+            with mock.patch("gates.lib.gitinfo._run", side_effect=run):
+                self.verdict(root, [("base", "update main from the remote: the worktrees cannot be listed: boom\n, "
+                                             "so no update command is given")])
+
+    def test_base_new_calls_propagate_interrupt(self):
+        "K3: KeyboardInterrupt (and a BaseExceptionGroup where it exists) from the upstream and listing calls propagates"
+        root = self.wcase("ki")
+        wt = os.path.join(self.tmp, "ki-wt")
+        git(root, "worktree", "add", "-q", wt, "main")
+        real = gitinfo._run
+        group = getattr(builtins, "BaseExceptionGroup", None)
+        for label, hit in (("upstream", lambda a: "--symbolic-full-name" in a), ("listing", lambda a: a[0] == "worktree")):
+            for exc in ([KeyboardInterrupt()] + ([group("g", [KeyboardInterrupt()])] if group else [])):
+                def run(r, name, args, *a, **k):
+                    if hit(args):
+                        raise exc
+                    return real(r, name, args, *a, **k)
+                with self.subTest(label, exc=type(exc).__name__), mock.patch("gates.lib.gitinfo._run", side_effect=run):
+                    with self.assertRaises(type(exc)):
+                        drift.base_errors(root, self.cfg)
 
 
 def make_branch(sid, files, links=None):
