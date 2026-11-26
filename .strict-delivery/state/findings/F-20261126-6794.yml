@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-6794
+status: open
+source: PR-5b3 final review (records/PR-5b3-final-review.md, FR-3)
+severity: LOW
+class: "restore rule: an existing test case weakened or replaced rather than kept (members: tests/test_gate_evidence.py:1211 assertion loosened; exception-group propagation cases retargeted from gitinfo.show to tipread.show_file at tests/test_continue_cli.py:1733, tests/test_gate_evidence.py:1512, tests/test_questions_cli.py:775)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 87b80fc3746970158925c682ebd95ecc20a77db6
+    by: stream-records
+review_round: 5
+caused_by_change: true
+dimension: restore rule

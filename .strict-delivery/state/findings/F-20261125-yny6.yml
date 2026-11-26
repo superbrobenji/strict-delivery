@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-yny6
-status: open
+status: closed
 source: 5b.3 task review 2 (records/5b.3-review-2.md, finding 2)
 severity: LOW
 class: "changed production branch without a test: tipread.py:26-27 the 'changed while it was being read' raise (members: the fail-closed raise)"
@@ -13,11 +13,16 @@ owner:
   task: 5b.3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - aaf0a559bba983170e6eb1304a23d17da3416222
 history:
   - status: open
     sha: 0375729cc26c35fb12ef052c20311a23c21acd6f
     by: stream-records
+  - status: closed
+    sha: 87b80fc3746970158925c682ebd95ecc20a77db6
+    by: stream-records
 review_round: 2
 caused_by_change: true
 dimension: changed production branch without a test
+resolved_by: 2026-10-31-strict-delivery-framework

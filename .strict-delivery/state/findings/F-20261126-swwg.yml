@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-swwg
+status: open
+source: PR-5b3 final review (records/PR-5b3-final-review.md, FR-2)
+severity: LOW
+class: "existence probe turned into a content read: blob_exists -> tipread.show_file makes a regular entry's verdict depend on its bytes (members: cleanup.py:195 plan_effort F28, claims.py:362 base_errors F29)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 87b80fc3746970158925c682ebd95ecc20a77db6
+    by: stream-records
+review_round: 5
+caused_by_change: true
+dimension: existence probe turned into a content read
