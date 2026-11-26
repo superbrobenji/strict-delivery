@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261116-vc8g
-status: open
+status: in-progress
 source: "U2 (hooks 3b.1 review 1): .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-early-report.md:93, .superpowers/sdd/2026-10-31-strict-delivery-framework/early-3b1-review-1.md:53-61, :72 (owner question Q-3b1R1-1; branch 20261110-v01/hooks/3b)"
 severity: HIGH
 class: "shell-model divergence: shell aliases, zsh =word expansion, zsh reserved words and precommand modifiers, the shell chosen by $SHELL"
@@ -19,7 +19,9 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 4a5f70ce284126178bc2fd7a63a86c642307329e
+  - a7adaab8ca50ef4cb3aac4adb807faab71578f2b:tests/test_hook_bash.py
 review_round: 1
 caused_by_change: false
 dimension: "shell-model divergence"
@@ -27,3 +29,9 @@ history:
   - status: open
     sha: 7e830234229aa5e29f3b2f5734defb9312c67ae3
     by: docs-reg7
+  - status: planned
+    sha: 4a5f70ce284126178bc2fd7a63a86c642307329e
+    by: implementer
+  - status: in-progress
+    sha: a7adaab8ca50ef4cb3aac4adb807faab71578f2b
+    by: implementer

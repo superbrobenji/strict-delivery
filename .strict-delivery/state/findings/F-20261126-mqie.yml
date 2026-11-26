@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-mqie
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/stream-hooks-4-log.md C4-1
 severity: MEDIUM
 class: "quadratic time in the command length: bashpolicy._home_moved per-token tail slice (:116) and hit list (:117), per-printf tail.index (:120-121), per-occurrence rest slice (:110); every other per-token or per-occurrence slice or rescan in bashpolicy.py and pre_bash.py found by search"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 5b0898f99f0b2401ecc4dbca4b73adae14799366
+  - 5b0898f99f0b2401ecc4dbca4b73adae14799366:tests/test_bashpolicy.py
 history:
   - status: open
     sha: 3cf7ffac402093b8a3aad82df01b61a5cc93fc98
     by: stream-hooks-4
+  - status: planned
+    sha: 5b0898f99f0b2401ecc4dbca4b73adae14799366
+    by: implementer
+  - status: in-progress
+    sha: 5b0898f99f0b2401ecc4dbca4b73adae14799366
+    by: implementer
+  - status: fixed-unpinned
+    sha: 5b0898f99f0b2401ecc4dbca4b73adae14799366
+    by: implementer
 review_round: 2
 caused_by_change: false
 dimension: "TX53 and PB5: linear time on a 10**5-character command, within the hook timeout"
