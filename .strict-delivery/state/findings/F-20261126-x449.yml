@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-x449
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-1b.md RB-6
+severity: LOW
+class: "new tests passing on the parent without a killing id: q1, q4, l3, l5, p5, q14, vr2, m638, u1_sibling; wrong kill labels"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 44528c0c7c09afc642fe9e9b223c5d5ae88570df
+    by: stream-config
+review_round: 1
+caused_by_change: true
+dimension: test

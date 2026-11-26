@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-qc7a
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-1b.md RB-1
+severity: HIGH
+class: "parent component of a source is a symlink: docs, docs/superpowers, docs/superpowers/specs, docs/superpowers/plans, a nested sub-directory"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 44528c0c7c09afc642fe9e9b223c5d5ae88570df
+    by: stream-config
+review_round: 1
+caused_by_change: true
+dimension: hardening H4

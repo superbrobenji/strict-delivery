@@ -3,7 +3,7 @@ id: F-20261125-iu7y
 status: planned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-5.md R5-1
 severity: LOW
-class: "state key equal to or below an existing planned file prints two conflict lines: members: CLAUDE.md, .gitignore, .claude/settings.json (existing)"
+class: "state key equal to or below an existing planned file prints two conflict lines: members: CLAUDE.md, .gitignore, .claude/settings.json (existing), the CI workflow, each installed hook, the existing paths.context file (4d.2 review 1 ch/4d2-review-1b.md C2: init.py:599-601)"
 siblings: []
 cites: []
 repro: null
