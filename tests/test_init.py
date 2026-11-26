@@ -12,7 +12,7 @@ import sys
 import unittest
 from unittest import mock
 
-from gates.lib import config, managed, plugin, yamlsub
+from gates.lib import config, managed, plugin, templates, yamlsub
 from gates.lib.result import GateError
 from gates.tools import githooks, init
 from tests import helpers
@@ -3350,9 +3350,10 @@ class TestReview3(More):
 # The migration targets themselves are planned paths only on an UNINITIALISED repository (Q13: neither the migration
 # nor the host offer runs where the config exists), and there ``cfg`` is the defaults, so the targets are a single
 # configuration, not a row: test_matrix_migration_targets_are_planned_paths is their completeness and cell test.
-# paths.reviews and paths.architecture are text in the CLAUDE.md block only (no write, no compare): no row.
+# Fix round 1 (RB-4): every key of config.DEFAULTS["paths"] is a row, 14 (architecture and reviews included: Q-RC14-1
+# (a) "every member of each set"); test_matrix_rows_are_every_configured_path_key pins the set.
 MATRIX_ROWS = ("context", "decisions", "findings", "claims", "plan_state", "programs", "playbooks", "state",
-               "index", "receipts", "specs", "plans")
+               "index", "receipts", "specs", "plans", "architecture", "reviews")
 MATRIX_DEFAULT_CTX = ".strict-delivery/context.yml"
 DOC_SPEC_DST = "docs/strict-delivery/specs/a.md"
 DOC_PLAN_DST = "docs/strict-delivery/plans/x/p.md"
@@ -3387,9 +3388,35 @@ MATRIX_DIRS = [".strict-delivery/state", ".strict-delivery/state/decisions", ".s
                ".strict-delivery/playbooks"]
 _MATRIX_UP = str.maketrans("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")  # Note H-1's map, reversed
 # (cells, distinct runs). By hand: a column has 2 + (its proper ancestors) relations, each exact and upper case. The 26
-# columns hold 85 relations, so a row has 85 x 2 = 170 cells and the 12 rows 12 x 170 = 2040; a row has 110 distinct
-# runs (the 4d.1 matrix: 880 / 8), so 12 x 110 = 1320. The scratch generator (the report) counts the same by a loop.
-MATRIX_COUNT = (2040, 1320)
+# columns hold 85 relations, so a row has 85 x 2 = 170 cells and the 14 rows 14 x 170 = 2380; a row has 110 distinct
+# runs (the 4d.1 matrix: 880 / 8), so 14 x 110 = 1540. The review's independent generator (derived from the planned
+# paths, ch/4d2-review-1b.md C4) counts (2380, 1540) for the 14 keys of config.DEFAULTS["paths"]; the fix report
+# repeats the run on both interpreters.
+MATRIX_COUNT = (2380, 1540)
+_MATRIX_DOWN = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+# U-1 oracle, by hand: the cells of the rows index and receipts (which feed .gitignore only) that Q-RC14-5 (a) refuses.
+# A value is refused when it is a planned file, below a planned file, a directory init makes or keeps as a parent of a
+# planned path, below a state directory or the state parent, the CI workflow path or its directories (ci answered),
+# or the hooks directory when it does not exist (layout nodir).
+U1_FILES = (".strict-delivery/config.yml", "CLAUDE.md", ".gitignore", ".claude/settings.json", MATRIX_DEFAULT_CTX,
+            ".git/hooks/pre-commit", ".git/hooks/pre-push")
+U1_DIRS = (".claude", ".strict-delivery", ".strict-delivery/state", ".strict-delivery/state/decisions",
+           ".strict-delivery/state/findings", ".strict-delivery/state/claims", ".strict-delivery/state/plans",
+           ".strict-delivery/state/programs", ".strict-delivery/playbooks")
+U1_BELOW_DIRS = U1_DIRS[2:]  # a state directory or the state parent: a path below it is "inside the state directory"
+U1_CI = (MATRIX_CI, ".github/workflows", ".github")
+
+
+def u1_refused(value, layout, ci):
+    v = value.translate(_MATRIX_DOWN)  # Note H-1: the compare is under the ASCII map
+    files = [f.translate(_MATRIX_DOWN) for f in U1_FILES]
+    if v in files or any(v.startswith(f + "/") for f in files):
+        return True
+    if v in U1_DIRS or any(v.startswith(d + "/") for d in U1_BELOW_DIRS):
+        return True
+    if ci and (v in U1_CI or v.startswith(MATRIX_CI + "/")):
+        return True
+    return v == ".git/hooks" and layout == "nodir"
 
 
 def matrix_cells():
@@ -3406,6 +3433,21 @@ def matrix_cells():
                     v = value if fold == "exact" else value.translate(_MATRIX_UP)
                     out.setdefault((row, v, layout, ci), []).append((col, relation, fold))
     return out
+
+
+def named_paths(out):
+    """The path each ``FAIL`` line of a refused plan names (``None`` for a line of another shape): the text before the
+    first ``": "`` of a ``FAIL init.conflict`` line, or the directory of the ``two ignore lines are equal`` input error."""
+    names = []
+    ignore = "FAIL init.input: two ignore lines are equal: "
+    for line in out.splitlines():
+        if line.startswith("FAIL init.conflict: "):
+            names.append(line[len("FAIL init.conflict: "):].split(": ", 1)[0])
+        elif line.startswith(ignore) and line.endswith("/index.yml"):
+            names.append(line[len(ignore):-len("/index.yml")])
+        else:
+            names.append(None)
+    return names
 
 
 def plan_moves_printed(out):
@@ -3488,6 +3530,12 @@ class TestPairMatrix(More):
                     self.assertEqual(["/".join(parts[:i]) for i in range(1, len(parts) + 1)
                                       if "/".join(parts[:i]) not in cols], [], (layout, ci, p))
 
+    def test_matrix_rows_are_every_configured_path_key(self):  # RB-4: the 14 keys of paths, written out by hand
+        self.assertEqual(sorted(MATRIX_ROWS), sorted([
+            "state", "decisions", "findings", "claims", "plan_state", "programs", "playbooks", "receipts", "context",
+            "architecture", "index", "specs", "plans", "reviews"]))
+        self.assertEqual(sorted(MATRIX_ROWS), sorted(config.DEFAULTS["paths"]))
+
     def test_pair_matrix(self):  # H5, every cell; the red cells on 118ccec are listed in ch/4d1-fix-5.md
         fw, lay, ans = self.layouts()
         cells = matrix_cells()
@@ -3503,9 +3551,15 @@ class TestPairMatrix(More):
                 before = snapshot(root)
                 pcode, pout = self.matrix_main(fw, ans, "plan", root, ci)
                 acode, aout = self.matrix_main(fw, ans, "apply", root, ci)
+                if row in ("index", "receipts"):  # U-1: the hand-written oracle of the refused cells (red on 9390daf)
+                    self.assertEqual(pcode != 0, u1_refused(value, layout, ci), (pout, aout))
                 if pcode != 0:
                     self.assertNotEqual(acode, 0, (pout, aout))
                     self.assertEqual(snapshot(root), before, aout)
+                    named = named_paths(pout)  # RB-5: every line names a path, and one is this cell's value or column
+                    want = {value.translate(_MATRIX_DOWN)} | {c.translate(_MATRIX_DOWN) for c, _r, _f in labels}
+                    self.assertTrue(named and None not in named, pout)
+                    self.assertTrue(any(n.translate(_MATRIX_DOWN) in want for n in named), (sorted(want), pout))
                     continue
                 self.assertEqual(acode, 0, (pout, aout))
                 files, dirs = plan_paths(pout, root)
@@ -3751,12 +3805,14 @@ class Mig(More):
                 if os.path.relpath(p, root).split(os.sep)[0] != ".git"}
 
     # --- questions (IN-Q*) ---------------------------------------------------------------------------------------
-    def test_in_q1_questions_no_docs(self):  # IN-Q1; kills b-1
+    def test_in_q1_questions_no_docs(self):  # IN-Q1; red on 9390daf (the control); kills fb-1
         self.gh({})
         before = snapshot(self.root)
         self.assertEqual(self.questions_json()["superpowers_docs"], [])
         self.assertEqual(self.ghlog(), [])
         self.assertEqual(snapshot(self.root), before)
+        self.docs()  # control: the same call lists the moves once documents are tracked
+        self.assertEqual(self.questions_json()["superpowers_docs"], [[PLAN_OLD, PLAN_NEW], [SPEC_OLD, SPEC_NEW]])
 
     def test_in_q2_questions_pairs_sorted(self):  # IN-Q2, Q15; kills b-1
         self.docs()
@@ -3770,9 +3826,11 @@ class Mig(More):
         q = self.questions_json()
         self.assertEqual((q["initialised"], q["superpowers_docs"]), (True, [[PLAN_OLD, PLAN_NEW], [SPEC_OLD, "docs/s2/a.md"]]))
 
-    def test_in_q4_untracked_only(self):  # IN-Q4
+    def test_in_q4_untracked_only(self):  # IN-Q4; red on 9390daf (the control)
         self.write(SPEC_OLD, "new\n")
         self.assertEqual(self.questions_json()["superpowers_docs"], [])
+        git(self.root, "add", SPEC_OLD)  # control: the same file, once tracked, is listed
+        self.assertEqual(self.questions_json()["superpowers_docs"], [[SPEC_OLD, SPEC_NEW]])
 
     def test_in_q5_non_utf8_tracked_path(self):  # IN-Q5 (CD23), H6
         blob = git(self.root, "hash-object", "-w", "README.md")
@@ -3780,7 +3838,7 @@ class Mig(More):
         subprocess.run([os.fsencode(a) for a in ("git", "-C", self.root, "update-index", "--add", "--cacheinfo")]
                        + [cacheinfo], check=True)
         before = snapshot(self.root)
-        for sub in ("questions", "plan"):
+        for sub in ("questions", "plan", "apply"):  # apply: nothing is written before the refusal (RB-9)
             argv = [sub, "--root", self.root] + (["--answers", self.put_answers(migrate=True)] if sub != "questions" else [])
             code, out, _ = self.run_init(*argv)
             self.assertEqual((code, out), (1, "FAIL init.input: git ls-files gave output that is not valid UTF-8\n"), sub)
@@ -3792,7 +3850,7 @@ class Mig(More):
         self.assertEqual(self.questions_json()["superpowers_docs"], [[PLAN_OLD, PLAN_NEW], [SPEC_OLD, SPEC_NEW]])
 
     # --- the migrate answer (IN-L*) ------------------------------------------------------------------------------
-    def test_in_l1_migrate_with_docs(self):  # IN-L1; kills b-3
+    def test_in_l1_migrate_with_docs(self):  # IN-L1; kills fb-3
         self.docs()
         for value in (True, False):
             self.assertEqual(self.mc("plan", migrate=value)[0], 0, value)
@@ -3802,7 +3860,7 @@ class Mig(More):
         code, out, _ = self.mc("plan")
         self.assertEqual((code, out.startswith("FAIL init.answers: migrate: ")), (1, True), out)
 
-    def test_in_l3_migrate_refused_without_docs(self):  # IN-L3 (also untracked only); kills b-3
+    def test_in_l3_migrate_refused_without_docs(self):  # IN-L3 (also untracked only); kills fb-2
         for untracked in (False, True):
             if untracked:
                 self.write(SPEC_OLD, "x\n")
@@ -3810,12 +3868,13 @@ class Mig(More):
                 self.assertEqual(self.mc("plan", migrate=value)[:2],
                                  (1, "FAIL init.answers: migrate: no superpowers documents are tracked\n"), (untracked, value))
 
-    def test_in_l5_protect_base_required(self):  # IN-L5
+    def test_in_l5_protect_base_required(self):  # IN-L5; kills fb-4 (the schema's required key)
         a = answers()
         del a["protect_base"]
         self.put_answers(a)
         code, out, _ = self.run_init("plan", "--root", self.root, "--answers", self.ans)
         self.assertEqual((code, out.startswith("FAIL init.answers: protect_base: ")), (1, True), out)
+        self.assertEqual(out.count("\n"), 1, out)
 
     # --- plan output (IN-P*) -------------------------------------------------------------------------------------
     def test_in_p1_plan_prints_moves(self):  # IN-P1; kills b-4
@@ -3854,11 +3913,28 @@ class Mig(More):
                       "-F allow_rebase_merge=false\n" % BODY, out)
         self.assertEqual(self.ghlog(), [G_REPO, G_PROT])  # reads only: nothing ran
 
-    def test_in_p5_plan_migrate_false_silent(self):  # IN-P5, IN-M1
+    def test_in_p5_plan_migrate_false_silent(self):  # IN-P5, IN-M1; red on 9390daf (the exit code)
         self.docs(spec="see docs/superpowers/specs/a.md\n")
-        out = self.mc("plan", migrate=False)[1]
+        code, out, err = self.mc("plan", migrate=False)
+        self.assertEqual((code, err), (0, ""), out)
         for text in ("move ", "docs/superpowers", "mentions", "untracked"):
             self.assertNotIn(text, out)
+        # the whole output, by hand: the new-file diffs of the init writes, the directories and the hooks (nothing of
+        # the documents), 10 + 23 + 7 + 6 + 47 body lines under the five hunk headers
+        head = [line for line in out.splitlines() if not line.startswith(("+", " ")) or line.startswith("+++")]
+        hooks = os.path.join(self.root, ".git", "hooks")
+        self.assertEqual(head, [
+            "--- a/.strict-delivery/config.yml", "+++ b/.strict-delivery/config.yml", "@@ -0,0 +1,10 @@",
+            "mkdir .strict-delivery/state/", "mkdir .strict-delivery/state/decisions/",
+            "mkdir .strict-delivery/state/findings/", "mkdir .strict-delivery/state/claims/",
+            "mkdir .strict-delivery/state/plans/", "mkdir .strict-delivery/state/programs/",
+            "mkdir .strict-delivery/playbooks/",
+            "--- a/CLAUDE.md", "+++ b/CLAUDE.md", "@@ -0,0 +1,23 @@",
+            "--- a/.gitignore", "+++ b/.gitignore", "@@ -0,0 +1,7 @@",
+            "--- a/.claude/settings.json", "+++ b/.claude/settings.json", "@@ -0,0 +1,6 @@",
+            "--- a/.strict-delivery/context.yml", "+++ b/.strict-delivery/context.yml", "@@ -0,0 +1,47 @@",
+            "hook " + os.path.join(hooks, "pre-commit"), "hook " + os.path.join(hooks, "pre-push")])
+        self.assertEqual(len(out.splitlines()), len(head) + 10 + 23 + 7 + 6 + 47, out)
 
     def test_in_p6_plan_conflict_exit_1(self):  # IN-P6; kills b-8
         self.write(SPEC_NEW, "exists\n")
@@ -3930,7 +4006,7 @@ class Mig(More):
         self.assertTrue(os.path.exists(os.path.join(self.root, SPEC_OLD)))
         self.assertFalse(os.path.exists(os.path.join(self.root, SPEC_NEW)))
 
-    def test_in_a3_moves_staged_edits_not(self):  # IN-A3, IN-M2, IN-M3; kills b-10, b-11
+    def test_in_a3_moves_staged_edits_not(self):  # IN-A3, IN-M2, IN-M3; kills b-11, b-35
         self.docs(spec="see docs/superpowers/specs/a.md\n", **{"README.md": "see docs/superpowers/specs/a.md\n"})
         code, out, _ = self.mc("apply", migrate=True)
         self.assertEqual(code, 0, out)
@@ -3946,12 +4022,18 @@ class Mig(More):
     def test_in_a4_no_host_call_when_false(self):  # IN-A4; kills b-12
         self.remote("https://github.com/o/n.git")
         self.gh(unprot())
+        other = os.path.join(self.tmp, "a4-other")
+        shutil.copytree(self.root, other, symlinks=True)  # an unwritten copy, for the apply without gh
         self.assertEqual(self.mc("apply", protect=False)[0], 0)
         self.assertEqual(self.ghlog(), [])
-        self.no_gh()  # and a missing gh is no error
-        self.assertEqual(self.mc("plan", protect=False)[0], 0)
+        self.no_gh()  # and a missing gh is no error, on plan and on apply
+        self.assertEqual(self.mc("plan", protect=False, root=other)[0], 0)
+        code, out, _ = self.mc("apply", protect=False, root=other)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("FAIL", out)
+        self.assertTrue(os.path.isfile(os.path.join(other, ".strict-delivery/config.yml")))
 
-    def test_in_a5_put_runs_with_body_on_stdin(self):  # IN-A5, IN-A1, IN-M3; kills b-13, b-14
+    def test_in_a5_put_runs_with_body_on_stdin(self):  # IN-A5, IN-A1, IN-M3; kills b-13
         self.docs()
         self.remote("https://github.com/o/n.git")
         self.gh(unprot())
@@ -3961,7 +4043,7 @@ class Mig(More):
         self.assertEqual(self.ghlog("body.txt"), [BODY])
         self.assertEqual(self.ghlog("state.log"), ["cfg=1 src=0 dst=1"])  # the file writes and the moves came first
 
-    def test_in_a6_patch_runs(self):  # IN-A6; kills b-15
+    def test_in_a6_patch_runs(self):  # IN-A6; kills b-13
         self.remote("https://github.com/o/n.git")
         self.gh(unprot(merge_only=False))
         self.assertEqual(self.mc("apply", protect=True)[0], 0)
@@ -3988,7 +4070,7 @@ class Mig(More):
         self.assertEqual(self.mc("apply", migrate=True)[:2], (1, "FAIL init.conflict: %s: exists\n" % SPEC_NEW))
         self.assertEqual(snapshot(self.root), before)
 
-    def test_in_a10_block_survives_rewrite(self):  # IN-A10 (Q16); kills b-16
+    def test_in_a10_block_survives_rewrite(self):  # IN-A10 (Q16); kills b-35, b-11
         old = "x docs/superpowers/specs/a.md y\n"
         self.docs(**{"CLAUDE.md": old, ".gitignore": old})
         code, out, _ = self.mc("apply", migrate=True)
@@ -3999,6 +4081,20 @@ class Mig(More):
         self.assertEqual(managed.find_block(self.read("CLAUDE.md"), managed._KIND_STYLE["claude-block"]).kind, "claude-block")
         self.assertEqual(managed.find_block(self.read(".gitignore"), managed._KIND_STYLE["gitignore-block"]).kind,
                          "gitignore-block")
+
+    def test_in_a10_workflow_holding_a_reference(self):  # IN-A10 (RB-9): a generated workflow is rewritten, init only notes it
+        fw = self.make_fw("tagged", version="0.1.0")
+        text = templates.ci_workflow(copy.deepcopy(config.DEFAULTS), "v0.1.0", plugin.repository_slug(fw)) \
+            + "# " + SPEC_OLD + "\n"
+        self.assertEqual(text.count(SPEC_OLD), 1)
+        self.docs(**{".github__workflows__strict-delivery.yml": text})
+        with mock.patch.object(plugin, "framework_dir", return_value=fw), \
+                mock.patch.object(init.gitinfo, "head_sha", side_effect=init.GitNotFound("no git")):
+            code, out, _ = self.mc("apply", migrate=True, ci=True)
+        self.assertEqual(code, 0, out)
+        self.assertIn("note: %s: present at version v0.1.0; run /strict-delivery:upgrade\n" % MATRIX_CI, out)
+        self.assertEqual(self.read(MATRIX_CI), text.replace(SPEC_OLD, SPEC_NEW))
+        self.assertIn(" M %s\n" % MATRIX_CI, out)  # an unstaged edit, never staged by init
 
     def test_in_a11_second_run_noop(self):  # IN-A11, IN-A14, IN-R2 (Q13); kills b-17
         self.docs()
@@ -4062,7 +4158,7 @@ class Mig(More):
         self.assertIn(self.NO_REMOTE, out)
         return out + err
 
-    def test_in_n1_no_remote_note(self):  # IN-N1 (also with gh missing); kills b-19
+    def test_in_n1_no_remote_note(self):  # IN-N1 (also with gh missing); kills b-14, fb-13
         self.no_remote()
         self.gh({})
         self.assertEqual(self.mc("plan", protect=True)[0], 0)
@@ -4104,7 +4200,7 @@ class Mig(More):
             self.gh(rules)
         return self.mc("apply", migrate=migrate, protect=True, js=js)
 
-    def test_gh_missing_fails_closed(self):  # IN-H1 (the plan's name); kills b-20
+    def test_gh_missing_fails_closed(self):  # IN-H1 (the plan's name); kills b-15, b-19, fb-18
         code, out, _ = self.host_fail()
         self.assertEqual(code, 1, out)
         self.assertIn("FAIL init.protection: gh api repos/o/n: gh not found on PATH\n", out)
@@ -4150,6 +4246,10 @@ class Mig(More):
         self.assertEqual(self.mc("apply", migrate=True, protect=True)[0], 1)
         self.assertEqual(self.mc("apply", migrate=True, protect=False, root=other)[0], 0)
         self.assertEqual(self.tree(self.root), self.tree(other))
+        for name in ("pre-commit", "pre-push"):  # the hooks stay too (RB-9): the files and their modes are the same
+            mine, theirs = (os.path.join(r, ".git", "hooks", name) for r in (self.root, other))
+            with open(mine, "rb") as a, open(theirs, "rb") as b:
+                self.assertEqual((a.read(), os.stat(mine).st_mode), (b.read(), os.stat(theirs).st_mode), name)
 
     def test_in_h6_output_order(self):  # IN-H6 (CD22): FAIL line, then the status listing
         code, out, _ = self.host_fail()
@@ -4162,14 +4262,161 @@ class Mig(More):
         self.assertIn({"id": "init.protection", "status": "FAIL", "reason": "gh api repos/o/n: gh not found on PATH"},
                       [json.loads(line) for line in out.splitlines() if line.startswith("{")])
 
-    def test_in_q14_branch_refused_no_gh_call(self):  # Q14: a branch gh could misread is refused before any call
+    def test_in_q14_branch_refused_no_gh_call(self):  # Q14: a branch gh could misread is refused before any call; kills fb-5
         self.remote("https://github.com/o/n.git")
         self.gh(unprot())
-        code, out, _ = self.mc("plan", protect=True, base_branch="a?b")
-        self.assertEqual(code, 1, out)
-        self.assertEqual(self.ghlog(), [])
-        code, out, _ = self.mc("plan", protect=True, base_branch="a#b")
-        self.assertEqual((code, self.ghlog()), (1, []))
+        want = "FAIL init.answers: base_branch: must be a branch name of letters, digits, '.', '_', '-' and '/'\n"
+        for branch in ("a?b", "a#b"):
+            for sub in ("plan", "apply"):
+                self.assertEqual(self.mc(sub, protect=True, base_branch=branch)[:2], (1, want), (branch, sub))
+                self.assertEqual(self.ghlog(), [], (branch, sub))
+
+    # --- the --json failure shapes (RB-8, D1): one object ``{"id", "status", "reason"}`` per FAIL line --------------------
+    def non_utf8_path(self, root):
+        blob = git(root, "hash-object", "-w", "README.md")
+        cacheinfo = b"100644," + blob.encode() + b",docs/superpowers/specs/\xff.md"
+        subprocess.run([os.fsencode(a) for a in ("git", "-C", root, "update-index", "--add", "--cacheinfo")] + [cacheinfo],
+                       check=True)
+
+    def test_json_failure_input_questions_plan_apply(self):  # init.input in all three subcommands; kills fb-26, fb-27
+        self.non_utf8_path(self.root)
+        before = snapshot(self.root)
+        want = '{"id": "init.input", "status": "FAIL", "reason": "git ls-files gave output that is not valid UTF-8"}\n'
+        for sub in ("questions", "plan", "apply"):
+            argv = [sub, "--root", self.root, "--json"] + (["--answers", self.put_answers(migrate=True)] if sub != "questions" else [])
+            self.assertEqual(self.run_init(*argv), (1, want, ""), sub)
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_json_failure_questions_is_json_not_text(self):  # D1: questions --json failed as text before; pin both forms
+        root = os.path.join(self.tmp, "nonrepo")
+        os.mkdir(root)
+        reason = "%s: git rev-parse --show-toplevel failed (exit 128)" % root
+        self.assertEqual(self.run_init("questions", "--root", root, "--json"),
+                         (1, json.dumps({"id": "init.input", "status": "FAIL", "reason": reason}) + "\n", ""))
+        self.assertEqual(self.run_init("questions", "--root", root), (1, "FAIL init.input: %s\n" % reason, ""))
+
+    def test_json_failure_framework_error_is_input(self):  # a GateError outside the build: init.input; kills fb-28
+        for sub in ("questions", "plan"):
+            argv = [sub, "--root", self.root, "--json"] + (["--answers", self.put_answers()] if sub == "plan" else [])
+            with mock.patch.object(plugin, "framework_dir", side_effect=GateError("no framework here")):
+                self.assertEqual(self.run_init(*argv), (1, '{"id": "init.input", "status": "FAIL", "reason": '
+                                                          '"no framework here"}\n', ""), sub)
+
+    def test_json_failure_answers_plan_apply(self):  # init.answers; kills fb-27
+        self.docs()
+        want = ('{"id": "init.answers", "status": "FAIL", "reason": "migrate: required key is missing '
+                '(superpowers documents are tracked)"}\n')
+        for sub in ("plan", "apply"):
+            self.assertEqual(self.mc(sub, js=True), (1, want, ""), sub)
+
+    def test_json_failure_conflict_plan_apply(self):  # init.conflict; kills fb-29
+        self.write(SPEC_NEW, "exists\n")
+        self.docs()
+        before = snapshot(self.root)
+        want = '{"id": "init.conflict", "status": "FAIL", "reason": "docs/strict-delivery/specs/a.md: exists"}\n'
+        for sub in ("plan", "apply"):
+            self.assertEqual(self.mc(sub, migrate=True, js=True), (1, want, ""), sub)
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_json_failure_write_apply(self):  # init.write (the ``written:`` line stays text); kills fb-31
+        self.init_config()
+        os.chmod(os.path.join(self.root, ".strict-delivery"), 0o555)
+        self.addCleanup(os.chmod, os.path.join(self.root, ".strict-delivery"), 0o755)
+        self.assertEqual(self.mc("apply", js=True),
+                         (1, '{"id": "init.write", "status": "FAIL", "reason": ".strict-delivery/state: cannot create '
+                             '(Permission denied)"}\nwritten: \n', ""))
+
+    def test_json_failure_migrate_apply(self):  # init.migrate (the status listing stays text); kills fb-32
+        self.docs()
+        self.trace_git(fail_on='*" mv -- docs/superpowers/specs"*')
+        code, out, _ = self.mc("apply", migrate=True, js=True)
+        want = ('{"id": "init.migrate", "status": "FAIL", "reason": "git mv failed (exit 1): docs/superpowers/specs/a.md '
+                '-> docs/strict-delivery/specs/a.md; moved before it: docs/superpowers/plans/x/p.md -> '
+                'docs/strict-delivery/plans/x/p.md"}\n')
+        self.assertEqual((code, out), (1, want + "A  docs/strict-delivery/plans/x/p.md\nD  docs/superpowers/plans/x/p.md\n"
+                                             "?? .claude/settings.json\n?? .gitignore\n?? .strict-delivery/config.yml\n"
+                                             "?? .strict-delivery/context.yml\n?? CLAUDE.md\n"))
+
+    def test_json_failure_status_apply(self):  # init.status after the writes (CD22); kills fb-40
+        self.trace_git(fail_on='*"status --porcelain=v1 --untracked-files=all"*')
+        self.assertEqual(self.mc("apply", js=True),
+                         (1, '{"id": "init.status", "status": "FAIL", "reason": "git status --porcelain failed (exit 1)"}\n', ""))
+        self.assertTrue(os.path.isfile(os.path.join(self.root, ".strict-delivery/config.yml")))  # the writes stay
+
+    def test_json_failure_protection_plan(self):  # init.protection in plan --json (Q12, D2); kills fb-30
+        self.remote("https://github.com/o/n.git")
+        self.no_gh()
+        self.assertEqual(self.mc("plan", protect=True, js=True),
+                         (1, '{"id": "init.protection", "status": "FAIL", "reason": "gh api repos/o/n: gh not found on '
+                             'PATH"}\n', ""))
+
+    def test_plan_init_refuses_with_input_error_for_a_reader_failure(self):  # IN-Q5 at the API: InitError init.input; kills fb-39
+        self.non_utf8_path(self.root)
+        with self.assertRaises(init.InitError) as cm:
+            init.plan_init(self.root, dict(answers(), migrate=True))
+        self.assertEqual((cm.exception.ident, cm.exception.reason), ("init.input", "git ls-files gave output that is not valid UTF-8"))
+
+    def test_no_host_read_while_the_plan_is_in_conflict(self):  # IN-P7 with IN-P6: ``and not conflicts``; kills fb-19
+        self.write(SPEC_NEW, "exists\n")
+        self.docs()
+        self.remote("https://github.com/o/n.git")
+        self.gh(unprot())
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            self.assertEqual(self.mc(sub, migrate=True, protect=True)[:2], (1, "FAIL init.conflict: %s: exists\n" % SPEC_NEW), sub)
+        self.assertEqual((self.ghlog(), snapshot(self.root)), ([], before))
+
+    # --- Q16: apply recomputes the moves after its writes; a change between the plan and the recompute is FAIL init.migrate
+    def race_git(self, trigger, actions):
+        """A ``git`` that, on its first call once ``trigger`` (a shell test) holds, runs ``actions`` and then the real git."""
+        d = os.path.join(self.tmp, "racebin")
+        os.makedirs(d, exist_ok=True)
+        lines = ["#!/bin/sh", 'if %s && [ ! -f "%s/done" ]; then' % (trigger, d), "  : > '%s/done'" % d]
+        lines += ["  " + a for a in actions] + ["fi", "exec '%s' \"$@\"" % self.real_git]
+        with open(os.path.join(d, "git"), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        os.chmod(os.path.join(d, "git"), 0o755)
+        self.prepend_path(d)
+
+    def race_target(self):
+        r = self.root
+        return ['[ -f "%s/.strict-delivery/config.yml" ]' % r,
+                ["mkdir -p '%s/docs/strict-delivery/specs'" % r, "echo x > '%s/docs/strict-delivery/specs/a.md'" % r]]
+
+    def race_record(self):
+        r, rec = self.root, ".strict-delivery/state/decisions/D-1.yml"
+        return ['[ -d "%s/.strict-delivery/state/decisions" ]' % r,
+                ["echo 'ref: docs/superpowers/specs/a.md' > '%s/%s'" % (r, rec), "'%s' -C '%s' add %s" % (self.real_git, r, rec)]]
+
+    LISTING = ("?? .claude/settings.json\n?? .gitignore\n?? .strict-delivery/config.yml\n?? .strict-delivery/context.yml\n"
+               "?? CLAUDE.md\n")
+
+    def test_apply_recomputes_moves_after_writes_target(self):  # Q16: a target made after the plan; kills fb-37
+        self.docs()
+        self.race_git(*self.race_target())
+        code, out, _ = self.mc("apply", migrate=True)
+        self.assertEqual((code, out), (1, "FAIL init.migrate: %s: exists\n" % SPEC_NEW + self.LISTING
+                                       + "?? docs/strict-delivery/specs/a.md\n"))
+        self.assertTrue(os.path.isfile(os.path.join(self.root, SPEC_OLD)) and os.path.isfile(os.path.join(self.root, PLAN_OLD)))
+        self.assertTrue(os.path.isfile(os.path.join(self.root, ".strict-delivery/config.yml")))  # the file writes stay
+
+    def test_apply_recompute_state_record_conflict(self):  # a tracked state record made after the plan; kills fb-36
+        self.docs()
+        self.race_git(*self.race_record())
+        code, out, _ = self.mc("apply", migrate=True)
+        self.assertEqual((code, out), (1, "FAIL init.migrate: .strict-delivery/state/decisions/D-1.yml: a state record names "
+                                          "a moved path (docs/superpowers/specs/a.md); resolve it by hand before the migration\n"
+                                          "A  .strict-delivery/state/decisions/D-1.yml\n" + self.LISTING))
+        self.assertTrue(os.path.isfile(os.path.join(self.root, SPEC_OLD)))
+
+    def test_apply_recompute_reports_the_move_conflict_alone(self):  # a target and a record: the target only; kills fb-35
+        self.docs()
+        t_trigger, t_actions = self.race_target()
+        _r_trigger, r_actions = self.race_record()
+        self.race_git(t_trigger, t_actions + ["mkdir -p '%s/.strict-delivery/state/decisions'" % self.root] + r_actions)
+        code, out, _ = self.mc("apply", migrate=True)
+        self.assertEqual(out.splitlines()[0], "FAIL init.migrate: %s: exists" % SPEC_NEW, out)
+        self.assertEqual(code, 1)
 
     # --- Version rows (both interpreters through the runner), Amendment H --------------------------------------------
     def test_vr1_numeral_in_rewritten_text(self):  # VR1 (b), (d): no int() on file text; line numbers are small ints
@@ -4201,10 +4448,14 @@ class Mig(More):
                 self.assertIn("FAIL init.protection: gh api repos/o/n: invalid JSON (an integer of more than 600 digits is not allowed)",
                               out)
 
-    def test_vr2_u2c2f_in_paths_refused(self):  # VR2 (4): print_table's pinned tables decide, on both interpreters
+    def test_vr2_u2c2f_in_paths_refused(self):  # VR2 (4): print_table's pinned tables decide, on both interpreters; kills fb-6 (3.13)
         self.init_config(paths={"specs": "docs/Ⱟ"})
-        code, out, _ = self.mc("plan")
-        self.assertEqual((code, out.startswith("FAIL init.")), (1, True), out)  # config.load or docmove names it, same on both
+        before = snapshot(self.root)
+        for sub in ("plan", "apply"):
+            self.assertEqual(self.mc(sub)[:2], (1, "FAIL init.config: .strict-delivery/config.yml: paths.specs: must be a "
+                                                   "non-empty normalised repo-relative path of printable characters; "
+                                                   "run /strict-delivery:doctor and /strict-delivery:upgrade\n"), sub)
+        self.assertEqual(snapshot(self.root), before)
 
     def test_matrix_migration_targets_are_planned_paths(self):  # Part B pair matrix, Q-RC14-1 (a): the migration targets
         self.docs()  # an uninitialised repository: ``cfg`` is the defaults, the one configuration the targets have
@@ -4290,7 +4541,7 @@ class TestPartBFindings(More):
             fws[name] = More.make_fw(self, name, **kw)
         return fws[name]
 
-    def test_iu7y_one_line_per_fault(self):  # R5-1; kills b-21; the class: CLAUDE.md, .gitignore, settings, CI, a hook
+    def test_iu7y_one_line_per_fault(self):  # R5-1; kills b-21r, b-22r, fb-10, fb-12; CLAUDE.md, .gitignore, settings, CI, a hook
         fw = self.make_fw("tagged", version="0.1.0")
         self.write("CLAUDE.md", "mine\n")
         self.write(".gitignore", "x\n")
@@ -4313,7 +4564,7 @@ class TestPartBFindings(More):
                 code, out, _ = self.run_init(sub, "--root", root, "--answers", self.ans)
             self.assertEqual(code, 0, (sub, out))
 
-    def test_m638_slash_boundary(self):  # R5-3; kills b-22: a sibling name of a planned file is accepted by every key
+    def test_m638_slash_boundary(self):  # R5-3; kills b-23: a sibling name of a planned file is accepted by every key
         count = 0
         for path, ci in (("CLAUDE.mdx", False), (".gitignorex", False), (".claude/settings.jsonx", False),
                          (MATRIX_CI + "x", True), (".git/hooks/pre-commitx", False), (".git/hooks/pre-pushx", False)):
@@ -4342,7 +4593,39 @@ class TestPartBFindings(More):
                 with self.subTest(key=key, value=value):
                     self.overlap(MATRIX_DEFAULT_CTX, expect, **{key: value})
 
-    def test_u1_sibling_paths_accepted(self):  # U-1 control: a path that merely shares a prefix is not refused
+    # --- F-20261125-iu7y, the member review 1 found open: an existing paths.context file equal to or below a state key ---
+    def ctx_file_under(self, key):
+        """``plan`` and ``apply`` print one line (``_dir_plan``'s) for the existing context file as, or below, ``key``."""
+        self.write(MATRIX_DEFAULT_CTX, CONTEXT_YML)
+        for value in (MATRIX_DEFAULT_CTX, MATRIX_DEFAULT_CTX + "/x"):
+            with self.subTest(key=key, value=value):
+                self.overlap(MATRIX_DEFAULT_CTX, "%s: exists and is not a directory" % MATRIX_DEFAULT_CTX, **{key: value})
+
+    def test_iu7y_context_file_under_decisions(self):  # red on 44528c0; kills fb-8, fb-9, b-22r
+        self.ctx_file_under("decisions")
+
+    def test_iu7y_context_file_under_findings(self):  # red on 44528c0; kills fb-8, fb-9, b-22r
+        self.ctx_file_under("findings")
+
+    def test_iu7y_context_file_under_claims(self):  # red on 44528c0; kills fb-8, fb-9, b-22r
+        self.ctx_file_under("claims")
+
+    def test_iu7y_context_file_under_plan_state(self):  # red on 44528c0; kills fb-8, fb-9, b-22r
+        self.ctx_file_under("plan_state")
+
+    def test_iu7y_context_file_under_programs(self):  # red on 44528c0; kills fb-8, fb-9, b-22r
+        self.ctx_file_under("programs")
+
+    def test_iu7y_context_file_under_playbooks(self):  # red on 44528c0; kills fb-8, fb-9, b-22r
+        self.ctx_file_under("playbooks")
+
+    def test_iu7y_state_below_the_hook_the_context_equals(self):  # the hook call's ``reported``; kills fb-11
+        self.overlap(".git/hooks/pre-commit", SAME % ".git/hooks/pre-commit", claims=".git/hooks/pre-commit/x")
+
+    def test_index_and_receipts_on_one_path_one_line(self):  # PO2 after the U-1 compares: two keys, one fault; kills fb-20
+        self.overlap(MATRIX_DEFAULT_CTX, SAME % "CLAUDE.md", index="CLAUDE.md", receipts="CLAUDE.md")
+
+    def test_u1_sibling_paths_accepted(self):  # U-1 control: a path that merely shares a prefix is not refused; kills fb-7
         for key in ("index", "receipts"):
             root = os.path.join(self.tmp, "u1-" + key)
             shutil.copytree(self.root, root, symlinks=True)
