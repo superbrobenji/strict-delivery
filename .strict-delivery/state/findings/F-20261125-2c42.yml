@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-2c42
-status: planned
+status: closed
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-5.md R5-2
 severity: LOW
 class: "round-5 conditions without a mutant id of the same shape: members: t7-h1 call-removed shape, t7-h6 if-True shape, the other round-5 conditions listed in review 5"
@@ -13,7 +13,9 @@ owner:
   task: 4d.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98:tests/test_init.py
 history:
   - status: open
     sha: e369e6ef1e5ff08fc812ef1339a3b8323452ef39
@@ -21,6 +23,13 @@ history:
   - status: planned
     sha: b16596ee7b407ec83e41db1daca384b862db16b6
     by: "stream-config: owner.task 4d.1 -> 4d.2 Part B (Q-RC14-4 (a), Q-RC15-1); review_round and caused_by_change are 4d.1's"
+  - status: open
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: "stream-config-17: 4d.2 fix round 1 reviewed (review 2); reopened to close"
+  - status: closed
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: "stream-config-17: resolved in 44528c0 (mutant ids b-27, b-28); review 1 ch/4d2-review-1b.md C2"
 review_round: 5
 caused_by_change: true
 dimension: input-domain mutant ids
+resolved_by: 2026-10-31-strict-delivery-framework

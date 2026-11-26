@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-f2ys
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-2a.md R2A-3
+severity: LOW
+class: _read_text os.open ENOENT, ENOTDIR, ENAMETOOLONG reported cannot read (docmove.py:179-184)
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: stream-config
+review_round: 2
+caused_by_change: false
+dimension: errno to file state

@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-iu7y
-status: planned
+status: closed
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d1-review-5.md R5-1
 severity: LOW
 class: "state key equal to or below an existing planned file prints two conflict lines: members: CLAUDE.md, .gitignore, .claude/settings.json (existing), the CI workflow, each installed hook, the existing paths.context file (4d.2 review 1 ch/4d2-review-1b.md C2: init.py:599-601)"
@@ -13,7 +13,9 @@ owner:
   task: 4d.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98:tests/test_init.py
 history:
   - status: open
     sha: e369e6ef1e5ff08fc812ef1339a3b8323452ef39
@@ -21,6 +23,13 @@ history:
   - status: planned
     sha: b16596ee7b407ec83e41db1daca384b862db16b6
     by: "stream-config: owner.task 4d.1 -> 4d.2 Part B (Q-RC14-4 (a), Q-RC15-1); review_round and caused_by_change are 4d.1's"
+  - status: open
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: "stream-config-17: 4d.2 fix round 1 reviewed (review 2); reopened to close"
+  - status: closed
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: "stream-config-17: paths.context member fixed in be667b0 (one conflict line per fault); review 2 ch/4d2-review-2b.md closes it"
 review_round: 5
 caused_by_change: true
 dimension: "output: one conflict line per fault"
+resolved_by: 2026-10-31-strict-delivery-framework

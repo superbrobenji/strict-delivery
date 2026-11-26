@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-rwve
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-2a.md R2A-5
+severity: LOW
+class: character and block device members untested without root in _source_state, _read_text, _still_regular
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: stream-config
+review_round: 2
+caused_by_change: false
+dimension: input-domain RW-F8, H3

@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-zgmn
-status: open
+status: closed
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-1a.md RA-5
 severity: LOW
 class: "conflict de-duplication: an existing dst shared by two moves (docmove.py:105)"
@@ -13,11 +13,17 @@ owner:
   task: 4d.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98:tests/test_docmove.py
 history:
   - status: open
     sha: 44528c0c7c09afc642fe9e9b223c5d5ae88570df
     by: stream-config
+  - status: closed
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: "stream-config-17: fixed in 5881198 (fix round 1, part A); review 2 ch/4d2-review-2a.md closes it"
 review_round: 1
 caused_by_change: true
 dimension: mutant coverage
+resolved_by: 2026-10-31-strict-delivery-framework

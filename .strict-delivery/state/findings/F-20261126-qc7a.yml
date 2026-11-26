@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-qc7a
-status: open
+status: closed
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-1b.md RB-1
 severity: HIGH
 class: "parent component of a source is a symlink: docs, docs/superpowers, docs/superpowers/specs, docs/superpowers/plans, a nested sub-directory"
@@ -13,11 +13,17 @@ owner:
   task: 4d.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98
+  - 0971c3bfd2769f142b4cc88d4b8f1d6bfd810a98:tests/test_init.py
 history:
   - status: open
     sha: 44528c0c7c09afc642fe9e9b223c5d5ae88570df
     by: stream-config
+  - status: closed
+    sha: 8e67dd40a8a4c5e6f4b64faac7c6766e31f05c23
+    by: "stream-config-17: fixed in 5881198 and 0971c3b (plan and apply before each move refuse a symlinked or non-directory source parent); both review-2 reports close it; the swap-after-check window members are R2A-2"
 review_round: 1
 caused_by_change: true
 dimension: hardening H4
+resolved_by: 2026-10-31-strict-delivery-framework
