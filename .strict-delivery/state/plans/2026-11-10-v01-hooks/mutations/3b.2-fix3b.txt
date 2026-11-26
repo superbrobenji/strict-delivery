@@ -1,0 +1,53 @@
+<!-- schema: mutation-transcript/1 -->
+Task 3b.2 fix round 3 part B (fix ebbf297: RULE-A as bashpolicy.write_text_refusals, called by pre_bash._git_lines).
+Runner (program rule): R = PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH /usr/bin/python3 /Users/benji/projects/personal/strict-delivery-worktrees/_program/par_suite.py
+(both interpreters, /usr/bin/python3 3.9.6 and /opt/homebrew/bin/python3.13, in one call; exit 0 = both OK, exit 1 = a failing shard).
+States. Fix present: the worktree at ebbf297 content (run green1: "/usr/bin/python3: Ran 616 tests; OK (skipped=1)",
+"/opt/homebrew/bin/python3.13: Ran 616 tests; OK (skipped=1)"). Fix reverted (one revert for the six ids, whose fix is the one
+function and its call): a scratch worktree at ebbf297 content with gates/ checked out from 4aea0bc (part A's production, before
+RULE-A), the final tests kept. Fix restored: the worktree at the final tree of part B (ebbf297 + the V1 alias-name test; run
+green3, the same two OK lines with 616 tests).
+Run 2 lines (the same run for every id below): "/usr/bin/python3: Ran 432 tests; FAILED (skipped=0)",
+"/opt/homebrew/bin/python3.13: Ran 432 tests; FAILED (skipped=0)"; each id's TEST is among its failures on both interpreters.
+
+FINDING F-20261126-w7nb
+TEST tests.test_hook_bash.RuleAHookTest.test_H_aliases_and_split_options
+MUTANT RB: gates/ = 4aea0bc (no write_text_refusals call; non-plain write text judged by the cwd target): `git br -D x; ls`, `git b2 -D x; ls`, `git co -b y; ls`, `git sw -c z; ls` PASS for the subagent at R
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+
+FINDING F-20261126-3icz
+TEST tests.test_hook_bash.RuleAHookTest.test_H_aliases_and_split_options
+MUTANT RB (as above): `git branch ';' -D x; ls`, `git checkout '&' -b y; ls` (quoted separator) fail in the same test (subtests H6, H7)
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+
+FINDING F-20261126-gzqn
+TEST tests.test_hook_bash.RuleAHookTest.test_H_aliases_and_split_options
+MUTANT RB (as above): `git branch $'-D' x; ls` (ANSI-C quoting, subtest H8) fails, now refused with the compound write line (expansion)
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+
+FINDING F-20261126-ypxp
+TEST tests.test_hook_bash.RuleAHookTest.test_H_target_tokens_need_no_listing
+MUTANT RB (as above): `export GIT_DIR=<X>/.git; git reset --hard`, `pushd <X>; git reset --hard`, `GIT_DIR=<X>/.git git reset --hard; ls` (H17-H19) fail
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+
+FINDING F-20261126-te2b
+TEST tests.test_hook_bash.OptionWriteHookTest.test_non_plain_write_options_as_the_session_in_its_worktree
+MUTANT RB (as above): pin P-c, `git <sub> <write option>; ls` PASS for the session (ruling R2-7's cwd target), now refused
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+
+FINDING F-20261116-vc8g
+TEST tests.test_hook_bash.InheritedClassesTest.test_LG1_01_session
+MUTANT RB (as above): LG1-2/LG1-6 `alias g=git && g reset --hard`, `alias g=git && g -C <O> reset --hard` PASS or the one-plain-command line (test_LG1_01_session, _01_agent, _02_agent, _03_session, _03_agent fail); the stated-limit passes LG1-3..5 (StatedLimitHookTest.test_B8_pre_session_shell_alias_of_git) pass on both trees, as a stated limit must
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry

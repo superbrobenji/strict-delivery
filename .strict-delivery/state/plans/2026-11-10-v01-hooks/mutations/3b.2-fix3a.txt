@@ -1,0 +1,63 @@
+<!-- schema: mutation-transcript/1 -->
+Task 3b.2 fix round 3 part A (cf1f428, saved tests 4aea0bc), transcripts written in part B (hooks stream controller 6).
+Runner (program rule): R = PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH /usr/bin/python3 /Users/benji/projects/personal/strict-delivery-worktrees/_program/par_suite.py
+(both interpreters, /usr/bin/python3 3.9.6 and /opt/homebrew/bin/python3.13, in one call; exit 0 = both OK, exit 1 = a failing shard).
+States. Fix present: the worktree at ebbf297 content (run green1: "/usr/bin/python3: Ran 616 tests; OK (skipped=1)",
+"/opt/homebrew/bin/python3.13: Ran 616 tests; OK (skipped=1)"). Fix reverted: a scratch worktree at ebbf297 content with one
+revert of scratch reverts.py applied (never the worktree), one finding id per tree. Fix restored: the worktree at the final
+tree of part B (ebbf297 + the V1 alias-name test; run green3, the same two OK lines with 616 tests).
+Part A's earlier red was COMBINED (all of part A's production reverted at once plus G1-G3, Y1; ch/hk5-3b2-fix3b.md, redA.txt:
+"Ran 576 tests; FAILED" on both): it is superseded per id below, each id with its own fix-reverted FAIL.
+
+FINDING F-20261126-xevm
+TEST tests.test_hook_bash.RuleAHookTest.test_H_inherited_git_dir
+MUTANT R-xevm: gates/hooks/pre_bash.py `return env_lines + _inherited_lines(ctx) + c_line` -> `return env_lines + c_line` (the inherited GIT_* lines dropped from the branch of a write in text that is not one plain git command)
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+Run 2 lines: "/usr/bin/python3: Ran 432 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 432 tests; FAILED (skipped=0)";
+failing: RuleAHookTest.test_H_inherited_git_dir (5 commands x 3 actors), InheritedEnvWriteTest.test_A1_0_00 .. test_A1_2_07
+(24 tests), ShellAliasWriteTest.test_A4_g3_with_GIT_DIR_inherited, test_A4_gb_with_GIT_DIR_inherited; nothing else.
+
+FINDING F-20261126-g6mw
+TEST tests.test_bashpolicy.WriteTextRefusalsTest.test_shell_alias_bodies
+MUTANT R-g6mw: gates/lib/bashpolicy.py write_text_refusals `texts = shell_alias_texts(call, aliases)` -> `texts = []` (the `!` bodies of a plain git command not judged; decision U-1, now T:690)
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_bashpolicy
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+Run 2 lines: "/usr/bin/python3: Ran 144 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 144 tests; FAILED (skipped=0)";
+failing: test_shell_alias_bodies (aliases g3, gb, gf, g6, gn, gm, gr, gy, gd, gc), test_shell_alias_bodies_of_the_pins (3 dicts),
+test_version_digits_and_code_points (the `dh` body); nothing else.
+
+FINDING F-20261126-2z9y
+TEST tests.test_hook_bash.GlobalCOptionTest.test_A6_command_line_alias_to_a_write
+MUTANT R-2z9y: gates/hooks/pre_bash.py _c_option `if scan.plain and not other_program:` -> `if False:` and `return c_option_in_text(command)` -> `return False` (git -c in play nowhere; ruling N1)
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+Run 2 lines: "/usr/bin/python3: Ran 432 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 432 tests; FAILED (skipped=0)";
+failing: GlobalCOptionTest test_A6_* (12 tests, the finding's members git -c alias.zz=reset zz --hard, -c alias.zz='!git ...',
+include.path, includeIf) and test_A7_* (7), RefusedEnvWriteTest, RuleAHookTest H5/H23/F3, OptionWriteHookTest -c rows,
+InterpreterRowsTest V1 -c rows.
+
+FINDING F-20261126-9r6e
+TEST tests.test_bashpolicy.GlobalCRuleTest.test_shell_alias_texts_cycles_end
+MUTANT R-9r6e (review 3 M-R3-a, part A's G1): gates/lib/bashpolicy.py _reached_texts `seen.add(name)` removed (the cycle guard)
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_bashpolicy
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+Run 2 lines: "/usr/bin/python3: Ran 144 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 144 tests; FAILED (skipped=0)";
+the cycle tests FAIL under the 60 s bound (KILLED, not a runner TIMEOUT: "Ran 144 tests in 492.860s" on 3.9):
+test_shell_alias_texts_cycles_end, AliasExpansionTest.test_shell_alias_through_an_alias_cycle_ends,
+test_shell_alias_through_an_alias_without_commit_is_unchanged, test_shell_alias_members, GlobalCRuleTest.test_shell_alias_texts,
+WriteTextRefusalsTest.test_shell_alias_bodies_of_the_pins.
+
+FINDING F-20261126-y6tf
+TEST tests.test_hook_bash.TargetTest.test_hardening_fifo
+MUTANT R-y6tf (part A's Y1): gates/lib/bashpolicy.py target_root burns 6 s of CPU when the named directory is /dev/null (the HR3 assert reads CPU time, R3-6)
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry
+Run 2 lines: "/usr/bin/python3: Ran 432 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 432 tests; FAILED (skipped=0)";
+the one failure on each: "AssertionError: 6.073788999999977 not less than 5 : git -C /dev/null commit -m m" (3.9),
+"6.094581999999974 not less than 5" (3.13).

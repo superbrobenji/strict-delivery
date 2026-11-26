@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-xevm
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md R3-4
 severity: MEDIUM
 class: "hook-inherited GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE refusal applied only on the plain write branch: git reset --hard; ls, bash -c 'git reset --hard', nice git reset --hard (decision Q3 sentences diverge)"
@@ -13,11 +13,23 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2:tests/test_hook_bash.py
+  - ebbf29781cba28a8ce464d76ad5e657cdb35b58d:tests/test_hook_bash.py
 history:
   - status: open
     sha: af6bdb0d04897222009934b7972869a96aa18421
     by: stream-hooks-4
+  - status: planned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: in-progress
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: fixed-unpinned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
 review_round: 3
 caused_by_change: false
 dimension: target check on every GIT_WRITES subcommand (decision Q3)

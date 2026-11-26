@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-y6tf
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md R3-6
 severity: LOW
 class: "load-sensitive 5 s assertLess time asserts: tests/test_hook_bash.py:481, :486, tests/test_bashpolicy.py:1393"
@@ -13,11 +13,23 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2:tests/test_hook_bash.py
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2:tests/test_bashpolicy.py
 history:
   - status: open
     sha: af6bdb0d04897222009934b7972869a96aa18421
     by: stream-hooks-4
+  - status: planned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: in-progress
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: fixed-unpinned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
 review_round: 3
 caused_by_change: false
 dimension: "hardening: hooks paths (HR3/HR8 time bound)"

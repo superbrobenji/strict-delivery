@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-3icz
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md R3-2
 severity: MEDIUM
 class: "non-plain write detection with a quoted separator between subcommand and write option: git branch ';' -D x; ls, and '|', '&', '(', 'a;b' in quotes"
@@ -13,11 +13,23 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+  - ebbf29781cba28a8ce464d76ad5e657cdb35b58d:tests/test_hook_bash.py
+  - ebbf29781cba28a8ce464d76ad5e657cdb35b58d:tests/test_bashpolicy.py
 history:
   - status: open
     sha: af6bdb0d04897222009934b7972869a96aa18421
     by: stream-hooks-4
+  - status: planned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: in-progress
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: fixed-unpinned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
 review_round: 3
 caused_by_change: false
 dimension: "alias resolution: plain or not (write detection)"

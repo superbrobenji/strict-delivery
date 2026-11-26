@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-9r6e
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-3.md R3-5
 severity: LOW
 class: "cycle-guard tests that hang instead of failing: _reached_texts (test_shell_alias_through_an_alias_cycle_ends, new in 5a102d1) and effective_words cycle guard"
@@ -13,11 +13,23 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2:tests/test_bashpolicy.py
+  - cf1f4286ea94f01ae4753851f006d6930a8aefe2:tests/test_hook_bash.py
 history:
   - status: open
     sha: af6bdb0d04897222009934b7972869a96aa18421
     by: stream-hooks-4
+  - status: planned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: in-progress
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
+  - status: fixed-unpinned
+    sha: ebbf29781cba28a8ce464d76ad5e657cdb35b58d
+    by: implementer
 review_round: 3
 caused_by_change: true
 dimension: "hardening: hooks paths (HR3/HR8 time bound)"
