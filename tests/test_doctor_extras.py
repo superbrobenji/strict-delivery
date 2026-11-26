@@ -304,6 +304,31 @@ class TestBlocks(Base):
             self.write(rel, build(pv="0.0.0", body="x\n"))  # CB8: version before stale
             self.assertIn("version 0.0.0 differs", self.line(id_))
 
+    def test_blocks_stale_when_body_differs_only_at_its_end(self):  # CB10, GI7 (survivor D29-block-body-stripped)
+        for id_, rel, build, op, cl in self.cases():
+            body = templates.claude_block_body(self.cfg()) if id_ == "claude-block" else templates.gitignore_block_body(self.cfg())
+            self.assertTrue(body.endswith("\n") and not body.endswith("\n\n"))
+            want = "FAIL doctor.%s: stale; run /strict-delivery:upgrade" % id_
+            # the last body line carries one trailing whitespace character (a CRLF ends it with "\r": lines split on "\n" only)
+            for name, ws in (("space", " "), ("two-spaces", "  "), ("tab", "\t"), ("crlf", "\r"), ("vtab", "\x0b"),
+                             ("formfeed", "\x0c"), ("nbsp", "\xa0"), ("emspace", " ")):
+                self.write(rel, build(body=body[:-1] + ws + "\n"))
+                with self.subTest(file=rel, last_line_ends_with=name):
+                    self.assertEqual(self.line(id_), want)
+            # extra whitespace-only lines after the last body line
+            for name, extra in (("blank", "\n"), ("two-blank", "\n\n"), ("space-line", " \n"), ("tab-line", "\t\n"),
+                                ("crlf-line", "\r\n")):
+                self.write(rel, build(body=body + extra))
+                with self.subTest(file=rel, extra_after_body=name):
+                    self.assertEqual(self.line(id_), want)
+            # the block format cannot hold a body without its final newline: the end marker then shares the last body
+            # line, so find_block sees no end marker (malformed, not stale)
+            self.write(rel, build(body=body[:-1]))
+            with self.subTest(file=rel, final_newline_removed=True):
+                self.assertEqual(self.line(id_), "FAIL doctor.%s: malformed: block: no end marker" % id_)
+            self.write(rel, build(body=body))
+            self.assertEqual(self.line(id_), "PASS doctor.%s" % id_)
+
     def test_stale_block_fails_naming_upgrade(self):  # CB10 (plan)
         self.write("CLAUDE.md", self.claude(body=templates.claude_block_body(self.cfg()) + "extra line\n"))
         self.assertIn("FAIL doctor.claude-block: stale; run /strict-delivery:upgrade", self.run_doctor()[1])

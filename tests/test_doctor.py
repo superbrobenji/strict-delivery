@@ -362,6 +362,18 @@ class TestPythonInputVersion(Base):
         self.set_cfg(framework_version="v0.1.0")
         self.assertTrue(self.lines()[3].startswith("FAIL doctor.version: "))
 
+    def test_doctor_version_proper_prefix_differs(self):  # VE5, VE2 (survivor D13-version-startswith)
+        # every proper prefix of the plugin's 0.1.0 that config.load keeps as framework_version is an unequal pair
+        for cfgv in ("0.1.", "0.1", "0.", "0"):
+            with self.subTest(framework_version=cfgv):
+                self.set_cfg(framework_version=cfgv)
+                self.assertEqual(self.lines()[3], "FAIL doctor.version: framework_version %s differs from the plugin 0.1.0; "
+                                                  "run /strict-delivery:upgrade" % cfgv)
+        # the empty prefix is refused by config.load (`must be a non-empty string`) before doctor.version is reached
+        self.set_cfg(framework_version="")
+        self.assertEqual(self.lines(), ["PASS doctor.python", "FAIL doctor.input: .strict-delivery/config.yml: "
+                                        "framework_version: must be a non-empty string"])
+
     def test_doctor_numeric_text_4300_4301(self):  # VE6, CB9, CI19, SA13, SA15, VR1
         for limit in INT_LIMITS:
             with int_limit(limit):
