@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-y8hc
+status: open
+source: task-CI3-final-review.md F4
+severity: LOW
+class: "G1 run-time inputs without a seeded generated test: GITHUB_OUTPUT (missing, empty, relative, directory, FIFO, symlink, unusual characters), MUTANT_RESULT_k and MUTANT_LINES_k (any text, missing, empty, unusual characters, splitlines separators), k outside 1..parts"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: 652-665
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+    by: stream-ci
+review_round: 1
+caused_by_change: true
+dimension: G1 run-time data

@@ -1,0 +1,27 @@
+schema: finding/1
+id: F-20261126-5nhg
+status: open
+source: task-CI3-final-review.md F1 (final review; re-judges F-20261125-9us5 as a defect in a narrower class)
+severity: MEDIUM
+class: "protected set vs the oracle's import closure: a tests/test*.py module imported (directly or transitively) by a killing module, plus tests/__init__.py, is accepted as a mutated path; members on 027c8fb: tests/test_breakdown.py, test_cleanup_lib.py, test_dispatch_lib.py, test_fold_table.py, test_gate_register.py, test_gate_streams.py, test_index.py, test_loopstats.py, test_playbook.py, test_plugin_manifest.py, test_program_cli.py, test_program_merged.py, test_program_rows_c.py, test_program_rows_c2.py, test_programs_lib.py, test_self_adoption.py, test_worktrees.py, tests/__init__.py; not members (allowed): tests/helpers.py, drift_fx.py, hookrun.py, prose_check.py, tests/fixtures/**, ci_shards.py"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: "712"
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+    by: stream-ci
+parent: F-20261125-9us5
+review_round: 1
+caused_by_change: true
+dimension: T6 protected set (oracle closure)
