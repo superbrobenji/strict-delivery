@@ -455,16 +455,19 @@ class TargetTest(HookCase):
         fifo = os.path.join(self.tmp, "fifo")
         os.mkfifo(fifo)
         agent = self.agent(W)
-        start = time.time()
-        self.refused(self.B("git -C %s commit -m m" % fifo, agent=agent), "target")
-        self.refused(self.B("git -C /dev/null commit -m m", agent=agent), "target")
-        self.assertLess(time.time() - start, 30)
+        for command in ("git -C %s commit -m m" % fifo, "git -C /dev/null commit -m m"):
+            start = time.time()
+            self.refused(self.B(command, agent=agent), "target")
+            self.assertLess(time.time() - start, 5, command)   # HR3: returns within 5 s
         os.rename(os.path.join(self.R, ".strict-delivery", "config.yml"), os.path.join(self.tmp, "config.moved"))
         os.mkfifo(os.path.join(self.R, ".strict-delivery", "config.yml"))
         start = time.time()
         r = self.B("git commit -m m")
-        self.assertLess(time.time() - start, 30)
-        self.assertIn(r.returncode, (0, 2))
+        self.assertLess(time.time() - start, 5)
+        self.refused(r, "config", absent=("unstaged", "gates"))   # HR3: the config.load verdict (cfg_error) refuses the commit
+        self.assertIn("FAIL hook.bash.config: .strict-delivery/config.yml: cannot read file (not a regular file); ",
+                      r.stderr)
+        self.assertFalse(self.gates_ran())
 
     def test_hardening_parent_symlink(self):   # HR4
         W = self.worktree("W", "-b", "wb")
@@ -1088,7 +1091,12 @@ class TreeStateTest(HookCase):
         r = self.B("git commit -m m", cwd=U)
         self.assertNotIn("hook.bash.unstaged", r.stderr)
         self.assertNotIn("FAIL hook.PreToolUse", r.stderr)
-        self.assertIn(r.returncode, (0, 2))
+        # CU19 "unstaged_paths works on an unborn branch ... no raise": no `git diff` failure line and no unstaged line;
+        # the gates then run on the unborn tree and their own lines (block 2: merge-base needs a commit) refuse, exit 2
+        self.refused(r, "gates", absent=("unstaged", "git"))
+        self.assertNotIn("git diff", r.stderr)
+        self.assertEqual([ln.split(":")[0] for ln in r.stderr.splitlines()], ["FAIL hook.bash.gates"] * 3)
+        self.assertIn("FAIL hook.bash.gates: register.input: git merge-base failed (exit 128)", r.stderr)
 
 
 class GatesTest(HookCase):
@@ -1156,6 +1164,82 @@ class GatesTest(HookCase):
         self.passes(self.B("git commit -m m"))
         self.assertTrue(self.gates_ran())
         self.assertEqual(git(self.R, "status", "--porcelain", "--untracked-files=all"), before)
+
+
+CALLERS = ("session", "agent-R", "agent-W", "agent-nested")
+CWDS = ("R", "nested")
+TARGETS = ("R", "W", "nested", "nested/sub", "X", "/")
+
+
+def cross_cells():
+    """Every cell of the caller x target x cwd product (HR5, HR7, TR21, TR2-TR4, TR11, TR12): ``(caller, cwd, form, target)``
+    with ``form`` in ``none`` (no named directory: the target is the cwd's top level), ``-C`` and ``cd`` (``cd <dir> &&``).
+    The expected verdict is written by hand in ``cross_expected`` from the table sentences: a session may write in the top
+    level of its cwd; a subagent only in its bound worktree; the top level of ``nested/sub`` is ``nested``; ``/`` has none."""
+    cells = []
+    for caller in CALLERS:
+        for cwd in CWDS:
+            cells.append((caller, cwd, "none", "cwd"))
+            for form in ("-C", "cd"):
+                for target in TARGETS:
+                    cells.append((caller, cwd, form, target))
+    return cells
+
+
+def cross_expected(cell):
+    """``(allowed, top)``: whether the cell's write is allowed, and the top level label the refusal names (``None`` for ``/``)."""
+    caller, cwd, form, target = cell
+    top = {"cwd": cwd, "R": "R", "W": "W", "nested": "nested", "nested/sub": "nested", "X": "X", "/": None}[target]
+    allowed = {"session": cwd, "agent-R": "R", "agent-W": "W", "agent-nested": "nested"}[caller]
+    return top == allowed, top
+
+
+class CrossProductTest(HookCase):
+    """R1-9: the caller x target x cwd product, every cell (owner rule 2026-11-24)."""
+
+    def build(self):
+        self.W = self.worktree("W", "-b", "wb")
+        self.nested = os.path.join(self.R, "nested")
+        git(self.R, "worktree", "add", "-q", "-b", "nb", self.nested)
+        os.mkdir(os.path.join(self.nested, "sub"))
+        self.X = os.path.join(self.work, "X")
+        os.mkdir(self.X)
+        make_repo(self.X)
+        self.paths = {"R": self.R, "W": self.W, "nested": self.nested, "nested/sub": os.path.join(self.nested, "sub"),
+                      "X": self.X, "/": "/"}
+        self.callers = {"session": None, "agent-R": self.agent(self.R), "agent-W": self.agent(self.W),
+                        "agent-nested": self.agent(self.nested)}
+
+    def command(self, form, target):
+        if form == "none":
+            return "git tag x"
+        return "git -C %s tag x" % self.paths[target] if form == "-C" else "cd %s && git tag x" % self.paths[target]
+
+    def test_every_cell(self):   # HR5, HR7, TR21 (main session and subagent), TR2-TR4, TR11, TR12
+        self.build()
+        cells = cross_cells()
+        self.assertEqual(len(cells), 4 * 2 * (1 + 2 * 6))
+        counts = {True: 0, False: 0}
+        for cell in cells:
+            caller, cwd, form, target = cell
+            allowed, top = cross_expected(cell)
+            counts[allowed] += 1
+            with self.subTest(cell=cell):
+                r = self.B(self.command(form, target), cwd=self.paths[cwd], agent=self.callers[caller])
+                if allowed:
+                    self.passes(r)
+                else:
+                    self.refused(r, "target")
+                    if top is None:
+                        self.assertIn("FAIL hook.bash.target: / has no git top level; ", r.stderr)
+                    else:
+                        self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
+                                      % (self.paths[top], self.paths[cross_expected_allowed(caller, cwd)]), r.stderr)
+        self.assertEqual(counts, {True: 26, False: 78})   # the cells that pass are exactly the ones the table names
+
+
+def cross_expected_allowed(caller, cwd):
+    return {"session": cwd, "agent-R": "R", "agent-W": "W", "agent-nested": "nested"}[caller]
 
 
 class QuoteSplitTest(HookCase):
