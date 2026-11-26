@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import tokenize
 import types
 import unittest
 from unittest import mock
@@ -1811,17 +1812,163 @@ class ImportClosureTest(Fx):  # F-20261126-5nhg (T6: a mutant of the oracle is r
             "ci_shards": ({"tests/test_a.py": "from tests import ci_shards\n" + TEST_A_BODY, "tests/ci_shards.py": "VALUE = 1\n"},
                           "tests/ci_shards.py"),
             "a fixture file": ({"tests/test_a.py": TEST_A_BODY, "tests/fixtures/f.py": "VALUE = 1\n"}, "tests/fixtures/f.py"),
+            # F-20261126-7bbd: a module the closure never reaches may be unreadable; a name that is no file is no refusal
+            "an unparsable module nothing imports": ({"tests/test_a.py": TEST_A_BODY, "tests/other.py": "def (:\n"},
+                                                     "tests/test_lib.py"),
+            "an imported name that is no file": ({"tests/test_a.py": "from tests import nothing_here\n" + TEST_A_BODY},
+                                                 "tests/test_lib.py"),
+            "a name that is no module name": ({"tests/test_a.py": "import importlib\nimportlib.import_module('tests.sub/support')\n"
+                                               + TEST_A_BODY, "tests/sub/support.py": "from tests import test_lib\n"},
+                                              "tests/test_lib.py"),
+            "constants and calls that name no module": ({"tests/test_a.py": "import importlib\nimportlib.import_module(5)\n"
+                                                         "__import__(b'tests.test_lib')\nimportlib.import_module()\n"
+                                                         "importlib.import_module(None)\ndict()\n" + TEST_A_BODY}, "tests/test_lib.py"),
         }
         for label, (files, path) in cases.items():
             with self.subTest(label):
                 code, line_of, fake = self.mutate(files, path=path)
                 self.assertEqual((code, line_of[0]), (0, "SURVIVED"), (label, line_of))
 
-    def test_an_imported_module_that_cannot_be_read_does_not_stop_the_run(self):  # F1: unreadable or unparsable source
-        files = {"tests/test_a.py": "from tests import test_lib\n" + TEST_A_BODY, "tests/test_lib.py": "def (:\n"}
-        code, line_of, fake = self.mutate(files, old="def (:")
-        self.assertEqual((code, line_of[0]), (1, "ERROR"), line_of)  # it is itself protected
-        self.assertIn("is protected", line_of[1])
+    # F-20261126-7bbd (T6, H1): a tests module the closure reaches and cannot read and parse refuses the whole run.
+    def refused(self, bad, files, prepare=None, label="", mode=None, why=r"\S"):
+        """The run is refused as ``ERROR oracle <bad>: <why>``: exit 1, nothing run, nothing mutated, the tree clean. ``files``
+        are committed; ``prepare()`` then changes the working tree and the change is committed too."""
+        self.repo({TABLE: table({"x1": ("src/a.py", "a + b", "a - b")}, {"x1": ("tests.test_a",)})}, base_extra=files)
+        if prepare:
+            prepare()
+            self.head = commit_all(self.root, "the module that cannot be read")
+        if mode is not None:  # a file git is told not to look at (it cannot read it either)
+            git(self.root, "update-index", "--skip-worktree", bad)
+            os.chmod(os.path.join(self.root, bad), mode)
+            self.addCleanup(os.chmod, os.path.join(self.root, bad), 0o644)
+        fake = Fake(self.root)
+        code, out, err = self.call(self.argv(), execute=fake)
+        self.assertEqual(code, 1, (label, out, err))
+        self.assertRegex(out, r"(?m)^ERROR oracle %s: %s" % (re.escape(bad), why), (label, out))
+        self.assertEqual(fake.calls, [], label)  # not even the baseline ran
+        self.assertEqual(self.status(), "", label)
+        self.assertEqual(self.read("src/a.py"), BASE_FILES["src/a.py"].encode("utf-8"), label)  # nothing mutated
+        return out
+
+    # Where the module that cannot be read sits: imported by the killing module tests/test_a.py, or through a support module.
+    # (A killing module that is a symbolic link, a directory or has two hard links is refused earlier, as a table error.)
+    IMPORTED = {"direct": ({"tests/test_a.py": "from tests import support\n" + TEST_A_BODY}, "tests/support.py"),
+                "transitive": ({"tests/test_a.py": "from tests import mid\n" + TEST_A_BODY, "tests/mid.py": "import tests.support\n"},
+                               "tests/support.py")}
+
+    def test_an_imported_module_that_is_a_symbolic_link_is_refused(self):  # F3: a link to a regular module (Python imports it)
+        for label, (files, rel) in self.IMPORTED.items():
+            with self.subTest(label):
+                def link():
+                    self.put("tests/real_module.py", "VALUE = 1\n")
+                    os.symlink("real_module.py", os.path.join(self.root, rel))
+                self.refused(rel, files, link, label, why="is not a regular file")
+
+    def test_an_imported_module_that_is_a_directory_is_refused(self):  # F3 / H1
+        for label, (files, rel) in self.IMPORTED.items():
+            with self.subTest(label):
+                def directory():
+                    self.put(rel + "/x.txt", "x\n")
+                self.refused(rel, files, directory, label, why="is not a regular file")
+
+    def test_an_imported_module_that_is_a_fifo_is_refused_without_blocking(self):  # F3 / H1: nothing opens it
+        for label, (files, rel) in self.IMPORTED.items():
+            with self.subTest(label):
+                def fifo():
+                    with open(os.path.join(self.root, ".git", "info", "exclude"), "a", encoding="utf-8") as fh:
+                        fh.write("/%s\n" % rel)  # git ignores it (it cannot be added)
+                    os.mkfifo(os.path.join(self.root, rel))
+                self.refused(rel, files, fifo, label, why="is not a regular file")
+
+    def test_an_imported_module_larger_than_8_mib_is_refused_and_one_of_exactly_8_mib_is_read(self):  # F3: the size cap
+        limit = 8 << 20
+        head = "from tests import test_lib\n"
+
+        def padded(size):
+            return head + "#" + "x" * (size - len(head) - 1)
+        for size, label in ((limit + 1, "8 MiB + 1 byte"),):
+            with self.subTest(label):
+                out = self.refused("tests/support.py", {"tests/test_a.py": "from tests import support\n" + TEST_A_BODY,
+                                                        "tests/support.py": padded(size)}, label=label, why="is larger than 8 MiB")
+        for size, label in ((limit, "exactly 8 MiB"),):
+            with self.subTest(label):  # read and walked: its import is protected
+                code, line_of, fake = self.mutate({"tests/test_a.py": "from tests import support\n" + TEST_A_BODY,
+                                                   "tests/support.py": padded(size)})
+                self.assertEqual((code, line_of[0]), (1, "ERROR"), (label, line_of))
+                self.assertIn("is protected", line_of[1], label)
+
+    def test_an_imported_module_that_cannot_be_parsed_is_refused(self):  # F3: unparsable source, per kind of text
+        texts = {"a syntax error": b"def (:\n", "a NUL byte": b"VALUE = 1\x00\n", "bytes that are not UTF-8": b"VALUE = '\xff\xfe'\n",
+                 "an unknown encoding": b"# coding: nonsense-9\nVALUE = 1\n", "a bad indent": b"if 1:\nx = 1\n",
+                 "nested too deep": b"x = " + b"[" * 3000 + b"]" * 3000 + b"\n"}
+        for what, text in texts.items():
+            for label, (files, rel) in dict(self.IMPORTED, **{"the killing module": ({}, "tests/test_a.py")}).items():
+                with self.subTest((what, label)):
+                    body = text + b"\n" + (TEST_A_BODY.encode("utf-8") if rel == "tests/test_a.py" else b"")
+                    self.refused(rel, dict(files, **{rel: body}), None, label, why="cannot be parsed")
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads a file whatever its mode")
+    def test_an_imported_module_that_cannot_be_read_is_refused(self):  # F3: unreadable (mode 0), per position
+        for label, (files, rel) in dict(self.IMPORTED, **{"the killing module": ({}, "tests/test_a.py")}).items():
+            with self.subTest(label):
+                self.refused(rel, dict(files, **({} if rel == "tests/test_a.py" else {rel: "VALUE = 1\n"})), None, label, 0,
+                             why="cannot be read")
+
+    def test_an_imported_module_with_two_hard_links_is_refused(self):  # F3 / H1: open_target refuses a second link
+        for label, (files, rel) in self.IMPORTED.items():
+            with self.subTest(label):
+                def twin():
+                    os.link(os.path.join(self.root, rel), os.path.join(self.root, rel + ".twin"))
+                self.refused(rel, dict(files, **{rel: "VALUE = 1\n"}), twin, label, why="cannot be read as a regular file with one hard link")
+
+    def test_an_imported_module_whose_status_or_content_cannot_be_read_is_refused(self):  # F3: an OS error, injected at the seam
+        files = {"tests/test_a.py": "from tests import support\n" + TEST_A_BODY, "tests/support.py": "VALUE = 1\n"}
+        real_lstat, real_open = os.lstat, ci_mutants.open_target
+
+        def lstat(path, *args, **kw):  # the status of the module cannot be read (any error but "no such file")
+            if str(path).endswith("tests/support.py"):
+                raise PermissionError(13, "Permission denied")
+            return real_lstat(path, *args, **kw)
+
+        class ReadFails:
+            def __init__(self, fh):
+                self.fh = fh
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.fh.close()
+
+            def fileno(self):
+                return self.fh.fileno()
+
+            def read(self, *args):
+                raise OSError(5, "Input/output error")
+
+        def open_target(root, rel, write):
+            fh = real_open(root, rel, write)
+            return ReadFails(fh) if rel == "tests/support.py" else fh
+        with mock.patch.object(os, "lstat", lstat):
+            self.refused("tests/support.py", files, why=r"cannot be read \(Permission denied\)")
+        with mock.patch.object(ci_mutants, "open_target", open_target):
+            self.refused("tests/support.py", files, why=r"cannot be read \(Input/output error\)")
+
+    def test_a_module_reached_twice_is_read_once(self):  # F3: the closure keeps the modules it has read (a diamond)
+        files = {"tests/test_a.py": "from tests import test_b2, test_c2\n" + TEST_A_BODY, "tests/test_b2.py": "from tests import test_lib\n",
+                 "tests/test_c2.py": "from tests import test_lib\n"}
+        self.repo({TABLE: table({"x1": ("tests/test_lib.py", "VALUE = 1", "VALUE = 2")}, {"x1": ("tests.test_a",)})},
+                  base_extra=dict({"tests/test_lib.py": "VALUE = 1\n"}, **files))
+        parsed, real_parse = [], ast.parse
+
+        def counting(source, filename="<unknown>", *args, **kw):
+            parsed.append(filename)
+            return real_parse(source, filename, *args, **kw)
+        with mock.patch.object(ast, "parse", counting):
+            code, out, err = self.call(self.argv(), execute=Fake(self.root))
+        self.assertEqual(code, 1, out)  # test_lib is protected
+        for rel in ("tests/test_a.py", "tests/test_b2.py", "tests/test_c2.py", "tests/test_lib.py"):
+            self.assertEqual(parsed.count(rel), 1, (rel, parsed))
 
     def test_the_tests_package_file_is_protected_once_it_has_content(self):  # F1: tests/__init__.py
         files = {"tests/__init__.py": "VALUE = 1\n"}
@@ -1915,19 +2062,48 @@ class JobEnvTest(Fx):  # F-20261126-zzcq (G1: a job index outside 1..parts) and 
         env.update({"MUTANT_X_9": "1", "XMUTANT_RESULT_9": "1", "mutant_result_9": "1", "MUTANT_RESULTS_9": "1"})
         self.assertEqual(self.summary(2, env)[0], 0)
 
-    SEPARATORS = ["\x85", " ", " ", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\r"]
+    # Every character at which str.splitlines cuts a line besides "\n" (and the pair "\r\n"), and every whitespace-only
+    # line that str.strip drops: none of them separates or blanks a line of the closed grammar, which cuts at "\n" only.
+    SEPARATORS = ["\x85", " ", " ", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\r", "\r\n"]
+    BLANKS = ["\xa0", "　", "\x1f", " ", "\t", " ", " ", " ", " ", "\x1f\x1f", " \t "]
+    DETAIL_CHARS = ["\U0001fae0", "é", "\x7f", "\x01", "‮", "퟿"]  # U+1FAE0: assigned in Unicode 14 (3.13), not 13 (3.9)
+    RAW_SEPARATORS = ["\x85"," ", " ", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\r"]
     RESULTS = ["success", "failure", "cancelled", "skipped", "", "Success", "success ", " success", "success\n", "\x85",
                "ok", " ", "null", "SUCCESS", "success\x00x", "‮success"]
-    PATHS = ["g out", "g'out", "g\"out", "géout", "g\nout", "g;out", "g$(x)out", "-gout", "g\ud800out"]
+    PATHS = ["g out", "g'out", "g\"out", "géout", "g\nout", "g;out", "g$(x)out", "-gout", "g\U0001fae0out"]  # names a file can have
+    SURROGATES = ["\ud800", "\udbff", "\udfff", "g\ud800out", "\ud83d" + "\ude00", "x\udc00"]  # lone surrogates: os.fsencode raises
+    ESCAPED = ["\udc80", "\udcff", "g\udcc3out", "\udcc3", "\udce9\udca9"]  # surrogate-escaped bytes: fsencode gives bytes that are no UTF-8
+
+    def lines_case(self, rng, env, k, kind, char=None):
+        """(label, env, 1) of one case of the lines grammar: the part's lines are the valid ones with ``char`` (a separator
+        between the first two lines, a whitespace-only line after the first, or a character in the detail of the first). The
+        grammar cuts lines at "\\n" only and allows one line or an empty line, so every such text is unreadable: exit 1."""
+        first, second, *rest = env["MUTANT_LINES_%d" % k].split("\n")
+        if kind == "separator-between":
+            char = char if char is not None else rng.choice(self.SEPARATORS)
+            first = first + char + second
+            second = None
+        elif kind == "blank-line-of-whitespace":
+            char = char if char is not None else rng.choice(self.BLANKS)
+            first = first + "\n" + char
+        else:
+            char = char if char is not None else rng.choice(self.DETAIL_CHARS)
+            first = first + " " + char
+        env["MUTANT_LINES_%d" % k] = "\n".join([first] + ([second] if second is not None else []) + rest)
+        return "%s=%r" % (kind, char), env, 1
 
     def mutations(self, rng, parts):
         """(label, env, expected exit code) of one generated case, built from the valid environment by one change whose
         verdict the closed grammar fixes: a part's job result must be exactly ``success``, its lines must be exactly the
-        part's ids one per line (blank lines allowed), and every job-looking name must carry a canonical index 1..parts."""
+        part's ids, cut at "\\n" only (an empty line, exactly "", is allowed; any other text is no line of the grammar), each
+        line printable ASCII, and every job-looking name must carry a canonical index 1..parts."""
         env = self.valid_env(parts)
         k = rng.randint(1, parts)
         kind = rng.choice(["none", "result", "result-missing", "lines-text", "lines-missing", "lines-empty", "blank-lines",
-                           "separator-in-line", "extra-name", "duplicate-line", "unknown-id"])
+                           "separator-in-line", "extra-name", "duplicate-line", "unknown-id", "separator-between",
+                           "blank-line-of-whitespace", "detail-char"])
+        if kind in ("separator-between", "blank-line-of-whitespace", "detail-char"):
+            return self.lines_case(rng, env, k, kind)
         if kind == "none":
             return kind, env, 0
         if kind == "result":
@@ -1938,7 +2114,7 @@ class JobEnvTest(Fx):  # F-20261126-zzcq (G1: a job index outside 1..parts) and 
             del env["MUTANT_RESULT_%d" % k]
             return kind, env, 1
         if kind == "lines-text":
-            text = "".join(rng.choice("abcxyz: |\t\x7f\x01é퟿ \x85-_.") for _ in range(rng.randint(1, 40)))
+            text = "".join(rng.choice("\U0001fae0abcxyz: |\t\x7f\x01é퟿ \x85-_.") for _ in range(rng.randint(1, 40)))
             env["MUTANT_LINES_%d" % k] = text
             return "%s=%r" % (kind, text), env, 1
         if kind == "lines-missing":
@@ -1948,7 +2124,7 @@ class JobEnvTest(Fx):  # F-20261126-zzcq (G1: a job index outside 1..parts) and 
             env["MUTANT_LINES_%d" % k] = ""
             return kind, env, 1
         if kind == "blank-lines":
-            env["MUTANT_LINES_%d" % k] = "\n" * rng.randint(0, 3) + env["MUTANT_LINES_%d" % k].replace("\n", "\n" * rng.randint(1, 3)) + "\n \n"
+            env["MUTANT_LINES_%d" % k] = "\n" * rng.randint(0, 3) + env["MUTANT_LINES_%d" % k].replace("\n", "\n" * rng.randint(1, 3)) + "\n\n"
             return kind, env, 0
         if kind == "separator-in-line":  # splitlines cuts the line: the second piece is no line of the grammar
             sep = rng.choice(self.SEPARATORS)
@@ -1977,28 +2153,92 @@ class JobEnvTest(Fx):  # F-20261126-zzcq (G1: a job index outside 1..parts) and 
             self.assertEqual(code, want, "seed=%d case=%d parts=%d %s\n%s" % (seed, n, parts, label, out))
             self.assertEqual(err, "", "seed=%d case=%d" % (seed, n))
 
-    def test_generated_github_output_values_get_the_verdict_of_the_closed_grammar(self):  # G1: seeded, through main()
+    def test_a_detail_of_every_printable_ascii_character_and_a_line_without_detail_are_accepted(self):  # F-20261126-5ssd control
+        self.setup_repo()
+        env = self.valid_env(1)
+        printable = "".join(chr(c) for c in range(0x20, 0x7f))
+        lines = env["MUTANT_LINES_1"].split("\n")
+        lines[0] = "s1: KILLED | " + printable
+        lines[1] = lines[1].split(" ")[0] + " KILLED"  # a line with no detail at all
+        env["MUTANT_LINES_1"] = "\n".join(lines)
+        code, out, err = self.summary(1, env)
+        self.assertEqual(code, 0, out)
+
+    def test_every_separator_and_whitespace_line_of_the_pool_is_refused(self):  # F-20261126-5ssd: one case per member, seeded
+        seed = 20261127
+        self.setup_repo()
+        rng = random.Random(seed)
+        self.assertEqual(self.RAW_SEPARATORS, self.SEPARATORS[:-1])  # the escapes above are the literal characters
+        members = ([("separator-between", c) for c in self.SEPARATORS] + [("blank-line-of-whitespace", c) for c in self.BLANKS]
+                   + [("detail-char", c) for c in self.DETAIL_CHARS] + [("separator-at-the-end", c) for c in self.SEPARATORS])
+        for n, (kind, char) in enumerate(members):
+            parts = rng.choice([1, 2, 3])
+            env = self.valid_env(parts)
+            k = rng.randint(1, parts)
+            if kind == "separator-at-the-end":  # a valid last line followed by the separator only
+                env["MUTANT_LINES_%d" % k] += char
+                label = "%s=%r" % (kind, char)
+            else:
+                label, env, _ = self.lines_case(rng, env, k, kind, char)
+            code, out, err = self.summary(parts, env)
+            why = "seed=%d case=%d parts=%d k=%d %s\n%s" % (seed, n, parts, k, label, out)
+            self.assertEqual(code, 1, why)
+            self.assertRegex(out, r"(?m)^FAIL (job %d: unreadable line|s\d: no line)" % k, why)
+            self.assertEqual(err, "", why)
+        for n in range(20):  # the valid environment and the empty lines of "\n" stay accepted (control)
+            parts = rng.choice([1, 2, 3])
+            env = self.valid_env(parts)
+            k = rng.randint(1, parts)
+            env["MUTANT_LINES_%d" % k] = "\n" * rng.randint(1, 3) + env["MUTANT_LINES_%d" % k].replace("\n", "\n" * rng.randint(1, 3)) + "\n"
+            self.assertEqual(self.summary(parts, env)[0], 0, "seed=%d control %d" % (seed, n))
+
+    def bounded(self, fn, release, what):
+        """``fn()`` run in a thread joined with a timeout. On timeout ``release()`` frees the thread (it is called until the
+        thread ends), then the test fails: a blocked open is a failure, never a hang. An exception of ``fn`` is re-raised."""
+        result = {}
+
+        def work():
+            try:
+                result["r"] = fn()
+            except BaseException as err:  # noqa: BLE001 - re-raised in the test thread
+                result["e"] = err
+        thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+        thread.join(20)
+        if thread.is_alive():
+            for _ in range(100):
+                release()
+                thread.join(0.1)
+                if not thread.is_alive():
+                    break
+            self.fail("the run blocked (%s)" % what)
+        if "e" in result:
+            raise result["e"]
+        return result["r"]
+
+    def test_generated_github_output_values_get_the_verdict_of_the_closed_grammar(self):  # G1, H1: seeded, through main()
         seed = 20261126
         self.repo()
         rng = random.Random(seed)
         kinds = ["missing", "empty", "relative", "directory", "fifo", "fifo-with-reader", "symlink", "dangling-symlink",
-                 "new-file", "existing-file", "nul"]
+                 "new-file", "nested-new-file", "existing-file", "write-only-file", "nul", "lone-surrogate",
+                 "surrogate-escaped", "escaped-utf8-alias", "long-name", "long-parent", "long-path", "no-file-name",
+                 "symlinked-parent", "parent-swapped", "final-swapped", "file-as-parent", "fifo-as-parent"]
+        umask = os.umask(0)
+        os.umask(umask)
+        self.assertEqual(os.path.realpath(self.tmp), self.tmp)  # no component above a sandbox is a symbolic link
         fds = []
         self.addCleanup(lambda: [os.close(fd) for fd in fds])
-        for n in range(60):
-            kind = rng.choice(kinds)
+        for n in range(len(kinds) + 60):  # every kind once, then a seeded draw
+            kind = kinds[n] if n < len(kinds) else rng.choice(kinds)
             box = os.path.join(self.tmp, "out%d" % n)  # the sandbox of the case: every path below it
             os.mkdir(box)
             name = rng.choice(self.PATHS)
-            try:
-                path = os.path.join(box, name)
-                path.encode("utf-8")
-            except UnicodeEncodeError:
-                path = os.path.join(box, "plain")
+            path = os.path.join(box, name)
             target = os.path.join(box, "target")
             with open(target, "wb") as fh:
                 fh.write(b"KEEP\n")
-            env, want, check = {}, 1, None
+            env, want, swap, none_made = {}, 1, None, False  # none_made: the case must leave nothing but ``target`` in the box
             if kind == "missing":
                 want = 0
             elif kind == "empty":
@@ -2021,30 +2261,119 @@ class JobEnvTest(Fx):  # F-20261126-zzcq (G1: a job index outside 1..parts) and 
             elif kind == "dangling-symlink":
                 os.symlink(os.path.join(box, "nothing"), path)
                 env["GITHUB_OUTPUT"] = path
+            elif kind in ("lone-surrogate", "surrogate-escaped"):  # no valid UTF-8 path: a named refusal, not a traceback
+                env["GITHUB_OUTPUT"] = box + "/" + rng.choice(self.SURROGATES if kind == "lone-surrogate" else self.ESCAPED)
+                none_made = True
+            elif kind == "escaped-utf8-alias":  # surrogate-escaped bytes that are valid UTF-8 spell a valid path: accepted
+                env["GITHUB_OUTPUT"] = box + "/g\udcc3\udca9out"
+                path = os.path.join(box, "géout")
+                want = 0
+            elif kind == "long-name":
+                env["GITHUB_OUTPUT"] = box + "/" + "x" * rng.choice([256, 300, 1000, 5000])  # more than 255 bytes: ENAMETOOLONG
+                none_made = True
+            elif kind == "long-parent":
+                env["GITHUB_OUTPUT"] = box + "/" + "y" * rng.choice([256, 4096]) + "/out"
+                none_made = True
+            elif kind == "long-path":  # every component is short; the whole path is longer than PATH_MAX and does not exist
+                env["GITHUB_OUTPUT"] = box + "".join("/" + "d" * 100 for _ in range(rng.randint(11, 60))) + "/out"
+                none_made = True
+            elif kind == "no-file-name":  # a path that does not end in a file name
+                env["GITHUB_OUTPUT"] = rng.choice([box + "/", box + "/out/", box + "//", box + "/out//", "/", "//", "///"])
+                none_made = True
+            elif kind in ("symlinked-parent", "parent-swapped"):
+                real, elsewhere = os.path.join(box, "real"), os.path.join(box, "elsewhere")
+                os.makedirs(os.path.join(real, "sub"))
+                os.makedirs(os.path.join(elsewhere, "sub"))
+                os.makedirs(os.path.join(elsewhere, "d2"))  # what the swapped link of the parent kind leads to
+                if kind == "symlinked-parent":  # a symbolic link is a component of the parent chain at the check
+                    link = rng.choice(["link", "a/link", "a/b/link"])
+                    os.makedirs(os.path.dirname(os.path.join(box, link)) or box, exist_ok=True)
+                    os.symlink(rng.choice([real, os.path.relpath(real, os.path.dirname(os.path.join(box, link)))]),
+                               os.path.join(box, link))
+                    env["GITHUB_OUTPUT"] = os.path.join(box, link, rng.choice(["", "sub/"]) + "out")
+                else:  # a real directory at the check, swapped for a link after it (while the runner holds the path)
+                    chain = os.path.join(box, "d1", "d2")
+                    os.makedirs(chain)
+                    env["GITHUB_OUTPUT"] = os.path.join(chain, "out")
+                    held = rng.choice([os.path.join(box, "d1"), chain])
+
+                    def swap(held=held):
+                        os.rename(held, held + ".aside")
+                        os.symlink(os.path.join(elsewhere, "sub") if held == chain else elsewhere, held)
+            elif kind in ("file-as-parent", "fifo-as-parent"):  # a parent that is no directory: a regular file, or a FIFO
+                holder = os.path.join(box, "holder")  # (a FIFO nobody has open: opening it without O_DIRECTORY blocks)
+                if kind == "file-as-parent":
+                    with open(holder, "wb") as fh:
+                        fh.write(b"KEEP\n")
+                else:
+                    os.mkfifo(holder)
+                env["GITHUB_OUTPUT"] = holder + "/out"
+            elif kind == "final-swapped":  # the file does not exist at the check; a link is there when it is opened
+                env["GITHUB_OUTPUT"] = path
+
+                def swap():
+                    os.symlink(target, path)
             else:
-                if kind == "existing-file":
+                if kind in ("existing-file", "write-only-file"):
                     with open(path, "wb") as fh:
                         fh.write(b"BEFORE\n")
+                    if kind == "write-only-file":
+                        os.chmod(path, 0o200)  # a file that can be appended to but not read
+                if kind == "nested-new-file":
+                    path = os.path.join(box, "d1", "d2", name)
+                    os.makedirs(os.path.dirname(path))
                 env["GITHUB_OUTPUT"] = path
                 want = 0
             before = os.getcwd()
             os.chdir(box)  # a relative GITHUB_OUTPUT (and "../x") resolves inside this case's sandbox even if it is accepted
+            fifo = {"fifo": path, "fifo-as-parent": os.path.join(box, "holder")}.get(kind)
+
+            def release():  # a reader frees a blocked writer, a writer frees a blocked reader
+                for flag in (os.O_RDONLY, os.O_WRONLY):
+                    try:
+                        fds.append(os.open(fifo, flag | os.O_NONBLOCK))
+                    except OSError:
+                        pass
+            fired = []
+
+            def hook(nbytes, real_hex=ci_mutants.secrets.token_hex):
+                fired.append(1)
+                swap()
+                return real_hex(nbytes)
             try:
-                code, out, err = self.call(self.argv(), execute=Fake(self.root), env=env)
+                with mock.patch.object(ci_mutants.secrets, "token_hex", hook) if swap else contextlib.nullcontext():
+                    code, out, err = self.bounded(lambda: self.call(self.argv(), execute=Fake(self.root), env=env), release,
+                                                  "seed=%d case=%d kind=%s: O_NONBLOCK is missing from the open of GITHUB_OUTPUT"
+                                                  % (seed, n, kind))
             finally:
                 os.chdir(before)
             why = "seed=%d case=%d kind=%s path=%r\n%s" % (seed, n, kind, env.get("GITHUB_OUTPUT"), out)
             self.assertEqual(code, want, why)
+            self.assertEqual(err, "", why)
+            self.assertEqual(bool(fired), swap is not None, why)  # the swap ran after the runner had checked the path
             if want:
                 self.assertRegex(out, r"(?m)^ERROR output: ", why)
-            if kind in ("symlink", "dangling-symlink"):
+            if kind in ("lone-surrogate", "surrogate-escaped"):  # the same refusal on every platform, not an open that fails
+                self.assertRegex(out, r"(?m)^ERROR output: GITHUB_OUTPUT must be valid UTF-8 text", why)
+                self.assertTrue(out.isascii(), why)  # the name is shown escaped: a lone surrogate would break a real stdout
+            if kind == "no-file-name":
+                self.assertRegex(out, r"(?m)^ERROR output: GITHUB_OUTPUT must name a file", why)
+            if kind in ("symlink", "dangling-symlink", "final-swapped"):
                 with open(target, "rb") as fh:
                     self.assertEqual(fh.read(), b"KEEP\n", why)  # nothing written through the link
                 self.assertFalse(os.path.exists(os.path.join(box, "nothing")), why)
-            if kind in ("new-file", "existing-file"):
+            if none_made:
+                self.assertEqual(sorted(os.listdir(box)), ["target"], why)
+            if kind in ("symlinked-parent", "parent-swapped"):
+                for top in (os.path.join(box, "real"), os.path.join(box, "elsewhere")):
+                    self.assertFalse([f for _, _, files in os.walk(top) for f in files if f == "out"], why)  # nothing written through
+            if kind in ("new-file", "nested-new-file", "escaped-utf8-alias"):  # a created file has the mode of open(..., 0o666)
+                self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o666 & ~umask, why)
+            if kind in ("new-file", "nested-new-file", "existing-file", "write-only-file", "escaped-utf8-alias"):
+                os.chmod(path, 0o600)
                 with open(path, "rb") as fh:
                     text = fh.read().decode("utf-8")
-                self.assertTrue(text.startswith("BEFORE\n" if kind == "existing-file" else "lines<<ci_mutants_"), why)
+                self.assertTrue(text.startswith("BEFORE\n" if kind in ("existing-file", "write-only-file") else "lines<<ci_mutants_"), why)
                 self.assertIn("i1: SURVIVED", text, why)
             if kind == "relative":
                 self.assertEqual(self.status(), "", why)  # nothing was written below the repository root either
@@ -2058,6 +2387,28 @@ class DocstringTest(unittest.TestCase):  # F-20261126-pwu6: the docs of the path
         self.assertIn("exactly one hard link", rule)
         self.assertIn("exactly one hard link", " ".join(ci_mutants._regular_problem.__doc__.split()))
         self.assertIn("exactly one hard link", " ".join(ci_mutants.open_target.__doc__.split()))  # already stated there
+
+    def test_the_docs_state_the_baseline_per_kill_tuple(self):  # F-20261126-bfmx: each tuple as it is run, not each module
+        doc = " ".join(ci_mutants.__doc__.split())
+        self.assertIn("``run`` baselines each distinct KILL tuple of its part exactly as it is run (the same modules in the "
+                      "same order, on both interpreters)", doc)
+        stale = re.compile(r"(every|each|per|one)[ -](killing )?" + "mod" + "ule", re.I)  # (the word is split: this file is scanned)
+        for rel in ("tests/ci_mutants.py", "tests/test_ci_mutants.py"):
+            source = sa.read_text(os.path.join(REPO, rel))
+            texts = [t.string for t in tokenize.generate_tokens(io.StringIO(source).readline) if t.type == tokenize.COMMENT]
+            tree = ast.parse(source)
+            texts += [ast.get_docstring(n) or "" for n in ast.walk(tree)
+                      if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))]
+            for text in texts:
+                for sentence in re.split(r"(?<=[.;:])\s+", " ".join(text.split())):
+                    if re.search("baselin", sentence, re.I):  # every sentence of a docstring or comment that names the baseline
+                        self.assertIsNone(stale.search(sentence), (rel, sentence))
+
+    def test_the_docs_state_the_grammar_of_the_job_lines_the_output_path_and_the_closure(self):  # F-20261126-5ssd, uvbz, 7bbd
+        doc = " ".join(ci_mutants.__doc__.split())
+        for needle in ("separated by \"\\n\" only", "printable ASCII", "valid UTF-8", "a symbolic link in any component",
+                       "ERROR output:", "ERROR oracle", "larger than 8 MiB"):
+            self.assertIn(needle, doc)
 
 
 # ---- E0-E4: the interface of tests/ci_mutants.py (stream-common :63 exact types; Q-CI5-1 (A) interface names) ----------
@@ -2111,7 +2462,7 @@ INTERNAL_NAMES = ("Refused Stop show clean number parse git tracked_files tree_p
                   "protected_reason path_problem Unsafe restore one_row run_rows write_output say refusals command_split "
                   "command_run command_summary").split()
 # Private functions added after the rename by the final-review fixes (F-20261126-5nhg: the import closure of the oracle).
-ADDED_PRIVATE = {"_import_closure"}
+ADDED_PRIVATE = {"_import_closure", "_" + "parse_module"}  # (the second, F-20261126-7bbd, is built: PRIVATE_USES_HERE stays as it was)
 PRIVATE_NAMES = {"_" + name for name in INTERNAL_NAMES} | ADDED_PRIVATE
 # The private names of ci_mutants that this test module itself uses, each with the reason (E0: "nothing outside the module
 # uses a private name" has this one exception, because the tests name the refusal class of E2-E4).
@@ -2153,7 +2504,7 @@ class InterfaceNamesTest(unittest.TestCase):  # E0
         self.assertEqual(public, PUBLIC_NAMES)
         self.assertEqual(len(names), len(set(names)))  # no name defined twice
         self.assertEqual(len(INTERNAL_NAMES), 33)
-        self.assertEqual(len(PRIVATE_NAMES), 34)
+        self.assertEqual(len(PRIVATE_NAMES), 35)
 
     def test_the_generated_private_list_equals_the_expected_set(self):  # E0
         self.assertEqual(self.module_names()[1], PRIVATE_NAMES)

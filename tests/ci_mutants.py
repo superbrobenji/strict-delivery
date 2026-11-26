@@ -22,21 +22,31 @@ table, the ``tests.test*`` modules those import directly or through any ``tests`
 must occur exactly once in the file's bytes (overlapping occurrences count; no newline translation), else NOT_APPLIED.
 
 ``split`` prints the ids of part K of N: the sorted (table, id) pairs cut into N contiguous blocks whose sizes differ by
-at most one (the larger blocks first); it depends on the sorted pairs only. ``run`` baselines every killing module of
-its part on both interpreters, then for each id applies the one replacement, runs the id's modules on both interpreters
-at once, restores the file byte for byte, checks the tree is clean, and prints one line per id::
+at most one (the larger blocks first); it depends on the sorted pairs only. ``run`` baselines each distinct KILL tuple of
+its part exactly as it is run (the same modules in the same order, on both interpreters), then for each id applies the
+one replacement, runs the id's modules on both interpreters at once, restores the file byte for byte, checks the tree is
+clean, and prints one line per id::
 
     <id>: KILLED|SURVIVED|SPLIT|NOT_APPLIED|TIMEOUT|ERROR | <detail>
 
 KILLED: both interpreters fail. SURVIVED: both pass. SPLIT: they differ. TIMEOUT: a run exceeded ``--timeout`` seconds
 (default DEFAULT_TIMEOUT). NOT_APPLIED: ``old`` occurs 0 times or 2 or more times. ERROR: a refused path, a failing
 baseline, a runner failure or a dirty tree. The lines are also appended to the file named by the environment variable
-GITHUB_OUTPUT as the multi-line output ``lines``. ``summary`` reads every job's result and lines from the environment
-(MUTANT_RESULT_k, MUTANT_LINES_k for k = 1..N) and fails on a non-success job, a missing, duplicated, unknown or
-unreadable line, and any NOT_APPLIED, TIMEOUT or ERROR; survivors and SPLIT ids are listed and do not fail it.
+GITHUB_OUTPUT as the multi-line output ``lines``: GITHUB_OUTPUT must be an absolute path of valid UTF-8 text that names a
+regular file or a file that does not exist yet, reached without a symbolic link in any component (the file included; every
+component is opened with O_NOFOLLOW from the root, so a swap after the check is refused too); a symbolic link, a directory,
+a FIFO or another special file, a name too long, a path that is not UTF-8 text (a lone surrogate, a surrogate-escaped byte)
+or does not name a file is ``ERROR output: <reason>`` and exit 1, never a traceback. ``summary`` reads every job's result
+and lines from the environment (MUTANT_RESULT_k, MUTANT_LINES_k for k = 1..N) and fails on a non-success job, a missing,
+duplicated, unknown or unreadable line, and any NOT_APPLIED, TIMEOUT or ERROR; survivors and SPLIT ids are listed and do
+not fail it. The lines of a job are separated by "\\n" only, and each is empty (exactly "") or one result line whose detail
+is printable ASCII; any other text (another line separator such as \\r or U+2028, a whitespace-only line, a character
+outside printable ASCII) is ``FAIL job k: unreadable line``.
 
 Exit 0: success. Exit 1: a table, base or head refused, or an ERROR line (``ERROR <where>: <reason>`` names the table and
-id). Exit 2: refused arguments (nothing is run). ``main(argv, root=..., execute=..., env=...)`` is the seam the tests use:
+id), or a ``tests`` module that the closure of the oracle reaches and cannot read and parse (``ERROR oracle <path>:
+<reason>``: a path that is not a regular file, a file with more than one hard link, a file larger than 8 MiB, an
+unreadable or unparsable one; the run is refused before anything is mutated). Exit 2: refused arguments (nothing is run). ``main(argv, root=..., execute=..., env=...)`` is the seam the tests use:
 ``execute(python_path, modules, root, timeout)`` returns ``(exit code, text, timed out)`` for one test run. POSIX only.
 """
 import ast
@@ -53,6 +63,7 @@ TABLE_DIR = ".strict-delivery/mutants"
 DEFAULT_TIMEOUT = 900  # seconds per interpreter run: the slowest module of the suite is a few minutes on ubuntu-24.04
 MAX_TABLE_BYTES = 1 << 20
 MAX_PATH_LENGTH = 300
+MAX_MODULE_BYTES = 8 << 20  # the largest tests module the closure of the oracle reads
 PROTECTED_FILES = ("tests/ci_mutants.py", "tests/test_ci_mutants.py")  # the runner, the splitter (one module) and their tests
 PROTECTED_DIRS = (TABLE_DIR, ".github")
 VERDICTS = ("KILLED", "SURVIVED", "SPLIT", "NOT_APPLIED", "TIMEOUT", "ERROR")
@@ -65,7 +76,7 @@ TABLE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.py")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 MODULE = re.compile(r"tests\.test[A-Za-z0-9_]*")
 PATH_CHARS = re.compile(r"[A-Za-z0-9_./+@=,-]+")
-LINE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,63}): (KILLED|SURVIVED|SPLIT|NOT_APPLIED|TIMEOUT|ERROR)( \|.*)?")
+LINE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,63}): (KILLED|SURVIVED|SPLIT|NOT_APPLIED|TIMEOUT|ERROR)( \|[ -~]*)?")  # the detail is printable ASCII
 RAN = re.compile(r"^Ran (\d+) tests?", re.M)
 JOB_ENV = re.compile(r"MUTANT_(RESULT|LINES)_(.*)", re.S)  # every name that looks like a job's result or lines
 USAGE = ("usage: python -m tests.ci_mutants (split|run|summary) --base REF --head SHA --parts N [--part K] "
@@ -688,17 +699,36 @@ def _write_output(env, lines):
     """Append the lines to the GITHUB_OUTPUT file as the multi-line output ``lines``; the problem text, or ''.
 
     GITHUB_OUTPUT missing: nothing is written (a local run; the summary fails ``no line`` for every id of the part).
-    Set, it must be an absolute path (empty or relative: refused) of a regular file, or of a file that does not exist yet;
-    a symbolic link, a directory, a FIFO or another special file is refused (nothing blocks, nothing is followed)."""
+    Set, it must be an absolute path (empty or relative: refused) of valid UTF-8 text (a lone surrogate or a surrogate-escaped
+    byte: refused) that names a regular file, or a file that does not exist yet; a symbolic link, a directory, a FIFO or
+    another special file is refused (nothing blocks, nothing is followed), and so is a symbolic link in any parent component:
+    every parent is opened as a directory with O_NOFOLLOW, one step at a time from the root (as ``open_target`` does), so a
+    link swapped in after the check is refused too."""
     path = env.get("GITHUB_OUTPUT")
     if path is None:
         return ""
     if "\0" in path or not os.path.isabs(path):
         return "GITHUB_OUTPUT must be an absolute path, got %s" % _show(path)
+    try:
+        raw = os.fsencode(path)
+        raw.decode("utf-8")
+    except ValueError:  # UnicodeEncodeError (a lone surrogate) and UnicodeDecodeError (a surrogate-escaped byte)
+        return "GITHUB_OUTPUT must be valid UTF-8 text (a lone surrogate or a byte that is not UTF-8 is refused), got %s" % _show(path)
+    names = [name for name in raw.split(b"/") if name]
+    if not names or raw.endswith(b"/"):
+        return "GITHUB_OUTPUT must name a file, got %s" % _show(path)
     delim = "ci_mutants_" + secrets.token_hex(16)
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        fd = os.open(path, flags, 0o666)
+        dfd = os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            for name in names[:-1]:
+                nfd = os.open(name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=dfd)
+                os.close(dfd)
+                dfd = nfd
+            fd = os.open(names[-1], flags, 0o666, dir_fd=dfd)
+        finally:
+            os.close(dfd)
     except OSError as err:
         return "cannot write GITHUB_OUTPUT (%s)" % (err.strerror or type(err).__name__)
     try:
@@ -711,27 +741,55 @@ def _write_output(env, lines):
     return ""
 
 
+def _parse_module(root, rel):
+    """The ast of the module file ``rel`` of ``tests/``, or None when no such file exists; _Stop when it exists and is not
+    a regular file with one hard link, is larger than MAX_MODULE_BYTES, cannot be read, or cannot be parsed."""
+    where = "oracle " + rel
+    try:
+        mode = os.lstat(os.path.join(root, rel)).st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        raise _Stop(where, "cannot be read (%s)" % (err.strerror or type(err).__name__))
+    if not stat.S_ISREG(mode):
+        raise _Stop(where, "is not a regular file (a symbolic link, directory or special file)")
+    try:
+        with open_target(root, rel, False) as fh:
+            if os.fstat(fh.fileno()).st_size > MAX_MODULE_BYTES:
+                raise _Stop(where, "is larger than 8 MiB")
+            data = fh.read()
+    except _Unsafe as err:
+        raise _Stop(where, "cannot be read as a regular file with one hard link (%s)" % _clean(str(err), 120))
+    except OSError as err:
+        raise _Stop(where, "cannot be read (%s)" % (err.strerror or type(err).__name__))
+    try:
+        return ast.parse(data, filename=rel)
+    except (SyntaxError, ValueError, MemoryError, RecursionError) as err:
+        raise _Stop(where, "cannot be parsed (%s)" % type(err).__name__)
+
+
 def _import_closure(root, modules):
     """The ``tests/`` paths of the oracle of the killing ``modules``: every ``tests.test*`` module they import, directly or
     through any module of ``tests`` (``tests/helpers.py`` and the like are walked but stay mutable), and the package
     ``tests/__init__.py``. Found by ast, nothing imported or run. Forms read: ``import tests.x``, ``from tests import x``,
     ``from tests.x import y``, the relative ``from . import x`` and ``from .x import y``, and ``import_module("tests.x")``
-    or ``__import__("tests.x")`` with a literal name (a name built at run time cannot be read, and is not followed)."""
+    or ``__import__("tests.x")`` with a literal name (a name built at run time cannot be read, and is not followed).
+
+    A name that is no file ``tests/x.py`` (an attribute of the package, or no module at all) is not followed. Every module
+    that is a file must be read and parsed, or the run is refused (_Stop ``oracle <path>``): the path is not a regular
+    file (a symbolic link, a directory, a FIFO), has more than one hard link, is larger than MAX_MODULE_BYTES, cannot be
+    read, or cannot be parsed."""
     found, todo, seen = {"tests/__init__.py"}, list(modules), set()
     while todo:
         name = todo.pop()
         if name in seen or re.fullmatch(r"tests\.[A-Za-z0-9_]+", name) is None:
             continue
         seen.add(name)
+        rel = "tests/" + name.split(".")[1] + ".py"
         if MODULE.fullmatch(name):
-            found.add("tests/" + name.split(".")[1] + ".py")
-        try:
-            path = os.path.join(root, "tests", name.split(".")[1] + ".py")
-            if not stat.S_ISREG(os.lstat(path).st_mode) or os.lstat(path).st_size > (8 << 20):
-                continue
-            with open(path, "rb") as fh:
-                tree = ast.parse(fh.read(), filename=path)
-        except (OSError, SyntaxError, ValueError, MemoryError, RecursionError):
+            found.add(rel)
+        tree = _parse_module(root, rel)
+        if tree is None:
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -830,8 +888,8 @@ def _command_summary(opts, root, env):
             problems.append("FAIL job %d: no result" % k)
         elif result != "success":
             problems.append("FAIL job %d: result %s" % (k, _show(result)))
-        for text_line in env.get("MUTANT_LINES_%d" % k, "").splitlines():
-            if not text_line.strip():
+        for text_line in env.get("MUTANT_LINES_%d" % k, "").split("\n"):  # the lines are cut at "\n" only
+            if text_line == "":
                 continue
             m = LINE.fullmatch(text_line)
             if m is None:
