@@ -1336,7 +1336,7 @@ class MemberOracleTest(Base):
     def test_member_list_is_exact_about_its_labels(self):  # every label is a member number or a checked non-member reason
         for key, label in LISTED_TESTS.items():
             with self.subTest(key):
-                self.assertRegex(label, r"^(M\d+|N-(env|own-mtime|plain-dir|tree-without-git|exists))$")
+                self.assertRegex(label, r"^(M\d+|N-(env|own-mtime|plain-dir|tree-without-git|exists|state-file))$")
         self.assertEqual(sorted({int(v[1:]) for v in LISTED_TESTS.values() if v.startswith("M")}), list(range(1, 24)))
 
     def test_member_list_has_teeth(self):  # a new test that names a pattern is found, in a new file or a listed one
@@ -1426,7 +1426,9 @@ def unlisted_oracle_tests(tests_dir):
 # Every test that names an oracle pattern, with its member number (M) or the reason it is a checked non-member:
 # N-env: sets or copies ``.git/index`` as an input (``GIT_INDEX_FILE``), compares no index bytes or mtimes across a probe;
 # N-own-mtime: the test sets the mtime itself; N-plain-dir: snapshot of a plain directory or of a tree without ``.git``;
-# N-tree-without-git: a snapshot that skips ``.git``; N-exists: only the existence of a file in a repository of its own.
+# N-tree-without-git: a snapshot that skips ``.git``; N-exists: only the existence of a file in a repository of its own;
+# N-state-file: compares the bytes, mtime and directory listing of a hook state file in the test's data directory (its
+# snap() never reads ``.git``), so a probe's rewrite of the repository's index cannot change what it compares.
 LISTED_TESTS = {
     "test_gate_index.py::Writes.test_gate_writes_nothing": "M1",
     "test_hook_entry.py::PostReadTest.test_post_read_writes_nothing": "M2",
@@ -1492,4 +1494,5 @@ LISTED_TESTS = {
     "test_gitinfo.py::UpstreamOfTests.test_upstream_of_inherits_index_env": "N-env",
     "test_hook_entry.py::SilentTest.test_inherited_git_env_ignored": "N-env",
     "test_hookio.py::ContextTest.test_inherited_git_env_ignored": "N-env",
+    "test_hook_edit.py::ReviewOneTest.test_no_match_leaves_store_unchanged": "N-state-file",
 }
