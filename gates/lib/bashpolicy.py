@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import types
 from typing import Callable, Mapping, Optional
 
 from gates.lib import gitinfo, shellscan
@@ -63,6 +64,28 @@ class Policy:
     agent_key: str
     cwd: str
     state_access: Callable
+
+    def __post_init__(self) -> None:
+        """Rows ET20-ET25 (Q-RS4-1 (A), CDP6): every field's exact type; ``env`` is the one named exception (T:101 PO7:
+        a ``dict``, a ``dict`` subclass or a read-only ``types.MappingProxyType``)."""
+        for name in ("root", "cwd"):
+            value = getattr(self, name)
+            if type(value) is not str or not os.path.isabs(value):
+                raise TypeError("Policy.%s must be a str" % name)
+        if self.cfg is not None and type(self.cfg) is not dict:
+            raise TypeError("Policy.cfg must be None or a dict")
+        for name in ("cfg_error", "branch"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not str:
+                raise TypeError("Policy.%s must be None or a str" % name)
+        if not isinstance(self.env, dict) and type(self.env) is not types.MappingProxyType:
+            raise TypeError("Policy.env must be a dict or a read-only mapping")
+        _check_aliases(self.aliases)
+        for name in ("base", "agent_key"):
+            if type(getattr(self, name)) is not str:
+                raise TypeError("Policy.%s must be a str" % name)
+        if not callable(self.state_access):
+            raise TypeError("Policy.state_access must be callable")
 
 
 def _fold(text: str) -> str:

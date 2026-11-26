@@ -1753,5 +1753,70 @@ class ExactTypesGithooksTest(Repo):
                 self.assertEqual(str(cm.exception), "config key must be a string of the form section.name")
 
 
+import collections  # noqa: E402
+import types  # noqa: E402
+
+
+class ExactTypesPolicyTest(unittest.TestCase):
+    """Rows ET20-ET25 (CDP6: the checks live in ``Policy.__post_init__``): each field's exact type is accepted, every
+    listed other case is refused with ``TypeError`` naming the field; ET22's read-only mapping (T:101 PO7) is the one
+    named exception (a ``dict`` subclass and ``types.MappingProxyType`` accepted)."""
+
+    def refused(self, field, value, msg):
+        with self.subTest(field=field, value=repr(value)):
+            with self.assertRaises(TypeError) as cm:
+                pol(**{field: value})
+            self.assertEqual(str(cm.exception), msg)
+
+    def test_exact_types_policy_accepted(self):
+        p = pol()
+        self.assertIs(type(p), bp.Policy)
+        for kw in ({"cfg": None}, {"cfg_error": "bad config"}, {"branch": None}, {"env": _DictSub(K="v")},
+                   {"env": types.MappingProxyType({"K": "v"})}, {"aliases": {"ci": "commit"}}, {"agent_key": "a1"},
+                   {"base": "trunk"}, {"root": "/", "cwd": "/x/y"}, {"state_access": dict}):
+            with self.subTest(kw=repr(kw)):
+                p = pol(**kw)
+                for k, v in kw.items():
+                    self.assertIs(getattr(p, k), v)
+
+    def test_exact_types_policy_root_cwd(self):  # ET20
+        for field in ("root", "cwd"):
+            for bad in (_StrSub("/r"), 3, None, "relative", "", b"/r"):
+                self.refused(field, bad, "Policy.%s must be a str" % field)
+
+    def test_exact_types_policy_cfg_fields(self):  # ET21
+        for bad in (_DictSub(), [], "cfg", 0):
+            self.refused("cfg", bad, "Policy.cfg must be None or a dict")
+        for field in ("cfg_error", "branch"):
+            for bad in (_StrSub("x"), b"x", 3, ["x"]):
+                self.refused(field, bad, "Policy.%s must be None or a str" % field)
+
+    def test_exact_types_policy_env(self):  # ET22
+        for bad in (None, "K=v", [("K", "v")], collections.ChainMap({}), 0):
+            self.refused("env", bad, "Policy.env must be a dict or a read-only mapping")
+
+    def test_exact_types_policy_aliases(self):  # ET23 (as ET12)
+        for bad in (_DictSub(), types.MappingProxyType({}), None, []):
+            self.refused("aliases", bad, "aliases must be a dict")
+        for bad in ({_StrSub("ci"): "commit"}, {"ci": _StrSub("commit")}, {"ci": None}, {1: "commit"}):
+            self.refused("aliases", bad, "aliases must map str to str")
+
+    def test_exact_types_policy_base_agent_key(self):  # ET24
+        for field in ("base", "agent_key"):
+            for bad in (_StrSub("main"), None, 3, b"main"):
+                self.refused(field, bad, "Policy.%s must be a str" % field)
+
+    def test_exact_types_policy_state_access(self):  # ET25
+        for bad in (None, "access", (frozenset(), [], None)):
+            self.refused("state_access", bad, "Policy.state_access must be callable")
+
+    def test_exact_types_policy_v1(self):  # V1: digits and a code point new in Unicode 14, exact str and a subclass
+        for value in (_DIGITS, _NEW_CP, "/" + _DIGITS):
+            with self.subTest(value=value[:8]):
+                self.assertEqual(pol(base=value, agent_key=value, branch=value, cfg_error=value).base, value)
+                self.refused("base", _StrSub(value), "Policy.base must be a str")
+        self.assertEqual(pol(root="/" + _NEW_CP, cwd="/" + _DIGITS).root, "/" + _NEW_CP)
+
+
 if __name__ == "__main__":
     unittest.main()
