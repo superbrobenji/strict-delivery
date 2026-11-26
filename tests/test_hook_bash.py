@@ -634,7 +634,8 @@ class ProgramTest(HookCase):
         env = self.failing_git_env('*for-each-ref*) echo "fatal: injected" >&2; exit 128;;')
         r = self.B("git -C %s merge main" % self.SW, env=env)
         self.refused(r, "target")
-        self.assertIn("FAIL hook.bash.target: live programs cannot be read (git for-each-ref failed (exit 128))\n", r.stderr)
+        self.assertIn("FAIL hook.bash.target: live programs cannot be read (git for-each-ref failed (exit 128))"
+                      "; run it with the ! prefix if you must, or ask the owner\n", r.stderr)
         self.assertIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.SW, self.R), r.stderr)
 
     def test_old_git_fails_closed_bash(self):   # V5 (the session form: worktree_list needs git 2.36)
@@ -1077,7 +1078,8 @@ class TreeStateTest(HookCase):
         env = self.failing_git_env('*--ignore-submodules=none*) echo "fatal: injected" >&2; exit 128;;')
         r = self.B("git commit -m m", env=env)
         self.refused(r, "gates", absent=("unstaged",))
-        self.assertEqual(r.stderr, "FAIL hook.bash.gates: git diff --name-only failed (exit 128)\n")
+        self.assertEqual(r.stderr, "FAIL hook.bash.gates: git diff --name-only failed (exit 128)"
+                                   "; the human can run the command with the ! prefix\n")
         self.assertFalse(self.gates_ran())
 
     def test_unborn_head(self):   # CU19
@@ -1125,7 +1127,8 @@ class GatesTest(HookCase):
                                   'fi; : > "%s";;' % (mark, mark))
         r = self.B("git commit -m m", env=env)
         self.refused(r, "gates")
-        self.assertEqual(r.stderr, "FAIL hook.bash.gates: git diff --name-only failed (exit 128)\n")
+        self.assertEqual(r.stderr, "FAIL hook.bash.gates: git diff --name-only failed (exit 128)"
+                                   "; the human can run the command with the ! prefix\n")
         self.assertTrue(os.path.exists(mark))   # the hook's own diff passed; the failing one was the gates'
         self.assertFalse(self.gates_ran())
 
