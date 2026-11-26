@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-956e
+status: open
+source: task-CI3-review-2.md unrelated LOW (pre-existing relative to fix 1; reproducer /private/tmp/claude-501/rev2/s.W3hrgB/hardlink2.py)
+severity: LOW
+class: "T5 mutated path kinds: a tracked file swapped for a hard link to a file outside the root is written through on restore (tests/ci_mutants.py:526); members: hard link at the check, hard link swapped in after the check, on the mutate write and on the restore write"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: "526"
+    sha: 745604371476e7a838bf55aa196f190375631328
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 745604371476e7a838bf55aa196f190375631328
+    by: stream-ci
+review_round: 2
+caused_by_change: false
+dimension: "T5 hardening: hard links"
