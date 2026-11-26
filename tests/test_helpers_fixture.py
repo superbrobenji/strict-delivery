@@ -1873,4 +1873,9 @@ LISTED_TESTS = {
     "test_hook_entry.py::SilentTest.test_inherited_git_env_ignored": "N-env",
     "test_hookio.py::ContextTest.test_inherited_git_env_ignored": "N-env",
     "test_hook_edit.py::ReviewOneTest.test_no_match_leaves_store_unchanged": "N-state-file",
+    # from main 3787493 (config 4a-4c): the snapshot of test_managed skips ``.git`` (``if ".git" in d.split(os.sep): continue``);
+    # test_render_writes_nothing compares directory listings of a template directory, no repository
+    "test_managed.py::ApplyTests.test_apply_precheck_writes_nothing": "N-tree-without-git",
+    "test_managed.py::PlanTests.test_plan_writes_nothing": "N-tree-without-git",
+    "test_templates.py::TestRender.test_render_writes_nothing": "N-plain-dir",
 }
