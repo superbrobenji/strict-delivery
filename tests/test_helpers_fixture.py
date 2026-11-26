@@ -5,14 +5,19 @@ and index oracles (rows L1, L2).
 Expected values are built here with raw ``git`` commands (an oracle independent of ``helpers``): the same commands the
 slow path ran before this task, never a second call of the code under test."""
 import ast
+import collections
+import contextlib
 import hashlib
+import importlib
 import inspect
 import os
+import random
 import re
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest import mock
@@ -1032,6 +1037,98 @@ class UmaskTest(Base):
         self.assertEqual(len(helpers._HISTORIES), before[1] + 1)
 
 
+class UmaskThreadTest(Base):
+    """F-20261126-jth9, row F4 / process state: ``helpers._umask`` reads the umask by setting it to 0 and putting it back,
+    so two threads interleaving would leave the process umask at 0 for good. It takes ``_UMASK_LOCK`` around the pair."""
+
+    def test_umask_reads_from_threads_leave_the_umask_alone(self):
+        old_interval = sys.getswitchinterval()
+        self.addCleanup(sys.setswitchinterval, old_interval)
+        sys.setswitchinterval(1e-6)
+        before = os.umask(0o022)
+        self.addCleanup(os.umask, before)
+        for round_no in range(5):
+            seen, barrier = [], threading.Barrier(6)
+
+            def hammer():
+                barrier.wait()
+                got = {helpers._umask() for _ in range(3000)}
+                seen.append(got)
+            threads = [threading.Thread(target=hammer) for _ in range(6)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(os.umask(0o022), 0o022, "round %d: the process umask was left changed" % round_no)
+            self.assertEqual(seen, [{0o022}] * 6, "round %d: a thread read a umask that was not the process's" % round_no)
+
+
+def process_state_sites(text):
+    """``{(function, kind): locked}``: every function of ``text`` that touches process state shared by all threads:
+    ``os.umask``, ``os.chdir``, ``os.putenv``, ``os.unsetenv``, ``os.environ`` (read or written) or ``tempfile.tempdir``;
+    ``locked`` is true when every such use lies inside a ``with <name ending in LOCK>:`` block."""
+    kinds = {"umask", "chdir", "putenv", "unsetenv", "environ"}
+    out = {}
+
+    def walk(node, qual, locked):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, ast.ClassDef):
+                walk(ch, qual + ch.name + ".", locked)
+            elif isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk(ch, qual + ch.name + ".", False)
+            else:
+                here = locked or (isinstance(ch, ast.With) and any(
+                    isinstance(i.context_expr, ast.Name) and i.context_expr.id.endswith("LOCK") for i in ch.items))
+                if isinstance(ch, ast.Attribute) and isinstance(ch.value, ast.Name):
+                    kind = None
+                    if ch.value.id == "os" and ch.attr in kinds:
+                        kind = "os." + ch.attr
+                    elif ch.value.id == "tempfile" and ch.attr == "tempdir":
+                        kind = "tempfile.tempdir"
+                    if kind:
+                        key = (qual[:-1], kind)
+                        out[key] = out.get(key, True) and here
+                walk(ch, qual, here)
+    walk(ast.parse(text), "", False)
+    return out
+
+
+class ProcessStateTest(Base):
+    """F-20261126-jth9, the class: process-state reads and writes in ``tests/helpers.py``. The one member is
+    ``_umask`` (locked). Non-members: ``_fast_path_ok``, ``make_repo`` and ``cached_history`` only read ``os.environ``
+    (nothing in helpers.py writes it from a thread); ``GitIsolatedTestCase.setUp`` patches and pops ``os.environ``
+    once per test, on the thread that runs the test, restored by its cleanup."""
+    EXPECTED = {
+        ("_umask", "os.umask"): True,  # member
+        ("_fast_path_ok", "os.environ"): False,  # non-member: reads
+        ("make_repo", "os.environ"): False,  # non-member: reads
+        ("cached_history", "os.environ"): False,  # non-member: reads
+        ("GitIsolatedTestCase.setUp", "os.environ"): False,  # non-member: one thread per test, restored by cleanup
+        ("git", "os.environ"): False,  # non-member: reads
+    }
+
+    def test_helpers_touches_process_state_only_where_listed(self):
+        with open(os.path.join(REPO, "tests", "helpers.py"), encoding="utf-8") as fh:
+            sites = process_state_sites(fh.read())
+        self.assertEqual(sites, self.EXPECTED)
+
+    def test_every_umask_chdir_putenv_use_is_locked(self):
+        with open(os.path.join(REPO, "tests", "helpers.py"), encoding="utf-8") as fh:
+            sites = process_state_sites(fh.read())
+        for (fn, kind), locked in sorted(sites.items()):
+            if kind != "os.environ":
+                with self.subTest(fn=fn, kind=kind):
+                    self.assertTrue(locked, "%s: %s is not inside a lock" % (fn, kind))
+
+    def test_scan_teeth(self):
+        text = ("import os, tempfile\nL = 1\ndef a():\n    os.umask(0)\ndef b():\n    with L_LOCK:\n        os.umask(0)\n"
+                "def c():\n    os.chdir('x')\n    with M_LOCK:\n        os.chdir('y')\ndef d():\n    tempfile.tempdir = 1\n"
+                "class K:\n    def m(self):\n        os.environ['A'] = '1'\n")
+        self.assertEqual(process_state_sites(text), {("a", "os.umask"): False, ("b", "os.umask"): True,
+                                                     ("c", "os.chdir"): False, ("d", "tempfile.tempdir"): False,
+                                                     ("K.m", "os.environ"): False})
+
+
 class HistorySymlinkTest(Base):
     """Rows F5/F11 (F-20261125-fiw5): symlinks inside a cached history are copied as symlinks, never followed. One test
     per member: a top-level symlink to a directory, a dangling symlink, a symlink to a directory below a directory. The
@@ -1111,6 +1208,181 @@ class OptionalLocksTest(Base):
         self.assertEqual(git(root, "log", "-1", "--format=%an|%ae|%cn|%ce|%at"),
                          "Fixture Author|author@example.invalid|Fixture Committer|committer@example.invalid|"
                          "1767225600")
+
+
+class Str(str):
+    pass
+
+
+class Dict(dict):
+    pass
+
+
+class ExactTypeTest(Base):
+    """Rows E1-E3 (owner Q-RS4-1 (A), 2026-11-26): ``git``, ``make_repo`` and ``cached_history`` accept exact types only; a
+    subclass or any other type raises a named ``TypeError`` before anything is written, git is run or a build is called.
+    Per parameter: the exact types are accepted, a subclass is refused."""
+
+    def untouched(self):
+        """The patches under which a refusal must not reach git, a copy, the slow build, a template or a history."""
+        box = self.sandbox()
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(helpers.subprocess, "run", side_effect=AssertionError("git was run")))
+        stack.enter_context(mock.patch.object(helpers.shutil, "copytree", side_effect=AssertionError("a copy was made")))
+        stack.enter_context(mock.patch.object(helpers, "_make_repo_slow", side_effect=AssertionError("a slow build")))
+        return box, tree_state(box), tree_state(self.tmp)
+
+    def refused(self, fn, text, *args, **kw):
+        box, in_box, in_tmp = self.untouched()
+        with self.assertRaises(TypeError) as cm:
+            fn(*args, **kw)
+        self.assertTrue(str(cm.exception).startswith(text), str(cm.exception))
+        self.assertEqual((helpers._TEMPLATE_ROOT, helpers._HISTORY_ROOT, helpers._TEMPLATES, helpers._HISTORIES),
+                         ([], [], {}, {}))
+        self.assertEqual((tree_state(box), tree_state(self.tmp)), (in_box, in_tmp))
+
+    # E1 git
+    def test_e1_git_root(self):
+        root = make_repo(self.fresh("r"))
+        self.assertEqual(git(root, "rev-parse", "--is-inside-work-tree"), "true")  # exact str accepted
+        for bad in (Str(root), os.fsencode(root), None, 3):
+            with self.subTest(root=type(bad).__name__):
+                self.refused(git, "git: root must be exactly str", bad, "status")
+
+    def test_e1_git_args(self):
+        root = make_repo(self.fresh("r"))
+        self.assertEqual(git(root, "status", "--porcelain"), "")
+        for bad in (Str("status"), b"status", 5, None):
+            with self.subTest(arg=type(bad).__name__):
+                self.refused(git, "git: argument 1 must be exactly str", root, "status", bad)
+
+    def test_e1_git_env(self):
+        root = make_repo(self.fresh("r"))
+        self.assertEqual(git(root, "status", "--porcelain", env=None), "")
+        self.assertEqual(git(root, "status", "--porcelain", env={"GIT_OPTIONAL_LOCKS": "1"}), "")
+        for bad in (Dict(), os.environ, [], "A=1", collections.OrderedDict()):
+            with self.subTest(env=type(bad).__name__):
+                self.refused(git, "git: env must be exactly dict", root, "status", env=bad)
+
+    def test_e1_git_check(self):
+        root = make_repo(self.fresh("r"))
+        self.assertEqual(git(root, "status", "--porcelain", check=True), "")
+        self.assertEqual(git(root, "rev-parse", "--verify", "nope", check=False), "")
+        for bad in (1, 0, None, "yes"):
+            with self.subTest(check=repr(bad)):
+                self.refused(git, "git: check must be exactly bool", root, "status", check=bad)
+
+    # E2 make_repo
+    def test_e2_make_repo_tmp(self):
+        make_repo(self.fresh("ok"))  # exact str accepted
+        d = os.path.join(self.tmp, "bad")
+        os.mkdir(d)
+        for bad in (Str(d), os.fsencode(d), None, 3):
+            with self.subTest(tmp=type(bad).__name__):
+                self.refused(make_repo, "make_repo: tmp must be exactly str", bad)
+
+    def test_e2_make_repo_config(self):
+        make_repo(self.fresh("none"), None)
+        make_repo(self.fresh("dict"), minimal_config())  # None and an exact dict accepted
+        d = os.path.join(self.tmp, "bad")
+        os.mkdir(d)
+        for bad in (Dict(minimal_config()), collections.OrderedDict(minimal_config()), [], "x", 0):
+            with self.subTest(config=type(bad).__name__):
+                self.refused(make_repo, "make_repo: config must be exactly dict", d, bad)
+
+    # E3 cached_history
+    def test_e3_cached_history_dest(self):
+        helpers.cached_history("k", self.fresh("ok"), lambda root: {})
+        d = os.path.join(self.tmp, "bad")
+        os.mkdir(d)
+        built = []
+        for bad in (Str(d), os.fsencode(d), None, 3):
+            with self.subTest(dest=type(bad).__name__):
+                self.refused(helpers.cached_history, "cached_history: dest must be exactly str", "k", bad,
+                             lambda root: built.append(root))
+        self.assertEqual(built, [])
+
+    def test_e3_cached_history_build(self):
+        d = os.path.join(self.tmp, "bad")
+        os.mkdir(d)
+
+        class Callable:
+            def __call__(self, root):
+                return {}
+        helpers.cached_history("k-callable", self.fresh("ok"), Callable())  # any callable is accepted
+        for bad in (None, "build", 3, [lambda root: {}]):
+            with self.subTest(build=type(bad).__name__):
+                self.refused(helpers.cached_history, "cached_history: build must be callable", "k", d, bad)
+
+    def test_e3_cached_history_key(self):
+        n = 0
+        for good in ("k", 3, True, None, ("a", 1, (None, False)), ()):
+            n += 1
+            with self.subTest(key=repr(good)):
+                helpers.cached_history(good, self.fresh("ok%d" % n), lambda root: {})
+        d = os.path.join(self.tmp, "bad")
+        os.mkdir(d)
+        for bad in (Str("k"), 1.5, [1], {"a": 1}, ("a", Str("b")), ("a", ["b"]), b"k", frozenset()):
+            with self.subTest(key=repr(bad)):
+                self.refused(helpers.cached_history, "cached_history: key must be built of exact", bad, d,
+                             lambda root: {})
+
+
+class InheritedEnvTest(Base):
+    """Row G1 (owner Q-HK5-2 (a), 2026-11-26): F4's inherited environment is pinned by a seeded generated-input test:
+    for every generated set of GIT_* variables, ``make_repo`` equals a raw slow build made under the same environment,
+    and the fast path is taken exactly when none of the variables moves or reshapes the repository (the rule of the table:
+    isolated config only; every other GIT_* name is part of the template key). The seed is in every failure text."""
+    SEEDS = tuple(range(1, 17))
+    SLOW = ("GIT_TEMPLATE_DIR", "GIT_CONFIG_COUNT", "GIT_DEFAULT_HASH", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_PARAMETERS", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+
+    def pool(self):
+        tdir = self.fresh("gittemplate")
+        self.write(tdir, "marker.txt", b"from the template dir\n")
+        self.write(self.tmp, "gcfg", b"[core]\n\tautocrlf = true\n")
+        return {
+            "GIT_TEMPLATE_DIR": [tdir], "GIT_CONFIG_COUNT": ["0"], "GIT_DEFAULT_HASH": ["sha1"],
+            "GIT_CONFIG_KEY_0": ["a.b"], "GIT_CONFIG_VALUE_0": ["c"], "GIT_CONFIG_PARAMETERS": ["'a.b=c'"],
+            "GIT_NAMESPACE": ["zz"], "GIT_CEILING_DIRECTORIES": [self.tmp],
+            "GIT_CONFIG_GLOBAL": ["/dev/null", os.path.join(self.tmp, "gcfg")], "GIT_CONFIG_NOSYSTEM": ["1", "0"],
+            "GIT_SOMETHING_ELSE": ["1", "2"], "GIT_OPTIONAL_LOCKS": ["0", "1"], "GIT_EDITOR": ["e1", "e2"],
+            "GIT_TERMINAL_PROMPT": ["0"],
+        }
+
+    def draw(self, seed, pool):
+        rng = random.Random(seed)
+        names = rng.sample(sorted(pool), rng.randint(1, 3))
+        return {n: rng.choice(pool[n]) for n in names}
+
+    def test_g1_generated_environments_equal_a_slow_build(self):
+        pool = self.pool()
+        isolated = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+        decisions = collections.Counter()
+        for seed in self.SEEDS:
+            env = self.draw(seed, pool)
+            where = "seed %d, environment %r" % (seed, env)
+            slow = any(n in self.SLOW for n in env) or any(env.get(n, v) != v for n, v in isolated.items())
+            decisions["slow" if slow else "fast"] += 1
+            with self.subTest(seed=seed), mock.patch.dict(os.environ, env):
+                a = self.fresh("a%d" % seed)
+                self.assertEqual(helpers._fast_path_ok(a, helpers._template_root()), not slow, where)
+                if slow:
+                    with self.no_copy():
+                        make_repo(a)
+                else:
+                    make_repo(a)
+                b = self.fresh("b%d" % seed)
+                slow_build(b)
+                self.assertEqual(facts(a), facts(b), where)
+        self.assertGreater(decisions["slow"], 0)  # the generator reaches both decisions
+        self.assertGreater(decisions["fast"], 0)
+
+    def test_g1_the_draw_is_a_function_of_the_seed(self):
+        pool = self.pool()
+        self.assertEqual([self.draw(s, pool) for s in self.SEEDS], [self.draw(s, pool) for s in self.SEEDS])
+        self.assertGreater(len({repr(self.draw(s, pool)) for s in self.SEEDS}), 8)
 
 
 class MemberOracleTest(Base):
@@ -1283,40 +1555,70 @@ class MemberOracleTest(Base):
         self.assertEqual((result.failures, result.errors, result.skipped), ([], [], []), result.failures + result.errors)
 
     def test_member15_claims_lib_conversion_cases(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_conversion_cases_match_git_add")
+        self.run_member(15)
 
     def test_member16_claims_lib_f1_reproducer(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_f1_reproducer_crlf_in_index_is_fresh")
+        self.run_member(16)
 
     def test_member17_claims_lib_lf_spaces_dash(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_lf_file_and_spaces_and_dash")
+        self.run_member(17)
 
     def test_member18_claims_lib_non_regular(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_non_regular_is_stale_and_never_staged")
+        self.run_member(18)
 
     def test_member19_claims_lib_tab_and_newline_paths(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_tab_and_newline_paths")
+        self.run_member(19)
 
     def test_member20_claims_lib_no_index_entry_yet(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_no_index_entry_yet")
+        self.run_member(20)
 
     def test_member21_claims_lib_git_index_file(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_index_from_git_index_file_is_read_and_unchanged")
+        self.run_member(21)
 
     def test_member22_claims_lib_temp_index_removed(self):
-        from tests import test_claims_lib
-        self.run_real(test_claims_lib, "StagedBlobIdTests", "test_temp_index_removed_on_every_exit")
+        self.run_member(22)
 
     def test_member23_context_cli_leaves_index_alone(self):
-        from tests import test_context_cli
-        self.run_real(test_context_cli, "Process", "test_cli_leaves_index_alone")
+        self.run_member(23)
+
+    def run_member(self, number):
+        """Members 15-23: the real test, by the table ``REAL_MEMBERS`` (module, class, test method)."""
+        module, cls, name = REAL_MEMBERS[number]
+        self.run_real(importlib.import_module("tests." + module), cls, name)
+
+    # F-20261126-hk6k: ``run_real`` fails when the real test fails, errors or skips (teeth: a deliberately failing,
+    # erroring and skipping parent test case, and each of the nine real tests replaced by such a body).
+    class Probe(GitIsolatedTestCase):
+        """A parent test case of the shape ``run_real`` runs: ``self.root`` is a repository of its own."""
+        def setUp(self):
+            super().setUp()
+            self.root = make_repo(self.work)
+
+    BODIES = {
+        "failure": lambda self: self.fail("deliberate failure"),
+        "error": lambda self: (_ for _ in ()).throw(RuntimeError("deliberate error")),
+        "skip": lambda self: self.skipTest("deliberate skip"),
+        "pass": lambda self: None,
+    }
+
+    def probe_module(self, mode):
+        probe = type("Probe", (self.Probe,), {"test_body": self.BODIES[mode]})
+        return types.SimpleNamespace(Probe=probe)
+
+    def test_run_real_fails_when_the_real_test_fails_errors_or_skips(self):
+        self.run_real(self.probe_module("pass"), "Probe", "test_body")  # a passing real test passes
+        for mode in ("failure", "error", "skip"):
+            with self.subTest(mode=mode), self.assertRaises(AssertionError):
+                self.run_real(self.probe_module(mode), "Probe", "test_body")
+
+    def test_each_of_members_15_23_fails_when_its_real_test_fails(self):
+        self.assertEqual(sorted(REAL_MEMBERS), list(range(15, 24)))
+        for number, (module, cls, name) in sorted(REAL_MEMBERS.items()):
+            mod = importlib.import_module("tests." + module)
+            for mode in ("failure", "error", "skip"):
+                with self.subTest(member=number, mode=mode), mock.patch.object(getattr(mod, cls), name, self.BODIES[mode]):
+                    with self.assertRaises(AssertionError):
+                        self.run_member(number)
 
     def test_members_15_23_oracles_see_a_plain_status(self):
         """Teeth of 15-23: their oracles (``StagedBlobIdTests.index_bytes``, the ``ls-files --stage`` and copy bytes of
@@ -1339,6 +1641,41 @@ class MemberOracleTest(Base):
                 self.assertRegex(label, r"^(M\d+|N-(env|own-mtime|plain-dir|tree-without-git|exists|state-file))$")
         self.assertEqual(sorted({int(v[1:]) for v in LISTED_TESTS.values() if v.startswith("M")}), list(range(1, 24)))
 
+    def test_oracle_closure_has_teeth_for_every_branch(self):
+        """F-20261126-eid2: every branch of the call closure of ``oracle_tests`` (which functions a test reaches by name):
+        a method calling a method of its class, a method calling a module-level function, a module-level test calling a
+        module-level function or a method of any class, two links, a cycle; and what it must NOT follow (a method of
+        another class), a helper nobody calls, a file that is not a test file and this file."""
+        mtime = "'st_mtime'"
+        body = (
+            "def mod_helper():\n    return %(m)s\n"
+            "def far():\n    return mod_helper()\n"
+            "def loop_a():\n    loop_b()\n"
+            "def loop_b():\n    loop_a()\n    return %(m)s\n"
+            "def unused():\n    return %(m)s\n"
+            "def test_module_calls_module():\n    mod_helper()\n"
+            "def test_module_calls_method():\n    method_only()\n"
+            "class Other:\n    def method_only(self):\n        return %(m)s\n"
+            "    def other_class_only(self):\n        return %(m)s\n"
+            "class T:\n"
+            "    def same(self):\n        return %(m)s\n"
+            "    def test_same_class(self):\n        self.same()\n"
+            "    def test_module_level_helper(self):\n        mod_helper()\n"
+            "    def test_two_links(self):\n        far()\n"
+            "    def test_cycle(self):\n        loop_a()\n"
+            "    def test_other_class_is_not_followed(self):\n        self.other_class_only()\n"
+            "    def test_calls_nothing(self):\n        pass\n"
+        ) % {"m": mtime}
+        with tempfile.TemporaryDirectory(dir=self.tmp) as d:
+            self.write(d, "test_closure.py", body.encode())
+            self.write(d, "helper_closure.py", body.encode())  # not a test file
+            self.write(d, "test_helpers_fixture.py", body.encode())  # this file is the oracle's own
+            got = set(oracle_tests(d))
+        want = {"test_closure.py::" + n for n in (
+            "test_module_calls_module", "test_module_calls_method", "T.test_same_class", "T.test_module_level_helper",
+            "T.test_two_links", "T.test_cycle")}
+        self.assertEqual(got, want)
+
     def test_member_list_has_teeth(self):  # a new test that names a pattern is found, in a new file or a listed one
         for pattern in ORACLE_PATTERNS:
             body = "class T:\n    def helper(self):\n        return %r\n    def test_new(self):\n        self.helper()\n" % pattern
@@ -1357,6 +1694,18 @@ class MemberOracleTest(Base):
             self.write(d, "test_plain.py", b"class T:\n    def test_d(self):\n        snapshot('.')\n")
             self.assertEqual(unlisted_oracle_tests(d), {"test_drifty.py::T.test_d"})
 
+
+REAL_MEMBERS = {
+    15: ("test_claims_lib", "StagedBlobIdTests", "test_conversion_cases_match_git_add"),
+    16: ("test_claims_lib", "StagedBlobIdTests", "test_f1_reproducer_crlf_in_index_is_fresh"),
+    17: ("test_claims_lib", "StagedBlobIdTests", "test_lf_file_and_spaces_and_dash"),
+    18: ("test_claims_lib", "StagedBlobIdTests", "test_non_regular_is_stale_and_never_staged"),
+    19: ("test_claims_lib", "StagedBlobIdTests", "test_tab_and_newline_paths"),
+    20: ("test_claims_lib", "StagedBlobIdTests", "test_no_index_entry_yet"),
+    21: ("test_claims_lib", "StagedBlobIdTests", "test_index_from_git_index_file_is_read_and_unchanged"),
+    22: ("test_claims_lib", "StagedBlobIdTests", "test_temp_index_removed_on_every_exit"),
+    23: ("test_context_cli", "Process", "test_cli_leaves_index_alone"),
+}
 
 ORACLE_PATTERNS = ("st_mtime", "getmtime", ".git/index", '".git", "index"', "GIT_OPTIONAL_LOCKS", "writes_nothing")
 

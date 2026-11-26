@@ -180,6 +180,43 @@ class Base(GitIsolatedTestCase):
             self.assertFalse(os.path.lexists(os.path.join(self.work, rel)), rel)
 
 
+class CachedKeyTests(Base):
+    """F-20261126-yga8, row F11: every part of the ``cached_history`` key of ``Base.build`` (decs, fins, files, cfg,
+    commit) is pinned: two builds that differ only in that part get different histories (a key without the part
+    would hand the second call the first call's history)."""
+
+    def fingerprint(self, root):
+        data = {}
+        for base, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for n in names:
+                with open(os.path.join(base, n), "rb") as fh:
+                    data[os.path.relpath(os.path.join(base, n), root)] = fh.read()
+        return (data, git(root, "status", "--porcelain", "--untracked-files=all"), git(root, "rev-list", "--count", "HEAD"))
+
+    def differ(self, a, b):
+        one = self.fingerprint(self.build(**a))
+        two = self.fingerprint(self.build(**b))
+        self.assertNotEqual(one, two)
+        self.assertEqual(self.fingerprint(self.build(**a)), one)  # each call alone is stable
+
+    def test_key_part_decs(self):
+        self.differ({"decs": [dec("Q-AAA-1")]}, {"decs": [dec("Q-BBB-1")]})
+
+    def test_key_part_fins(self):
+        self.differ({"fins": [fnd("F-20260101-aaaa")]}, {"fins": [fnd("F-20260101-bbbb")]})
+
+    def test_key_part_files(self):
+        self.differ({"files": {"a.txt": "a\n"}}, {"files": {"b.txt": "b\n"}})
+
+    def test_key_part_cfg(self):
+        self.differ({"cfg": None}, {"cfg": {**minimal_config(), "decision_classes": {"owner_only": ["hardware"]}}})
+
+    def test_key_part_commit(self):
+        rows = [fnd("F-20260101-aaaa")]
+        self.differ({"fins": rows, "commit": True}, {"fins": rows, "commit": False})
+
+
 def run_main(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

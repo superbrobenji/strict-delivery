@@ -149,6 +149,46 @@ class Base(GitIsolatedTestCase):
 
 # ---------------------------------------------------------------- A: argv, root, config
 
+class CachedKeyTests(Base):
+    """F-20261126-yga8, row F11: every part of the ``cached_history`` key of ``Base.build`` (findings, decs, files, cfg,
+    commit) is pinned: two builds that differ only in that part get different histories (a key without the part
+    would hand the second call the first call's history)."""
+
+    def fingerprint(self, root):
+        data = {}
+        for base, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for n in names:
+                p = os.path.join(base, n)
+                data[os.path.relpath(p, root)] = _read(p)
+        return (data, git(root, "status", "--porcelain", "--untracked-files=all"), git(root, "rev-list", "--count", "HEAD"))
+
+    def differ(self, a, b):
+        self.fresh("one")
+        one = self.fingerprint(self.build(**a))
+        self.fresh("two")
+        two = self.fingerprint(self.build(**b))
+        self.assertNotEqual(one, two)
+        self.fresh("one-again")  # and each call alone is stable: the same arguments give the same history
+        self.assertEqual(self.fingerprint(self.build(**a)), one)
+
+    def test_key_part_findings(self):
+        self.differ({"findings": [frow("F-20260101-aaaa")]}, {"findings": [frow("F-20260101-bbbb")]})
+
+    def test_key_part_decs(self):
+        self.differ({"decs": [drow("Q-AAA-1")]}, {"decs": [drow("Q-BBB-1")]})
+
+    def test_key_part_files(self):
+        self.differ({"files": {"src/x.py": "x\n"}}, {"files": {"src/y.py": "y\n"}})
+
+    def test_key_part_cfg(self):
+        self.differ({"cfg": None}, {"cfg": {**minimal_config(), "decision_classes": {"owner_only": ["hardware"]}}})
+
+    def test_key_part_commit(self):
+        rows = [frow("F-20260101-aaaa")]
+        self.differ({"findings": rows, "commit": True}, {"findings": rows, "commit": False})
+
+
 class ArgvTests(Base):  # A1-A4
     def test_a1_root_absent_cwd_and_env(self):  # A1 (1c.1 A1)
         root = self.build()

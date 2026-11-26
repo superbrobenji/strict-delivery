@@ -79,10 +79,28 @@ def minimal_config() -> dict:
     return {"schema": "config/2", "framework_version": "0.0.0", "profile": "strict"}
 
 
+def _exact(fn: str, name: str, value, typ) -> None:
+    """Row E (owner Q-RS4-1 (A), 2026-11-26): exact types are accepted, subclasses (and every other type) are refused with
+    a named TypeError before the function writes, runs git or calls a build."""
+    if type(value) is not typ:
+        raise TypeError("%s: %s must be exactly %s, not %s" % (fn, name, typ.__name__, type(value).__name__))
+
+
+def _key_ok(key) -> bool:
+    return type(key) in (str, int, bool, type(None)) or (type(key) is tuple and all(_key_ok(k) for k in key))
+
+
 def git(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -> str:
     """Run git in root with a fixed identity and date; return stripped stdout. ``GIT_OPTIONAL_LOCKS=0`` is the
     default, as in ``gates/lib/gitinfo.py``: a probe such as ``git status`` never rewrites ``.git/index`` (a test that
-    compares the index across its own probe would see the probe's write); an explicit ``env`` entry wins."""
+    compares the index across its own probe would see the probe's write); an explicit ``env`` entry wins.
+    Row E1: ``root`` and every argument are exactly ``str``, ``env`` is ``None`` or exactly ``dict``, ``check`` is exactly ``bool``."""
+    _exact("git", "root", root, str)
+    for i, a in enumerate(args):
+        _exact("git", "argument %d" % i, a, str)
+    if env is not None:
+        _exact("git", "env", env, dict)
+    _exact("git", "check", check, bool)
     full_env = dict(os.environ)
     full_env.update(_IDENTITY)
     full_env["LC_ALL"] = "C"
@@ -153,10 +171,15 @@ def _overlaps(real: str, root: str) -> bool:
     return real == root or real.startswith(root + os.sep) or root.startswith(real + os.sep)
 
 
+_UMASK_LOCK = threading.Lock()
+
+
 def _umask() -> int:
-    """The process umask (no read-only getter exists: set it to 0 and put it back at once)."""
-    old = os.umask(0)
-    os.umask(old)
+    """The process umask (no read-only getter exists: set it to 0 and put it back at once, under a lock, so that two
+    threads cannot interleave and leave the umask at 0)."""
+    with _UMASK_LOCK:
+        old = os.umask(0)
+        os.umask(old)
     return old
 
 
@@ -180,7 +203,11 @@ def make_repo(tmp: str, config: Optional[dict] = None) -> str:
     """Make tmp a git repository whose first branch is main, with the config committed; return tmp.
     ``maintenance.auto`` is ``false`` and ``gc.auto`` is ``0`` in every repository returned. An empty tmp under the
     isolated git environment is a copy of a per-process template (one per emitted config text, PATH, umask and GIT_* environment, built the slow
-    way, private temporary directory, removed at exit); any other tmp gets ``git init`` and the commit."""
+    way, private temporary directory, removed at exit); any other tmp gets ``git init`` and the commit.
+    Row E2: ``tmp`` is exactly ``str``, ``config`` is ``None`` or exactly ``dict``."""
+    _exact("make_repo", "tmp", tmp, str)
+    if config is not None:
+        _exact("make_repo", "config", config, dict)
     text = emit(config if config is not None else minimal_config())
     root = _template_root()
     if _overlaps(os.path.realpath(tmp), os.path.realpath(root)):
@@ -214,7 +241,14 @@ def cached_history(key, dest: str, build):
     Under the same conditions as ``make_repo``'s fast path (an empty, real ``dest`` on the template's file system,
     the isolated git environment) the build runs once per key, PATH, umask and GIT_* environment; otherwise ``build(dest)``
     runs on ``dest`` itself. Use only for a test that never depends on fresh history (the commit dates are the fixed
-    ``_IDENTITY`` ones; the copy keeps every mtime, the index included)."""
+    ``_IDENTITY`` ones; the copy keeps every mtime, the index included).
+    Row E3: ``dest`` is exactly ``str``, ``build`` is callable, ``key`` is built of exact ``str``, ``int``, ``bool``,
+    ``None`` and ``tuple`` only."""
+    _exact("cached_history", "dest", dest, str)
+    if not callable(build):
+        raise TypeError("cached_history: build must be callable, not %s" % type(build).__name__)
+    if not _key_ok(key):
+        raise TypeError("cached_history: key must be built of exact str, int, bool, None and tuple, not %s" % type(key).__name__)
     root = _template_root()
     real = os.path.realpath(dest)
     for rroot in (os.path.realpath(root), os.path.realpath(_private_root(_HISTORY_ROOT, "sd-fixture-history-"))):
