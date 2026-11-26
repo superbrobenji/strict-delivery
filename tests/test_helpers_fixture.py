@@ -127,9 +127,36 @@ class Base(GitIsolatedTestCase):
             fh.write(data)
 
     def fresh(self, name):
-        d = os.path.join(self.tmp, name)
+        d = self.inside(os.path.join(self.tmp, name))  # checked before it is created: a name like ".." fails the test
         os.mkdir(d)
         return d
+
+    def inside(self, path):
+        """SAFETY (rows D2, D3, E4; F-20261126-djav): returns ``path`` unchanged when its real path equals or lies below
+        the real path of this test's own directory (``self.tmp``, which holds every ``self.sandbox()`` box), else fails the
+        test with a message that starts ``inside:`` before any guard or write sees the path. ``path`` is exactly ``str``
+        (anything else is a ``TypeError``, before any filesystem call) and absolute (a relative path depends on the
+        working directory). Only ``realpath`` is called, which looks at links and never opens, creates or writes the
+        path. The comparison is case-folded, as ``helpers._overlaps`` compares (chosen: the pair-matrix test hands the
+        guards the case-folded spelling of a path of its sandbox, which must reach the guard; on a case-insensitive file
+        system that spelling is the same directory, on a case-sensitive one it names nothing that exists). It is not a
+        lock: a component swapped for a link after the check is seen by the next call only, which is why the call
+        stands in the argument of the guard call itself."""
+        if type(path) is not str:
+            raise TypeError("inside: path must be exactly str, not %s" % type(path).__name__)
+        if "\0" in path:  # not every interpreter's realpath refuses it: one named verdict on both
+            self.fail("inside: %r holds a NUL" % (path,))
+        try:
+            os.fsencode(path)
+        except UnicodeEncodeError:  # a lone surrogate no file system name can hold
+            self.fail("inside: %r cannot be encoded as a file system name" % (path,))
+        if not os.path.isabs(path):
+            self.fail("inside: %r is not an absolute path" % (path,))
+        real, home = os.path.realpath(path), os.path.realpath(self.tmp)  # lstat and readlink only; never raises here
+        folded, top = real.casefold(), home.casefold().rstrip(os.sep)  # only the real path "/" ends in a separator
+        if folded != top and not folded.startswith(top + os.sep):
+            self.fail("inside: %r is not inside this test's directory %r" % (path, home))
+        return path
 
     def sandbox(self):
         """SAFETY (a test of a refusal guard must never reach a real shared directory if the guard fails): from here
@@ -590,7 +617,7 @@ class HistoryTemplateTest(Base):
             for label, path in (("root", root), ("inside", os.path.join(root, "x")), ("parent", os.path.dirname(root)),
                                 ("a built history", calls[0])):
                 with self.subTest(root=root, label=label), self.assertRaises(ValueError) as cm:
-                    helpers.cached_history("k-h5", path, build)
+                    helpers.cached_history("k-h5", self.inside(path), build)
                 self.assertIn("overlaps the fixture template directory", str(cm.exception))
             self.assertEqual(tree_state(box), before)  # nothing written anywhere in the sandbox
         self.assertEqual(len(calls), 1)
@@ -743,7 +770,7 @@ class InputDomainTest(Base):
         for label, path in (("root itself", root), ("template", tpl), (".git of the template", os.path.join(tpl, ".git")),
                             ("missing under it", inner), ("parent of the root", os.path.dirname(root))):
             with self.subTest(label), self.assertRaises(ValueError) as cm:
-                make_repo(path)
+                make_repo(self.inside(path))
             self.assertIn("overlaps the fixture template directory", str(cm.exception))
         self.assertEqual(tree_state(box), before)  # nothing written anywhere in the sandbox
         self.assertFalse(os.path.exists(inner))
@@ -801,68 +828,271 @@ class InputDomainTest(Base):
             self.assertTrue(tpl.startswith(root + os.sep))
 
 
-TAINT = ("_TEMPLATE_ROOT", "_HISTORY_ROOT", "_template_root", "_private_root", "gettempdir", "REPO", "HOME", "expanduser")
-GUARDED_CALLS = ("make_repo", "cached_history")
+GUARD_ARGS = {"make_repo": ("tmp", 0), "_make_repo_slow": ("tmp", 0), "cached_history": ("dest", 1)}  # name -> (keyword, position) of the path
+OWN_FILE = "test_helpers_fixture.py"
+DYNAMIC = ("getattr", "globals", "vars", "__dict__", "__getattribute__", "attrgetter")  # ways to reach a name given as a string
+
+
+def _callee(node):
+    return getattr(node, "attr", getattr(node, "id", ""))
+
+
+def _dotted(node):
+    """``a.b.c`` for a chain of attributes ending in a name, else ``None``."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    return ".".join([node.id] + parts[::-1]) if isinstance(node, ast.Name) else None
+
+
+def guard_units(tree):
+    """``[(qualified name, scope node)]``: every function and method (at any class depth; a nested function or lambda
+    belongs to the function that holds it), the module level, and the statements of every class body."""
+    units = []
+
+    def collect(node, prefix):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, ast.ClassDef):
+                collect(ch, prefix + ch.name + ".")
+            elif isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                units.append((prefix + ch.name, ch))
+    collect(tree, "")
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    units.append(("<module level>", ast.Module(body=[n for n in tree.body if not isinstance(n, defs)], type_ignores=[])))
+    for cl in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+        units.append((cl.name + ".<class body>", ast.Module(body=[n for n in cl.body if not isinstance(n, defs)], type_ignores=[])))
+    return units
+
+
+def _raises_area(node):
+    """The ids of every node inside an ``assertRaises`` / ``assertRaisesRegex`` block or inside the arguments of such a call."""
+    area = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.With) and any(isinstance(i.context_expr, ast.Call) and _callee(i.context_expr.func).startswith("assertRaises")
+                                             for i in sub.items):
+            for stmt in sub.body:
+                area.update(id(n) for n in ast.walk(stmt))
+        elif isinstance(sub, ast.Call) and _callee(sub.func).startswith("assertRaises"):
+            for a in list(sub.args) + [k.value for k in sub.keywords]:
+                area.update(id(n) for n in ast.walk(a))
+    return area
 
 
 def unsandboxed_guard_tests(tests_dir):
-    """Row H5 safety (F-20261125-hqt5), the class: ``{"file::Class.test"}`` of every test function in ``tests_dir`` that
-    hands ``make_repo`` or ``cached_history`` a path derived (through assignments and loops of the function) from a shared
-    root (``_TEMPLATE_ROOT``, ``_HISTORY_ROOT``, ``gettempdir``, ``REPO``, ``HOME``), and does not call ``self.sandbox(``."""
+    """Row S1 / H5 safety (F-20261125-hqt5, F-20261126-djav; stream-common :65), the class: ``{"file::Qualified.name"}`` of
+    every refusal-guard test in a ``test_*.py`` file of ``tests_dir`` (row D1) that hands ``make_repo``, ``cached_history``
+    or ``_make_repo_slow`` a path that is not positively the test's own (row D2, a closed grammar: everything not listed
+    is reported, whatever it spells). Members: in ``test_helpers_fixture.py`` every function (method, helper, nested
+    function, lambda), the module level and every class body that names a guarded function; in any other module only a
+    guarded call inside an ``assertRaises`` / ``assertRaisesRegex`` block or passed to one (a plain caller that expects no
+    refusal is outside the class). Accepted path forms: ``self.inside(..)`` (checks at run time that the real path lies
+    inside the test's own directory); in ``test_helpers_fixture.py`` also ``self.tmp``, ``self.work``, ``self.fresh(..)``
+    (it calls ``self.inside``) and ``self.sandbox()`` (a box below ``self.tmp``), ``Str(<accepted>)`` and ``None`` and
+    an ``int`` (type-refusal tests); everywhere ``tempfile.mkdtemp(..)`` and ``tempfile.TemporaryDirectory(..)`` (a new
+    directory), ``os.path.join(<accepted>, <relative literal without a ``..`` component>...)``, ``os.path.realpath``,
+    ``os.path.abspath`` and ``os.fsencode`` of an accepted path, the result of ``make_repo`` of an accepted path, a
+    conditional of two accepted paths, and a name whose every binding (assignment, tuple assignment, loop over literal
+    tuples, ``with .. as``, the directory a ``cached_history`` build callback gets) is accepted. A guarded name used other
+    than as a called name (an alias, a string beside ``getattr``/``globals``/``vars``/``__dict__``), a guarded function
+    passed by value to anything but ``assertRaises``/``assertRaisesRegex`` (or ``self.refused(fn, text, *args)`` in the own
+    file), starred arguments, and a rebinding of ``self.tmp`` or ``self.work`` are reported. It reports more than the
+    name-list scan it replaces: that one accepted a ``self.sandbox()`` test with any path."""
     found = set()
     for name in sorted(os.listdir(tests_dir)):
         if not (name.startswith("test_") and name.endswith(".py")):
             continue
         with open(os.path.join(tests_dir, name), encoding="utf-8") as fh:
             text = fh.read()
-        lines = text.split("\n")
-        for qual, node in test_functions(ast.parse(text)):
-            src = "\n".join(lines[node.lineno - 1:node.end_lineno])
-            if not any(g + "(" in src for g in GUARDED_CALLS):
-                continue
-            tainted = set()
-            changed = True
-            while changed:
-                changed = False
-                for sub in ast.walk(node):
-                    if isinstance(sub, ast.Assign):
-                        targets, value = sub.targets, sub.value
-                    elif isinstance(sub, ast.For):
-                        targets, value = [sub.target], sub.iter
-                    else:
-                        continue
-                    vtext = ast.get_source_segment(text, value) or ""
-                    if any(t in vtext for t in TAINT) or any(re.search(r"\b%s\b" % v, vtext) for v in tainted):
-                        for t in targets:
-                            for n in ast.walk(t):
-                                if isinstance(n, ast.Name) and n.id not in tainted:
-                                    tainted.add(n.id)
-                                    changed = True
-            hit = False
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Call) and getattr(sub.func, "attr", getattr(sub.func, "id", "")) in GUARDED_CALLS:
-                    atext = " ".join(ast.get_source_segment(text, a) or "" for a in sub.args)
-                    if any(t in atext for t in TAINT) or any(re.search(r"\b%s\b" % v, atext) for v in tainted):
-                        hit = True
-            if hit and "self.sandbox(" not in src:
+        tree = ast.parse(text)
+        own = name == OWN_FILE
+        builders = set()  # names passed as the build callback of cached_history anywhere in the file
+        for sub in ast.walk(tree):
+            if isinstance(sub, ast.Call) and _callee(sub.func) == "cached_history":
+                for b in list(sub.args[2:3]) + [k.value for k in sub.keywords if k.arg == "build"]:
+                    if isinstance(b, ast.Name):
+                        builders.add(b.id)
+        for qual, node in guard_units(tree):
+            if _guard_problems(node, text, own, qual in builders):
                 found.add(name + "::" + qual)
     return found
 
 
-def test_functions(tree):
-    """``(qualified name, node)`` of every function whose name starts with ``test`` (classes and nesting in the name)."""
-    out = []
+def _guard_problems(node, text, own, is_builder):
+    """The reasons (source texts) why ``node`` hands a guarded function a path that is not positively the test's own."""
+    named = any(isinstance(s, (ast.Name, ast.Attribute)) and _callee(s) in GUARD_ARGS or isinstance(s, ast.Constant) and s.value in GUARD_ARGS
+                for s in ast.walk(node))
+    if not named:  # the unit names no guarded function: not a member
+        return []
+    area = _raises_area(node)
+    scope = named and (own or any(isinstance(s, ast.Call) and _callee(s.func).startswith("assertRaises") for s in ast.walk(node)))
+    binds, stored = {}, set()
 
-    def walk(node, prefix):
-        for ch in ast.iter_child_nodes(node):
-            if isinstance(ch, ast.ClassDef):
-                walk(ch, prefix + ch.name + ".")
-            elif isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if ch.name.startswith("test"):
-                    out.append((prefix + ch.name, ch))
-                walk(ch, prefix + ch.name + ".")
-    walk(tree, "")
-    return out
+    def bind(target, kind, value):
+        for n in ast.walk(target):
+            if isinstance(n, ast.Name):
+                binds.setdefault(n.id, []).append((kind, target, value))
+                stored.add(id(n))
+    other = ("other", None, None)
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Assign):
+            for t in sub.targets:
+                bind(t, "assign", sub.value)
+        elif isinstance(sub, ast.For):
+            bind(sub.target, "for", sub.iter)
+        elif isinstance(sub, ast.withitem) and sub.optional_vars is not None:
+            bind(sub.optional_vars, "with", sub.context_expr)
+        elif isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            a = sub.args
+            for arg in a.posonlyargs + a.args + a.kwonlyargs + [x for x in (a.vararg, a.kwarg) if x]:
+                binds.setdefault(arg.arg, []).append(("param", sub, arg))
+            if not isinstance(sub, ast.Lambda):
+                binds.setdefault(sub.name, []).append(other)
+        elif isinstance(sub, ast.ClassDef):
+            binds.setdefault(sub.name, []).append(other)
+        elif isinstance(sub, ast.ExceptHandler) and sub.name:
+            binds.setdefault(sub.name, []).append(other)
+        elif isinstance(sub, (ast.Import, ast.ImportFrom)):
+            for al in sub.names:
+                binds.setdefault((al.asname or al.name).split(".")[0], []).append(other)
+    for sub in ast.walk(node):  # every other way a name gets a value: augmented, walrus, comprehension, delete, match
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)) and id(sub) not in stored:
+            binds.setdefault(sub.id, []).append(other)
+    handed = set()  # build callbacks of cached_history: their first parameter is the helper's own directory
+    if is_builder:  # a function (a module or class body has no name a callback could be passed by)
+        handed.add(id(node))
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call) and _callee(sub.func) == "cached_history":
+            for b in list(sub.args[2:3]) + [k.value for k in sub.keywords if k.arg == "build"]:
+                if isinstance(b, ast.Lambda):
+                    handed.add(id(b))
+                elif isinstance(b, ast.Name):
+                    handed.update(id(v) for kind, tgt, v in binds.get(b.id, []) if kind == "assign" and isinstance(v, ast.Lambda))
+                    handed.update(id(i) for i in ast.walk(node) if isinstance(i, (ast.FunctionDef, ast.AsyncFunctionDef)) and i.name == b.id)
+
+    def accepted(e, seen):
+        if isinstance(e, ast.Name):
+            if e.id in seen:
+                return True
+            bs = binds.get(e.id)
+            # a parameter is the helper's directory only where the function that binds it holds the use
+            return bool(bs) and all(binding_ok(e.id, b, seen | {e.id}) and (b[0] != "param" or id(e) in {id(n) for n in ast.walk(b[1])})
+                                    for b in bs)
+        if isinstance(e, ast.Attribute):
+            return own and isinstance(e.value, ast.Name) and e.value.id == "self" and e.attr in ("tmp", "work")
+        if isinstance(e, ast.Constant):
+            return own and (e.value is None or (type(e.value) is int))
+        if isinstance(e, ast.Call):
+            f, d = e.func, _dotted(e.func)
+            if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "self":
+                return f.attr == "inside" or (own and f.attr in ("fresh", "sandbox"))
+            if d in ("tempfile.mkdtemp", "tempfile.TemporaryDirectory"):
+                return True
+            if d == "os.path.join" and e.args and not e.keywords:
+                return accepted(e.args[0], seen) and all(relative(a, seen) for a in e.args[1:])
+            if d in ("os.path.realpath", "os.path.abspath", "os.fsencode") and len(e.args) == 1 and not e.keywords:
+                return accepted(e.args[0], seen)
+            if own and d == "Str" and len(e.args) == 1 and not e.keywords:
+                return accepted(e.args[0], seen)
+            if _callee(f) in ("make_repo", "_make_repo_slow"):
+                return path_of(e) is not None and accepted(path_of(e), seen)
+            return False
+        if isinstance(e, ast.IfExp):
+            return accepted(e.body, seen) and accepted(e.orelse, seen)
+        return False
+
+    def relative(a, seen):
+        if isinstance(a, ast.Constant):
+            return isinstance(a.value, str) and a.value[:1] not in ("", "/") and ".." not in a.value.split("/")
+        if isinstance(a, ast.Name):
+            bs = binds.get(a.id)
+            return bool(bs) and a.id not in seen and all(
+                (k == "assign" and relative(v, seen | {a.id})) or (k == "for" and isinstance(t, ast.Name) and isinstance(v, (ast.Tuple, ast.List))
+                                                                   and all(relative(x, seen | {a.id}) for x in v.elts))
+                for k, t, v in bs)
+        return False
+
+    def binding_ok(name, b, seen):
+        kind, tgt, v = b
+        if kind == "param":
+            args = tgt.args.posonlyargs + tgt.args.args
+            return id(tgt) in handed and bool(args) and args[0] is v
+        if kind in ("assign", "with"):
+            return accepted(v, seen) if isinstance(tgt, ast.Name) else positional(tgt, v, name, seen, False)
+        if kind == "for":
+            if isinstance(tgt, ast.Name):
+                return isinstance(v, (ast.Tuple, ast.List)) and all(accepted(x, seen) for x in v.elts)
+            return positional(tgt, v, name, seen, True)
+        return False
+
+    def positional(tgt, v, name, seen, loop):
+        if not isinstance(tgt, ast.Tuple):
+            return False
+        pos = [i for i, t in enumerate(tgt.elts) if isinstance(t, ast.Name) and t.id == name]
+        if len(pos) != 1:
+            return False
+        rows = (v.elts if isinstance(v, (ast.Tuple, ast.List)) else None) if loop else [v]
+        if rows is None:
+            return False
+        return all(isinstance(r, (ast.Tuple, ast.List)) and len(r.elts) == len(tgt.elts) and not any(isinstance(x, ast.Starred) for x in r.elts)
+                   and accepted(r.elts[pos[0]], seen) for r in rows)
+
+    def guard_path(args, keywords, name):
+        kw, idx = GUARD_ARGS[name]
+        if any(isinstance(a, ast.Starred) for a in args) or any(k.arg is None for k in keywords):
+            return "starred"
+        return args[idx] if len(args) > idx else next((k.value for k in keywords if k.arg == kw), None)
+
+    def path_of(call):
+        """The path argument of a guarded call, or ``None`` (absent or starred)."""
+        p = guard_path(call.args, call.keywords, _callee(call.func))
+        return None if p == "starred" else p
+
+    bad, refs = [], set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            callee = _callee(sub.func)
+            if callee in GUARD_ARGS and (own or id(sub) in area):
+                arg = guard_path(sub.args, sub.keywords, callee)
+                if arg == "starred":
+                    bad.append("starred arguments")
+                elif arg is None or not accepted(arg, frozenset()):
+                    bad.append(ast.get_source_segment(text, arg) if arg is not None else "no path argument")
+            # a guarded function passed by value: its arguments are the ones after it (after the text for ``self.refused``)
+            for i, a in enumerate(sub.args):
+                if isinstance(a, (ast.Name, ast.Attribute)) and _callee(a) in GUARD_ARGS:
+                    refs.add(id(a))
+                    if not (own or id(sub) in area or callee.startswith("assertRaises")):
+                        continue  # a plain caller outside the own file expects no refusal: not in the class (row D1 (b))
+                    skip = 1 if callee.startswith("assertRaises") else 2 if own and callee == "refused" else None
+                    if skip is None:
+                        bad.append("%s passed to %s" % (_callee(a), callee))
+                        continue
+                    rest, kws = sub.args[i + skip:], sub.keywords
+                    arg = guard_path(rest, kws, _callee(a))
+                    if arg == "starred":
+                        bad.append("starred arguments")
+                    elif arg is None or not accepted(arg, frozenset()):
+                        bad.append(ast.get_source_segment(text, arg) if arg is not None else "no path argument")
+            if own and len(sub.args) > 1 and isinstance(sub.args[0], ast.Name) and sub.args[0].id == "self" \
+                    and isinstance(sub.args[1], ast.Constant) and sub.args[1].value in ("tmp", "work"):
+                bad.append("rebinds self.%s" % sub.args[1].value)  # setattr(self, "tmp", ..), patch.object(self, "tmp", ..)
+        elif own and isinstance(sub, ast.Attribute) and isinstance(sub.ctx, ast.Store) and isinstance(sub.value, ast.Name) \
+                and sub.value.id == "self" and sub.attr in ("tmp", "work"):
+            bad.append("assigns self.%s" % sub.attr)
+    calls = {id(s.func) for s in ast.walk(node) if isinstance(s, ast.Call)}
+    if scope:
+        dynamic = guard_string = False
+        for sub in ast.walk(node):
+            if isinstance(sub, (ast.Name, ast.Attribute)) and _callee(sub) in GUARD_ARGS and id(sub) not in calls and id(sub) not in refs:
+                bad.append("%s named other than in a call" % _callee(sub))
+            if isinstance(sub, (ast.Name, ast.Attribute)) and _callee(sub) in DYNAMIC:
+                dynamic = True
+            if isinstance(sub, ast.Constant) and sub.value in GUARD_ARGS:
+                guard_string = True
+        if dynamic and guard_string:
+            bad.append("a guarded name as a string beside a dynamic lookup")
+    return bad
 
 
 class OverlapMatrixTest(Base):
@@ -912,9 +1142,9 @@ class OverlapMatrixTest(Base):
                         self.assertTrue(os.path.samefile(path, exact))
                 built = []
                 if guard == "make_repo":
-                    run = lambda: make_repo(path)  # noqa: E731
+                    run = lambda: make_repo(self.inside(path))  # noqa: E731
                 else:
-                    run = lambda: helpers.cached_history("k-cell", path, lambda root: built.append(root) or {})  # noqa: E731
+                    run = lambda: helpers.cached_history("k-cell", self.inside(path), lambda root: built.append(root) or {})  # noqa: E731
                 if self.refused(guard, rname, rel):
                     with self.assertRaises(ValueError) as cm:
                         run()
@@ -970,13 +1200,655 @@ class OverlapMatrixTest(Base):
                "    def test_b(self):\n        for p in (tempfile.gettempdir(),):\n            helpers.cached_history('k', p, b)\n"
                "    def test_c(self):\n        make_repo(os.path.join(REPO, 'x'))\n")
         good = ("class T:\n    def test_a(self):\n        self.sandbox()\n        root = helpers._TEMPLATE_ROOT[0]\n"
-                "        make_repo(os.path.dirname(root))\n"
+                "        make_repo(self.inside(os.path.dirname(root)))\n"
                 "    def test_b(self):\n        make_repo(self.fresh('x'))\n")
-        with tempfile.TemporaryDirectory(dir=self.tmp) as d:
-            self.write(d, "test_bad.py", bad.encode())
-            self.write(d, "test_good.py", good.encode())
-            self.assertEqual(unsandboxed_guard_tests(d), {"test_bad.py::T.test_a", "test_bad.py::T.test_b",
-                                                          "test_bad.py::T.test_c"})
+        own = "test_helpers_fixture.py"  # the file whose every function is a member of the class (row D1 (a))
+        with tempfile.TemporaryDirectory(dir=self.tmp) as d, tempfile.TemporaryDirectory(dir=self.tmp) as g:
+            self.write(d, own, bad.encode())
+            self.write(g, own, good.encode())
+            self.assertEqual(unsandboxed_guard_tests(d), {own + "::T.test_a", own + "::T.test_b", own + "::T.test_c"})
+            self.assertEqual(unsandboxed_guard_tests(g), set())
+
+
+class GuardScanTest(Base):
+    """Rows D1, D2 (F-20261126-djav): the S1 scan ``unsandboxed_guard_tests`` over planted files in a scratch tests
+    directory (the production scan, never an extracted helper). Membership (D1): every function of
+    tests/test_helpers_fixture.py that names a guarded function; in any other module only a guarded call inside an
+    ``assertRaises`` / ``assertRaisesRegex`` block or passed to one (a plain caller is outside the class). The closed
+    grammar (D2): a path argument is accepted only in the forms listed in ``unsandboxed_guard_tests``'s docstring."""
+    OWN = "test_helpers_fixture.py"
+    OTHER = "test_other.py"
+    SPELLINGS = (  # the seven reviewer spellings of a shared root, TMPDIR in its three forms: (label, expression)
+        ("dirname-of-self-tmp", "os.path.dirname(self.tmp)"),
+        ("slash", '"/"'),
+        ("tempfile-tempdir", "tempfile.tempdir"),
+        ("environ-subscript", 'os.environ["TMPDIR"]'),
+        ("environ-get", 'os.environ.get("TMPDIR")'),
+        ("os-getenv", 'os.getenv("TMPDIR")'),
+        ("getcwd", "os.getcwd()"),
+        ("dirname-of-file", "os.path.dirname(__file__)"),
+        ("helper-method-return", "self.shared_dir()"),
+        ("module-function-return", "shared_dir()"),
+    )
+
+    def scan(self, **files):
+        """The set the real scan reports for a scratch directory holding ``files`` (name -> source text)."""
+        d = tempfile.mkdtemp(dir=self.tmp)
+        for name, src in files.items():
+            self.write(d, name, src.encode("utf-8"))
+        return unsandboxed_guard_tests(d)
+
+    @staticmethod
+    def guard_test(call):
+        return "class T(Base):\n    def test_x(self):\n        with self.assertRaises(ValueError):\n            %s\n" % call
+
+    def test_each_listed_spelling_is_reported_for_both_guards_in_and_outside_the_own_file(self):
+        for label, expr in self.SPELLINGS:
+            for call in ("make_repo(%s)", "helpers.cached_history('k', %s, build)", "_make_repo_slow(%s, {})",
+                         "make_repo(tmp=%s)"):
+                src = self.guard_test(call % expr)
+                with self.subTest(label=label, call=call):
+                    self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::T.test_x"})
+                    self.assertEqual(self.scan(**{self.OTHER: src}), {self.OTHER + "::T.test_x"})
+
+    def test_a_spelling_reaches_the_scan_through_a_name_or_a_conditional(self):
+        for label, expr in self.SPELLINGS:
+            for body in ("        p = %s\n        with self.assertRaises(ValueError):\n            make_repo(p)\n",
+                         "        p = self.tmp if self.x else %s\n        with self.assertRaises(ValueError):\n            make_repo(p)\n",
+                         "        for p in (self.tmp, %s):\n            with self.assertRaises(ValueError):\n                make_repo(p)\n"):
+                src = "class T(Base):\n    def test_x(self):\n" + body % expr
+                with self.subTest(label=label, body=body[:30]):
+                    self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::T.test_x"})
+
+    def reported(self, expr):
+        """``expr`` as the path of a guarded call in a refusal-guard test is reported, in the own file and in another one."""
+        src = self.guard_test("make_repo(%s)" % expr)
+        self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::T.test_x"})
+        self.assertEqual(self.scan(**{self.OTHER: src}), {self.OTHER + "::T.test_x"})
+
+    def test_spelling_dirname_of_self_tmp(self):
+        self.reported("os.path.dirname(self.tmp)")
+
+    def test_spelling_slash(self):
+        self.reported('"/"')
+
+    def test_spelling_tempfile_tempdir(self):
+        self.reported("tempfile.tempdir")
+
+    def test_spelling_environ_subscript_tmpdir(self):
+        self.reported('os.environ["TMPDIR"]')
+
+    def test_spelling_environ_get_tmpdir(self):
+        self.reported('os.environ.get("TMPDIR")')
+
+    def test_spelling_getenv_tmpdir(self):
+        self.reported('os.getenv("TMPDIR")')
+
+    def test_spelling_getcwd(self):
+        self.reported("os.getcwd()")
+
+    def test_spelling_dirname_of_file(self):
+        self.reported("os.path.dirname(__file__)")
+
+    def test_spelling_helper_method_return_value(self):
+        src = ("class T(Base):\n    def shared(self):\n        return os.path.dirname(self.tmp)\n"
+               "    def test_x(self):\n        with self.assertRaises(ValueError):\n            make_repo(self.shared())\n")
+        self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::T.test_x"})
+        self.assertEqual(self.scan(**{self.OTHER: src}), {self.OTHER + "::T.test_x"})
+
+    def test_the_wrapped_form_is_accepted_and_nothing_else_of_these_spellings(self):
+        for label, expr in self.SPELLINGS:
+            src = self.guard_test("make_repo(self.inside(%s))" % expr)
+            with self.subTest(label=label):
+                self.assertEqual(self.scan(**{self.OWN: src}), set())
+                self.assertEqual(self.scan(**{self.OTHER: src}), set())
+
+    def test_aliasing_a_guarded_name_or_reaching_it_through_a_string_is_reported(self):
+        cases = (
+            "mr = make_repo\n        with self.assertRaises(ValueError):\n            mr(self.tmp)",
+            "mr = helpers.make_repo\n        with self.assertRaises(ValueError):\n            mr(self.tmp)",
+            "with self.assertRaises(ValueError):\n            getattr(helpers, 'make_repo')(self.tmp)",
+            "with self.assertRaises(ValueError):\n            getattr(helpers, \"make_\" \"repo\")(self.tmp)",
+            "with self.assertRaises(ValueError):\n            helpers.__dict__['make_repo'](self.tmp)",
+            "with self.assertRaises(ValueError):\n            globals()['cached_history']('k', self.tmp, b)",
+            "with self.assertRaises(ValueError):\n            vars(helpers)['_make_repo_slow'](self.tmp, {})",
+            "fn = (make_repo,)[0]\n        with self.assertRaises(ValueError):\n            fn(self.tmp)",
+            "with self.assertRaises(ValueError):\n            helpers.__getattribute__('make_repo')(self.tmp)",
+            "with self.assertRaises(ValueError):\n            operator.attrgetter('make_repo')(helpers)(self.tmp)",
+        )
+        for body in cases:
+            src = "class T(Base):\n    def test_x(self):\n        " + body + "\n"
+            with self.subTest(body=body.split("\n")[0]):
+                self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::T.test_x"})
+                self.assertEqual(self.scan(**{self.OTHER: src}), {self.OTHER + "::T.test_x"})
+
+    def test_membership_a_guard_test_in_another_module_is_in_a_plain_caller_is_out(self):
+        shared = "os.path.dirname(self.tmp)"
+        member_forms = (
+            self.guard_test("make_repo(%s)" % shared),
+            "class T(Base):\n    def test_x(self):\n        self.assertRaises(ValueError, make_repo, %s)\n" % shared,
+            "class T(Base):\n    def test_x(self):\n        self.assertRaisesRegex(ValueError, 'x', helpers.cached_history, 'k', %s, b)\n" % shared,
+            "class T(Base):\n    def test_x(self):\n        self.assertRaises(ValueError, lambda: make_repo(%s))\n" % shared,
+            "class T(Base):\n    def test_x(self):\n        with self.subTest(), self.assertRaisesRegex(ValueError, 'x'):\n            make_repo(%s)\n" % shared,
+            "class T(Base):\n    def test_x(self):\n        self.assertRaises(ValueError, msg=make_repo(%s))\n" % shared,
+        )
+        for src in member_forms:
+            with self.subTest(src=src.split("\n")[2]):
+                self.assertEqual(self.scan(**{self.OTHER: src}), {self.OTHER + "::T.test_x"})
+        plain = ("class T(Base):\n    def test_x(self):\n        make_repo(%s)\n"
+                 "        with self.assertRaises(KeyError):\n            {}['k']\n" % shared)
+        with_helper = "class T(Base):\n    def new(self):\n        return make_repo(%s)\n" % shared
+        self.assertEqual(self.scan(**{self.OTHER: plain, "test_third.py": with_helper}), set())
+        self.assertEqual(self.scan(**{self.OWN: plain}), {self.OWN + "::T.test_x"})  # the own file: every function is in
+
+    def test_membership_every_function_kind_of_the_own_file_is_scanned(self):
+        bad = 'make_repo("/")'
+        kinds = {
+            "method": ("class T(Base):\n    def test_a(self):\n        %s\n" % bad, "T.test_a"),
+            "helper method": ("class T(Base):\n    def build_it(self):\n        return %s\n" % bad, "T.build_it"),
+            "module function": ("def helper_fn():\n    %s\n" % bad, "helper_fn"),
+            "module level": ("%s\n" % bad, "<module level>"),
+            "class body": ("class T(Base):\n    made = %s\n" % bad, "T.<class body>"),
+            "nested function": ("class T(Base):\n    def test_n(self):\n        def inner():\n            %s\n        inner()\n" % bad,
+                                "T.test_n"),
+            "nested class": ("class T(Base):\n    class U:\n        def test_u(self):\n            %s\n" % bad, "T.U.test_u"),
+            "nested class body": ("class T(Base):\n    class U:\n        made = %s\n" % bad, "U.<class body>"),
+            "lambda": ("class T(Base):\n    def test_l(self):\n        f = lambda: %s\n        f()\n" % bad, "T.test_l"),
+            "async function": ("class T(Base):\n    async def test_s(self):\n        %s\n" % bad, "T.test_s"),
+        }
+        for kind, (src, key) in kinds.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::" + key})
+        good = {kind: src.replace(bad, "make_repo(self.inside('/x'))") for kind, (src, key) in kinds.items()}
+        for kind, src in good.items():
+            with self.subTest(kind=kind, wrapped=True):
+                self.assertEqual(self.scan(**{self.OWN: src}), set())
+
+    def test_the_accepted_forms_of_the_grammar_and_their_look_alikes(self):
+        head = "class T(Base):\n    def test_x(self):\n"
+        accepted = (
+            "self.tmp", "self.work", "self.fresh('a')", "self.fresh(name)", "self.sandbox()", "self.inside(x)",
+            "tempfile.mkdtemp(dir=self.tmp)", "os.path.join(self.tmp, 'a', 'b')", "os.path.join(self.sandbox(), 'a')",
+            "os.path.realpath(self.tmp)", "os.path.abspath(self.fresh('a'))", "self.tmp if x else self.work",
+            "make_repo(self.fresh('a'))", "Str(self.tmp)", "os.fsencode(self.tmp)", "None", "3",
+            "os.path.join(self.inside(p), 'a')", "_make_repo_slow(self.fresh('a'), {})", "os.path.join(self.fresh('a'), 'b', 'c')",
+        )
+        for expr in accepted:
+            with self.subTest(accepted=expr):
+                self.assertEqual(self.scan(**{self.OWN: head + "        with self.assertRaises(TypeError):\n            make_repo(%s)\n" % expr}),
+                                 set())
+        refused = (
+            "os.path.join(self.tmp, '..')", "os.path.join(self.tmp, '../x')", "os.path.join(self.tmp, 'a/../..')",
+            "os.path.join(self.tmp, '/etc')", "os.path.join(self.tmp, name)", "os.path.join(self.tmp, 'a' + x)",
+            "os.path.join('/', 'a')", "os.path.join(x, 'a')", "'a'", "''", "x", "self.root", "self.tmp.upper()",
+            "self.tmp + '/..'", "os.path.dirname(self.fresh('a'))", "os.path.normpath(self.tmp)", "str(self.tmp)",
+            "tmp_of(self)", "[self.tmp][0]", "self.tmp[:-1]", "f'{self.tmp}/..'", "make_repo(os.getcwd())",
+            "other.tmp", "other.inside(x)", "True", "self.tmp if x else '/'", "'/' if x else self.tmp", "os.path.join(self.tmp, '')",
+            "os.path.join(self.tmp, 3)", "os.path.join(self.tmp, 'a', x=1)", "os.path.realpath(self.tmp, strict=True)",
+            "os.path.realpath(self.tmp, '/')", "Str(self.tmp, '/')", "Str(x=self.tmp)", "os.path.join()", "os.path.join(**kw)",
+            "mkdtemp(dir=self.tmp)", "other.mkdtemp()", "Str('/')", "os.fsencode('/')", "4.5", "b'/'", "self.fresh",
+        )
+        for expr in refused:
+            with self.subTest(refused=expr):
+                self.assertEqual(self.scan(**{self.OWN: head + "        with self.assertRaises(TypeError):\n            make_repo(%s)\n" % expr}),
+                                 {self.OWN + "::T.test_x"})
+
+    def test_a_name_is_accepted_only_when_every_binding_is_and_loops_need_literal_elements(self):
+        head = "class T(Base):\n    def test_x(self):\n"
+        ok = (
+            "        p = self.fresh('a')\n        make_repo(p)\n",
+            "        p = self.fresh('a')\n        q = os.path.join(p, 'b')\n        make_repo(q)\n",
+            "        for p in (self.tmp, self.work):\n            make_repo(p)\n",
+            "        for p, c in ((self.tmp, 1), (self.work, 2)):\n            make_repo(p)\n",
+            "        with tempfile.TemporaryDirectory(dir=self.tmp) as d:\n            make_repo(d)\n",
+            "        n = 'sub'\n        make_repo(os.path.join(self.tmp, n))\n",
+            "        for n in ('a', 'b'):\n            make_repo(os.path.join(self.tmp, n))\n",
+            "        helpers.cached_history('k', self.tmp, lambda root: make_repo(root))\n",
+            "        f = lambda root: make_repo(root)\n        helpers.cached_history('k', self.tmp, f)\n",
+            "        p = self.fresh('a')\n        p = os.path.join(p, 'b')\n        make_repo(p)\n",
+            "        p, q = self.tmp, self.work\n        make_repo(p)\n",
+            "        helpers.cached_history('k', self.tmp, build=lambda root: make_repo(root))\n",
+            "        def build(root):\n            make_repo(root)\n        helpers.cached_history('k', self.tmp, build)\n",
+        )
+        bad = (
+            "        p = self.fresh('a')\n        p = '/'\n        make_repo(p)\n",
+            "        p = self.fresh('a')\n        p += '/..'\n        make_repo(p)\n",
+            "        p = self.fresh('a')\n        (p := '/')\n        make_repo(p)\n",
+            "        p = self.fresh('a')\n        del p\n        make_repo(p)\n",
+            "        p = self.fresh('a')\n        with open('x') as p:\n            make_repo(p)\n",
+            "        p = self.fresh('a')\n        try:\n            pass\n        except OSError as p:\n            make_repo(p)\n",
+            "        p = self.fresh('a')\n        import os as p\n        make_repo(p)\n",
+            "        for p in (self.tmp, '/'):\n            make_repo(p)\n",
+            "        for p in roots():\n            make_repo(p)\n",
+            "        for p in [x for x in ('/',)]:\n            make_repo(p)\n",
+            "        for p, c in ((self.tmp, 1), ('/', 2)):\n            make_repo(p)\n",
+            "        for p, c in rows:\n            make_repo(p)\n",
+            "        for p, c in ((self.tmp,),):\n            make_repo(p)\n",
+            "        for p, c in ((self.tmp, *r),):\n            make_repo(p)\n",
+            "        for p, p in ((self.tmp, self.work),):\n            make_repo(p)\n",
+            "        n = 'a'\n        n = n\n        make_repo(os.path.join(self.tmp, n))\n",
+            "        for n in names:\n            make_repo(os.path.join(self.tmp, n))\n",
+            "        for n, m in (('a', 'b'),):\n            make_repo(os.path.join(self.tmp, n))\n",
+            "        f = lambda root: 0\n        helpers.cached_history('k', self.tmp, f)\n        make_repo(root)\n",
+            "        for c, p in ((1, self.tmp),):\n            make_repo(p)\n            p = '/'\n",
+            "        p, q = '/', self.tmp\n        make_repo(p)\n",
+            "        n = '..'\n        make_repo(os.path.join(self.tmp, n))\n",
+            "        for n in ('a', '..'):\n            make_repo(os.path.join(self.tmp, n))\n",
+            "        helpers.cached_history('k', self.tmp, lambda root: 0)\n        make_repo(root)\n",
+            "        def build(root):\n            make_repo(root)\n        other(build)\n",
+            "        def build(root, extra):\n            make_repo(extra)\n        helpers.cached_history('k', self.tmp, build)\n",
+            "        self.tmp = '/'\n        make_repo(self.tmp)\n",
+            "        self.work = os.getcwd()\n        make_repo(self.work)\n",
+            "        make_repo(*args)\n",
+            "        make_repo(**kw)\n",
+            "        make_repo()\n",
+        )
+        for body in ok:
+            with self.subTest(ok=body):
+                self.assertEqual(self.scan(**{self.OWN: head + body}), set())
+        for body in bad:
+            with self.subTest(bad=body):
+                self.assertEqual(self.scan(**{self.OWN: head + body}), {self.OWN + "::T.test_x"})
+
+    def test_a_guard_passed_by_value_maps_its_arguments_to_the_guards_parameters(self):
+        head = "class T(Base):\n    def test_x(self):\n"
+        cases = (  # (statement, reported)
+            ("self.refused(make_repo, 'make_repo: tmp must be exactly str', Str(self.fresh('a')))", False),
+            ("self.refused(make_repo, 'make_repo: tmp must be exactly str', '/')", True),
+            ("self.refused(make_repo, 'x', self.fresh('a'), 1)", False),
+            ("self.refused(make_repo, 'x', self.fresh('a'), os.getcwd())", False),  # the config is no path
+            ("self.refused(helpers.cached_history, 'x', 'k', Str(self.tmp), build)", False),
+            ("self.refused(helpers.cached_history, 'x', 'k', '/', build)", True),
+            ("self.refused(helpers.cached_history, 'x', 'k', dest='/', build=build)", True),
+            ("self.refused(helpers.cached_history, 'x', '/', self.tmp, build)", False),  # the key is no path
+            ("self.refused(make_repo, 'x')", True),
+            ("self.refused(make_repo)", True),
+            ("self.refused(*args)", False),
+            ("self.refused(make_repo, 'x', *rest)", True),
+            ("self.assertRaises(TypeError, make_repo, self.tmp)", False),
+            ("self.assertRaises(TypeError, make_repo, '/')", True),
+            ("self.assertRaisesRegex(TypeError, 'x', make_repo, '/')", True),
+            ("self.assertRaises(TypeError, make_repo)", True),
+            ("self.other(make_repo, self.tmp)", True),  # any other consumer of the function itself
+            ("fns = [make_repo]", True),
+            ("x = helpers.cached_history", True),
+        )
+        for stmt, reported in cases:
+            with self.subTest(stmt=stmt):
+                self.assertEqual(self.scan(**{self.OWN: head + "        " + stmt + "\n"}),
+                                 {self.OWN + "::T.test_x"} if reported else set())
+        outside = "class T(Base):\n    def test_x(self):\n        self.refused(make_repo, 'x', self.tmp)\n"
+        self.assertEqual(self.scan(**{self.OTHER: outside}), set())  # `refused` is the convention of the own file only
+        other = ("class T(Base):\n    def test_x(self):\n        with self.assertRaises(ValueError):\n"
+                 "            self.refused(make_repo, 'x', self.tmp)\n")
+        self.assertEqual(self.scan(**{self.OTHER: other}), {self.OTHER + "::T.test_x"})
+
+    def test_the_own_file_forms_are_not_accepted_in_other_modules_and_inside_is(self):
+        for expr in ("self.tmp", "self.work", "self.fresh('a')", "self.sandbox()", "Str(self.tmp)"):
+            with self.subTest(expr=expr):
+                self.assertEqual(self.scan(**{self.OTHER: self.guard_test("make_repo(%s)" % expr)}),
+                                 {self.OTHER + "::T.test_x"})
+        for expr in ("self.inside(p)", "tempfile.mkdtemp()", "os.path.join(self.inside(p), 'a')", "os.fsencode(self.inside(p))"):
+            with self.subTest(expr=expr):
+                self.assertEqual(self.scan(**{self.OTHER: self.guard_test("make_repo(%s)" % expr)}), set())
+
+    def test_the_build_callback_of_a_module_function_is_the_helpers_directory(self):
+        src = ("def builder(root):\n    make_repo(root)\n\ndef other(root):\n    make_repo(root)\n\n"
+               "class T(Base):\n    def test_x(self):\n        helpers.cached_history('k', self.tmp, builder)\n")
+        self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::other"})
+        self.assertEqual(self.scan(**{self.OWN: src.replace("builder)", "builder, 0)")}), {self.OWN + "::other"})
+        src2 = src.replace("self.tmp, builder)", "self.tmp, build=builder)")
+        self.assertEqual(self.scan(**{self.OWN: src2}), {self.OWN + "::other"})
+        self.assertEqual(self.scan(**{self.OWN: src.replace("helpers.cached_history", "helpers.unrelated")}),
+                         {self.OWN + "::builder", self.OWN + "::other"})
+
+    def test_self_tmp_is_never_assigned_in_a_scanned_function(self):
+        for stmt in ("self.tmp = '/'", "self.work = '/'", "self.tmp, self.x = '/', 1", "setattr(self, 'tmp', '/')",
+                     "mock.patch.object(self, 'tmp', '/').start()"):
+            src = "class T(Base):\n    def test_x(self):\n        %s\n        make_repo(self.tmp)\n" % stmt
+            with self.subTest(stmt=stmt):
+                self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::T.test_x"})
+
+    def test_a_plain_caller_in_another_module_that_sets_self_work_is_outside_the_class(self):
+        """The shape of ``tests/test_index.py`` ``Base.build``: it sets ``self.work`` and builds a history, expecting no refusal."""
+        src = ("class Base(T):\n    def build(self):\n        self.work = os.path.join(self.tmp, 'w1')\n        setattr(self, 'tmp', 1)\n"
+               "        cached_history('k', self.work, make)\n        make_repo(self.work)\n")
+        self.assertEqual(self.scan(**{self.OTHER: src}), set())
+        self.assertEqual(self.scan(**{self.OWN: src}), {self.OWN + "::Base.build"})
+
+    def test_only_test_python_files_are_read(self):
+        bad = self.guard_test("make_repo('/')")
+        self.assertEqual(self.scan(**{"test_notes.txt": "def (", "helpers_x.py": bad, "testing.py": bad, "conftest.py": bad,
+                                      "test_ok.py": "x = 1\n"}), set())
+        self.assertEqual(self.scan(**{"test_a.py": bad}), {"test_a.py::T.test_x"})
+
+    def test_a_string_alone_or_a_dynamic_lookup_alone_is_not_reported(self):
+        head = "class T(Base):\n    def test_x(self):\n"
+        for body in ("        names = ['make_repo']\n        make_repo(self.fresh('a'))\n",
+                     "        x = getattr(self, 'y')\n        make_repo(self.fresh('a'))\n"):
+            with self.subTest(body=body):
+                self.assertEqual(self.scan(**{self.OWN: head + body}), set())
+
+    def test_a_guarded_name_stored_to_is_reported(self):
+        for stmt in ("make_repo = self.stub", "helpers.make_repo = self.stub", "cached_history, x = self.a, 1"):
+            with self.subTest(stmt=stmt):
+                self.assertEqual(self.scan(**{self.OWN: "class T(Base):\n    def test_x(self):\n        %s\n" % stmt}),
+                                 {self.OWN + "::T.test_x"})
+
+    def test_the_old_teeth_cases_are_still_reported_and_a_sandboxed_root_needs_the_wrapped_form(self):
+        old_bad = ("class T(Base):\n    def test_a(self):\n        root = helpers._TEMPLATE_ROOT[0]\n"
+                   "        make_repo(os.path.dirname(root))\n"
+                   "    def test_b(self):\n        for p in (tempfile.gettempdir(),):\n            helpers.cached_history('k', p, b)\n"
+                   "    def test_c(self):\n        make_repo(os.path.join(REPO, 'x'))\n"
+                   "    def test_d(self):\n        self.sandbox()\n        root = helpers._TEMPLATE_ROOT[0]\n"
+                   "        make_repo(os.path.dirname(root))\n")
+        self.assertEqual(self.scan(**{self.OWN: old_bad}), {self.OWN + "::T.test_" + n for n in "abcd"})
+        wrapped = old_bad.replace("make_repo(os.path.dirname(root))", "make_repo(self.inside(os.path.dirname(root)))")
+        self.assertEqual(self.scan(**{self.OWN: wrapped}), {self.OWN + "::T.test_" + n for n in "bc"})
+
+    def test_the_scan_over_the_real_tests_directory_reports_nothing_and_fresh_is_the_checked_form(self):
+        self.assertEqual(unsandboxed_guard_tests(os.path.join(REPO, "tests")), set())
+        src = inspect.getsource(Base.fresh)
+        self.assertIn("self.inside(os.path.join(self.tmp, name))", src)  # `self.fresh(..)` is accepted because of this line
+        # each name is chosen so that `os.mkdir` could not create anything if the check were gone: an existing directory
+        # (EEXIST) or a missing parent (ENOENT), so a weakened `inside` writes nothing here
+        for bad in ("..", "../x/y", "a/../..", "/etc", "a" + os.sep + ".." + os.sep + ".."):
+            with self.subTest(name=bad):
+                before = tree_state(self.tmp)
+                with self.assertRaises(AssertionError) as cm:
+                    self.fresh(bad)
+                self.assertTrue(str(cm.exception).startswith("inside: "), str(cm.exception))
+                self.assertEqual(tree_state(self.tmp), before)
+
+
+class Probe(object):
+    """A stand-in test whose own directory is ``tmp``: ``inside`` is the real ``Base.inside`` bound to it, ``fail`` raises
+    ``AssertionError`` as ``TestCase.fail`` does."""
+    inside = Base.inside
+
+    def __init__(self, tmp):
+        self.tmp = tmp
+
+    def fail(self, msg=None):
+        raise AssertionError(msg)
+
+
+class InsideTest(Base):
+    """Rows D3 and E4 (F-20261126-djav): ``Base.inside(path)``, the run-time check behind the S1 scan. D3: a seeded,
+    generated matrix of path role (the argument, a parent of it, the test's own directory as holder) x file state
+    (absent, regular, directory, symlink to inside, symlink to outside, FIFO, non-UTF-8 name) x relation of the
+    location (equal, below, above, sibling of the holder) x spelling (exact, case-folded) x moment (at the check;
+    between check and use). The expected verdict of every cell is written by hand in ``expect``, from the row: the
+    path is returned only when its real path equals or lies below the real path of the holder, else the test fails
+    with a message that starts ``inside:``. E4: exact ``str`` accepted; a subclass, bytes, a PathLike, None refused."""
+    STATES = ("absent", "regular", "directory", "symlink-inside", "symlink-outside", "fifo", "non-utf8")
+    ROLES = ("argument", "parent", "holder")
+    RELATIONS = ("equal", "below", "above", "sibling")
+    SPELLINGS = ("exact", "folded")
+    SEEDS = tuple(range(1, 9))
+    # names: ASCII, accents, case folds that change length (ß, ﬁ, İ), a code point new in Unicode 14 and one whose category
+    # differs between 3.9 and 3.13, a surrogate-escaped (non-UTF-8) name, and glob or pathspec magic (* ? [ ] ! : \ and
+    # git's ``:(top)``, ``:!x``, ``:/``)
+    POOL = ("a", "é", "ß", "ﬁ", "İ", "x y", "dot.d", "-dash", "\U0001fae0", "ퟻ", "Ꟁ", "n\nl", "t\tb", "g*lob", "q?", "[x]",
+            "[!a]", ":(top)m", ":!ex", ":(glob)r", "b\\s", "{a,b}", "~tilde", "$HOME")
+
+    @staticmethod
+    def expect(role, relation, state, spelling, case_insensitive):
+        """The row, by hand. ``relation`` is where the object (the argument, or the parent of the argument) lives
+        relative to the holder. A symlink state decides the real path (its target); every other state leaves the real
+        path equal to the lexical location. A holder is judged by its real path, so every path equal to or below the
+        holder (spelled through the holder or through a link to it) is accepted and nothing else is. The comparison
+        folds case: a case-folded spelling is the same directory on a case-insensitive file system (a link in it still
+        resolves), and on a case-sensitive one it names nothing that exists, so it is judged by its lexical place."""
+        if role == "holder":
+            if spelling == "folded" and state.startswith("symlink") and not case_insensitive:
+                return False  # the folded name of the holder's link is no link: its lexical place is not the holder's real path
+            return relation in ("equal", "below")
+        if state == "symlink-outside":
+            real_outside = True
+        elif state == "symlink-inside":
+            real_outside = False
+        else:
+            real_outside = relation not in ("equal", "below")
+        if spelling == "folded" and state.startswith("symlink") and not case_insensitive:
+            real_outside = relation not in ("equal", "below")  # on a case-sensitive file system the folded name is no link
+        return not real_outside
+
+    @staticmethod
+    def fold(path):
+        """Upper-case the ASCII letters only (the upper case of other letters can be a different name: ß -> SS)."""
+        return "".join(c.upper() if c.isascii() else c for c in path)
+
+    def world(self, rng, seed):
+        """A private world under this test's own directory: ``scratch`` holds ``holder`` (the probe's own directory),
+        ``outside`` (a sibling) and a target directory in each. Names are drawn from the pool, each made unique by an
+        index, so no two casefold equal."""
+        names = rng.sample(self.POOL, 6)
+        scratch = self.fresh("world-%d" % seed)
+        w = {"scratch": scratch}
+        for i, key in enumerate(("holder", "outside", "in-target", "out-target", "deep", "other")):
+            w[key] = names[i] + "-%d" % i
+        w["holder"], w["outside"] = os.path.join(scratch, w["holder"]), os.path.join(scratch, w["outside"])
+        os.mkdir(w["holder"])
+        os.mkdir(w["outside"])
+        w["in-target"], w["out-target"] = os.path.join(w["holder"], w["in-target"]), os.path.join(w["outside"], w["out-target"])
+        os.mkdir(w["in-target"])
+        os.mkdir(w["out-target"])
+        return w
+
+    @staticmethod
+    def make(path, state, w):
+        """Create the object of ``state`` at ``path``; True when it exists as that state (a file system may refuse a
+        non-UTF-8 name: then the cell is the absent one)."""
+        if state == "absent":
+            return True
+        if state == "directory":
+            os.mkdir(path)
+        elif state == "regular":
+            with open(path, "wb") as fh:
+                fh.write(b"x")
+        elif state == "symlink-inside":
+            os.symlink(w["in-target"], path)
+        elif state == "symlink-outside":
+            os.symlink(w["out-target"], path)
+        elif state == "fifo":
+            os.mkfifo(path)
+        elif state == "non-utf8":
+            try:
+                with open(path, "wb") as fh:
+                    fh.write(b"x")
+            except OSError:  # EILSEQ on APFS: the name cannot exist; the check still sees the name
+                return False
+        return True
+
+    def cells(self, rng, w):
+        """``(role, relation, state, spelling, path, holder_spelling)``: every cell of the cross product that exists
+        (an object that is the holder or its parent directory has the state ``directory`` only)."""
+        out = []
+        holder, scratch = w["holder"], w["scratch"]
+        loc = {"below": holder, "sibling": w["outside"]}
+        n = 0
+        for state in self.STATES:
+            for relation in ("below", "sibling"):
+                for role in ("argument", "parent"):
+                    n += 1
+                    depth = rng.randrange(0, 3)  # directories between the location and the object
+                    where = loc[relation]
+                    for k in range(depth):
+                        where = os.path.join(where, "d%d-%d" % (n, k))
+                        os.mkdir(where)
+                    name = "%s-%d" % (rng.choice(self.POOL), n) if state != "non-utf8" else os.fsdecode(b"o%d-\xff\xfe" % n)
+                    obj = os.path.join(where, name)
+                    self.make(obj, state, w)
+                    rest = [] if role == "argument" else ["child"] + ["r%d" % k for k in range(rng.randrange(0, 2))]
+                    path = os.path.join(obj, *rest)
+                    out.append((role, relation, state, "exact", path, holder))
+                    out.append((role, relation, state, "folded", self.fold(path), holder))
+        link = os.path.join(holder, "link-to-holder")
+        os.symlink(holder, link)
+        for spelling, p in (("exact", holder), ("folded", self.fold(holder))):
+            out.append(("argument", "equal", "directory", spelling, p, holder))
+            out.append(("argument", "above", "directory", spelling, scratch if spelling == "exact" else self.fold(scratch), holder))
+        out.append(("argument", "equal", "symlink-inside", "exact", link, holder))  # a link to the holder is the holder
+        # the holder as a role: the probe's own directory is spelled through a link, case-folded, absent, a file, a FIFO
+        for hstate in self.STATES:
+            hp = os.path.join(scratch, "h-%s" % hstate)
+            if hstate == "symlink-inside":
+                os.symlink(holder, hp)  # a link to a directory: its real path is the holder's
+            elif hstate == "symlink-outside":
+                os.symlink(w["out-target"], hp)
+            elif hstate == "directory":
+                os.mkdir(hp)
+            elif hstate == "non-utf8":
+                hp = os.path.join(scratch, os.fsdecode(b"h\xff"))
+            else:
+                self.make(hp, hstate, w)
+            for relation, rel_path in (("equal", hp), ("below", os.path.join(hp, "x", "y")),
+                                       ("above", scratch), ("sibling", os.path.join(scratch, "sibling-of-h"))):
+                out.append(("holder", relation, hstate, "exact", rel_path, hp))
+            out.append(("holder", "below", hstate, "folded", self.fold(os.path.join(hp, "x")), hp))
+        return out
+
+    def run_cell(self, cell, case_insensitive, seed):
+        role, relation, state, spelling, path, holder = cell
+        want = self.expect(role, relation, state, spelling, case_insensitive)
+        label = "seed=%d role=%s relation=%s state=%s spelling=%s path=%r holder=%r" % (seed, role, relation, state, spelling, path, holder)
+        probe = Probe(holder)
+        with mock.patch("builtins.open", side_effect=AssertionError("inside opened a file: " + label)), \
+                mock.patch.object(os, "open", side_effect=AssertionError("inside opened a file: " + label)), \
+                mock.patch.object(os, "mkdir", side_effect=AssertionError("inside created: " + label)), \
+                mock.patch.object(os, "makedirs", side_effect=AssertionError("inside created: " + label)), \
+                mock.patch.object(os, "mkfifo", side_effect=AssertionError("inside created: " + label)), \
+                mock.patch.object(os, "symlink", side_effect=AssertionError("inside created: " + label)), \
+                mock.patch.object(os, "rename", side_effect=AssertionError("inside moved: " + label)), \
+                mock.patch.object(os, "unlink", side_effect=AssertionError("inside removed: " + label)), \
+                mock.patch.object(os, "rmdir", side_effect=AssertionError("inside removed: " + label)), \
+                mock.patch.object(os, "utime", side_effect=AssertionError("inside wrote: " + label)), \
+                mock.patch.object(os, "chmod", side_effect=AssertionError("inside wrote: " + label)):
+            try:
+                got = Probe.inside(probe, path)
+            except AssertionError as err:
+                self.assertFalse(want, "refused but expected accepted (%s): %s" % (label, err))
+                self.assertTrue(str(err).startswith("inside: "), "message of the refusal (%s): %s" % (label, err))
+            else:
+                self.assertTrue(want, "accepted but expected refused (%s)" % label)
+                self.assertIs(got, path, label)  # returned unchanged (the same object)
+        return want, label
+
+    def test_d3_generated_path_matrix(self):
+        for seed in self.SEEDS:
+            rng = random.Random(seed)
+            w = self.world(rng, seed)
+            ci = os.path.exists(self.fold(w["holder"])) and os.path.samefile(self.fold(w["holder"]), w["holder"])
+            cells = self.cells(rng, w)
+            seen = collections.Counter()
+            before = tree_state(w["scratch"])
+            for cell in cells:
+                want, label = self.run_cell(cell, ci, seed)
+                seen[(cell[0], want)] += 1
+                self.assertEqual(tree_state(w["scratch"]), before, "the world changed: " + label)
+            # every role has accepted and refused cells, and every file state appears at least once as an argument
+            self.assertEqual(set(r for r, _ in seen), set(self.ROLES), "seed=%d" % seed)
+            for role in self.ROLES:
+                self.assertGreater(seen[(role, True)], 0, "seed=%d role=%s" % (seed, role))
+                self.assertGreater(seen[(role, False)], 0, "seed=%d role=%s" % (seed, role))
+            self.assertEqual({c[2] for c in cells if c[0] != "holder"}, set(self.STATES), "seed=%d" % seed)
+            self.assertEqual({c[1] for c in cells}, set(self.RELATIONS), "seed=%d" % seed)
+            self.assertEqual({c[3] for c in cells}, set(self.SPELLINGS), "seed=%d" % seed)
+            # the cross product: role x state x relation x spelling of the generated (non-holder) cells is complete
+            keys = {(c[0], c[2], c[1], c[3]) for c in cells if c[0] != "holder" and c[1] in ("below", "sibling")}
+            self.assertEqual(len(keys), 2 * len(self.STATES) * 2 * 2, "seed=%d" % seed)
+
+    def test_d3_the_draw_is_a_function_of_the_seed(self):
+        def shape(seed, call):
+            rng = random.Random(seed)
+            w = self.world(rng, 700 + call)  # a fresh scratch directory for each call
+            return [(c[0], c[1], c[2], c[3], os.path.relpath(c[4], w["scratch"] if c[3] == "exact" else self.fold(w["scratch"])))
+                    for c in self.cells(rng, w)]
+        self.assertEqual(shape(3, 1), shape(3, 2))
+        self.assertNotEqual(shape(3, 3), shape(4, 4))
+
+    def test_d3_a_swap_between_check_and_use_is_seen_by_the_next_check_only(self):
+        """Moment: between check and use. ``inside`` is not a lock: the answer it gave stays what it was (it returned the
+        path), a component swapped for a link to outside afterwards is refused by the NEXT call. So the wrapped form
+        puts the call in the argument of the guard call (the window is one argument evaluation) and ``fresh`` checks
+        before it creates."""
+        for seed in self.SEEDS:
+            rng = random.Random(seed)
+            w = self.world(rng, 50 + seed)
+            probe = Probe(w["holder"])
+            for role in ("argument", "parent"):
+                for depth in (0, 1, 2):
+                    where = os.path.join(w["holder"], "s%s%d" % (role, depth))
+                    os.mkdir(where)
+                    swapped = where
+                    path = os.path.join(where, *["sub%d" % k for k in range(depth)] + ["leaf"])
+                    label = "seed=%d role=%s depth=%d path=%r" % (seed, role, depth, path)
+                    self.assertIs(Probe.inside(probe, path), path, label)  # the check passes
+                    os.rename(swapped, swapped + ".moved")  # the swap, after the check and before the use
+                    os.symlink(w["out-target"], swapped)
+                    self.assertEqual(path, os.path.join(swapped, *["sub%d" % k for k in range(depth)] + ["leaf"]), label)
+                    with self.assertRaises(AssertionError, msg=label) as cm:  # the next check sees it
+                        Probe.inside(probe, path)
+                    self.assertTrue(str(cm.exception).startswith("inside: "), label)
+                    self.assertIn(repr(path), str(cm.exception), label)
+
+    def test_d3_refusals_write_nothing_and_name_the_path(self):
+        w = self.world(random.Random(0), 99)
+        probe = Probe(w["holder"])
+        before = tree_state(self.tmp)
+        for path in (w["scratch"], w["outside"], os.path.join(w["outside"], "x"), "/", os.path.dirname(self.tmp), os.getcwd(),
+                     os.path.join(w["holder"], "..", "outside", "x"), "relative/path", "", ".", "~", "a" + os.sep,
+                     os.path.join(w["holder"], "a\0b"), os.path.join(w["holder"], "\ud800"), "\0", w["holder"] + "\0"):
+            with self.subTest(path=path[:60]), self.assertRaises(AssertionError) as cm:
+                Probe.inside(probe, path)
+            self.assertTrue(str(cm.exception).startswith("inside: "), str(cm.exception))
+            self.assertIn(repr(path), str(cm.exception))
+            self.assertEqual(tree_state(self.tmp), before)
+        # a name too long to exist is still a place below the holder (it is the guard's and the file system's to refuse)
+        for path in (w["holder"], w["holder"] + os.sep, os.path.join(w["holder"], "a", "..", "b"), os.path.join(w["holder"], "l" * 300),
+                     os.path.join(w["holder"], "l" * 70000)):
+            with self.subTest(accepted=path[:60]):
+                self.assertIs(Probe.inside(probe, path), path)
+
+    def test_d3_through_the_real_test_object_the_sandbox_box_and_self_tmp_are_inside(self):
+        box = self.sandbox()
+        for path in (self.tmp, self.work, box, os.path.join(box, "x"), self.fresh("a"), tempfile.mkdtemp(dir=self.tmp)):
+            self.assertIs(self.inside(path), path)
+        for path in (os.path.dirname(self.tmp), "/", self.tmp + "-other", REPO):  # "-other": a sibling that shares the prefix
+            with self.assertRaises(AssertionError) as cm:
+                self.inside(path)
+            self.assertTrue(str(cm.exception).startswith("inside: "), str(cm.exception))
+            self.assertIn(repr(path), str(cm.exception))
+
+    def test_d3_a_holder_that_is_the_file_system_root_holds_every_absolute_path(self):
+        probe = Probe("/")  # nothing is created or opened: the check only looks at links
+        for path in ("/", "/x", "/x/y", "//x"):
+            with self.subTest(path=path):
+                self.assertIs(Probe.inside(probe, path), path)
+
+    def test_e4_exact_types_only_and_before_any_filesystem_call(self):
+        class S(str):
+            pass
+
+        class P:
+            def __fspath__(self):
+                return self.path
+        good = os.path.join(self.tmp, "ok")
+        pathlike = P()
+        pathlike.path = good
+        calls = []
+        with contextlib.ExitStack() as stack:
+            for mod, name in ((os.path, "realpath"), (os.path, "isabs"), (os.path, "exists"), (os, "lstat"), (os, "readlink"),
+                              (os, "stat")):
+                stack.enter_context(mock.patch.object(mod, name, side_effect=lambda *a, _n=name, **k: calls.append(_n)))
+            for bad in (S(good), os.fsencode(good), pathlike, None, 3, [good], bytearray(good, "utf-8"), ("a",)):
+                with self.subTest(type=type(bad).__name__), self.assertRaises(TypeError) as cm:
+                    self.inside(bad)
+                self.assertEqual(str(cm.exception), "inside: path must be exactly str, not %s" % type(bad).__name__)
+        self.assertEqual(calls, [])  # no filesystem call before the type refusal
+        self.assertEqual(self.inside(good), good)
+        self.assertIs(type(self.inside(good)), str)
 
 
 class UmaskTest(Base):
