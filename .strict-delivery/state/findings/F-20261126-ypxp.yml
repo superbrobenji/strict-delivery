@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-ypxp
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk5-3b2-investigation.md N2
+severity: MEDIUM
+class: "non-plain text that moves the write target without -C, --git-dir, --work-tree or cd passes with the target guessed as cwd: export GIT_DIR=<X>/.git; git reset --hard, GIT_DIR=<X>/.git git reset --hard; ls, GIT_WORK_TREE= assignments, pushd <X>; git reset --hard, popd"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 8712aa721fee0331aa13c086718d412ae6ffedb1
+    by: stream-hooks-5
+review_round: 3
+caused_by_change: false
+dimension: target check on every GIT_WRITES subcommand (decision Q3)

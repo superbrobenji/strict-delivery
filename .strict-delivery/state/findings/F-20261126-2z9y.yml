@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-2z9y
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk5-3b2-investigation.md N1
+severity: MEDIUM
+class: "a git alias defined on the command line passes the write and target checks: git -c alias.zz=reset zz --hard, git -c alias.zz='!git reset --hard' zz, git -c include.path=<file> zi, git -c includeIf.<cond>.path=<file> <alias> (subagent bound to W at cwd R: exit 0); spec 4 and plan :3335 list git -c before a subcommand in the bypass block"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 8712aa721fee0331aa13c086718d412ae6ffedb1
+    by: stream-hooks-5
+review_round: 3
+caused_by_change: false
+dimension: "alias resolution: plain or not (write detection)"
