@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-29wu
+status: open
+source: task-CI3-final-loop-review-2.md F-E
+severity: LOW
+class: "E0 private names used outside the module: _Refused (4 sites), _regular_problem (1 site) in tests/test_ci_mutants.py"
+siblings: []
+cites:
+  - file: tests/test_ci_mutants.py
+    lines: "1"
+    sha: 32d96b26e688a061e294dd92c9cec95472409c56
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2ef9d740e17611ed37b9637bc39ffe3699712ffd
+    by: stream-ci-6a
+review_round: 2
+caused_by_change: true
+dimension: E0 interface names

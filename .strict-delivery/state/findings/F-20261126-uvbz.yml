@@ -1,0 +1,27 @@
+schema: finding/1
+id: F-20261126-uvbz
+status: open
+source: task-CI3-final-loop-review-2.md F-B (residual member of F-20261126-y8hc)
+severity: LOW
+class: "G1 GITHUB_OUTPUT unusual characters and parents: lone surrogate (UnicodeEncodeError), surrogate-escaped bytes, over-long name; a symlinked parent component"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: "701"
+    sha: 32d96b26e688a061e294dd92c9cec95472409c56
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2ef9d740e17611ed37b9637bc39ffe3699712ffd
+    by: stream-ci-6a
+parent: F-20261126-y8hc
+review_round: 2
+caused_by_change: false
+dimension: G1 run-time data
