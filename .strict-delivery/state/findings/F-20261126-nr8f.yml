@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-nr8f
+status: open
+source: PR-5c3 final review (records/PR-5c3-final-review.md, F-B; with records/5c.3-review-2.md unrelated 2, mutant M9)
+severity: LOW
+class: "pin strength: the new skip in drift._checkout_of (drift.py:175) has unpinned members: isdir vs exists (mutant X1 survives; no locked entry whose path is a regular file or a FIFO), continue past a skipped entry to a second base-branch entry (mutant M9 survives; no test builds two entries with worktree add -f, either listing order)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 13649af8d859bc4b042ffe06fe864033fee554a6
+    by: stream-records-13
+review_round: 3
+caused_by_change: true
+dimension: pin strength

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-hmyt
+status: open
+source: PR-5c3 final review (records/PR-5c3-final-review.md, F-A; same as records/5c.3-review-2.md unrelated 1)
+severity: MEDIUM
+class: "worktree entry state: entries git lists with the base branch and not prunable, but not a usable checkout, taken as the checkout (drift.py:175): locked, directory present, .git gone (wrong command); the same nested in the main checkout (the printed command fast-forwards the main checkout's other branch); unlocked, .git file to a missing gitdir (wrong command); .git replaced by a directory (wrong command); admin directory renamed (listed, command); siblings already correct: admin gitdir missing, empty, relocated or pointing nowhere, admin HEAD missing, locked with directory gone (W5), prunable (W4, W12)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 13649af8d859bc4b042ffe06fe864033fee554a6
+    by: stream-records-13
+review_round: 3
+caused_by_change: false
+dimension: worktree entry state

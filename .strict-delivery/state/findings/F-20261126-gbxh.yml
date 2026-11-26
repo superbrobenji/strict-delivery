@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-gbxh
+status: open
+source: PR-5c3 final review (records/PR-5c3-final-review.md, F-C)
+severity: LOW
+class: "upstream named in the printed command vs the resolved upstream: the short name remote/bb in merge --ff-only (drift.py:138-139, plan :5446 text) resolves first to: a tag of that name (wrong merge, ambiguous refname), a local branch of that name (wrong merge), refs/remote/bb (git's first dwim rule, not probed)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 13649af8d859bc4b042ffe06fe864033fee554a6
+    by: stream-records-13
+review_round: 3
+caused_by_change: false
+dimension: upstream named in the printed command
