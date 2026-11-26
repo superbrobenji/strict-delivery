@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -342,6 +343,18 @@ class StateTest(GitIsolatedTestCase):
         FakeGh(self, {REPO: (b"{}", b"gh: Not Found (HTTP 404)\n", 1)})  # a 404 on the repository call is an error
         with self.assertRaisesRegex(HostError, "^gh api repos/o/n: gh: Not Found"):
             self.state(None)
+
+    def test_rs_j10_large_body(self):  # RS-J10: 50 MB; the fake serves the body from a file, so the time is host.py's
+        fake = FakeGh(self, {REPO: (b"", b"", 0)})
+        big = os.path.join(fake.dir, "big.json")
+        with open(big, "wb") as fh:
+            fh.write(b'{"x": "' + b"a" * 50000000 + b'"}')
+        with open(fake.path, "w") as fh:
+            fh.write("#!/bin/sh\n/bin/cat '%s'\n" % big)
+        start = time.monotonic()
+        with self.assertRaisesRegex(HostError, "^gh api repos/o/n: allow_merge_commit is missing$"):  # parsed, refused
+            self.state(None)
+        self.assertLess(time.monotonic() - start, 60)  # the bound: it completes with a verdict (decision 2026-11-09)
 
     def test_rs_e8_stderr_first_line(self):  # RS-E8 RS-E17, VR2 (3)
         cases = ((b"", "(no message)"), (b"\n\n  text \n", "text"), (b"one\ntwo\n", "one"), (b"x" * 5000, "x" * 200),

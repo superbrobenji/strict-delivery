@@ -13,12 +13,13 @@ import difflib
 import json
 import os
 import re
+import shlex
 import stat
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-from gates.lib import (config, detect, dispatch, gitinfo, managed, migrations, plugin, print_table,
+from gates.lib import (config, detect, dispatch, docmove, gitinfo, host, managed, migrations, plugin, print_table,
                        profiles, schema, templates, yamlsub)
 from gates.lib.result import GateError, GitNotFound, _GateParser, safe_text
 from gates.tools import githooks
@@ -62,6 +63,7 @@ class InitPlan:
     moves: list
     host_calls: list
     notes: list
+    host_error: Optional[str] = None  # Q12: a ``HostError`` of the reads; ``plan`` and ``apply`` print it as FAIL
 
 
 @dataclass
@@ -75,6 +77,9 @@ class _Extra:
     context_path: Optional[str] = None
     diffs: list = field(default_factory=list)  # (path, old, new)
     actions: list = field(default_factory=list)  # (path, new) from managed.plan
+    rewrite_diffs: list = field(default_factory=list)  # (old path, new path, old text, new text) of the migration
+    cfg: Optional[dict] = None
+    migrate: bool = False  # the migration runs: ``migrate`` answered true on an uninitialised repository
 
 
 # ---------------------------------------------------------------------------------------------------- the root
@@ -178,7 +183,8 @@ def _problem_dicts(det) -> list:
 def questions(root: str) -> dict:
     """What the owner is asked; writes nothing."""
     real = _check_root(root)
-    _cfg, initialised = _load_config(real)
+    cfg, initialised = _load_config(real)
+    docs = _doc_plan(real, cfg)[0]
     try:
         det = detect.detect(real)
         names = {}
@@ -216,9 +222,17 @@ def questions(root: str) -> dict:
         "models": copy.deepcopy(config.DEFAULTS["models"]["tiers"]),
         "defaults": {"git_hooks": True, "ci": False, "merge_mode": "host", "protect_base": True},
         "subagents": {"current": current},
-        "superpowers_docs": [],
+        "superpowers_docs": [[src, dst] for src, dst in docs],  # Q15: the moves, sorted by source
         "initialised": initialised,
     }
+
+
+def _doc_plan(root: str, cfg: dict) -> tuple:
+    """``docmove.plan_moves`` with a ``GateError`` of a reader as ``init.input`` (CD23)."""
+    try:
+        return docmove.plan_moves(root, cfg)
+    except GateError as e:
+        raise _input(e) from None
 
 
 def _questions_text(q: dict) -> str:
@@ -265,9 +279,7 @@ def _answer_errors(answers: dict, framework_schema) -> list:
                     errs.append("subagents.%s: must be an integer of at most %d digits" % (key, dispatch.MAX_DIGITS))
     if "base_branch" not in bad and "base_branch" in answers and not _branch_ok(answers["base_branch"]):
         errs.append("base_branch: must be a branch name of letters, digits, '.', '_', '-' and '/'")
-    if "migrate" in answers:
-        errs.append("migrate: no superpowers documents are tracked")
-    return errs
+    return errs  # ``migrate`` against the tracked documents is ``_build``'s check (it needs the repository)
 
 
 def _model_errors(models: object) -> list:
@@ -470,12 +482,17 @@ def _hook_overlap(root: str, ctx: str, hooks: str, names: list) -> list:
     return ["%s: parent %s is not a directory" % (shown, hook_name[h]) for h in hook_files if ctx.startswith(h + "/")]
 
 
-def _state_overlap(dirs: list, files: list) -> list:
+def _state_overlap(dirs: list, files: list, reported: list = ()) -> list:
     """H5 (F-20261125-5bb3): a configured state directory (``dirs``) equal to a planned file (``files``) is
     ``<dir>: two writes name the same path``; below one is ``<dir>: parent <f> is not a directory`` (managed's texts).
-    Compared under the ASCII map (Note H-1); the configured spellings are shown."""
+    Compared under the ASCII map (Note H-1); the configured spellings are shown. One line per fault
+    (F-20261125-iu7y): a directory that is, or lies below, a path an earlier conflict line (``reported``) already
+    names is not reported again."""
     out = []
+    names = [_fold(c.split(": ", 1)[0]) for c in reported]
     for d in dirs:
+        if any(_fold(d) == n or _fold(d).startswith(n + "/") for n in names):
+            continue
         for f in files:
             if _fold(d) == _fold(f):
                 out.append("%s: two writes name the same path" % d)
@@ -529,12 +546,19 @@ def _build(root: str, answers: dict) -> tuple:
     """``(InitPlan, _Extra)``; ``root`` is a checked real top level."""
     cfg, initialised = _load_config(root)
     answers = _validated(answers, cfg, initialised)
+    all_moves, move_conflicts, move_notes = _doc_plan(root, cfg)
+    if ("migrate" in answers) != bool(all_moves):  # P:4132: ``migrate`` is asked exactly when documents are tracked
+        reason = ("migrate: no superpowers documents are tracked" if "migrate" in answers
+                  else "migrate: required key is missing (superpowers documents are tracked)")
+        raise InitError("init.answers", reason)
     try:
         version = plugin.version(plugin.framework_dir())
         writes: list = []
         notes: list = []
         conflicts: list = []
         extra = _Extra()
+        extra.cfg = cfg
+        extra.migrate = answers.get("migrate") is True and not initialised  # Q13: no migration on an initialised repository
         if not initialised:
             text = _config_text(answers, version)
             writes.append(managed.Write(config.CONFIG_PATH, text, "file"))
@@ -571,7 +595,7 @@ def _build(root: str, answers: dict) -> tuple:
         planned_files = [config.CONFIG_PATH, "CLAUDE.md", ".gitignore", SETTINGS] + ([CI_PATH] if answers["ci"] else [])
         # H5 (F-20261125-5bb3): a state directory equal to or below a planned file; config.yml is _dir_plan's own
         # conflict (a present file when initialised; the defaults never overlap it otherwise)
-        dir_conflicts = dir_conflicts + _state_overlap(paths, planned_files[1:])
+        dir_conflicts = dir_conflicts + _state_overlap(paths, planned_files[1:], dir_conflicts)
         overlap = _context_overlap(extra.context_path, paths, planned_files, cfg["paths"]["state"])
         if overlap:  # H5: no write is planned for a path equal to or nested with another planned path
             dir_conflicts = dir_conflicts + overlap
@@ -587,8 +611,40 @@ def _build(root: str, answers: dict) -> tuple:
             if extra.hook_names:  # H5: every hook init plans or keeps is a planned file (ninr; jmqe: installed too)
                 conflicts.extend(_hook_overlap(root, extra.context_path, extra.hooks_dir, extra.hook_names))
                 hooks_rel = os.path.relpath(extra.hooks_dir, root)
-                conflicts.extend(_state_overlap(paths, [hooks_rel + "/" + n for n in extra.hooks]))
-                conflicts[:] = dict.fromkeys(conflicts)  # PO2 after the hook compares
+                conflicts.extend(_state_overlap(paths, [hooks_rel + "/" + n for n in extra.hooks], conflicts))
+        for key in ("index", "receipts"):  # U-1: the two keys that only feed .gitignore are compared like the context
+            value = cfg["paths"][key]
+            conflicts.extend(_context_overlap(value, paths, planned_files + ([] if overlap else [extra.context_path]),
+                                              cfg["paths"]["state"]))  # a context in conflict is no planned file
+            if extra.hook_names:
+                conflicts.extend(_hook_overlap(root, value, extra.hooks_dir, extra.hook_names))
+        if extra.migrate:
+            moves = list(all_moves)
+            conflicts.extend(move_conflicts)
+            notes.extend(move_notes)
+            state_dirs = [cfg["paths"][k] for k in ("decisions", "findings", "claims", "plan_state", "programs")]
+            changes = []
+            try:
+                changes, rewrite_notes, rewrite_conflicts = docmove.rewrites(root, moves, state_dirs)
+                conflicts.extend(rewrite_conflicts)
+                notes.extend(rewrite_notes)
+            except GateError:
+                if not move_conflicts:  # a name ``plan_moves`` refused, ``rewrites`` refuses too: that is reported alone
+                    raise
+            # No target-versus-planned-path compare: ``migrate`` runs only on an uninitialised repository (Q13), whose
+            # ``cfg`` is the defaults, so no target equals, holds or lies below a path init plans (the matrix's "docs" cell)
+            src_of = {dst: src for src, dst in moves}
+            for path, new in changes:
+                old = docmove._read_text(root, src_of.get(path, path))
+                extra.rewrite_diffs.append((src_of.get(path, path), path, old[1] if old[0] == "text" else "", new))
+        else:
+            moves = []
+        conflicts[:] = dict.fromkeys(conflicts)  # PO2 after the hook, key and move compares
+        host_calls, host_error = [], None
+        if initialised and (answers["protect_base"] or answers.get("migrate") is True):
+            notes.append("initialised repository: document migration and branch protection are not offered")  # Q13
+        elif answers["protect_base"] and not conflicts:
+            host_calls, host_error = _host_plan(root, answers["base_branch"], notes)
     except InitError:
         raise
     except GateError as e:
@@ -605,8 +661,27 @@ def _build(root: str, answers: dict) -> tuple:
     for path, new in extra.actions:
         state = managed._inspect(root, path)
         extra.diffs.append((path, state[1] if state[0] == "text" else "", new))
-    plan = InitPlan(writes=writes, conflicts=conflicts, settings=settings, moves=[], host_calls=[], notes=notes)
+    plan = InitPlan(writes=writes, conflicts=conflicts, settings=settings, moves=moves, host_calls=host_calls,
+                    notes=notes, host_error=host_error)
     return plan, extra
+
+
+def _host_plan(root: str, branch: str, notes: list) -> tuple:
+    """``(calls, host_error)`` for ``protect_base`` true on an uninitialised repository: no GitHub remote is a note and
+    no call (P:4712); a ``HostError`` of the reads is returned, not raised (Q12); a protected base gets no call and a
+    note per missing setting (owner Q-4d2-9 (1)). A branch ``host`` refuses is its ``GateError`` (Q14), no ``gh`` call."""
+    slug = host.github_remote(root)
+    if slug is None:
+        notes.append("no GitHub remote recognised; branch protection is not offered")  # CD16: never the URL
+        return [], None
+    try:
+        state = host.read_state(root, slug, branch)
+        calls = host.calls(state, slug, branch)
+    except host.HostError as e:
+        return [], str(e)
+    if state["protected"]:
+        notes.extend("protection of %s on %s: %s" % (branch, slug, text) for text in host.missing(state))
+    return calls, None
 
 
 def plan_init(root: str, answers: dict) -> InitPlan:
@@ -627,9 +702,10 @@ def _lines_kept(text: str) -> list:
     return out
 
 
-def _diff_text(path: str, old: str, new: str) -> str:
+def _diff_text(path: str, old: str, new: str, old_path: Optional[str] = None) -> str:
     out = []
-    for i, line in enumerate(difflib.unified_diff(_lines_kept(old), _lines_kept(new), "a/" + path, "b/" + path,
+    for i, line in enumerate(difflib.unified_diff(_lines_kept(old), _lines_kept(new),
+                                                  "a/" + (path if old_path is None else old_path), "b/" + path,
                                                   lineterm="")):
         if i >= 2 and line[:1] in (" ", "+", "-"):
             line = line[:-1] if line.endswith("\n") else line
@@ -641,12 +717,33 @@ def _out(text: str) -> None:
     sys.stdout.write(text)
 
 
-def _idle(extra: _Extra) -> bool:
-    return not (extra.actions or extra.dirs or extra.hooks)
+def _idle(plan: InitPlan, extra: _Extra) -> bool:
+    return not (extra.actions or extra.dirs or extra.hooks or plan.moves or extra.rewrite_diffs or plan.host_calls)
+
+
+def _call_lines(argv: list) -> list:
+    """CD23: a host call as one ``shlex.join`` line, then the PUT's body as a second line."""
+    out = ["call: %s\n" % safe_text(shlex.join(argv))]
+    if argv[2:4] == ["-X", "PUT"]:
+        out.append("body: %s\n" % safe_text(host.body_text()))
+    return out
+
+
+def _plan_json(plan: InitPlan, extra: _Extra) -> str:
+    """``plan --json`` (CD23): the facts of the text form. ``moves`` is a list of ``[src, dst]``, ``rewrites`` of
+    ``{path, diff}``, ``notes`` of ``str``, ``host_calls`` of argv lists."""
+    doc = {"writes": [{"path": p, "diff": _diff_text(p, old, new)} for p, old, new in extra.diffs],
+           "mkdirs": list(extra.dirs), "hooks": [os.path.join(extra.hooks_dir, n) for n in extra.hooks],
+           "moves": [[src, dst] for src, dst in plan.moves],
+           "rewrites": [{"path": new_path, "diff": _diff_text(new_path, old, new, old_path)}
+                        for old_path, new_path, old, new in extra.rewrite_diffs],
+           "notes": list(plan.notes), "host_calls": [list(c) for c in plan.host_calls],
+           "host_error": plan.host_error}
+    return json.dumps(doc, indent=2) + "\n"
 
 
 def _show_plan(plan: InitPlan, extra: _Extra) -> None:
-    if _idle(extra):
+    if _idle(plan, extra):
         _out("no changes\n")
         for n in plan.notes:
             _out("note: %s\n" % safe_text(n))
@@ -661,13 +758,23 @@ def _show_plan(plan: InitPlan, extra: _Extra) -> None:
             _out(_diff_text(path, old, new))
     for name in extra.hooks:
         _out("hook %s\n" % safe_text(os.path.join(extra.hooks_dir, name)))
+    for src, dst in plan.moves:
+        _out("move %s -> %s\n" % (safe_text(src), safe_text(dst)))
+    for old_path, new_path, old, new in extra.rewrite_diffs:
+        _out(_diff_text(new_path, old, new, old_path))
+    for argv in plan.host_calls:
+        for line in _call_lines(argv):
+            _out(line)
     for n in plan.notes:
         _out("note: %s\n" % safe_text(n))
 
 
-def _fail(ident: str, parts: list) -> None:
+def _fail(ident: str, parts: list, as_json: bool = False) -> None:
     for part in parts:
-        _out("FAIL %s: %s\n" % (ident, safe_text(part)))
+        if as_json:  # CD23: the same fact as ``FAIL <id>: <reason>``
+            _out(json.dumps({"id": ident, "status": "FAIL", "reason": safe_text(part)}) + "\n")
+        else:
+            _out("FAIL %s: %s\n" % (ident, safe_text(part)))
 
 
 # ------------------------------------------------------------------------------------------------------- apply
@@ -730,9 +837,36 @@ def _parser(sub: str) -> _GateParser:
     p = _GateParser(prog="init " + sub, add_help=True)
     for f in ("--root", "--answers"):
         p.add_argument(f, default=None, action="append")
-    if sub == "questions":
-        p.add_argument("--json", action="store_true")
+    p.add_argument("--json", action="store_true")
     return p
+
+
+def _migrate_and_protect(root: str, plan: InitPlan, extra: _Extra, as_json: bool) -> bool:
+    """After the file writes: the moves and rewrites (Q16: recomputed from the written texts), then the host calls
+    (CD21), stopping at the first failure. ``False`` after a ``FAIL`` line, which is printed here."""
+    if plan.moves:
+        try:
+            state_dirs = [extra.cfg["paths"][k] for k in ("decisions", "findings", "claims", "plan_state", "programs")]
+            moves, conflicts, _notes = docmove.plan_moves(root, extra.cfg)
+            changes, rconf = [], []
+            if not conflicts:
+                changes, _rnotes, rconf = docmove.rewrites(root, moves, state_dirs)
+            if conflicts or rconf:
+                raise GateError("; ".join(conflicts + rconf))
+            docmove.apply_moves(root, moves, changes)
+        except GateError as e:
+            _fail("init.migrate", [str(e)], as_json)
+            return False
+    if plan.host_error is not None:
+        _fail("init.protection", [plan.host_error], as_json)
+        return False
+    for argv in plan.host_calls:
+        try:
+            host.run(root, argv)
+        except GateError as e:
+            _fail("init.protection", [str(e)], as_json)
+            return False
+    return True
 
 
 def _run(sub: str, ns) -> int:
@@ -747,18 +881,24 @@ def _run(sub: str, ns) -> int:
         answers = load_answers(ns.answers[0])
         plan, extra = _build(real, answers)
     except InitError as e:
-        _fail(e.ident, e.parts)
+        _fail(e.ident, e.parts, ns.json)
         return 1
     except GateError as e:
-        _fail("init.input", [str(e)])
+        _fail("init.input", [str(e)], ns.json)
         return 1
     if plan.conflicts:
-        _fail("init.conflict", plan.conflicts)
+        _fail("init.conflict", plan.conflicts, ns.json)
         return 1
     if sub == "plan":
-        _show_plan(plan, extra)
+        if plan.host_error is not None:  # Q12: ``plan`` cannot offer protection; nothing is written
+            _fail("init.protection", [plan.host_error], ns.json)
+            return 1
+        if ns.json:
+            _out(_plan_json(plan, extra))
+        else:
+            _show_plan(plan, extra)
         return 0
-    if _idle(extra):
+    if _idle(plan, extra):
         _out("no changes\n")  # PO6, IN3; a note of D-Q5 (a) follows it, as on ``plan`` (PO7)
     for n in plan.notes:
         _out("note: %s\n" % safe_text(n))
@@ -766,15 +906,17 @@ def _run(sub: str, ns) -> int:
     try:
         _apply(real, plan, extra, written)
     except (GateError, OSError) as e:
-        _fail("init.write", [str(e) if isinstance(e, GateError) else "%s: %s" % (type(e).__name__, e.strerror)])
+        _fail("init.write", [str(e) if isinstance(e, GateError) else "%s: %s" % (type(e).__name__, e.strerror)],
+              ns.json)
         _out("written: %s\n" % safe_text(", ".join(written)))
         return 1
+    ok = _migrate_and_protect(real, plan, extra, bool(ns.json))
     try:
-        _out(_status(real))
+        _out(_status(real))  # CD22: after a FAIL the listing still shows what stays
     except GateError as e:
-        _fail("init.status", [str(e)])
+        _fail("init.status", [str(e)], ns.json)
         return 1
-    return 0
+    return 0 if ok else 1
 
 
 def main(argv: list) -> int:
