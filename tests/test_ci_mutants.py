@@ -1013,6 +1013,9 @@ class ReplacementTest(Fx):
         self.assertEqual(fake.mutated_calls()[0][2]["src/raw.py"], b"k=1;k=1\n")
         code, out, fake = self.apply("a b c\n", " b", "")
         self.assertEqual(fake.mutated_calls()[0][2]["src/raw.py"], b"a c\n")
+        code, out, fake = self.apply("a b c\n", "a b c\n", "")  # the whole file removed: the write opens truncate to 0 bytes
+        self.assertEqual(fake.mutated_calls()[0][2]["src/raw.py"], b"")
+        self.assertEqual(self.read("src/raw.py"), b"a b c\n")
 
     def test_numeric_text_of_4300_and_4301_digits(self):  # K1
         for digits in (4300, 4301):
