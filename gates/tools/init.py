@@ -482,6 +482,16 @@ def _hook_overlap(root: str, ctx: str, hooks: str, names: list) -> list:
     return ["%s: parent %s is not a directory" % (shown, hook_name[h]) for h in hook_files if ctx.startswith(h + "/")]
 
 
+def _reported_names(reported: list) -> list:
+    """The folded paths that the conflict lines ``reported`` name (the text before the first ``": "``)."""
+    return [_fold(c.split(": ", 1)[0]) for c in reported]
+
+
+def _is_reported(path: str, names: list) -> bool:
+    """``path`` is, or lies below, a path an earlier conflict line already names (F-20261125-iu7y)."""
+    return any(_fold(path) == n or _fold(path).startswith(n + "/") for n in names)
+
+
 def _state_overlap(dirs: list, files: list, reported: list = ()) -> list:
     """H5 (F-20261125-5bb3): a configured state directory (``dirs``) equal to a planned file (``files``) is
     ``<dir>: two writes name the same path``; below one is ``<dir>: parent <f> is not a directory`` (managed's texts).
@@ -489,9 +499,9 @@ def _state_overlap(dirs: list, files: list, reported: list = ()) -> list:
     (F-20261125-iu7y): a directory that is, or lies below, a path an earlier conflict line (``reported``) already
     names is not reported again."""
     out = []
-    names = [_fold(c.split(": ", 1)[0]) for c in reported]
+    names = _reported_names(reported)
     for d in dirs:
-        if any(_fold(d) == n or _fold(d).startswith(n + "/") for n in names):
+        if _is_reported(d, names):
             continue
         for f in files:
             if _fold(d) == _fold(f):
@@ -598,7 +608,8 @@ def _build(root: str, answers: dict) -> tuple:
         dir_conflicts = dir_conflicts + _state_overlap(paths, planned_files[1:], dir_conflicts)
         overlap = _context_overlap(extra.context_path, paths, planned_files, cfg["paths"]["state"])
         if overlap:  # H5: no write is planned for a path equal to or nested with another planned path
-            dir_conflicts = dir_conflicts + overlap
+            names = _reported_names(dir_conflicts)  # iu7y: an existing context file under a state key is _dir_plan's line
+            dir_conflicts = dir_conflicts + [c for c in overlap if not _is_reported(c.split(": ", 1)[0], names)]
         elif managed._inspect(root, extra.context_path)[0] != "text":  # CX1, CX2: a present file is never rewritten
             writes.append(managed.Write(extra.context_path, templates.render(CONTEXT_TEMPLATE, {}), "file"))
         actions, m_conflicts = managed.plan(root, writes, version)

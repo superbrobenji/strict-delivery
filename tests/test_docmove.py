@@ -2,10 +2,12 @@
 Fixture repositories come only from tests/helpers.py; expected values are written by hand from the plan and the domain
 table (task-4d.2-domain.md, row ids in each test's comment). Nothing here reads the code under test back."""
 import copy
+import errno
 import inspect
 import os
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import tempfile
@@ -20,6 +22,7 @@ from tests.helpers import (INT_LIMITS, TOP, GitIsolatedTestCase, check_root_form
 
 S, D = "docs/superpowers/specs/", "docs/strict-delivery/specs/"
 PL, DP = "docs/superpowers/plans/", "docs/strict-delivery/plans/"
+SD = "docs/strict-delivery/"
 M1 = (S + "a.md", D + "a.md")
 CLS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-"
 CFG = copy.deepcopy(config.DEFAULTS)
@@ -31,7 +34,7 @@ def slurp(path, mode="r"):
         return fh.read()
 
 
-def snap(root):
+def snap(root, index=True):
     out = {}
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d != ".git"]
@@ -41,14 +44,61 @@ def snap(root):
             body = os.readlink(p) if stat.S_ISLNK(st.st_mode) else (
                 slurp(p, "rb") if stat.S_ISREG(st.st_mode) else b"")
             out[os.path.relpath(p, root)] = (stat.S_IFMT(st.st_mode), stat.S_IMODE(st.st_mode), body)
-    out[".git/index"] = git(root, "ls-files", "-s")
+    if index:  # a directory that is not a repository has none
+        out[".git/index"] = git(root, "ls-files", "-s")
     return out
+
+
+def make_socket(tc, path):
+    """A real Unix socket at ``path``: bound by a relative name from its own directory (the address limit is about
+    100 bytes, shorter than most temp paths); the file stays after the socket is closed."""
+    directory, name = os.path.split(path)
+    cwd = os.getcwd()
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    tc.addCleanup(sock.close)
+    try:
+        os.chdir(directory)
+        sock.bind(name)
+    finally:
+        os.chdir(cwd)
+
+
+def fail_lstat(name, number):
+    """Patch ``os.lstat`` to raise ``OSError(number)`` for the path whose last component is ``name``."""
+    real = os.lstat
+
+    def fake(p, *a, **k):
+        if os.path.basename(p) == name:
+            raise OSError(number, os.strerror(number))
+        return real(p, *a, **k)
+    return mock.patch("os.lstat", side_effect=fake)
+
+
+def make_device(path):
+    """A character device (/dev/null's numbers) at ``path``, or False: ``mknod`` needs root (EPERM otherwise)."""
+    try:
+        os.mknod(path, stat.S_IFCHR | 0o600, os.makedev(1, 3))
+    except OSError:
+        return False
+    return True
 
 
 class Repo(GitIsolatedTestCase):
     def setUp(self):
         super().setUp()
         self.r = make_repo(self.work)
+
+    def new(self, names):
+        """A second repository (a directory of our own under self.tmp) with the tracked files ``names``."""
+        top = tempfile.mkdtemp(dir=self.tmp)
+        make_repo(top)
+        for rel in names:
+            p = os.path.join(top, *rel.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as fh:
+                fh.write("x\n")
+        commit_all(top, "c")
+        return top
 
     def put(self, rel, data="x\n", mode=None):
         p = os.path.join(self.r, *rel.split("/"))
@@ -291,6 +341,155 @@ class PlanMovesTest(Repo):
         self.assertTrue(os.path.isdir(os.path.join(self.r, "docs/superpowers/specs")) or True)
 
 
+SRCS = [S + "a.md", S + "n/b.md", PL + "q.md", PL + "x/p.md"]
+MOVES4 = [(PL + "q.md", DP + "q.md"), (PL + "x/p.md", DP + "x/p.md"), (S + "a.md", D + "a.md"), (S + "n/b.md", D + "n/b.md")]
+NOT_DIR = "%s: parent %s is not a directory"
+NOT_REG = "%s: not a regular file; not moved"
+# (the swapped component, the sources below it, the first of them in move order): RB-1, Amendment H4
+PARENTS = (("docs", [PL + "q.md", PL + "x/p.md", S + "a.md", S + "n/b.md"], PL + "q.md"),
+           ("docs/superpowers", [PL + "q.md", PL + "x/p.md", S + "a.md", S + "n/b.md"], PL + "q.md"),
+           ("docs/superpowers/specs", [S + "a.md", S + "n/b.md"], S + "a.md"),
+           ("docs/superpowers/plans", [PL + "q.md", PL + "x/p.md"], PL + "q.md"),
+           ("docs/superpowers/plans/x", [PL + "x/p.md"], PL + "x/p.md"),
+           ("docs/superpowers/specs/n", [S + "n/b.md"], S + "n/b.md"))
+
+
+class SourceStateTest(Repo):
+    def swap_dir(self, top, member):
+        """Move the directory ``member`` to a directory of our own and put a symlink to it in its place."""
+        out = tempfile.mkdtemp(dir=self.tmp)
+        os.rename(os.path.join(top, *member.split("/")), os.path.join(out, "c"))
+        os.symlink(os.path.join(out, "c"), os.path.join(top, *member.split("/")))
+        return out
+
+    def test_rb1_plan_parent_symlink_is_conflict(self):  # RB-1 (H4): every member of the parent class; PM-T5's source side
+        for member, under, _ in PARENTS:
+            with self.subTest(member=member):
+                top = self.new(SRCS)
+                out = self.swap_dir(top, member)
+                before, outside = snap(top), snap(out, False)
+                moves, conflicts, _ = docmove.plan_moves(top, CFG)
+                want = [NOT_DIR % (s, member) for s in under]
+                if member == "docs":  # the targets below the symlinked docs are refused the same way (PM-T5)
+                    want += [NOT_DIR % (SD + n, "docs") for n in ("plans/q.md", "plans/x/p.md", "specs/a.md", "specs/n/b.md")]
+                self.assertEqual(conflicts, sorted(want))
+                self.assertEqual(moves, MOVES4)
+                self.assertEqual((snap(top), snap(out, False)), (before, outside))  # nothing moved outside, nothing written
+
+    def test_rb1_apply_parent_swapped_after_plan(self):  # RB-1 (H4): apply re-checks before the first git mv: nothing moves
+        for member, _, first in PARENTS:
+            with self.subTest(member=member):
+                top = self.new(SRCS)
+                moves = docmove.plan_moves(top, CFG)[0]
+                out = self.swap_dir(top, member)
+                before, outside = snap(top), snap(out, False)
+                with self.assertRaises(GateError) as cm:
+                    docmove.apply_moves(top, moves, [])
+                self.assertEqual(str(cm.exception), NOT_DIR % (first, member))
+                self.assertEqual((snap(top), snap(out, False)), (before, outside))
+
+    def test_rb1_parent_swapped_for_a_file(self):  # RB-1 (H4): a parent that is a regular file, in plan and in apply
+        for member, under, first in PARENTS:
+            if member not in ("docs/superpowers/specs", "docs/superpowers/plans/x"):
+                continue
+            with self.subTest(member=member):
+                top = self.new(SRCS)
+                moves = docmove.plan_moves(top, CFG)[0]
+                aside = os.path.join(tempfile.mkdtemp(dir=self.tmp), "c")
+                os.rename(os.path.join(top, *member.split("/")), aside)
+                with open(os.path.join(top, *member.split("/")), "w") as fh:
+                    fh.write("now a file\n")
+                before = snap(top)
+                self.assertEqual(docmove.plan_moves(top, CFG)[1], sorted(NOT_DIR % (s, member) for s in under))
+                with self.assertRaises(GateError) as cm:
+                    docmove.apply_moves(top, moves, [])
+                self.assertEqual(str(cm.exception), NOT_DIR % (first, member))
+                self.assertEqual(snap(top), before)
+
+    def test_pm_source_below_unreadable_directory(self):  # unchanged: what lstat cannot reach is "tracked but missing" (as lexists)
+        if os.geteuid() == 0:
+            self.skipTest("root reads mode 000 directories")
+        top = self.new(SRCS)
+        sub = os.path.join(top, "docs/superpowers/specs")
+        os.chmod(sub, 0o000)
+        self.addCleanup(os.chmod, sub, 0o755)
+        self.assertEqual(docmove.plan_moves(top, CFG)[1], [S + "a.md: tracked but missing; not moved",
+                                                          S + "n/b.md: tracked but missing; not moved"])
+
+    def test_rb1_apply_parent_swapped_between_moves(self):  # RB-1 (H4): the re-check before each git mv, not only the first
+        top = self.new(SRCS)
+        moves = docmove.plan_moves(top, CFG)[0]
+        real = docmove.gitinfo._run
+        out = []
+
+        def run(root, name, *a, **k):
+            p = real(root, name, *a, **k)
+            if name == "mv" and not out:
+                out.append(self.swap_dir(top, "docs/superpowers/plans/x"))  # after the first move (plans/q.md)
+            return p
+        with mock.patch("gates.lib.gitinfo._run", side_effect=run), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), NOT_DIR % (PL + "x/p.md", "docs/superpowers/plans/x")
+                         + "; moved before it: " + PL + "q.md -> " + DP + "q.md")
+        self.assertEqual(os.listdir(os.path.join(out[0], "c")), ["p.md"])  # the outside file stays where it was
+        self.assertEqual(slurp(os.path.join(out[0], "c", "p.md")), "x\n")
+        self.assertTrue(os.path.exists(os.path.join(top, S + "a.md")))  # the third move was not attempted
+
+    def special_members(self):
+        """(name, function that replaces the tracked file ``path`` with it); the device only when mknod is allowed."""
+        def directory(top, path):
+            os.mkdir(path)  # empty: a file inside would add an untracked note
+
+        def fifo(top, path):
+            os.mkfifo(path)
+
+        def sock(top, path):
+            make_socket(self, path)
+
+        def symlink(top, path):
+            with open(os.path.join(self.tmp, "target.md"), "w") as fh:
+                fh.write("t\n")
+            os.symlink(os.path.join(self.tmp, "target.md"), path)
+
+        def device(top, path):
+            if not make_device(path):
+                raise unittest.SkipTest("mknod needs root")
+        return [("directory", directory), ("fifo", fifo), ("socket", sock), ("symlink", symlink), ("device", device)]
+
+    def test_rb2_rb3_plan_and_apply_special_source(self):  # RB-2 (H2), RB-3 (H3): directory, FIFO, socket, symlink, device
+        for name, make in self.special_members():
+            with self.subTest(member=name):
+                top = self.new([S + "a.md", S + "b.md"])
+                moves = docmove.plan_moves(top, CFG)[0]
+                os.remove(os.path.join(top, S + "a.md"))
+                try:
+                    make(top, os.path.join(top, S + "a.md"))
+                except unittest.SkipTest:
+                    continue  # a device cannot be made without root: the member is not reachable here
+                before = snap(top)
+                kind, got = watched(lambda: docmove.plan_moves(top, CFG))  # no read, no open: a FIFO would block
+                self.assertEqual(kind, "ok")
+                self.assertEqual(got, ([(S + "a.md", D + "a.md"), (S + "b.md", D + "b.md")],
+                                       [NOT_REG % (S + "a.md")], []))
+                kind, got = watched(lambda: docmove.apply_moves(top, moves, []))
+                self.assertEqual(kind, "err")
+                self.assertIsInstance(got, GateError)
+                self.assertEqual(str(got), NOT_REG % (S + "a.md"))
+                self.assertEqual(snap(top), before)  # plan wrote nothing, apply moved nothing (b.md stays)
+
+    def test_ra5_conflict_listed_once(self):  # RA-5: an existing target shared by two moves is one `exists`
+        self.files([S + "a.md", PL + "a.md", "out/a.md"])
+        moves, conflicts, notes = self.pm({"paths": {"specs": "out", "plans": "out"}})
+        self.assertEqual(conflicts, ["out/a.md: exists", "out/a.md: two moves name the same target",
+                                     "paths.specs: equals paths.plans"])
+        self.assertEqual(moves, [(PL + "a.md", "out/a.md"), (S + "a.md", "out/a.md")])
+
+    def test_ra6_tracked_but_deleted_target(self):  # RA-6: a target the index holds and the work tree lost
+        self.files([S + "a.md", D + "a.md"])
+        os.remove(os.path.join(self.r, D + "a.md"))
+        self.assertEqual(self.pm(), ([M1], [D + "a.md: exists"], []))
+
+
 class Rw(Repo):
     def holders(self, cases):
         """Write every ``(text)`` as a tracked holder docs/cNNNN.md, commit, return the path list."""
@@ -502,10 +701,10 @@ class RewriteRulesTest(Rw):
 
 
 class HolderKindsTest(Rw):
-    def test_rw_f_holder_kinds(self):  # RW-F2 F3 F4 F5 F7 F8 F9 F10 F11 F13 F15 F16 F12 F14
+    def test_rw_f_holder_kinds(self):  # RW-F2 F3 F4 F5 F7 F9 F10 F11 F13 F15 F16 F12 F14 (F8: test_rw_f8_socket_and_device)
         P, Q = S + "a.md", D + "a.md"
         names = ["docs/h-link.md", "docs/h-dir.md", "docs/h-fifo.md", "docs/h-gone.md", "docs/dd/x.md", "docs/h-mod.md",
-                 "docs/a b.md", "docs/é.md", "docs/-x.md", "docs/~x.md", "docs/n\nl.md", "docs/h-sock.md"]
+                 "docs/a b.md", "docs/é.md", "docs/-x.md", "docs/~x.md", "docs/n\nl.md"]
         for n in names:
             self.put(n, P + "\n")
         self.put(".gitignore", "ign.md\n")
@@ -526,13 +725,36 @@ class HolderKindsTest(Rw):
         before = snap(self.r)
         changes, notes, conflicts = watched(lambda: docmove.rewrites(self.r, [M1], []))[1]
         self.assertEqual(snap(self.r), before)  # F16
-        want = {"docs/a b.md", "docs/é.md", "docs/-x.md", "docs/~x.md", "docs/n\nl.md", "docs/h-sock.md", "docs/h-mod.md"}
+        want = {"docs/a b.md", "docs/é.md", "docs/-x.md", "docs/~x.md", "docs/n\nl.md", "docs/h-mod.md"}
         self.assertEqual(dict(changes), dict((n, ("edited " if n == "docs/h-mod.md" else "") + Q + "\n") for n in want))
         for n in ("h-link.md", "h-dir.md", "h-fifo.md", "dd/x.md"):
             self.assertIn("docs/%s: not a regular file; not read" % n, notes)
         self.assertNotIn("docs/h-gone.md", " ".join(notes))
         self.put("docs/h-mod.md", "none\n")
         self.assertNotIn("docs/h-mod.md", dict(docmove.rewrites(self.r, [M1], [])[0]))  # F15: no cache
+
+    def test_rw_f8_socket_and_device(self):  # RW-F8, H3 (RA-3): a tracked holder replaced by a socket or a device
+        P, Q = S + "a.md", D + "a.md"
+        names = ["docs/h-sock.md", "docs/h-dev.md", "docs/h-ok.md"]
+        for n in names:
+            self.put(n, P + "\n")
+        commit_all(self.r, "c")
+        os.remove(os.path.join(self.r, "docs/h-sock.md"))
+        make_socket(self, os.path.join(self.r, "docs/h-sock.md"))
+        self.assertTrue(stat.S_ISSOCK(os.lstat(os.path.join(self.r, "docs/h-sock.md")).st_mode))
+        os.remove(os.path.join(self.r, "docs/h-dev.md"))
+        device = make_device(os.path.join(self.r, "docs/h-dev.md"))  # False without root (mknod: EPERM); then h-dev is gone
+        if not device:
+            os.mkfifo(os.path.join(self.r, "docs/h-dev.md"))  # not the device member; a FIFO stands in (RW-F4)
+        before = snap(self.r)
+        kind, got = watched(lambda: docmove.rewrites(self.r, [M1], []))
+        self.assertEqual(kind, "ok")
+        changes, notes, conflicts = got
+        self.assertEqual(dict(changes), {"docs/h-ok.md": Q + "\n"})
+        self.assertIn("docs/h-sock.md: not a regular file; not read", notes)
+        self.assertIn("docs/h-dev.md: not a regular file; not read", notes)  # device (root) or the FIFO stand-in
+        self.assertEqual(conflicts, [])
+        self.assertEqual(snap(self.r), before)
 
     def test_vr1_d_note_line_numbers_under_int_limits(self):  # VR1 (d) RW-N3: a note line is a small int printed with %d
         self.put("docs/n.md", "9" * 4301 + "\n" + "a.md " + "9" * 4301 + "\n")
@@ -589,6 +811,56 @@ class HolderKindsTest(Rw):
             docmove.rewrites(self.r, [M1], [])
 
 
+class RewriteGapsTest(Rw):
+    def test_ra2_read_text_errno_mapping(self):  # RA-2 (P1.3 D-Q22): ENOENT, ENOTDIR, ENAMETOOLONG are missing; another is cannot read
+        self.put("docs/h.md", "see " + S + "a.md\n")
+        commit_all(self.r, "h")
+        for number in (errno.ENOENT, errno.ENOTDIR):
+            with self.subTest(errno=number), fail_lstat("h.md", number):
+                got = docmove.rewrites(self.r, [M1], [])
+                self.assertNotIn("docs/h.md", dict(got[0]))
+                self.assertEqual([n for n in got[1] if "h.md" in n], [])
+        with fail_lstat("h.md", errno.EIO), self.assertRaisesRegex(GateError, r"^docs/h\.md: cannot read \(Input/output error\)$"):
+            docmove.rewrites(self.r, [M1], [])
+        long = "docs/" + "n" * 300 + ".md"  # a real ENAMETOOLONG from the kernel
+        self.cache(long, data=("see " + S + "a.md\n").encode())
+        got = docmove.rewrites(self.r, [M1], [])
+        self.assertEqual(dict(got[0]), {"docs/h.md": "see " + D + "a.md\n"})
+        self.assertEqual([n for n in got[1] if "nnn" in n], [])
+
+    def test_ra7_target_directories_must_agree(self):  # RA-7 (CD10) and the dst.endswith guard
+        for src in (S, PL):
+            moves = [(src + "a.md", "x/a.md"), (src + "b.md", "y/b.md")]
+            with self.assertRaisesRegex(GateError, "^moves: the moves under %s name more than one target directory$" % src):
+                docmove.rewrites(self.r, moves, [])
+        self.put("docs/h.md", "dir " + S + " and " + S + "a.md\n")
+        commit_all(self.r, "h")  # a target whose end is not the source's rest names no directory: the prefix stays
+        self.assertEqual(docmove.rewrites(self.r, [(S + "a.md", "x/z.md")], [])[0],
+                         [("docs/h.md", "dir " + S + " and x/z.md\n")])
+        self.assertEqual(docmove.rewrites(self.r, [(S + "a.md", "x/a.md")], [])[0],
+                         [("docs/h.md", "dir x/ and x/a.md\n")])  # and when it does agree the prefix follows
+
+    def test_ra8_state_directory_boundary(self):  # RA-8: a sibling directory that shares the prefix is no state directory
+        self.put("a/decx/f.yml", "see " + S + "a.md\n")
+        commit_all(self.r, "x")
+        self.assertEqual(docmove.rewrites(self.r, [M1], ["a/dec"]),
+                         ([("a/decx/f.yml", "see " + D + "a.md\n")], [], []))
+        self.put("a/dec/f.yml", "see " + S + "a.md\n")
+        commit_all(self.r, "d")
+        self.assertEqual(docmove.rewrites(self.r, [M1], ["a/dec"])[2],
+                         ["a/dec/f.yml: a state record names a moved path (" + S + "a.md); resolve it by hand before the migration"])
+
+    def test_ra10_list_subclass_refused(self):  # RA-10, RW-A3: type(moves) is list, never a subclass
+        class L(list):
+            pass
+        with self.assertRaisesRegex(GateError, "^moves: must be a list$"):
+            docmove.rewrites(self.r, L([M1]), [])
+        with self.assertRaisesRegex(GateError, "^moves: must be a list$"):
+            docmove.apply_moves(self.r, L([M1]), [])
+        with self.assertRaisesRegex(GateError, "^changes: must be a list$"):
+            docmove.apply_moves(self.r, [], L([("a", "b")]))
+
+
 class StateRecordTest(Rw):
     def test_rw_x1_state_record_conflicts(self):  # RW-X1a X1b X1c X1d X1e X1f (the runner runs both interpreters), X2
         rec = ".strict-delivery/state/decisions/D-1.yml"
@@ -622,7 +894,9 @@ class StateRecordTest(Rw):
                                                                          for i, d in enumerate(STATE)))  # X1e
 
 
-class ApplyTest(Repo):
+class ApplyBase(Repo):
+    """The helpers of the apply tests; it holds no test, so ``ApplyRowsTest`` does not re-run ``ApplyTest`` (RA-15 c)."""
+
     def trace(self):
         d = tempfile.mkdtemp(dir=self.tmp)
         log = os.path.join(d, "log")
@@ -648,6 +922,8 @@ class ApplyTest(Repo):
         moves = docmove.plan_moves(self.r, CFG)[0]
         return moves
 
+
+class ApplyTest(ApplyBase):
     def test_am_a_arguments_and_noop(self):  # AM-A1 A2 A3 A4 A5 A6
         class Str(str):
             pass
@@ -795,7 +1071,7 @@ class ApplyTest(Repo):
         old = os.umask(0o077)
         try:
             docmove.apply_moves(self.r, [], [("m1.md", "A\n"), ("m2.md", "B\n"), ("crlf.md", "﻿x\r\ny"), ("hard.md", ""),
-                                             ("link-target.md", "n" * 2000000)])
+                                             ("link-target.md", "n" * 50000000)])  # W13: 50 MB, no cap (CD7)
         finally:
             os.umask(old)
         self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.r, "m1.md")).st_mode), 0o755)
@@ -803,7 +1079,7 @@ class ApplyTest(Repo):
         self.assertEqual(slurp(os.path.join(self.r, "crlf.md"), "rb"), b"\xef\xbb\xbfx\r\ny")
         self.assertEqual(slurp(os.path.join(self.tmp, "hard-other")), "h\n")  # W9
         self.assertEqual(os.path.getsize(os.path.join(self.r, "hard.md")), 0)  # W12
-        self.assertEqual(len(slurp(os.path.join(self.r, "link-target.md"))), 2000000)  # W13
+        self.assertEqual(os.path.getsize(os.path.join(self.r, "link-target.md")), 50000000)  # W13
         self.assertEqual([n for n in os.listdir(self.r) if n.startswith(".sd-managed-")], [])
         os.remove(os.path.join(self.r, "swap.md"))
         os.symlink(os.path.join(self.tmp, "hard-other"), os.path.join(self.r, "swap.md"))
@@ -821,7 +1097,7 @@ class ApplyTest(Repo):
         self.assertEqual(slurp(os.path.join(self.r, "m1.md")), "1\n")
 
 
-class ApplyRowsTest(ApplyTest):
+class ApplyRowsTest(ApplyBase):
     def test_am_a3_more_shapes(self):  # AM-A3: shapes of moves and changes, with the wording of the errors
         calls = self.trace()
         for bad in ([("a", 1)], [(1, "b")], [None], [["a", "b"]], [("a", "b", "c")], {M1}, [("", "b")]):
@@ -837,6 +1113,116 @@ class ApplyRowsTest(ApplyTest):
         with self.assertRaisesRegex(GateError, "^changes: " + S + "a.md is the source of a move"):
             docmove.apply_moves(self.r, [M1], [(S + "a.md", "t")])
         self.assertEqual(calls(), [])
+
+    def test_ra1_os_errors_are_named(self):  # RA-1 (CD11, AM-W5): os.mkdir and the preflight os.lstat raise GateError
+        if os.geteuid() == 0:
+            self.skipTest("root writes into a mode 0555 directory and reads a mode 000 one")
+        calls = self.trace()
+        top = self.new([S + "a.md"])  # (a) a read-only parent: os.mkdir of docs/strict-delivery
+        os.chmod(os.path.join(top, "docs"), 0o555)
+        self.addCleanup(os.chmod, os.path.join(top, "docs"), 0o755)
+        before = snap(top)
+        with self.assertRaisesRegex(GateError, r"^docs/strict-delivery/specs/a\.md: cannot write \(Permission denied\)$"):
+            docmove.apply_moves(top, [M1], [])
+        self.assertEqual(snap(top), before)
+        top = self.new([S + "a.md"])  # (b) an unreadable intermediate directory: os.lstat of docs/strict-delivery/specs
+        os.mkdir(os.path.join(top, "docs/strict-delivery"))
+        os.chmod(os.path.join(top, "docs/strict-delivery"), 0o000)
+        self.addCleanup(os.chmod, os.path.join(top, "docs/strict-delivery"), 0o755)
+        before = snap(top)
+        with self.assertRaisesRegex(GateError, r"^docs/strict-delivery/specs/sub/a\.md: cannot read \(Permission denied\)$"):
+            docmove.apply_moves(top, [(S + "a.md", D + "sub/a.md")], [])
+        self.assertEqual(snap(top), before)
+        top = self.new([S + "a.md"])  # (c) a component over NAME_MAX
+        before = snap(top)
+        with self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, [(S + "a.md", "docs/" + "n" * 300 + "/a.md")], [])
+        self.assertEqual(str(cm.exception), "docs/" + "n" * 300 + "/a.md: cannot read (File name too long)")
+        self.assertEqual(snap(top), before)
+        self.assertFalse(any("mv" in c for c in calls()))
+        top = self.new([S + "a.md", PL + "p.md"])  # (d) os.mkdir fails after a move: the move is named
+        real = os.mkdir
+
+        def mkdir(p, *a, **k):
+            if os.path.basename(p) == "plans" and "strict-delivery" in p:
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+            return real(p, *a, **k)
+        with mock.patch("os.mkdir", side_effect=mkdir), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, [M1, (PL + "p.md", DP + "p.md")], [])
+        self.assertEqual(str(cm.exception), DP + "p.md: cannot write (No space left on device); moved before it: "
+                         + S + "a.md -> " + D + "a.md")
+
+    def test_ra2_still_regular_errno_mapping(self):  # RA-2: ENOENT, ENOTDIR, ENAMETOOLONG are missing; another is cannot read
+        self.put("docs/h.md", "x\n")
+        commit_all(self.r, "h")
+        for number in (errno.ENOENT, errno.ENOTDIR):
+            with self.subTest(errno=number), fail_lstat("h.md", number):
+                with self.assertRaisesRegex(GateError, r"^docs/h\.md: missing$"):
+                    docmove.apply_moves(self.r, [], [("docs/h.md", "n\n")])
+        with fail_lstat("h.md", errno.EIO), \
+                self.assertRaisesRegex(GateError, r"^docs/h\.md: cannot read \(Input/output error\)$"):
+            docmove.apply_moves(self.r, [], [("docs/h.md", "n\n")])
+        with self.assertRaises(GateError) as cm:  # the kernel's own ENAMETOOLONG
+            docmove.apply_moves(self.r, [], [("docs/" + "n" * 300 + ".md", "n\n")])
+        self.assertEqual(str(cm.exception), "docs/" + "n" * 300 + ".md: missing")
+
+    def test_ra4_holder_swapped_after_plan(self):  # RA-4, AM-W6, H1-H4: FIFO, directory, socket, symlink, parent symlink, parent file
+        def fifo(top, path):
+            os.mkfifo(path)
+
+        def directory(top, path):
+            os.mkdir(path)
+
+        def sock(top, path):
+            make_socket(self, path)
+
+        def symlink(top, path):
+            os.symlink(os.path.join(self.tmp, "outside-file"), path)
+        with open(os.path.join(self.tmp, "outside-file"), "w") as fh:
+            fh.write("outside-old\n")
+        for name, make in (("fifo", fifo), ("directory", directory), ("socket", sock), ("symlink", symlink)):
+            with self.subTest(member=name):
+                top = self.new(["sub/h.md", "other.md"])
+                os.remove(os.path.join(top, "sub/h.md"))
+                make(top, os.path.join(top, "sub/h.md"))
+                before = snap(top)
+                kind, got = watched(lambda: docmove.apply_moves(top, [], [("sub/h.md", "new\n")]))
+                self.assertEqual(kind, "err")
+                self.assertIsInstance(got, GateError)
+                self.assertEqual(str(got), "sub/h.md: not a regular file")
+                self.assertEqual(snap(top), before)
+                self.assertEqual(slurp(os.path.join(self.tmp, "outside-file")), "outside-old\n")
+        for name in ("symlink", "file"):  # the parent component swapped
+            with self.subTest(parent=name):
+                top = self.new(["sub/h.md", "other.md"])
+                aside = os.path.join(tempfile.mkdtemp(dir=self.tmp), "c")
+                os.rename(os.path.join(top, "sub"), aside)
+                if name == "symlink":
+                    os.symlink(aside, os.path.join(top, "sub"))
+                else:
+                    with open(os.path.join(top, "sub"), "w") as fh:
+                        fh.write("a file\n")
+                before = snap(top)
+                with self.assertRaisesRegex(GateError, "^sub/h.md: not a regular file$"):
+                    docmove.apply_moves(top, [], [("sub/h.md", "new\n")])
+                self.assertEqual(snap(top), before)
+                self.assertEqual(slurp(os.path.join(aside, "h.md")), "x\n")  # nothing written outside the root
+
+    def test_ra9_oserror_write_names_earlier_writes(self):  # RA-9 (CD11): the OSError branch lists what was written before
+        self.put("m1.md", "a\n")
+        self.put("m2.md", "b\n")
+        commit_all(self.r, "c")
+        real = os.replace
+
+        def replace(src, dst, *a, **k):
+            if os.path.basename(dst) == "m2.md":
+                raise OSError(errno.EROFS, "Read-only file system")
+            return real(src, dst, *a, **k)
+        with mock.patch("os.replace", side_effect=replace), \
+                self.assertRaisesRegex(GateError, r"^m2\.md: cannot write \(Read-only file system\); written before it: m1\.md$"):
+            docmove.apply_moves(self.r, [], [("m1.md", "A\n"), ("m2.md", "B\n")])
+        self.assertEqual(slurp(os.path.join(self.r, "m1.md")), "A\n")
+        self.assertEqual(slurp(os.path.join(self.r, "m2.md")), "b\n")
 
     def test_am_g9_linked_worktree(self):  # AM-G9: a linked worktree top level is a root; its own tree moves
         self.files([S + "a.md"])
