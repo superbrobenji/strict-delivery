@@ -101,7 +101,9 @@ planned owner step.
 - `gate_checkpoint` in full (#41)
 - CI: the test suite split into five parallel shard jobs per cell (#40); tests never start git's file-system monitor (#34)
 
-Merged pull requests: #1-#37 and #39-#43 (#38 is open).
+- Config profiles and their checks: profile presets and overrides, config errors, the decision gate's override checks (#38)
+
+Merged pull requests: #1-#43.
 
 ## Where v0.1 stands
 
@@ -110,7 +112,7 @@ evidence for each pinned finding and a green CI run on its exact head before it 
 
 | Stream | Done | In progress | Still to come |
 |---|---|---|---|
-| config | (none merged yet) | config profiles and their checks (4a-4c, #38: open, CI green on its head, a records commit still owed); `init` (4d.1-4d.2) and `doctor` (4d.3) | `upgrade` (4e.1), the slash command files and this repository's adoption (4e.2), fixture repositories and the `init` end-to-end tests (4e.3) |
+| config | config profiles and their checks (4a-4c, #38) | `init` (4d.1-4d.2) and `doctor` (4d.3) | `upgrade` (4e.1), the slash command files and this repository's adoption (4e.2), fixture repositories and the `init` end-to-end tests (4e.3) |
 | hooks | runtime, Edit/Write and Agent hooks (#36, #42) | the Bash hook (3b.2), on a branch and not merged: by the owner's decision it will refuse a chained or piped command that mixes git with a write, rather than guessing where it points | 3b.3, then the Bash hook PR; the plugin is enabled in this repository after it |
 | records | overview, checkpoints, drift (#37, #39, #41, #43) | the tip-reader task 5b.3 | drift hardening (5c.4) |
 | residual | the program controller's sync text (#37) | residual batch 1, the registry requests (#44 open) | the process-learning tasks L1 and L2, batch 2 (the index and drift registry rows, context in the hooks, loopstats conditions in `gate_dispatch`, the interim skill's removal) |

@@ -3262,7 +3262,9 @@ FIX1_PINS = [
     ("R1-7", BD_DOC, "PR-config 52.0, PR-release 59.25", "PR-config 53.5, PR-release 60.75", 2),
     ("R1-7", BD_DOC, "| **v0.1.0 tag (6R.3)** | **60.0** | 59.25 + 0.75 | **Fri 20 Nov 02:00** | **Fri 27 Nov 10:00** |",
      "| **v0.1.0 tag (6R.3)** | **61.5** | 60.75 + 0.75 |", 1),
-    ("R1-7", README_DOC, "Target: about 60.0 hours of work", "Target: about 61.5 hours of work", 1),
+    # README rows (R1-7, R2-7): the README's status text moved on with the build (owner request
+    # 2026-11-26, PR #45); each row now pins the current text, and the flagged text stays gone (Q-A7-1).
+    ("R1-7", README_DOC, "Estimate (ledger, 2026-11-26 14:15)", "Target: about 61.5 hours of work", 1),
     ("R1-8", PLAN_DOC, "`FIX_ROUND_CAP = 5` (spec §10: \"rounds 4-5 a fresh agent one tier up, then the Rules N and T "
      "verdict\")", "`FIX_ROUND_CAP = 5` (spec §10: \"rounds 4-5 a fresh agent one tier up, then an owner question\")", 1),
     ("R1-8", PLAN_DOC, "PC3's \"The full suites run once per commit\" (as on origin/main)",
@@ -3432,7 +3434,7 @@ FIX2_PINS = [
      "**Block R1 end:** final review, PR to `main` (`MERGED ... stream=residual block=R1`", 1),
     ("R2-6", PLAN_DOC, R3_END_NEW, "the block rides PR-hooks, breakdown revision 7;", 1),
     ("R2-6", PLAN_DOC, R4_END_NEW, "the block rides PR-config, breakdown revision 7;", 1),
-    ("R2-7", README_DOC, "Merged pull requests: #1-#24.", "(#17, `run_all`, is open)", 1),
+    ("R2-7", README_DOC, "Merged pull requests: #1-#43.", "(#17, `run_all`, is open)", 1),
 ]
 SUB_BLOCK_PR = {"3a": "PR-runtime", "3d": "PR-package", "5a": "PR-5a", "5b": "PR-5b", "5c": "PR-5c", "6E": "PR-6E",
                 "6K": "PR-6K", "R3": "PR-R3", "R4": "PR-R4", "4e": "PR-config", "4c": "PR-4c",
