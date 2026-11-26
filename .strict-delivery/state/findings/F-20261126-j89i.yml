@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261126-j89i
+status: open
+source: residual final review 1 (residual/final-review-1.md, F-FR-3)
+severity: LOW
+class: "stale count comment beside a count literal: tests/test_gate_context.py:225 (15-line verdict, asserts 17); tests/test_run_all.py:36 (the 32 lines the five real gates give, REAL_PASS now longer with six gates)"
+siblings: []
+cites:
+  - file: tests/test_gate_context.py
+    lines: 225-227
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+  - file: tests/test_run_all.py
+    lines: "36"
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: residual-batch-1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+    by: stream-residual
+review_round: 1
+caused_by_change: true
+dimension: test literal comments
