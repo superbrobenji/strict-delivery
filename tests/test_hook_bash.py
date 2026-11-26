@@ -8,7 +8,7 @@ import subprocess
 import time
 import unittest
 
-from gates.lib import session
+from gates.lib import gitinfo, session
 from gates.lib.yamlsub import emit
 from gates.tools import githooks
 from tests import hookrun
@@ -16,6 +16,12 @@ from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minim
 
 FW = hookrun.FW
 ASK = "ask-id"
+# hand-written stderr lines (one line each, newline included) of the alias and -n refusals
+ALIAS_LINE = ("FAIL hook.bash.alias: a git alias that runs a shell command holding commit is refused, its commit cannot be "
+              "checked; the human can run the command with the ! prefix\n")
+N_FLAG_LINE = "FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; the human can run the command with the ! prefix\n"
+UNSTAGED_LINE = ("FAIL hook.bash.unstaged: a.txt: tracked file has unstaged changes; stage it or stash it, so the gates read "
+                 "the tree being committed\n")
 
 
 def write(path, text):
@@ -51,13 +57,18 @@ class HookCase(GitIsolatedTestCase):
     def gates_ran(self):
         return os.path.exists(self.marker)
 
-    def B(self, command, cwd=None, agent=None, env=None, tool_input=None):
+    def B(self, command, cwd=None, agent=None, env=None, tool_input=None, timeout=None):
+        """The hook's answer to ``command``. ``timeout`` (seconds): a hook that has not returned then is killed and the
+        test FAILS (C4-2, F-20261126-d2cx; a call that may block on a FIFO is always bounded this way)."""
         cwd = cwd or self.R
         fields = {"tool_input": tool_input if tool_input is not None else {"command": command, "description": "d"}}
         if agent:
             fields.update(agent)
-        return hookrun.run_hook("PreToolUse", hookrun.payload("PreToolUse", cwd, **fields),
-                                env if env is not None else self.env, FW)
+        try:
+            return hookrun.run_hook("PreToolUse", hookrun.payload("PreToolUse", cwd, **fields),
+                                    env if env is not None else self.env, FW, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.fail("the hook blocked: no answer within %s s for %r" % (timeout, command))
 
     def passes(self, r, msg=""):
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""), msg)
@@ -223,10 +234,19 @@ class CommitTest(HookCase):
         git(self.R, "config", "alias.ci", "commit")
         self.refused(self.B("git ci --no-verify -m m"), "bypass.no-verify")
         self.refused(self.B("git ci -n -m m"), "bypass.n-flag")
+        # R2-4 (F-20261126-9azm), plan :3697 "alias.x = !git commit used as git x (refused)": on a CLEAN tree with the git
+        # hooks installed the one line is hook.bash.alias, exactly (nothing else can refuse it: no unstaged path, no bypass)
+        self.assertEqual(githooks.install(self.R, FW), [])
+        git(self.R, "config", "alias.x", "!git commit")
+        with open(self.marker, encoding="utf-8") as fh:   # the calls above ran the gates (a text refusal does not stop them)
+            before = fh.read()
+        r = self.B("git x -m m")
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", ALIAS_LINE))
+        with open(self.marker, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), before)   # the alias refusal itself runs no gates
         self.dirty()
         self.refused(self.B("git ci -m m"), "unstaged")
-        git(self.R, "config", "alias.x", "!git commit")
-        self.refused(self.B("git x -m m"), absent=("bypass",))
+        self.refused(self.B("git x -m m"), absent=("bypass",))   # the dirty-tree case, kept as the second assertion
 
     def test_alias_in_compound_without_commit_word(self):   # EW8
         git(self.R, "config", "alias.ci", "commit")
@@ -457,12 +477,12 @@ class TargetTest(HookCase):
         agent = self.agent(W)
         for command in ("git -C %s commit -m m" % fifo, "git -C /dev/null commit -m m"):
             start = time.time()
-            self.refused(self.B(command, agent=agent), "target")
+            self.refused(self.B(command, agent=agent, timeout=30), "target")   # C4-2: a blocked hook fails the test
             self.assertLess(time.time() - start, 5, command)   # HR3: returns within 5 s
         os.rename(os.path.join(self.R, ".strict-delivery", "config.yml"), os.path.join(self.tmp, "config.moved"))
         os.mkfifo(os.path.join(self.R, ".strict-delivery", "config.yml"))
         start = time.time()
-        r = self.B("git commit -m m")
+        r = self.B("git commit -m m", timeout=30)
         self.assertLess(time.time() - start, 5)
         self.refused(r, "config", absent=("unstaged", "gates"))   # HR3: the config.load verdict (cfg_error) refuses the commit
         self.assertIn("FAIL hook.bash.config: .strict-delivery/config.yml: cannot read file (not a regular file); ",
@@ -1418,6 +1438,7 @@ LG_BANG = "the human can run the command with the ! prefix"
 LG_ONE_PLAIN = ("FAIL hook.bash.target: a git write names its worktree only as one plain command "
                 "(git -C <dir> ... or cd <dir> && git ...); " + LG_WAY)
 LG_NOT_GIT = "FAIL hook.bash.not-git: the program is not git; " + LG_WAY
+LG_ENV_S = "FAIL hook.bash.not-git: env option -S is refused; " + LG_WAY
 LG_OUTSIDE = "FAIL hook.bash.target: <O> is not a worktree this caller may write in (allowed: <A>); " + LG_WAY
 LG_NO_VERIFY = "FAIL hook.bash.bypass.no-verify: --no-verify and its abbreviations are refused; " + LG_BANG
 LG_DECIDE = ("FAIL hook.bash.decide: decisions decide and withdraw come only from the human, who runs them with the ! "
@@ -1462,7 +1483,8 @@ LG_MEMBERS = [
     ("LG4", "zsh -c 'git commit -m m'", *_same([LG_NOT_GIT]), ""),
     ("LG4", "zsh -c 'git reset --hard'", LG_PASS, LG_PASS, PLAIN_RESET),
     ("LG4", "zsh -c 'git -C <O> reset --hard'", *LG_SAME, ""),
-    ("LG4", "env -S 'git -C <O> reset --hard'", *LG_SAME, ""),
+    # U1 (F-20261126-ej5r): the refused env option keeps its not-git line, ahead of the one-plain-command line
+    ("LG4", "env -S 'git -C <O> reset --hard'", *_same([LG_ENV_S, LG_ONE_PLAIN]), ""),
     # LG5 F-20261116-grp8: quote removal before the text checks
     ("LG5", "gi't' commit -m m", *_same([LG_COMPOUND % "command word"]), ""),
     ("LG5", "git co\\mmit -m m", *_same([LG_COMPOUND % "quoting"]), ""),
@@ -1568,6 +1590,339 @@ def _add_member_tests():
 
 
 _add_member_tests()
+
+
+# ---- fix round 2, part B (review 2: R2-1 .. R2-7, U1, C4-2). Expected lines are hand-written from the table. ----
+class AliasChainHookTest(HookCase):
+    """R2-2 (F-20261126-zapk) and R2-3 (F-20261126-yfpy) through the hook, the git hooks installed (a healthy
+    ``pre-commit``, so ``-n`` is the bypass) and a clean tree: the exact stderr of each member."""
+
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(githooks.install(self.R, FW), [])
+        self.W = self.worktree("W", "-b", "wb")
+
+    def alias(self, **aliases):
+        for name, value in aliases.items():
+            git(self.R, "config", "alias." + name, value)
+
+    def check(self, command, want):
+        for kw, cwd in (({}, self.R), ({"agent": self.agent(self.W)}, self.W)):   # the main session, a bound subagent
+            r = self.B(command, cwd=cwd, **kw)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", want), (command, cwd))
+        self.assertFalse(self.gates_ran(), command)
+
+    def test_shell_alias_through_an_alias_R2_2(self):
+        self.alias(ci="commit", x1="!git commit -n -m m", x2="!git ci -n -m m", y1="x2", y2="!git x1", y3="!git x2",
+                   v4="!GIT_DIR=/x git ci")
+        for name, want in (("x1", N_FLAG_LINE + ALIAS_LINE), ("x2", N_FLAG_LINE + ALIAS_LINE),
+                           ("y1", N_FLAG_LINE + ALIAS_LINE), ("y2", N_FLAG_LINE + ALIAS_LINE),
+                           ("y3", N_FLAG_LINE + ALIAS_LINE), ("v4", ALIAS_LINE)):
+            with self.subTest(alias=name):
+                self.check("git %s -m m" % name, want)
+
+    def test_shell_alias_with_a_split_commit_word_or_alias_name_R2_3(self):   # controller's mutant A8
+        self.alias(ci="commit", s1='!git com""mit -m m', s2="!git com\\mit -n", s3='!git c""i -n -m m', s4="!git p1",
+                   p1="x2", x2="!git ci -n -m m", s5='!git p""1')
+        for name, want in (("s1", ALIAS_LINE), ("s2", N_FLAG_LINE + ALIAS_LINE), ("s3", N_FLAG_LINE + ALIAS_LINE),
+                           ("s4", N_FLAG_LINE + ALIAS_LINE), ("s5", N_FLAG_LINE + ALIAS_LINE)):
+            with self.subTest(alias=name):
+                self.check("git %s -m m" % name, want)
+
+    def test_split_commit_alias_R2_3_n_flag(self):
+        self.alias(q1='com""mit -n', q3="com\\mit -n", q5='com""mit', q6="q5", q7='q""5 -n')
+        for name in ("q1", "q3", "q7"):
+            with self.subTest(alias=name):
+                self.check("git %s -m m" % name, N_FLAG_LINE)
+        self.check("git q5 -n -m m", N_FLAG_LINE)
+        self.check("git q6 -n -m m", N_FLAG_LINE)
+
+    def test_split_commit_alias_R2_3_dirty_tree(self):
+        self.alias(q5='com""mit', q6="q5", q7='q""5')
+        self.dirty()
+        self.dirty(self.W)   # the subagent's worktree is a tree of its own
+        for name in ("q5", "q6", "q7"):
+            with self.subTest(alias=name):
+                self.check("git %s -m m" % name, UNSTAGED_LINE)
+
+    def test_split_commit_alias_R2_3_clean_tree_passes(self):   # hooks healthy: the alias commits as `git commit` does
+        self.alias(q5='com""mit', q6="q5")
+        for name in ("q5", "q6"):
+            self.passes(self.B("git %s -m m" % name), name)
+        self.assertFalse(self.gates_ran())
+
+
+class HooksDirHookTest(HookCase):
+    """R2-6 (F-20261126-j26u), rows HR8 and HR9 through the production hook (``pre_bash._run_gates``): the hooks directory
+    forms. A ``pre-commit`` that is not a regular framework file reads as not healthy, so the gates run and the commit is
+    refused exactly when they FAIL; a ``pre-push`` form does not decide a commit. Every call is bounded (C4-2)."""
+
+    BOUND = 30
+
+    def hooks(self):
+        d = gitinfo.hooks_dir(self.R)
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def shim(self, name, hooks=None):
+        path = os.path.join(hooks or self.hooks(), name)
+        with open(path, "wb") as fh:
+            fh.write(githooks.shim(name, FW))
+        os.chmod(path, 0o755)
+
+    def form(self, name, form):
+        path = os.path.join(self.hooks(), name)
+        if form == "symlink":
+            target = os.path.join(self.tmp, "outside-" + name)
+            with open(target, "wb") as fh:
+                fh.write(githooks.shim(name, FW))
+            os.chmod(target, 0o755)
+            os.symlink(target, path)
+        elif form == "directory":
+            os.mkdir(path)
+        else:
+            os.mkfifo(path)
+
+    def failing_tests(self):
+        cfg = dict(minimal_config())
+        cfg["commands"] = {"test": "exit 3"}
+        write(os.path.join(self.R, ".strict-delivery", "config.yml"), emit(cfg))
+        commit_all(self.R, "failing test command")
+
+    def ran_once(self):
+        with open(self.marker, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "ran\n")
+
+    def commit(self):
+        return self.B("git commit -m m", timeout=self.BOUND)
+
+    def equal_to_the_default(self, spelling):
+        default = os.path.join(self.R, ".git", "hooks")
+        git(self.R, "config", "core.hooksPath", spelling)
+        self.passes(self.commit(), spelling)   # nothing installed: the gates run
+        self.ran_once()
+        os.makedirs(default, exist_ok=True)
+        self.shim("pre-commit", default)
+        self.shim("pre-push", default)
+        self.passes(self.commit(), spelling)   # installed there: git runs them itself, the gates do not run twice
+        self.ran_once()
+
+    def test_hooks_path_equal_to_the_default_reads_as_unset_HR9_absolute(self):
+        self.equal_to_the_default(os.path.join(self.R, ".git", "hooks"))
+
+    def test_hooks_path_equal_to_the_default_reads_as_unset_HR9_relative(self):
+        self.equal_to_the_default(".git/hooks")
+
+    def test_hooks_path_nested_in_the_default_is_judged_at_that_path_HR9(self):
+        default = os.path.join(self.R, ".git", "hooks")
+        nested = os.path.join(default, "nested")
+        git(self.R, "config", "core.hooksPath", nested)
+        os.makedirs(nested)
+        self.shim("pre-commit", default)   # installed in the default directory only: not where git looks
+        self.shim("pre-push", default)
+        self.passes(self.commit())
+        self.ran_once()
+        self.shim("pre-commit", nested)
+        self.shim("pre-push", nested)
+        self.passes(self.commit())
+        self.ran_once()   # still once: installed at the configured path, git runs the hook itself
+
+
+def _hr8_test(kind, form):
+    def test(self):
+        if kind == "pre_commit_runs_gates":
+            self.shim("pre-push")
+            self.form("pre-commit", form)
+            self.passes(self.commit())
+            self.ran_once()
+        elif kind == "pre_commit_failing_gates_refuse":
+            self.failing_tests()
+            self.shim("pre-push")
+            self.form("pre-commit", form)
+            r = self.commit()
+            self.refused(r, "gates")
+            self.assertIn("commands.test exited 3", r.stderr)
+        elif kind == "pre_push_does_not_decide_a_commit":
+            self.shim("pre-commit")
+            self.form("pre-push", form)
+            self.passes(self.commit())
+            self.assertFalse(self.gates_ran())
+        else:
+            self.form("pre-push", form)   # pre-commit missing: the gates run
+            self.passes(self.commit())
+            self.ran_once()
+    return test
+
+
+for _form in ("symlink", "directory", "fifo"):
+    for _kind in ("pre_commit_runs_gates", "pre_commit_failing_gates_refuse", "pre_push_does_not_decide_a_commit",
+                  "pre_push_form_with_pre_commit_missing"):
+        setattr(HooksDirHookTest, "test_HR8_%s_%s" % (_kind, _form), _hr8_test(_kind, _form))
+
+
+# R2-7 (F-20261126-te2b): the write options of branch, checkout and switch in a non-plain text.
+OPTION_WRITES = (
+    ("branch", ("-D x", "-d x", "-f x", "-m x y", "-M x y", "-c x y", "-C x y", "-t x", "--delete x", "--force x",
+                "--move x y", "--copy x y", "--track x", "--del x", "--forc x", "--mo x y", "-fD x", "-vD x")),
+    ("checkout", ("-b y", "-B y", "-f", "-t y", "--force", "--track y", "--orphan y", "--detach", "--fo", "--or y",
+                  "-fb y", "-qB y")),
+    ("switch", ("-c y", "-C y", "-f", "-d", "--create y", "--force-create y", "--force", "--discard-changes", "--detach",
+                "--track y", "--orphan y", "--cr y", "-fc y")),
+)
+OPTION_READS = ("branch --list", "branch -v", "branch --list x", "branch", "branch -a", "checkout feat", "switch feat",
+                "checkout -- a.txt", "branch --show-current", "switch --guess feat")
+
+
+class OptionWriteHookTest(HookCase):
+    """R2-7 (F-20261126-te2b), the controller's ruling: a non-plain text holding ``git`` and ``branch``, ``checkout`` or
+    ``switch`` with one of its create, move, copy, delete or force options is judged as a git write exactly as its plain
+    form is (target: the cwd's top level; with ``-C``, ``--git-dir``, ``--work-tree`` or ``cd`` the one-plain-command line).
+    A subagent bound to W with its cwd in R (not allowed) is the discriminating actor."""
+
+    def setUp(self):
+        super().setUp()
+        self.W = self.worktree("W", "-b", "wb")
+        self.agent_w = self.agent(self.W)
+        self.X = os.path.join(self.work, "X")
+        os.mkdir(self.X)
+        make_repo(self.X)
+
+    def same(self, split, plain, **kw):
+        a, b = self.B(split, **kw), self.B(plain, **kw)
+        self.refused(b, "target")
+        self.assertEqual((a.returncode, a.stdout, a.stderr), (b.returncode, b.stdout, b.stderr), split)
+        return a
+
+    def test_non_plain_write_options_judged_as_the_plain_form(self):
+        outside = "FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s); " % (self.R, self.W)
+        for sub, options in OPTION_WRITES:
+            for opt in options:
+                if self.is_capital_c(opt):
+                    continue   # the text holds the token -C: see test_capital_c_option_is_read_as_the_global_option
+                plain = "git %s %s" % (sub, opt)
+                with self.subTest(command=plain):
+                    r = self.same(plain + "; ls", plain, agent=self.agent_w)
+                    self.assertEqual(r.stderr, outside + "run it with the ! prefix if you must, or ask the owner\n")
+
+    @staticmethod
+    def is_capital_c(opt):
+        return opt.split(" ")[0] == "-C"
+
+    def test_capital_c_option_is_read_as_the_global_option(self):
+        # `branch -C x y` and `switch -C y` hold the token -C, which a non-plain text cannot tell from git's global -C: the
+        # ruling's "when the text also holds -C" gives the one-plain-command line (fail closed, the same for both actors)
+        one_plain = ("FAIL hook.bash.target: a git write names its worktree only as one plain command (git -C <dir> ... or "
+                     "cd <dir> && git ...); run it with the ! prefix if you must, or ask the owner\n")
+        for command in ("git branch -C x y; ls", "git switch -C y; ls", "ls && git branch -C x y"):
+            with self.subTest(command=command):
+                for kw in ({}, {"agent": self.agent_w}):
+                    r = self.B(command, **kw)
+                    self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", one_plain), command)
+
+    def test_non_plain_write_options_with_a_named_directory(self):   # -C <O>: the plain form names the directory's top level
+        one_plain = ("FAIL hook.bash.target: a git write names its worktree only as one plain command (git -C <dir> ... or "
+                     "cd <dir> && git ...); run it with the ! prefix if you must, or ask the owner\n")
+        for sub, options in OPTION_WRITES:
+            for opt in options:
+                plain = "git -C %s %s %s" % (self.X, sub, opt)
+                with self.subTest(command=plain):
+                    p = self.B(plain, agent=self.agent_w)
+                    self.refused(p, "target")
+                    self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in" % self.X, p.stderr)
+                    for split in (plain + "; ls", "ls && " + plain):
+                        s = self.B(split, agent=self.agent_w)
+                        self.assertEqual((s.returncode, s.stdout, s.stderr), (2, "", one_plain), split)
+                        s = self.B(split)   # the main session: the named directory decides as well
+                        self.assertEqual((s.returncode, s.stdout, s.stderr), (2, "", one_plain), split)
+
+    def test_non_plain_write_options_as_the_session_in_its_worktree(self):   # the plain form passes there: so does the text
+        for sub, options in OPTION_WRITES:
+            for opt in [o for o in options if not self.is_capital_c(o)][:3]:
+                with self.subTest(sub=sub, opt=opt):
+                    self.passes(self.B("git %s %s" % (sub, opt)))
+                    self.passes(self.B("git %s %s; ls" % (sub, opt)))
+
+    def test_forms_of_the_text(self):   # the sub and the option read through quotes, in either position of the text
+        for command in ("ls && git checkout -B y", "git branch -\"D\" x; ls", "git bra\"\"nch -D x; ls",
+                        "git 'branch' --del x; ls", "git branch -D x | cat", "(git switch -c z); ls", "ls; git switch --force-create z",
+                        "git chec\\kout -b y; ls", "ls\ngit branch -f q HEAD"):
+            with self.subTest(command=command):
+                r = self.B(command, agent=self.agent_w)
+                self.refused(r, "target")
+                self.assertIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.R, self.W), r.stderr)
+
+    def test_non_write_options_still_pass(self):
+        for read in OPTION_READS:
+            for command in ("git %s; ls" % read, "ls && git %s" % read, "git %s" % read):
+                with self.subTest(command=command):
+                    self.passes(self.B(command, agent=self.agent_w), command)
+                    self.passes(self.B(command), command)
+        # the options of ANOTHER command in the same text do not count: a letter of ls is no option of git branch
+        for command in ("git branch --list; ls -fD", "ls -fD; git branch --list", "git branch --list && ls -c x"):
+            with self.subTest(command=command):
+                self.passes(self.B(command, agent=self.agent_w), command)
+
+
+class RefusedEnvWriteTest(HookCase):
+    """U1 (F-20261126-ej5r): a git write behind a refused ``env`` wrapper keeps its ``not-git`` line (decision of hooks
+    stream controller 4: Q3's 'not-git stays commit-only' is narrowed to the case where the program word resolves)."""
+
+    WRITES = ("push", "merge x", "pull", "rebase x", "cherry-pick x", "revert x", "am x", "reset --hard", "update-ref x y",
+              "tag x", "stash", "worktree list", "branch -D x", "checkout -b y", "switch -c y")
+    WRAPPERS = (("env FOO=1", "FAIL hook.bash.not-git: env operand FOO is refused; "),
+                ("env -x", "FAIL hook.bash.not-git: env option -x is refused; "),
+                ('env "é=1"', "FAIL hook.bash.not-git: the program is not git; "))
+    WAY = "run it with the ! prefix if you must, or ask the owner\n"
+
+    def setUp(self):
+        super().setUp()
+        self.W = self.worktree("W", "-b", "wb")
+
+    def actors(self):
+        return (("session", self.R, {}), ("agent", self.W, {"agent": self.agent(self.W)}))
+
+    def test_every_git_write_behind_a_refused_env_is_refused(self):
+        for wrapper, line in self.WRAPPERS:
+            for write in self.WRITES:
+                command = "%s git %s" % (wrapper, write)
+                for actor, cwd, kw in self.actors():
+                    with self.subTest(command=command, actor=actor):
+                        r = self.B(command, cwd=cwd, **kw)
+                        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", line + self.WAY))
+
+    def test_the_target_lines_follow_the_env_line(self):
+        other = self.R
+        for wrapper, line in self.WRAPPERS:
+            with self.subTest(wrapper=wrapper):   # outside: the subagent's cwd R is not its worktree
+                r = self.B("%s git reset --hard" % wrapper, cwd=self.R, agent=self.agent(self.W))
+                self.assertEqual(r.stderr, line + self.WAY + "FAIL hook.bash.target: %s is not a worktree this caller may "
+                                 "write in (allowed: %s); %s" % (other, self.W, self.WAY))
+                r = self.B("%s git -C %s reset --hard" % (wrapper, self.W))   # a named directory
+                self.assertEqual(r.stderr, line + self.WAY + "FAIL hook.bash.target: a git write names its worktree only "
+                                 "as one plain command (git -C <dir> ... or cd <dir> && git ...); " + self.WAY)
+
+    def test_unchanged_around_the_refused_wrapper(self):
+        # `env -i echo git reset --hard` and `env TZ=x bash -c ...`: the wrapper is accepted, the program is not git: the
+        # text is read as `echo git reset --hard` is (a pass in the cwd), with no env line
+        for command in ("env FOO=1 git status", "env FOO=1 ls", "env -x ls", 'env "é=1" git log', "env FOO=1 git branch --list",
+                        "env FOO=1 git branch", "env -i echo git reset --hard", "env TZ=x bash -c 'git reset --hard'"):
+            for actor, cwd, kw in self.actors():
+                with self.subTest(command=command, actor=actor):
+                    self.passes(self.B(command, cwd=cwd, **kw))
+        for command in ("env FOO=1 git commit -m m", "env -x git commit -m m"):   # a commit keeps its own (older) path
+            r = self.B(command)
+            self.assertEqual(r.returncode, 2)
+            self.assertEqual(r.stderr.count("FAIL hook.bash.not-git"), 1, r.stderr)
+
+    def test_an_accepted_env_wrapper_is_the_plain_form(self):   # `env -i` and `env NAME=V` with an allowed name are unwrapped
+        outside = self.B("git reset --hard", cwd=self.R, agent=self.agent(self.W))
+        self.refused(outside, "target")
+        for command in ("env -i git reset --hard", "env -u FOO git reset --hard", "env TZ=x git reset --hard"):
+            with self.subTest(command=command):
+                self.passes(self.B(command))
+                self.passes(self.B(command, cwd=self.W, agent=self.agent(self.W)))
+                r = self.B(command, cwd=self.R, agent=self.agent(self.W))
+                self.assertEqual((r.returncode, r.stderr), (outside.returncode, outside.stderr))
 
 
 if __name__ == "__main__":

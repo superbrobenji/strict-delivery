@@ -225,7 +225,7 @@ class ResultFunctionsTest(Repo):
         res = githooks.status_result(d, FRAMEWORK)
         self.assertEqual(res.render(False), "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
         self.assertEqual(githooks.install(d, FRAMEWORK), [])
-        self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+        self.assertEqual(status_text(d),
                          "PASS githooks.pre-commit\nPASS githooks.pre-push\n")
         hooks = gitinfo.hooks_dir(d)
         with open(os.path.join(hooks, "pre-commit"), "ab") as fh:
@@ -233,19 +233,19 @@ class ResultFunctionsTest(Repo):
         with open(os.path.join(hooks, "pre-push"), "wb") as fh:
             fh.write(b"#!/bin/sh\nexit 0\n")
         os.chmod(os.path.join(hooks, "pre-push"), 0o755)
-        self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+        self.assertEqual(status_text(d),
                          "FAIL githooks.pre-commit: stale\nFAIL githooks.pre-push: foreign\n")
         empty = os.path.join(self.tmp, "emptyhooks")
         os.mkdir(empty)
         git(d, "config", "core.hooksPath", empty)
-        self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+        self.assertEqual(status_text(d),
                          "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
 
     def test_status_result_equals_status(self):  # GH1
         d = self.repo()
         for step in ("missing", "installed"):
             with self.subTest(step):
-                self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+                self.assertEqual(status_text(d),
                                  githooks.status(d, FRAMEWORK).render(False))
                 githooks.install(d, FRAMEWORK)
 
@@ -519,6 +519,21 @@ class EffectiveWordsTest(unittest.TestCase):
                      ("git a", {"commit"}), ("git pp", {"pull"}), ("git mg", {"merge"}), ("git gg", {"commit"}),
                      ("echo ci", set()), ("ci", set()), ("git c1", set()), ("git commit", {"commit"})):
             self.assertEqual(bp.effective_words(t, al), w, t)
+
+    def test_alias_expansion_read_through_both_views(self):  # R2-3 (F-20261126-yfpy), ruling R1: raw and quote-removed
+        for expansion, w in (('com""mit', {"commit"}), ("com\\mit", {"commit"}), ('com""mit -n', {"commit"}),
+                             ("co'mm'it", {"commit"}), ('pu""sh', {"push"}), ("pu\\ll", {"pull"}), ('me""rge', {"merge"}),
+                             ("com\\\nmit", {"commit"}), ('log --grep com""mit', {"commit"})):
+            with self.subTest(expansion=expansion):
+                self.assertEqual(bp.effective_words("git q5", {"q5": expansion}), w)
+                self.assertEqual(bp.effective_words("git q6", {"q6": "q5", "q5": expansion}), w)  # a chain
+                self.assertEqual(bp.effective_words("git q7", {"q7": "q6", "q6": "q5", "q5": expansion}), w)
+        # an alias name split by a quote inside an expansion is followed (the raw text holds q and 5, not q5)
+        self.assertEqual(bp.effective_words("git q6", {"q6": 'q""5', "q5": "commit"}), {"commit"})
+        self.assertEqual(bp.effective_words("git q6", {"q6": "q\\5", "q5": 'pu""sh'}), {"push"})
+        # unchanged: no word, no alias, a cycle
+        for al in ({"q5": 'com""mitx'}, {"q5": 'x""y'}, {"q5": 'q5'}, {"q5": 'q""5'}):
+            self.assertEqual(bp.effective_words("git q5", al), set(), al)
 
     def test_bad_aliases(self):  # EW14
         self.assertEqual(bp.effective_words("git commit", {}), {"commit"})
@@ -1086,6 +1101,80 @@ class AliasExpansionTest(Repo):
         self.assertEqual(ids(out).count("hook.bash.bypass.no-verify"), 0)  # the option line is global-option, once
         self.assertIn("hook.bash.global-option.--no-verify", ids(out))
 
+    # R2-2 (F-20261126-zapk): a ``!`` alias whose body names another git alias that reaches ``commit`` ----
+    CHAIN = {"ci": "commit", "x1": "!git commit -n -m m", "x2": "!git ci -n -m m", "y1": "x2", "y2": "!git x1",
+             "y3": "!git x2", "v4": "!GIT_DIR=/x git ci", "y5": "!git x6", "x6": "!git -c core.hooksPath=/dev/null commit"}
+    N_FLAG = "FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; " + BANG
+
+    def test_shell_alias_through_an_alias_keeps_the_n_flag_and_is_refused(self):  # R2-2
+        for text, want in (("git x1 -m m", [self.N_FLAG, ALIAS_LINE]),   # the direct form, for comparison
+                           ("git x2 -m m", [self.N_FLAG, ALIAS_LINE]),   # !git ci -n: ci = commit
+                           ("git y1 -m m", [self.N_FLAG, ALIAS_LINE]),   # y1 = x2
+                           ("git y2 -m m", [self.N_FLAG, ALIAS_LINE]),   # !git x1: x1 = !git commit -n
+                           ("git y3 -m m", [self.N_FLAG, ALIAS_LINE]),   # !git x2
+                           ("git v4 -m m", [ALIAS_LINE]),                # !GIT_DIR=/x git ci
+                           ("git Y3 -m m", [self.N_FLAG, ALIAS_LINE])):  # alias names are case-insensitive
+            with self.subTest(text=text):
+                out, rec = self.lines(text, self.CHAIN)
+                self.assertEqual((out, rec.calls), (want, []))
+
+    def test_shell_alias_through_an_alias_is_read_by_the_text_checks(self):  # R2-2: the values reached are read as the text is
+        out, rec = self.lines("git y5", self.CHAIN)
+        self.assertEqual((out, rec.calls), (["FAIL hook.bash.bypass.hooks-path: core.hooksPath is refused; " + BANG,
+                                             ALIAS_LINE], []))
+
+    def test_shell_alias_through_an_alias_without_commit_is_unchanged(self):  # R2-2: only a body that reaches commit
+        for al in ({"x": "!echo hi", "y": "!git x"}, {"a": "!git b", "b": "!git a"}, {"y": "!git x", "x": "status"}):
+            with self.subTest(aliases=al):
+                out, rec = self.lines("git y" if "y" in al else "git a", al)
+                self.assertEqual((out, len(rec.calls)), ([], 1))
+
+    def test_shell_alias_through_an_alias_cycle_ends(self):  # R2-2: cycles end
+        al = {"a": "!git b commit", "b": "!git a"}
+        out, rec = self.lines("git a", al)
+        self.assertEqual((out, rec.calls), ([ALIAS_LINE], []))
+
+    # R2-3 member (controller's mutant A8, _has_word reading the raw view only): the commit word of a ``!`` body, or the
+    # alias name it holds, appears only quote-removed
+    SPLIT_SHELL = {"ci": "commit", "s1": '!git com""mit -m m', "s2": "!git com\\mit -n", "s3": '!git c""i -n -m m',
+                   "s4": "!git p1", "p1": "x2", "x2": "!git ci -n -m m", "s5": '!git p""1'}
+
+    def test_shell_alias_with_a_split_commit_word_or_alias_name(self):  # R2-3, R2-2
+        for text, want in (("git s1 -m m", [ALIAS_LINE]),                      # !git com""mit
+                           ("git s2 -m m", [self.N_FLAG, ALIAS_LINE]),         # !git com\mit -n
+                           ("git s3 -m m", [self.N_FLAG, ALIAS_LINE]),         # !git c""i -n: the name ci, quote-removed
+                           ("git s4 -m m", [self.N_FLAG, ALIAS_LINE]),         # !git p1; p1 = x2 (a plain value); x2 = !git ci -n
+                           ("git s5 -m m", [self.N_FLAG, ALIAS_LINE])):        # !git p""1
+            with self.subTest(text=text):
+                out, rec = self.lines(text, self.SPLIT_SHELL)
+                self.assertEqual((out, rec.calls), (want, []))
+
+    # R2-3 (F-20261126-yfpy): an alias expansion is read through the raw text and the quote-removed words ----
+    SPLIT = {"q1": 'com""mit -n', "q3": "com\\mit -n", "q5": 'com""mit', "q6": "q5", "q7": 'q""5 -n'}
+
+    def test_split_commit_alias_keeps_the_n_flag(self):  # R2-3
+        for name in ("q1", "q3", "q7"):
+            with self.subTest(alias=name):
+                out, rec = self.lines("git %s -m m" % name, self.SPLIT)
+                self.assertEqual((out, rec.calls), ([self.N_FLAG], []))
+        out, rec = self.lines("git q6 -n -m m", self.SPLIT)
+        self.assertEqual((out, rec.calls), ([self.N_FLAG], []))
+
+    def test_split_commit_alias_runs_the_unstaged_check_and_the_gates(self):  # R2-3
+        for name in ("q5", "q6", "q1x"):
+            al = dict(self.SPLIT, q1x='com""mit')
+            with self.subTest(alias=name):
+                out, rec = self.lines("git %s -m m" % name, al)
+                self.assertEqual((out, rec.calls), ([], [self.clean]))   # the gates ran on the clean tree
+                with open(os.path.join(self.clean, "a.txt"), "w", encoding="utf-8") as fh:
+                    fh.write("two\n")
+                try:
+                    rec = Recorder()
+                    out = bp.commit_refusals("git %s -m m" % name, pol(root=self.clean, cwd=self.clean, aliases=al), rec)
+                    self.assertEqual((out, rec.calls), (["FAIL hook.bash.unstaged: a.txt: " + bp.UNSTAGED_REASON], []))
+                finally:
+                    git(self.clean, "checkout", "--", "a.txt")
+
 
 class UnicodeEnvNameTest(Repo):
     """R1-5 (F-20261125-tsuc): ``env NAME=V`` reads NAME with an ASCII-only test, so the line is the same on every
@@ -1102,6 +1191,26 @@ class UnicodeEnvNameTest(Repo):
                 out, rec = self.run_lines('env "%s=1" git commit -m m' % name)
                 self.assertEqual((out, rec.calls), (want, []))
                 self.assertNotIn(name, "".join(out))
+
+    def test_every_ascii_alphanumeric_is_a_name_character(self):  # R2-5 (F-20261126-duce): all 62, hand-written ranges
+        chars = [chr(c) for c in range(ord("0"), ord("9") + 1)] + [chr(c) for c in range(ord("A"), ord("Z") + 1)] + \
+                [chr(c) for c in range(ord("a"), ord("z") + 1)]
+        self.assertEqual(len(chars), 62)
+        for ch in chars:
+            with self.subTest(ch=ch):
+                out, rec = self.run_lines("env %s_=1 git commit -m m" % ch)   # a name holding the character, after env
+                self.assertEqual((out, rec.calls), (["FAIL hook.bash.not-git: env operand %s_ is refused; %s" % (ch, WAY)], []))
+                out, rec = self.run_lines("env _%s=1 git commit -m m" % ch)   # and as the last character
+                self.assertEqual((out, rec.calls), (["FAIL hook.bash.not-git: env operand _%s is refused; %s" % (ch, WAY)], []))
+
+    def test_characters_next_to_the_ascii_alphanumerics_are_not_name_characters(self):  # R2-5: the edges of the ranges
+        want = ["FAIL hook.bash.not-git: the program is not git; " + WAY]
+        for ch in ("/", ":", "@", "[", "`", "{", ".", "~"):   # the neighbours of 0-9, A-Z, a-z and a few more
+            with self.subTest(ch=ch):
+                out, rec = self.run_lines("env '%s_=1' git commit -m m" % ch)   # single quotes: the character stays literal
+                self.assertEqual((out, rec.calls), (want, []))
+                out, rec = self.run_lines("env '_%s=1' git commit -m m" % ch)
+                self.assertEqual((out, rec.calls), (want, []))
 
     def test_env_operand_ascii_names_are_unchanged(self):
         out, _rec = self.run_lines("env FOO_1=1 git commit -m m")
@@ -1167,6 +1276,28 @@ class UnstagedNonUtf8Test(Repo):
         out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), Recorder())
         self.assertEqual(out, [self.unstaged("bad\\udcffname.txt"), self.unstaged("sub")])
 
+    def test_fallback_only_for_the_not_utf8_error(self):  # R2-1 (F-20261126-5xx3): any other first error is the line
+        d = self.repo()
+        os.mkdir(os.path.join(d, "sub"))
+        with open(os.path.join(d, "sub", "f.txt"), "w", encoding="utf-8") as fh:
+            fh.write("one\n")
+        commit_all(d, "sub")
+        toplevel = "git rev-parse --show-toplevel: root must be the repository top level"
+        failed = "git rev-parse --show-toplevel failed (exit 128)"
+        for dirty in (False, True):   # the subdirectory root reads the same with or without a dirty path below it
+            if dirty:
+                with open(os.path.join(d, "sub", "f.txt"), "w", encoding="utf-8") as fh:
+                    fh.write("two\n")
+            for name, root, why in (("subdirectory", os.path.join(d, "sub"), toplevel),
+                                    ("missing", os.path.join(d, "missing"), failed),
+                                    ("not a repository", self.tmp, failed),
+                                    ("a file", os.path.join(d, "a.txt"), failed)):
+                with self.subTest(root=name, dirty=dirty):
+                    rec = Recorder()
+                    out = bp.commit_refusals("git commit -m m", pol(root=root, cwd=root), rec)
+                    self.assertEqual(out, ["FAIL hook.bash.gates: %s; %s" % (why, BANG)])
+                    self.assertEqual(rec.calls, [])
+
     def test_git_failure_is_still_a_gates_line(self):
         out = bp.commit_refusals("git commit -m m", pol(root=os.path.join(self.repo(), "a.txt")), Recorder())
         self.assertEqual(len(out), 1)
@@ -1231,6 +1362,12 @@ class WayOutTailTest(Repo):
         self.assertEqual(checked.count("FAIL hook.bash.gates: %s: %s"), 1)
 
 
+def status_text(d):
+    """``githooks.status_result(d, FRAMEWORK).render(False)`` under a bound that fails the test when the call blocks (C4-2:
+    a hook path that is a FIFO must not be opened for reading)."""
+    return bounded(lambda: githooks.status_result(d, FRAMEWORK).render(False), 10, "githooks.status_result blocked")
+
+
 def _shim_bytes(name):
     return githooks.shim(name, FRAMEWORK)
 
@@ -1249,17 +1386,10 @@ class HooksDirPathsTest(Repo):
         return run
 
     def commit(self, d, rec):
-        """``commit_refusals`` on ``d``, guarded: a call that blocks (a FIFO opened for reading) fails the test."""
-        def alarm(_sig, _frm):
-            raise AssertionError("the commit check blocked for 10 s")
-        old = signal.signal(signal.SIGALRM, alarm)
-        signal.alarm(10)
+        """``commit_refusals`` on ``d``, guarded: a call that blocks (a FIFO opened for reading) fails the test (C4-2)."""
         began = time.monotonic()
-        try:
-            out = bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), self.runner(rec))
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old)
+        out = bounded(lambda: bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), self.runner(rec)), 10,
+                      "the commit check blocked")
         self.assertLess(time.monotonic() - began, 5)
         return out
 
@@ -1291,7 +1421,7 @@ class HooksDirPathsTest(Repo):
                 hooks = gitinfo.hooks_dir(d)
                 self.install(hooks, "pre-push")
                 self.make_form(hooks, "pre-commit", form)
-                status = githooks.status_result(d, FRAMEWORK).render(False)
+                status = status_text(d)
                 self.assertEqual(status, "FAIL githooks.pre-commit: foreign\nPASS githooks.pre-push\n")
                 rec = Recorder()
                 self.assertEqual(self.commit(d, rec), [])
@@ -1306,7 +1436,7 @@ class HooksDirPathsTest(Repo):
                 hooks = gitinfo.hooks_dir(d)
                 self.install(hooks, "pre-commit")
                 self.make_form(hooks, "pre-push", form)
-                status = githooks.status_result(d, FRAMEWORK).render(False)
+                status = status_text(d)
                 self.assertEqual(status, "PASS githooks.pre-commit\nFAIL githooks.pre-push: foreign\n")
                 rec = Recorder([("run_all.x", "bad")])
                 self.assertEqual(self.commit(d, rec), [])
@@ -1327,21 +1457,21 @@ class HooksDirPathsTest(Repo):
                 d = self.repo(spelling)
                 default = os.path.join(d, ".git", "hooks")
                 value = default if spelling == "absolute" else ".git/hooks"
-                unset = githooks.status_result(d, FRAMEWORK).render(False)
+                unset = status_text(d)
                 git(d, "config", "core.hooksPath", value)
-                self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False), unset)
+                self.assertEqual(status_text(d), unset)
                 rec = Recorder()
                 self.assertEqual(self.commit(d, rec), [])
                 self.assertEqual(rec.calls, [d])  # nothing installed: the gates run
                 self.install(default, "pre-commit")
                 self.install(default, "pre-push")
-                self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+                self.assertEqual(status_text(d),
                                  "PASS githooks.pre-commit\nPASS githooks.pre-push\n")
                 rec = Recorder([("run_all.x", "bad")])
                 self.assertEqual(self.commit(d, rec), [])
                 self.assertEqual(rec.calls, [])  # installed there: git runs them itself
                 git(d, "config", "--unset", "core.hooksPath")
-                self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+                self.assertEqual(status_text(d),
                                  "PASS githooks.pre-commit\nPASS githooks.pre-push\n")
 
     def test_hooks_path_nested_in_the_default_is_judged_at_that_path(self):  # HR9
@@ -1351,7 +1481,7 @@ class HooksDirPathsTest(Repo):
         git(d, "config", "core.hooksPath", nested)
         self.install(default, "pre-commit")  # installed in the default directory only: not where git looks
         self.install(default, "pre-push")
-        self.assertEqual(githooks.status_result(d, FRAMEWORK).render(False),
+        self.assertEqual(status_text(d),
                          "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
         rec = Recorder([("run_all.x", "bad")])
         self.assertEqual(self.commit(d, rec), ["FAIL hook.bash.gates: run_all.x: bad"])
@@ -1367,11 +1497,13 @@ HOME_LINE = ("FAIL hook.bash.bypass.home: moving HOME or XDG_CONFIG_HOME is refu
              "with the ! prefix")
 
 
-def bounded(fn, seconds=30):
-    """``fn()`` under a hard wall-clock bound: linear code takes well under 1 s at 10**5 tokens, the quadratic scan
-    of every remaining token took tens of minutes."""
+def bounded(fn, seconds=30, what="the check is not linear in the command length"):
+    """``fn()`` under a hard wall-clock bound that FAILS the test when the call does not return (C4-2, F-20261126-d2cx): the
+    alarm handler raises in the calling thread, so a call blocked in ``open`` of a FIFO is interrupted (PEP 475 re-raises
+    the handler's exception) and the test ends with an AssertionError within ``seconds``. Linear code takes well under 1 s
+    at 10**5 tokens, the quadratic scan of every remaining token took tens of minutes."""
     def alarm(_sig, _frm):
-        raise AssertionError("no answer within %d s: the check is not linear in the command length" % seconds)
+        raise AssertionError("no answer within %d s: %s" % (seconds, what))
     old = signal.signal(signal.SIGALRM, alarm)
     signal.alarm(seconds)
     try:

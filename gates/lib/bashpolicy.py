@@ -47,6 +47,7 @@ _SEPARATORS = frozenset(";&|\n()")
 _WAY = "run it with the ! prefix if you must, or ask the owner"
 _BANG = "the human can run the command with the ! prefix"
 _ASCII_ALNUM = frozenset("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+_NOT_UTF8 = "git diff --name-only gave output that is not valid UTF-8"  # gitinfo._text's error for the unstaged paths
 UNSTAGED_REASON = "tracked file has unstaged changes; stage it or stash it, so the gates read the tree being committed"
 
 
@@ -191,8 +192,10 @@ def effective_words(text: str, aliases: dict) -> set:
             if expansion.startswith("!"):
                 found |= set(COMMIT_WORDS + PUSH_WORDS + MERGE_WORDS[:1])
                 continue
-            found |= _words_of(expansion)
-            todo.extend(t for t in _runs(_fold(expansion)) if t in aliases)
+            # R2-3: an expansion is read through both views as the command text is (ruling R1): `com""mit` holds `commit`
+            for seen_view in (expansion, " ".join(shellscan.scan(expansion).words)):
+                found |= _words_of(seen_view)
+                todo.extend(t for t in _runs(_fold(seen_view)) if t in aliases)
     return found
 
 
@@ -230,6 +233,49 @@ def is_git_write(sub: str, args) -> bool:
     return False
 
 
+def write_option_in_text(views) -> bool:
+    """Whether a text that is not one plain command (``views``: its raw text and its quote-removed words, ruling R1) holds
+    ``branch``, ``checkout`` or ``switch`` followed, in the same simple command (cut at ``; & | newline ( )``), by one of that
+    subcommand's create, move, copy, delete or force options: ``is_git_write`` over the words after it (R2-7, F-20261126-te2b;
+    plan :3336 puts those forms in the git writes, :3659 'plain or not'). One pass over the words, linear in the text."""
+    return any(_segment_writes(seg) for view in views for seg in _simple_commands(view))
+
+
+def _simple_commands(view: str) -> list:
+    """The word lists of the simple commands of ``view`` (cut at ``; & | newline ( )``, words split at a space or tab)."""
+    out = []
+    cur = []
+    word = []
+    for ch in view:
+        if ch in _SEPARATORS:
+            if word:
+                cur.append("".join(word))
+                word = []
+            out.append(cur)
+            cur = []
+        elif ch in " \t":
+            if word:
+                cur.append("".join(word))
+                word = []
+        else:
+            word.append(ch)
+    if word:
+        cur.append("".join(word))
+    out.append(cur)
+    return out
+
+
+def _segment_writes(words: list) -> bool:
+    """Whether one simple command's words hold a ``WRITE_OPTIONS`` subcommand word and, after it, a write option of it."""
+    seen: set = set()
+    for word in words:
+        if word in WRITE_OPTIONS:
+            seen.add(word)
+        elif seen and word.startswith("-") and any(is_git_write(sub, [word]) for sub in seen):
+            return True
+    return False
+
+
 @dataclasses.dataclass
 class GitCall:
     """What the words of one plain command say about git: ``lines`` of steps 2-4 (not-git, index, target, global
@@ -240,11 +286,14 @@ class GitCall:
     args: list
     expansion_words: list
     expansions: list = dataclasses.field(default_factory=list)  # the alias values followed, in order (R1-3)
+    env_refused: bool = False  # the ``env`` wrapper was refused: an option, an operand off the allow-list, or a name that is
+    #                            not ASCII (U1, F-20261126-ej5r); its not-git line stands for a git write too
 
 
 def _env_unwrap(argv: tuple, lines: list) -> tuple:
-    """``(argv after env, operands)``: ``-i``, ``-u NAME`` and ``NAME=V`` only; other options and other names are
-    refused (one level)."""
+    """``(argv after env, operands, refused)``: ``-i``, ``-u NAME`` and ``NAME=V`` only; other options and other names are
+    refused (one level); ``refused`` is true for an option, an operand off the allow-list and an operand-shaped word
+    (``NAME=V``, ``NAME`` not an ASCII identifier) that is not accepted."""
     n = 1
     operands = []
     while n < len(argv):
@@ -255,17 +304,17 @@ def _env_unwrap(argv: tuple, lines: list) -> tuple:
             n += 2
         elif word.startswith("-"):
             lines.append("FAIL hook.bash.not-git: env option %s is refused; %s" % (safe_text(_option_word(word)), _WAY))
-            return (), operands
+            return (), operands, True
         elif "=" in word and word[0] != "=" and all(ch in _ASCII_ALNUM or ch == "_" for ch in word.split("=", 1)[0]):
             name = word.split("=", 1)[0]  # ASCII only: no Unicode-database call (CD6, V2d)
             if name not in _ENV_NAMES:
                 lines.append("FAIL hook.bash.not-git: env operand %s is refused; %s" % (safe_text(name), _WAY))
-                return (), operands
+                return (), operands, True
             operands.append(name)
             n += 1
         else:
-            break
-    return argv[n:], operands
+            return argv[n:], operands, "=" in word and word[0] != "="
+    return argv[n:], operands, False
 
 
 def _resolve(sub: str, rest: list, aliases: dict) -> tuple:
@@ -304,18 +353,19 @@ def git_call(scan, aliases: dict) -> Optional[GitCall]:
         return None
     program = argv
     operands: list = []
+    env_refused = False
     if _basename(argv[0]) == "env":
-        program, operands = _env_unwrap(argv, lines)
+        program, operands, env_refused = _env_unwrap(argv, lines)
         for name in operands:
             if name == "GIT_INDEX_FILE":
                 lines.append("FAIL hook.bash.index: GIT_INDEX_FILE is refused for a commit; %s" % _WAY)
             elif name in _ASSIGN_TARGET:
                 lines.append("FAIL hook.bash.target: %s is refused; %s" % (name, _WAY))
         if not program:
-            return GitCall(lines, None, None, [], [])
+            return GitCall(lines, None, None, [], [], env_refused=env_refused)
     if _basename(program[0]) != "git":
         lines.append("FAIL hook.bash.not-git: the program is not git; %s" % _WAY)
-        return GitCall(lines, None, None, [], [])
+        return GitCall(lines, None, None, [], [], env_refused=env_refused)
     words = list(program[1:])
     argv_C = None
     seen_option = False
@@ -396,11 +446,45 @@ def _has_word(text: str, word: str) -> bool:
     return any(word in _runs(view) for view in _views(text))
 
 
+def _alias_names_after_git(text: str, aliases: dict) -> list:
+    """The alias names held after the first ``git`` token of either view of ``text``, in order."""
+    out = []
+    for view in _views(text):
+        toks = _runs(view)
+        if "git" in toks:
+            out.extend(t for t in toks[toks.index("git") + 1:] if t in aliases)
+    return out
+
+
+def _reached_texts(body: str, aliases: dict) -> list:
+    """The texts of the alias values a ``!`` alias ``body`` names (the git alias names after its ``git`` token, R2-2), chains
+    followed through plain values (every alias name they hold) and ``!`` values (the names after their ``git`` token);
+    cycles end. A leading ``!`` is cut from each text."""
+    out: list = []
+    seen: set = set()
+    todo = _alias_names_after_git(body, aliases)[::-1]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        value = aliases[name]
+        if value.startswith("!"):
+            out.append(value[1:])
+            todo.extend(reversed(_alias_names_after_git(value[1:], aliases)))
+        else:
+            out.append(value)
+            for view in _views(value):
+                todo.extend(t for t in reversed(_runs(view)) if t in aliases)
+    return out
+
+
 def _alias_lines(call: GitCall, p: Policy, out: list) -> list:
     """The lines for the alias values ``call`` followed (R1-3, plan :3697, table CD7): each value, plain or ``!``, is read
-    by every ``text_refusals`` member as the command text is; a ``!`` value that holds a ``commit`` word is refused, since
-    the shell command it runs cannot be checked, and its ``-n`` is read as the command's is. ``out`` holds the lines of the
-    earlier steps: an alias ``--no-verify`` line is not added beside a ``no-verify`` line of ``out``."""
+    by every ``text_refusals`` member as the command text is; a ``!`` value that reaches a ``commit`` word, in its own text
+    or in the value of a git alias it names (R2-2, chains followed, cycles end; both views), is refused, since the shell
+    command it runs cannot be checked, and its ``-n`` is read as the command's is. ``out`` holds the lines of the earlier
+    steps: an alias ``--no-verify`` line is not added beside a ``no-verify`` line of ``out``."""
     agent = None if p.agent_key == "session" else p.agent_key
     lines: list = []
 
@@ -410,14 +494,16 @@ def _alias_lines(call: GitCall, p: Policy, out: list) -> list:
     for value in call.expansions:
         shell = value.startswith("!")
         body = value[1:] if shell else value
-        for line in text_refusals(body, agent):
-            if line.split(":", 1)[0].endswith(".no-verify"):
-                if not any("no-verify" in ln for ln in out):
-                    add("FAIL hook.bash.bypass.no-verify: an alias holds --no-verify; " + _BANG)
-            else:
-                add(line)
-        if shell and _has_word(body, "commit"):
-            if n_flag(list(shellscan.scan(body).words)):
+        texts = [body] + (_reached_texts(body, p.aliases) if shell else [])
+        for text in texts:
+            for line in text_refusals(text, agent):
+                if line.split(":", 1)[0].endswith(".no-verify"):
+                    if not any("no-verify" in ln for ln in out):
+                        add("FAIL hook.bash.bypass.no-verify: an alias holds --no-verify; " + _BANG)
+                else:
+                    add(line)
+        if shell and any(_has_word(text, "commit") for text in texts):
+            if any(n_flag(list(shellscan.scan(text).words)) for text in texts):
                 add("FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; " + _BANG)
             add("FAIL hook.bash.alias: a git alias that runs a shell command holding commit is refused, its commit "
                 "cannot be checked; " + _BANG)
@@ -428,10 +514,13 @@ def _unstaged_paths(root: str) -> list:
     """``gitinfo.unstaged_paths(root)``; when that raises (a tracked path whose name is not UTF-8, row HR6, is the only
     cause git's own success hides), the same ``git diff --name-only -z`` is read as bytes and each name decoded with
     ``surrogateescape``, so ``safe_text`` shows it as ``\\udcXX`` and the other paths stay listed (R1-6). A second
-    failure raises the first error."""
+    failure raises the first error. Any other first error (a root that is not the top level, a git failure) is raised as it
+    is (R2-1)."""
     try:
         return gitinfo.unstaged_paths(root)
     except GateError as first:
+        if str(first) != _NOT_UTF8:
+            raise
         try:
             p = gitinfo._run(root, "diff --name-only", ["diff", "--no-color", "--name-only", "-z", "--no-ext-diff",
                                                         "--no-textconv", "--ignore-submodules=none"],

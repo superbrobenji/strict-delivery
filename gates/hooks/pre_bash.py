@@ -10,7 +10,7 @@ from typing import Optional
 
 from gates.lib import config, gitinfo, session, shellscan, transcript, worktrees
 from gates.lib.bashpolicy import (GIT_WRITES, INHERITED_GIT_ENV, Policy, commit_refusals, effective_words, git_call,
-                                  is_git_write, target_root, text_refusals)
+                                  is_git_write, target_root, text_refusals, write_option_in_text)
 from gates.lib.hookio import HookContext, Outcome
 from gates.lib.result import GateError, Result, safe_text
 from gates.tools import githooks
@@ -87,7 +87,7 @@ def _has(views: tuple, word: str, casefold: bool = False) -> bool:
 def _write_words(views: tuple, aliases: dict) -> bool:
     """Whether the text names a git write: a ``GIT_WRITES`` token, or an alias that resolves to a write or a write option
     (table GW11: "the subcommand is alias-resolved before the membership test", plain or not)."""
-    if any(_has(views, w) for w in GIT_WRITES):
+    if any(_has(views, w) for w in GIT_WRITES) or write_option_in_text(views):   # R2-7: branch, checkout, switch + option
         return True
     for name in aliases:
         if _has(views, name, True):
@@ -128,10 +128,14 @@ def _git_lines(ctx: HookContext, command: str) -> list:
     if not scan.plain or (other_program and not is_commit):
         if is_commit:
             return commit_refusals(command, p0, run)
+        # U1: a git write behind a refused env wrapper keeps the wrapper's not-git line (decision of hooks controller 4)
+        env_lines = []
+        if call is not None and call.env_refused:
+            env_lines = [ln for ln in call.lines if ln.startswith("FAIL hook.bash.not-git")]
         if any(_has(views, w) for w in ("-C", "--git-dir", "--work-tree", "cd")):
-            return ["FAIL hook.bash.target: a git write names its worktree only as one plain command "
-                    "(git -C <dir> ... or cd <dir> && git ...); %s" % _WAY]
-        return target_root(scan, None, p0)[1]
+            return env_lines + ["FAIL hook.bash.target: a git write names its worktree only as one plain command "
+                                "(git -C <dir> ... or cd <dir> && git ...); %s" % _WAY]
+        return env_lines + target_root(scan, None, p0)[1]
     if is_write and not is_commit:
         lines = [ln for ln in call.lines if not ln.startswith("FAIL hook.bash.not-git")] if call is not None else []
         for name in INHERITED_GIT_ENV:
