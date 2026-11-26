@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261125-98hf
+status: closed
+source: 5c.3 task review 1 (records/5c.3-review-1.md, finding 1)
+severity: LOW
+class: "pin strength: tests/test_gate_drift_rows.py:312 test_base_checkout_path_escaped_once patches the private drift._checkout_of, so the listing parse, the prunable skip and the isdir check are out of the pin (members: private-function patch, listing parse bypassed)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.3
+pin: null
+ruling: null
+evidence:
+  - bf1f57c684032f5b3a18c47fefd593036ce898c2
+  - "bf1f57c684032f5b3a18c47fefd593036ce898c2:tests/test_gate_drift_rows.py"
+history:
+  - status: open
+    sha: f2f4ac8353b44e5683ebd3a7d5af3390df03a313
+    by: stream-records
+  - status: closed
+    sha: bf1f57c684032f5b3a18c47fefd593036ce898c2
+    by: stream-records-13
+resolved_by: 2026-10-31-strict-delivery-framework
+review_round: 1
+caused_by_change: true
+dimension: pin strength
