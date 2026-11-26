@@ -229,7 +229,9 @@ def load(root: str, cfg: dict) -> dict:
         raw = yamlsub._read_regular_file(path, rel)
     except yamlsub.YamlError as e:
         raise GateError("%s: %s" % (rel, "%s (line %d)" % (e.reason, e.line) if e.line else e.reason)) from None
-    return load_text(raw, rel, cfg)
+    # the pre-request load only formatted rel with %s, so a str subclass was shown by its __str__; load_text takes exactly
+    # str, and the join makes the text exact on 3.9 too (there "%s" % (x,) hands a str-subclass __str__ result back as is)
+    return load_text(raw, "".join(("%s" % (rel,),)), cfg)
 
 
 def load_text(text: bytes, rel: str, cfg: dict) -> dict:

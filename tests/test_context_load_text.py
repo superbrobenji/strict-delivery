@@ -2,6 +2,7 @@
 exactly as ``context.load`` validates the bytes it reads; ``load`` = read + ``load_text``. Expected values are written
 by hand; today's ``load`` texts (measured before the change, including the doubled ``<rel>: <rel>: `` prefix of a YAML
 error) are pinned by literal."""
+import builtins
 import copy
 import os
 import sys
@@ -182,14 +183,18 @@ class LoadText(Base):
 
     def test_pc1_beg(self):  # LT-pc1-beg (PC1c)
         if sys.version_info >= (3, 11):
-            exc = BaseExceptionGroup("g", [ValueError("v")])
+            exc = BaseExceptionGroup("g", [KeyboardInterrupt()])  # noqa: F821
+            self.assertIs(type(exc), BaseExceptionGroup)  # noqa: F821  # not the ExceptionGroup that ValueError members make
         else:
-            self.assertFalse(hasattr(__builtins__ if isinstance(__builtins__, dict) else __builtins__,
-                                     "BaseExceptionGroup"))
+            self.assertFalse(hasattr(builtins, "BaseExceptionGroup"))
 
             class Group(BaseException):
                 pass
             exc = Group("g")
+            exc.exceptions = (KeyboardInterrupt(),)   # the group shape of 3.11+
+        self.assertNotIsInstance(exc, Exception)
+        self.assertEqual(len(exc.exceptions), 1)
+        self.assertIs(type(exc.exceptions[0]), KeyboardInterrupt)
         with mock.patch.object(yamlsub, "parse", side_effect=exc):
             with self.assertRaises(type(exc)) as cm:
                 self.lt(TAG)
@@ -251,6 +256,93 @@ class Parity(Base):
         except GateError as e:
             got = ("err", str(e))
         self.assertEqual(got, ("ok", ROW))
+
+
+class S(str):
+    pass
+
+
+class SOther(str):          # __str__ gives a different exact str
+    def __str__(self):
+        return "other.yml"
+
+
+class SNonStr(str):         # __str__ gives a non-str
+    def __str__(self):
+        return 5            # type: ignore
+
+
+class SubText(str):
+    pass
+
+
+class SSubText(str):        # __str__ gives a str subclass instance
+    def __str__(self):
+        return SubText("sub.yml")
+
+
+class SRaises(str):         # __str__ raises
+    def __str__(self):
+        raise ValueError("boom")
+
+
+SCHEMA_ERR = ": schema: expected context/1, got context/2; run /strict-delivery:upgrade"
+
+
+class LoadRelSubclass(Base):
+    """R-sub: ``load`` with a ``str``-subclass ``paths.context``: the pre-request ``load`` (origin/main, measured by a
+    scratch script on both interpreters) formatted ``rel`` with ``%s`` only; the expected values are written by hand."""
+
+    def via_load(self, cls, data, name=REL):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["paths"]["context"] = cls(name)
+        if data is not None:
+            self.put(data)
+        try:
+            return ("ok", load(self.root, cfg))
+        except GateError as e:
+            return ("err", str(e))
+        except Exception as e:
+            return (type(e).__name__, str(e))
+
+    def check(self, cls, want):
+        paths = (("valid", TAG, REL), ("schema", b"schema: context/2\n", REL), ("yaml", b"every: [a\n", REL),
+                 ("missing", None, "nothing.yml"))
+        for label, data, name in paths:
+            with self.subTest(member=cls.__name__, path=label):
+                self.assertEqual(self.via_load(cls, data, name), want[label])
+
+    def test_plain_subclass(self):  # R-sub-a
+        self.check(S, {"valid": ("ok", ROW),
+                       "schema": ("err", REL + SCHEMA_ERR),
+                       "yaml": ("err", REL + ": " + REL + ": unterminated flow sequence (line 1)"),
+                       "missing": ("err", "nothing.yml: missing; run /strict-delivery:init")})
+
+    def test_str_gives_other_exact_str(self):  # R-sub-b
+        self.check(SOther, {"valid": ("ok", ROW),
+                            "schema": ("err", "other.yml" + SCHEMA_ERR),
+                            "yaml": ("err", "other.yml: other.yml: unterminated flow sequence (line 1)"),
+                            "missing": ("err", "other.yml: missing; run /strict-delivery:init")})
+
+    def test_str_gives_non_str(self):  # R-sub-c: refused with a TypeError on every path (controller's decision)
+        err = ("TypeError", "__str__ returned non-string (type int)")
+        self.check(SNonStr, {"valid": err, "schema": err, "yaml": err, "missing": err})
+
+    def test_str_gives_str_subclass(self):  # R-sub-d: a member found by the class check
+        self.check(SSubText, {"valid": ("ok", ROW),
+                              "schema": ("err", "sub.yml" + SCHEMA_ERR),
+                              "yaml": ("err", "sub.yml: sub.yml: unterminated flow sequence (line 1)"),
+                              "missing": ("err", "sub.yml: missing; run /strict-delivery:init")})
+
+    def test_str_raises(self):  # R-sub-e: a member found by the class check; the __str__'s own error on every path
+        err = ("ValueError", "boom")
+        self.check(SRaises, {"valid": err, "schema": err, "yaml": err, "missing": err})
+
+    def test_load_text_still_refuses_subclass(self):  # T4 unchanged: load_text itself is not widened
+        for cls in (S, SOther, SNonStr, SSubText, SRaises):
+            with self.subTest(cls=cls.__name__), self.assertRaises(TypeError) as cm:
+                load_text(TAG, cls(REL), self.cfg)
+            self.assertEqual(str(cm.exception), "rel must be str, got %s" % cls.__name__)
 
 
 if __name__ == "__main__":

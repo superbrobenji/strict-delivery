@@ -33,7 +33,7 @@ UNSET = object()
 HAS_EG = hasattr(builtins, "ExceptionGroup")
 PASS6 = "".join("PASS %s.ok\n" % g for g in SIX)
 VERSION_PASS = "PASS run_all.version\n"   # Task 3d.1: the last line; config framework_version "0.0.0" = the plugin's
-# the 32 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
+# the 43 lines the six real gates give on a valid strict fixture repository, written by hand (as in O4)
 REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
              "PASS schema.request\nPASS schema.streams\nPASS schema.context\nPASS schema.status\nPASS schema.sync-log\nPASS schema.merged-log\nPASS schema.breakdown\n"
              "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\nPASS schema.mutation-transcript\nPASS schema.review-report\n"

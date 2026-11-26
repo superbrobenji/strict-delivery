@@ -222,7 +222,7 @@ class Producer(Base):
 
     def test_check_schema_unchanged_before_registration(self):  # PR3
         before = tuple(m for m in producers.PRODUCER_MODULES if m != "gates.gate_context")
-        out, code = self.schema_out(REPO, before)  # the registry without the Rq-5-2 line: the 15-line verdict
+        out, code = self.schema_out(REPO, before)  # the registry without the Rq-5-2 line: the 17-line verdict
         self.assertEqual(code, 0, out)
         self.assertEqual(out.count("\n"), 17)   # Rq-6-2: the two evidence kinds
         self.assertNotIn("schema.context", out)
