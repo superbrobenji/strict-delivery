@@ -2,8 +2,10 @@
 directory and puts first on PATH; no test runs a real ``gh`` or touches the network. Expected values are hand-written.
 Row ids (task-4d.2-domain.md) are named in each test's comment."""
 import ast
+import contextlib
 import json
 import os
+import resource
 import stat
 import subprocess
 import sys
@@ -66,6 +68,28 @@ class FakeGh:
                 return fh.read().splitlines()
         except FileNotFoundError:
             return []
+
+
+@contextlib.contextmanager
+def stdin_holding(data: bytes):
+    """File descriptor 0 of this process reads ``data`` inside the block (a child that inherits it would see it)."""
+    with tempfile.TemporaryFile() as fh:
+        fh.write(data)
+        fh.flush()
+        fh.seek(0)
+        try:
+            saved = os.dup(0)
+        except OSError:
+            saved = None  # the runner started without a stdin
+        os.dup2(fh.fileno(), 0)
+        try:
+            yield
+        finally:
+            if saved is None:
+                os.close(0)
+            else:
+                os.dup2(saved, 0)
+                os.close(saved)
 
 
 def only_path(tc: unittest.TestCase) -> str:
@@ -131,6 +155,21 @@ class RemoteTest(GitIsolatedTestCase):
         for url in bad:
             with self.subTest(url=url[:60]):
                 self.assertIsNone(self.url(url))
+
+    def append_url(self, url):
+        git(self.r, "config", "--unset-all", "remote.origin.url", check=False)
+        with open(os.path.join(self.r, ".git", "config"), "ab") as fh:  # not on a command line: it would pass ARG_MAX
+            fh.write(b'[remote "origin"]\n\turl = ' + url.encode() + b"\n")
+
+    def test_gr_u17_one_megabyte_url(self):  # GR-U17 (RA-14): a 1 MB URL in linear time (the bound is generous)
+        for url, want in (("https://github.com/" + "o" * 500000 + "/" + "n" * 500000, "o" * 500000 + "/" + "n" * 500000),
+                          ("https://github.com/o/" + ".x" * 500000, "o/" + ".x" * 500000),
+                          ("https://github.com/o/" + "n" * 1000000 + "!", None),
+                          ("https://github.com/o/" + ".git" * 250000, None)):
+            self.append_url(url)
+            start = time.monotonic()
+            self.assertEqual(host.github_remote(self.r), want)
+            self.assertLess(time.monotonic() - start, 20)
 
     def test_gr_r_remotes(self):  # GR-R1 R2 R3 R4 R5 R6 R7 R9 R10 R11
         fake = FakeGh(self, {})
@@ -344,17 +383,40 @@ class StateTest(GitIsolatedTestCase):
         with self.assertRaisesRegex(HostError, "^gh api repos/o/n: gh: Not Found"):
             self.state(None)
 
-    def test_rs_j10_large_body(self):  # RS-J10: 50 MB; the fake serves the body from a file, so the time is host.py's
+    def test_rs_j10_large_body(self):  # RS-J10 (RA-15 b): 50 MB; bounded time (20 s) and memory (1 GiB, a child process)
         fake = FakeGh(self, {REPO: (b"", b"", 0)})
         big = os.path.join(fake.dir, "big.json")
         with open(big, "wb") as fh:
             fh.write(b'{"x": "' + b"a" * 50000000 + b'"}')
         with open(fake.path, "w") as fh:
             fh.write("#!/bin/sh\n/bin/cat '%s'\n" % big)
+        code = ("import sys\nfrom gates.lib import host\ntry:\n    host.read_state(sys.argv[1], 'o/n', 'main')\n"
+                "except host.HostError as e:\n    print(e)\n")
         start = time.monotonic()
-        with self.assertRaisesRegex(HostError, "^gh api repos/o/n: allow_merge_commit is missing$"):  # parsed, refused
+        p = subprocess.run([sys.executable, "-c", code, self.r], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           cwd=os.getcwd())
+        elapsed = time.monotonic() - start
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, b"gh api repos/o/n: allow_merge_commit is missing\n", b""))
+        self.assertLess(elapsed, 20)  # parsed and refused, not refused for its size
+        peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss  # bytes on macOS, KiB on Linux
+        self.assertLess(peak if sys.platform == "darwin" else peak * 1024, 1 << 30)
+
+    def test_ra11_reads_run_with_stdin_devnull(self):  # RS-E11 (RA-11): a read never passes this process's stdin on
+        fake = FakeGh(self, self.rules(prot=PROT_OK), deep=True)
+        with stdin_holding(b"leaked stdin\n"):
             self.state(None)
-        self.assertLess(time.monotonic() - start, 60)  # the bound: it completes with a verdict (decision 2026-11-09)
+        names = [n for n in os.listdir(fake.dir) if n.startswith("stdin.")]
+        self.assertEqual(len(names), 2)  # the repository read and the protection read
+        for name in names:
+            with open(os.path.join(fake.dir, name), "rb") as fh:
+                self.assertEqual(fh.read(), b"")
+
+    def test_ra12_signal_status_is_named(self):  # RS-E7 (RA-12): a gh killed by a signal (returncode < 0)
+        fake = FakeGh(self, {})
+        with open(fake.path, "w") as fh:
+            fh.write("#!/bin/sh\nkill -TERM $$\n")
+        with self.assertRaisesRegex(HostError, r"^gh api repos/o/n: \(no message\) \(terminated by signal 15\)$"):
+            self.state(None)
 
     def test_rs_e8_stderr_first_line(self):  # RS-E8 RS-E17, VR2 (3)
         cases = ((b"", "(no message)"), (b"\n\n  text \n", "text"), (b"one\ntwo\n", "one"), (b"x" * 5000, "x" * 200),

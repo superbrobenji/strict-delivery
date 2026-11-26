@@ -22,6 +22,7 @@ SOURCES = ("docs/superpowers/specs/", "docs/superpowers/plans/")
 _OLD = "docs/superpowers"
 _KEYS = ("specs", "plans")
 _CLASS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-")
+_MISSING = (errno.ENOENT, errno.ENOTDIR, errno.ENAMETOOLONG)  # "missing" (P1.3 D-Q22, domain table :15)
 _PATH_MSG = "path: must be a relative path inside the root"
 _STATE_MSG = "%s: a state record names a moved path (%s); resolve it by hand before the migration"
 
@@ -87,8 +88,11 @@ def plan_moves(root: str, cfg: dict) -> tuple:
         elif mode == "160000":
             conflicts.append("%s: tracked submodule; not moved" % path)
     for src, _ in moves:
-        if not os.path.lexists(os.path.join(top, *src.split("/"))):
+        kind = _source_state(top, src)
+        if kind[0] == "missing":
             conflicts.append("%s: tracked but missing; not moved" % src)
+        elif kind[0] == "refused":
+            conflicts.append(kind[1])
     overlap = False
     for key, target in zip(_KEYS, targets):
         for source in SOURCES:
@@ -103,6 +107,26 @@ def plan_moves(root: str, cfg: dict) -> tuple:
     notes = sorted("%s: untracked; not moved" % gitinfo._text(raw, "ls-files")
                    for raw in _listing(top, ["--others"]).split(b"\0") if raw)
     return moves, sorted(set(conflicts)), notes
+
+
+def _source_state(top: str, src: str) -> tuple:
+    """``("ok",)``, ``("missing",)`` or ``("refused", text)`` for a tracked source: every component is looked at with
+    ``lstat`` and never followed or opened. A parent that is not a directory (a symlink included) or a last component
+    that is not a regular file is refused (Amendment H1-H4; the D-Q3 (A) text of the target parents)."""
+    parts = src.split("/")
+    cur = top
+    for i, part in enumerate(parts):
+        cur = os.path.join(cur, part)
+        try:
+            st = os.lstat(cur)
+        except OSError:  # as ``os.path.lexists`` says: whatever cannot be looked at is not there
+            return ("missing",)
+        if i == len(parts) - 1:
+            if not stat.S_ISREG(st.st_mode):
+                return ("refused", "%s: not a regular file; not moved" % src)
+        elif not stat.S_ISDIR(st.st_mode):
+            return ("refused", "%s: parent %s is not a directory" % (src, "/".join(parts[:i + 1])))
+    return ("ok",)
 
 
 def _target_conflicts(top: str, moves: list, tracked: frozenset) -> list:
@@ -144,9 +168,9 @@ def _read_text(root: str, path: str) -> tuple:
         cur = os.path.join(cur, part)
         try:
             st = os.lstat(cur)
-        except (FileNotFoundError, NotADirectoryError):
-            return ("absent",)
         except OSError as e:
+            if e.errno in _MISSING:
+                return ("absent",)
             raise GateError("%s: cannot read (%s)" % (path, e.strerror)) from None
         last = i == len(parts) - 1
         if (not last and not stat.S_ISDIR(st.st_mode)) or (last and not stat.S_ISREG(st.st_mode)):
@@ -319,6 +343,8 @@ def _preflight(top: str, moves: list) -> None:
                 st = os.lstat(cur)
             except FileNotFoundError:
                 break
+            except OSError as e:
+                raise GateError("%s: cannot read (%s)" % (dst, e.strerror)) from None
             if not stat.S_ISDIR(st.st_mode):
                 raise GateError("%s: parent %s is not a directory; nothing was moved" % (dst, cur[len(top) + 1:]))
 
@@ -330,13 +356,25 @@ def _still_regular(top: str, path: str) -> None:
         cur = os.path.join(cur, part)
         try:
             st = os.lstat(cur)
-        except FileNotFoundError:
-            raise GateError("%s: missing" % path) from None
         except OSError as e:
+            if e.errno in _MISSING:
+                raise GateError("%s: missing" % path) from None
             raise GateError("%s: cannot read (%s)" % (path, e.strerror)) from None
         want = stat.S_ISREG if i == len(parts) - 1 else stat.S_ISDIR
         if not want(st.st_mode):
             raise GateError("%s: not a regular file" % path)
+
+
+def _moved(done: list) -> str:
+    return "; moved before it: " + ", ".join("%s -> %s" % m for m in done) if done else ""
+
+
+def _require_source(top: str, src: str, before: str) -> None:
+    """Refuse a source that is no longer a regular file below real directories (the ``plan_moves`` texts); a source
+    that is gone is left to ``git mv``, whose failure the caller names."""
+    kind = _source_state(top, src)
+    if kind[0] == "refused":
+        raise GateError(kind[1] + before)
 
 
 def apply_moves(root: str, moves: list, changes: list) -> None:
@@ -349,14 +387,20 @@ def apply_moves(root: str, moves: list, changes: list) -> None:
         return None
     gitinfo._require_toplevel(root)
     top = gitinfo.toplevel(root)
+    for src, _ in moves:  # a source swapped after the plan: nothing has moved yet
+        _require_source(top, src, "")
     _preflight(top, moves)
     done: list = []
     for src, dst in moves:
+        _require_source(top, src, _moved(done))  # and again at the move's turn
         cur = top
         for part in dst.split("/")[:-1]:
             cur = os.path.join(cur, part)
             if not os.path.lexists(cur):
-                os.mkdir(cur)
+                try:
+                    os.mkdir(cur)
+                except OSError as e:
+                    raise GateError("%s: cannot write (%s)%s" % (dst, e.strerror, _moved(done))) from None
         p = gitinfo._run(top, "mv", ["mv", "--", src, dst], ok=None, literal=True)
         if p.returncode != 0:
             before = "; moved before it: " + ", ".join("%s -> %s" % m for m in done) if done else ""
