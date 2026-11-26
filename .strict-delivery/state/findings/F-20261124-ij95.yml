@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-ij95
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4c2-review-2.md R2-1
+severity: LOW
+class: "A4 condition (ii) digit class: first digits 3-9 and later digits 6, 8, 9 (9, 99, 19, 1.9) refused by the code but pinned by no test row; mutants m_f9 ([0-8] first) and m_r9 (0-8 later) survive on both"
+siblings: []
+cites:
+  - file: gates/lib/templates.py
+    lines: "31"
+    sha: 12f780f
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 12f780ff5d81687053db062ec0d3ff43d5f2539b
+    by: stream-config-hooks
+review_round: 2
+caused_by_change: true
+dimension: ci_workflow base_branch values

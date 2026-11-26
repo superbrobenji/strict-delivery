@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-2dbx
+status: open
+source: "4c.1 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4c1-review-1.md R1-1"
+severity: MEDIUM
+class: "mutants killed only by a hang, not by an assertion: M28c (O_NONBLOCK dropped at managed.py:258; test_plan_fifo_swap test_managed.py:782 freezes)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2abd288359c2b3ca4d78d22a3cf00ca791716bd0
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: PC3 mutant kill by assertion (O_NONBLOCK on a FIFO)

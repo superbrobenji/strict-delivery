@@ -1,0 +1,6 @@
+kind: gitignore-block
+version: 1
+format: managed-block
+comment: hash
+files:
+  - file: .gitignore

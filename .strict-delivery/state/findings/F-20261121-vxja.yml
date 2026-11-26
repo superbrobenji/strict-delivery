@@ -1,0 +1,28 @@
+schema: finding/1
+id: F-20261121-vxja
+status: closed
+source: "4a.2 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4a2-review-1.md R1-1"
+severity: LOW
+class: "PC3 mutation evidence: mutants argued equivalent without the survivor run on the targeted modules plus their importers on both interpreters; members: M16, M27, M54"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4a.2
+pin: null
+ruling: null
+evidence:
+  - 2323006824515b790a619fa489b37019793932f8
+history:
+  - status: open
+    sha: 3f97ea85a684d099dd429870d602c97079672079
+    by: stream-config-hooks
+  - status: closed
+    sha: 2323006824515b790a619fa489b37019793932f8
+    by: "stream-config-16: vx-M16, vx-M27, vx-M54 SURVIVED on all 77 closure modules on both interpreters (vx A-D 759ca80, E2 b151d10, E1 2323006; ch/pr4c-vx*-run.txt); equivalence judged by the PR-4c delta final review ch/final-review-4c-5.md ('After 1-4, vxja can close')"
+review_round: 1
+caused_by_change: true
+dimension: PC3 mutation evidence for argued-equivalent mutants
+resolved_by: 2026-10-31-strict-delivery-framework
