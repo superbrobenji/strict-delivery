@@ -652,6 +652,27 @@ class ProgramTest(HookCase):
         self.assertIn("worktrees cannot be listed", r.stderr)
         self.passes(self.B("git merge main", env=env, cwd=self.R))   # cwd's own top level stays allowed
 
+    def test_old_git_subagent_form_unaffected_bash(self):   # V5 (the subagent form, R1-11 option (a), F-20261125-dq8c)
+        # `worktrees._subagent` reads the dispatch record only and never lists worktrees, so a git that cannot run
+        # `worktree list` (exit 129, as test_old_git_fails_closed_bash builds it) leaves the subagent's checks as they were.
+        W = self.worktree("W", "-b", "wb")
+        fake = os.path.join(self.tmp, "fakegit-sub")
+        os.mkdir(fake)
+        real = subprocess.run(["which", "git"], env=self.env, stdout=subprocess.PIPE, check=True).stdout.decode().strip()
+        write(os.path.join(fake, "git"), '#!/bin/sh\ncase "$*" in *"worktree list"*) echo "error: unknown option" >&2; exit 129;; '
+                                         'esac\nexec "%s" "$@"\n' % real)
+        os.chmod(os.path.join(fake, "git"), 0o755)
+        env = dict(self.env, PATH=fake + os.pathsep + self.env["PATH"])
+        agent = self.agent(W)
+        self.assertEqual(subprocess.run([os.path.join(fake, "git"), "worktree", "list"], cwd=W, env=env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode, 129)
+        self.passes(self.B("git -C %s reset --hard" % W, cwd=W, agent=agent, env=env))   # no hook.bash.target line
+        self.passes(self.B("git reset --hard", cwd=W, agent=agent, env=env))
+        r = self.B("git -C %s reset --hard" % self.R, cwd=W, agent=agent, env=env)
+        self.assertEqual((r.returncode, r.stdout), (2, ""))
+        self.assertEqual(r.stderr, "FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s); "
+                                   "run it with the ! prefix if you must, or ask the owner\n" % (self.R, W))
+
 
 class SubagentBindingTest(HookCase):
     def test_subagent_bound_to_main_checkout(self):   # TR5
@@ -1416,13 +1437,74 @@ def _same(want):
 
 # (row, command, session verdict, subagent verdict, note); the note "out" runs the subagent with cwd R (outside its bound W).
 LG_MEMBERS = [
+    # LG1 F-20261116-vc8g: shell aliases
+    ("LG1", "alias g=git; g commit -m m", *_same([LG_COMPOUND % "operator ;"]), ""),
+    ("LG1", "alias g=git && g reset --hard", LG_PASS, LG_PASS, PLAIN_RESET),
+    ("LG1", "alias g=git && g reset --hard", None, [LG_OUTSIDE], "out"),
+    ("LG1", "alias g=git && g -C <O> reset --hard", *LG_SAME, ""),
+    ("LG1", "alias g=git && g -C <O> commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
+    ("LG1", "g commit -m m", LG_PASS, LG_PASS, STATED_LIMIT),
+    ("LG1", "g reset --hard", LG_PASS, LG_PASS, STATED_LIMIT),
+    ("LG1", "g -C <O> reset --hard", LG_PASS, LG_PASS, STATED_LIMIT),
+    # LG2 vc8g: zsh =word expansion
+    ("LG2", "=git commit -m m", *_same([LG_COMPOUND % "expansion"]), ""),
+    ("LG2", "=git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG2", "=git -C <O> commit -m m", *_same([LG_COMPOUND % "expansion"]), ""),
+    ("LG2", "=git reset --hard", LG_PASS, LG_PASS, PLAIN_RESET),
     # LG4 vc8g: the shell chosen by $SHELL
+    ("LG4", "SHELL=/bin/bash git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
+    ("LG4", "SHELL=/bin/bash git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG4", "$SHELL -c 'git commit -m m'", *_same([LG_COMPOUND % "expansion"]), ""),
+    ("LG4", "$SHELL -c 'git -C <O> reset --hard'", *LG_SAME, ""),
     ("LG4", "bash -c 'git commit -m m'", *_same([LG_NOT_GIT]), ""),
+    ("LG4", "bash -c 'git commit -m m'", None, [LG_OUTSIDE, LG_NOT_GIT], "out"),
     ("LG4", "bash -c 'git -C <O> reset --hard'", *LG_SAME, ""),
     ("LG4", "zsh -c 'git commit -m m'", *_same([LG_NOT_GIT]), ""),
     ("LG4", "zsh -c 'git reset --hard'", LG_PASS, LG_PASS, PLAIN_RESET),
     ("LG4", "zsh -c 'git -C <O> reset --hard'", *LG_SAME, ""),
     ("LG4", "env -S 'git -C <O> reset --hard'", *LG_SAME, ""),
+    # LG5 F-20261116-grp8: quote removal before the text checks
+    ("LG5", "gi't' commit -m m", *_same([LG_COMPOUND % "command word"]), ""),
+    ("LG5", "git co\\mmit -m m", *_same([LG_COMPOUND % "quoting"]), ""),
+    ("LG5", "git \"reset\" --hard", LG_PASS, LG_PASS, "judged as its unquoted form `git reset --hard`"),
+    ("LG5", "git com\\<NL>mit -m m", *_same([LG_COMPOUND % "quoting"]), ""),
+    ("LG5", "git commit --no-v\"erify\"", *_same([LG_NO_VERIFY, LG_COMPOUND % "quoting"]), ""),
+    ("LG5", "git commit --no-v\\erify -m m", *_same([LG_NO_VERIFY, LG_COMPOUND % "quoting"]), ""),
+    ("LG5", "git commit -\"n\" -m m", *_same([LG_COMPOUND % "quoting"]), ""),
+    ("LG5", "git -\\C <O> reset --hard", *LG_SAME, ""),
+    ("LG5", "git -\"C\" <O> reset --hard", *LG_SAME, ""),
+    ("LG5", "git \"-C\" <O> reset --hard", *_same([LG_OUTSIDE]), "judged as its unquoted form `git -C <O> reset --hard`"),
+    ("LG5", "python3 -m gates decisions deci\"de\" X", LG_PASS, [LG_DECIDE], "judged as `decisions decide`: subagents only"),
+    ("LG5", "python3 -m gates decisions de\\cide X", LG_PASS, [LG_DECIDE], "judged as `decisions decide`: subagents only"),
+    # LG6 F-20261116-wrtm: a cd target with ..
+    ("LG6", "cd <W>/../R && git reset --hard", *LG_SAME, ""),
+    ("LG6", "cd <W>/sub/.. && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
+    # LG7 wrtm: CDPATH
+    ("LG7", "CDPATH=/x cd <W> && git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
+    ("LG7", "CDPATH=/x cd <O> && git reset --hard", *LG_SAME, ""),
+    ("LG7", "cd w && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
+    ("LG7", "cd w && git reset --hard", *LG_SAME, ""),
+    # LG8 wrtm: cd -P / cd -L (refused: not plain)
+    ("LG8", "cd -P <W> && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
+    ("LG8", "cd -P <O> && git reset --hard", *LG_SAME, ""),
+    ("LG8", "cd -L <L> && git reset --hard", *LG_SAME, ""),
+    ("LG8", "cd -L <L> && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
+    # LG9 F-20261116-sjya: a path in argv[0]; a basename git is read as git, so the same checks run (never a skip)
+    ("LG9", "/usr/bin/git commit -m m", LG_PASS_GATES, LG_PASS_GATES, "as git"),
+    ("LG9", "./git commit -m m", LG_PASS_GATES, LG_PASS_GATES, "as git (any path whose basename is git)"),
+    ("LG9", "/tmp/x/git commit -m m", LG_PASS_GATES, LG_PASS_GATES, "as git (any path whose basename is git)"),
+    ("LG9", "/usr/bin/git -C <O> reset --hard", *_same([LG_OUTSIDE]), "as git: the target check runs"),
+    ("LG9", "./git -C <O> commit -m m", *_same([LG_OUTSIDE]), "as git: the target check runs"),
+    ("LG9", "/tmp/x/git -C <O> reset --hard", *_same([LG_OUTSIDE]), "as git: the target check runs"),
+    ("LG9", "/tmp/x/git reset --hard", LG_PASS, LG_PASS, "as git: `git reset --hard` in the cwd"),
+    # LG10 sjya: PATH=
+    ("LG10", "PATH=/x git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
+    ("LG10", "PATH=/x git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG10", "PATH=/x:$PATH git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
+    ("LG10", "PATH=/x:$PATH git reset --hard", LG_PASS, LG_PASS, PLAIN_RESET),
+    ("LG10", "PATH=/x:$PATH git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG10", "export PATH=/x; git commit -m m", *_same([LG_COMPOUND % "reserved word"]), ""),
+    ("LG10", "export PATH=/x; git -C <O> reset --hard", *LG_SAME, ""),
     # NG: a plain command whose program is not git, its text holding a git write (the narrowing of this fix)
     ("NG", "sh -c 'cd <O> && git reset --hard'", *LG_SAME, ""),
     ("NG", "bash -c 'git --git-dir=<O>/.git reset --hard'", *LG_SAME, ""),
@@ -1431,6 +1513,11 @@ LG_MEMBERS = [
     ("NG", "ls", LG_PASS, LG_PASS, "no git word: unchanged"),
     ("NG", "grep -n \"git status\" notes.md", LG_PASS, LG_PASS, "a git word that is no write: unchanged"),
 ]
+# LG3 vc8g: each member of set K (task-3b.1-domain-r4.md) before a commit and before a write with a target outside
+for _word in ("if", "!", "{", "time", "coproc", "builtin", "command", "exec", "noglob", "nocorrect", "-"):
+    _reason = "grouping" if _word == "{" else "reserved word"
+    LG_MEMBERS.append(("LG3", "%s git commit -m m" % _word, *_same([LG_COMPOUND % _reason]), ""))
+    LG_MEMBERS.append(("LG3", "%s git -C <O> reset --hard" % _word, *LG_SAME, ""))
 
 
 class InheritedClassesTest(HookCase):
