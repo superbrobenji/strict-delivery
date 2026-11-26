@@ -518,7 +518,14 @@ class EffectiveWordsTest(unittest.TestCase):
                      ("git x", {"commit", "push", "merge"}), ("git y", {"commit", "push", "merge"}),
                      ("git a", {"commit"}), ("git pp", {"pull"}), ("git mg", {"merge"}), ("git gg", {"commit"}),
                      ("echo ci", set()), ("ci", set()), ("git c1", set()), ("git commit", {"commit"})):
-            self.assertEqual(bp.effective_words(t, al), w, t)
+            self.assertEqual(bounded(lambda: bp.effective_words(t, al), CYCLE_BOUND, CYCLE_WHAT), w, t)   # c1: a cycle (R3-5)
+
+    def test_alias_cycles_end(self):  # R3-5 (F-20261126-9r6e), mutant M-R3-b: the ``seen`` guard of ``effective_words``
+        shell = {"commit", "push", "merge"}   # EW7: a ``!`` alias adds these
+        for al, want in (({"c1": "c1"}, set()), ({"a": "b", "b": "a"}, set()), ({"a": "!git a"}, shell),
+                         ({"a": "!git b", "b": "!git a"}, shell), ({"a": "b c", "b": "c", "c": "a"}, set())):
+            with self.subTest(aliases=al):
+                self.assertEqual(bounded(lambda: bp.effective_words("git a c1", al), CYCLE_BOUND, CYCLE_WHAT), want)
 
     def test_alias_expansion_read_through_both_views(self):  # R2-3 (F-20261126-yfpy), ruling R1: raw and quote-removed
         for expansion, w in (('com""mit', {"commit"}), ("com\\mit", {"commit"}), ('com""mit -n', {"commit"}),
@@ -533,7 +540,7 @@ class EffectiveWordsTest(unittest.TestCase):
         self.assertEqual(bp.effective_words("git q6", {"q6": "q\\5", "q5": 'pu""sh'}), {"push"})
         # unchanged: no word, no alias, a cycle
         for al in ({"q5": 'com""mitx'}, {"q5": 'x""y'}, {"q5": 'q5'}, {"q5": 'q""5'}):
-            self.assertEqual(bp.effective_words("git q5", al), set(), al)
+            self.assertEqual(bounded(lambda: bp.effective_words("git q5", al), CYCLE_BOUND, CYCLE_WHAT), set(), al)  # R3-5
 
     def test_bad_aliases(self):  # EW14
         self.assertEqual(bp.effective_words("git commit", {}), {"commit"})
@@ -1024,6 +1031,11 @@ import ast  # noqa: E402
 import signal  # noqa: E402
 import time  # noqa: E402
 
+# R3-5 (F-20261126-9r6e), decision of hooks controller 5: every cycle-guard call runs under ``bounded`` for this many seconds,
+# so a guard that stops ending the loop FAILS the test (a hang would end as a TIMEOUT of the whole module).
+CYCLE_BOUND = 60
+CYCLE_WHAT = "an alias cycle did not end: a loop guard is broken"
+
 ALIAS_LINE = ("FAIL hook.bash.alias: a git alias that runs a shell command holding commit is refused, its commit "
               "cannot be checked; " + BANG)
 
@@ -1039,7 +1051,8 @@ class AliasExpansionTest(Repo):
         d = self.clean
         self.assertEqual(git(d, "status", "--porcelain"), "")
         rec = Recorder()
-        out = bp.commit_refusals(text, pol(root=d, cwd=d, aliases=aliases, agent_key=agent), rec)
+        out = bounded(lambda: bp.commit_refusals(text, pol(root=d, cwd=d, aliases=aliases, agent_key=agent), rec),
+                      CYCLE_BOUND, CYCLE_WHAT)   # R3-5: a broken cycle guard fails here instead of hanging the module
         return out, rec
 
     def refused(self, text, aliases, want, agent="session"):
@@ -1387,10 +1400,10 @@ class HooksDirPathsTest(Repo):
 
     def commit(self, d, rec):
         """``commit_refusals`` on ``d``, guarded: a call that blocks (a FIFO opened for reading) fails the test (C4-2)."""
-        began = time.monotonic()
+        began = time.process_time()   # R3-6: CPU time, so a loaded machine cannot fail "within 5 s"; the alarm of
         out = bounded(lambda: bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), self.runner(rec)), 10,
-                      "the commit check blocked")
-        self.assertLess(time.monotonic() - began, 5)
+                      "the commit check blocked")   # ``bounded`` stays the wall-clock bound that fails a blocked call
+        self.assertLess(time.process_time() - began, 5)
         return out
 
     def install(self, hooks, name, mode=0o755):
@@ -1547,6 +1560,62 @@ class LinearTimeTest(unittest.TestCase):
         for t in ("printf -v A -v HOME x", "printf -v", "printf x -v", "printf %s HOME", "env A=1 ls", "env -u A ls",
                   "export A", "echo HOME; export A", "env; echo HOME", "export; HOME", "echo $HOME", "a home b"):
             self.assertEqual(bp.text_refusals(t), [], t)
+
+
+# ---- fix round 3, part A (rulings N1 and U-1 of hooks controller 5): the helpers of the `-c` rule and of the `!` bodies ----
+class GlobalCRuleTest(unittest.TestCase):
+    """L rows A6-A8: ``c_option_in_text`` (a whole token ``-c`` after a ``git`` token, either view), ``expansion_c_option``
+    (a ``-c`` among the leading options of an alias expansion) and ``shell_alias_texts`` (the ``!`` texts a plain call
+    reaches). Expected values are written by hand from the ruling."""
+
+    def test_c_option_in_text_true(self):   # A6, A7
+        for text in ("git -c a=b log; ls", "ls | git -c a=b log", "bash -c 'git -c a=b log'", "git log; wc -c f",
+                     'git "-c" a=b log', "GIT -c a=b log", "git -c", "git -C x -c a=b status", "git --no-pager -c a=b log",
+                     "ls\ngit -c a=b log", "git 'x' -\\c y", "git -c\ta=b log", "echo git; ls -c x", "git -c Ꟁ=1 log",
+                     "ls; gi\"\"t -c a=b log"):
+            with self.subTest(text=text):
+                self.assertIs(bp.c_option_in_text(text), True)
+
+    def test_c_option_in_text_false(self):   # A8: no git token, `-c` before the git token, or not the whole token `-c`
+        for text in ("bash -c 'ls'", "wc -c f", "ls; wc -c f", "git commit -m m", "git -C x status", "git log --cc",
+                     "bash -c 'git status'", "git x-c", "echo -c; git status", "git status --c", "git status -cc", "", "git",
+                     "sh -c 'cd x && git reset --hard'", "git log -C"):
+            with self.subTest(text=text):
+                self.assertIs(bp.c_option_in_text(text), False)
+
+    def test_c_option_in_text_linear(self):   # C4-1: one pass, no slice per token
+        for unit, want in (("git ", False), ("-c ", False), ("a ", False), ("git -c ", True)):
+            out = bounded(lambda: bp.c_option_in_text(unit * 100000), 30, "the -c scan is not linear")
+            self.assertIs(out, want, unit)
+
+    def test_c_option_in_text_bad_input(self):
+        for bad in (None, b"git -c", 3, ["git"]):
+            with self.assertRaises(TypeError):
+                bp.c_option_in_text(bad)
+
+    def test_expansion_c_option(self):   # A6: a -c among the leading options of the alias expansion (after alias resolution)
+        def call(aliases, name="a"):
+            return bp.git_call(shellscan.scan("git " + name), aliases)
+        for aliases in ({"a": "-c a=b status"}, {"a": "-C x -c a=b status"}, {"a": "ac", "ac": "-c a=b status"},
+                        {"a": "--no-pager -c a=b log"}, {"a": "-c a=b"}):
+            with self.subTest(aliases=aliases):
+                self.assertIs(bp.expansion_c_option(call(aliases)), True)
+        for aliases in ({"a": "status"}, {"a": "log -c"}, {"a": "--no-pager status"}, {"a": "!git -c a=b status"},
+                        {"a": "-C x status"}, {"a": "commit -c HEAD"}, {}):
+            with self.subTest(aliases=aliases):
+                self.assertIs(bp.expansion_c_option(call(aliases)), False)
+
+    def test_shell_alias_texts(self):   # U-1: the `!` bodies of the chain, and the texts the bodies reach
+        chain = {"g6": "g2", "g2": "!git g3 x", "g3": "!git reset --hard", "eh": "!echo hi", "ci": "commit"}
+        for name, want in (("g6", ["git g3 x", "git reset --hard"]), ("g2", ["git g3 x", "git reset --hard"]),
+                           ("g3", ["git reset --hard"]), ("eh", ["echo hi"]), ("ci", [])):
+            with self.subTest(alias=name):
+                self.assertEqual(bp.shell_alias_texts(bp.git_call(shellscan.scan("git " + name), chain), chain), want)
+
+    def test_shell_alias_texts_cycles_end(self):   # R3-5 (the same guard as ``_reached_texts``): bounded
+        al = {"a": "!git b", "b": "!git a"}
+        out = bounded(lambda: bp.shell_alias_texts(bp.git_call(shellscan.scan("git a"), al), al), CYCLE_BOUND, CYCLE_WHAT)
+        self.assertEqual(out, ["git b", "git a", "git b"])   # the body, then the values of b and a it reaches (each once)
 
 
 if __name__ == "__main__":

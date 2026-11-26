@@ -9,13 +9,18 @@ import os
 from typing import Optional
 
 from gates.lib import config, gitinfo, session, shellscan, transcript, worktrees
-from gates.lib.bashpolicy import (GIT_WRITES, INHERITED_GIT_ENV, Policy, commit_refusals, effective_words, git_call,
-                                  is_git_write, target_root, text_refusals, write_option_in_text)
+from gates.lib.bashpolicy import (GIT_WRITES, INHERITED_GIT_ENV, Policy, c_option_in_text, commit_refusals,
+                                  effective_words, expansion_c_option, git_call, is_git_write, shell_alias_texts,
+                                  target_root, text_refusals, write_option_in_text)
 from gates.lib.hookio import HookContext, Outcome
 from gates.lib.result import GateError, Result, safe_text
 from gates.tools import githooks
 
 _WAY = "run it with the ! prefix if you must, or ask the owner"
+_ONE_PLAIN = ("FAIL hook.bash.target: a git write names its worktree only as one plain command "
+              "(git -C <dir> ... or cd <dir> && git ...); %s" % _WAY)
+_C_OPTION = "FAIL hook.bash.global-option.-c: git option -c before the subcommand is refused; %s" % _WAY  # bashpolicy.py:386's format
+_TARGET_TOKENS = ("-C", "--git-dir", "--work-tree", "cd")
 
 
 def _state_access(ctx: HookContext):
@@ -97,6 +102,45 @@ def _write_words(views: tuple, aliases: dict) -> bool:
     return False
 
 
+def _inherited_lines(ctx: HookContext) -> list:
+    """Ruling R3-4 (F-20261126-xevm): a line for each of ``GIT_INDEX_FILE``, ``GIT_DIR`` and ``GIT_WORK_TREE`` the hook
+    inherited (an inherited variable reaches the Bash tool too: the target of a write cannot be checked), on every branch
+    that judges a git write."""
+    return ["FAIL hook.bash.target: the hook inherited %s; %s" % (name, _WAY) for name in INHERITED_GIT_ENV if name in ctx.env]
+
+
+def _text_write_lines(ctx: HookContext, views: tuple, scan, p0: Policy, argv_C: Optional[str]) -> list:
+    """The lines of a git write in a text this hook cannot parse as one plain git command (decision Q3, rulings R2-7 and
+    R3-4): the inherited-env lines, then the one-plain-command line when the text names a directory (a ``-C``,
+    ``--git-dir``, ``--work-tree`` or ``cd`` token, either view), else the cwd target's lines."""
+    lines = _inherited_lines(ctx)
+    if any(_has(views, w) for w in _TARGET_TOKENS):
+        return lines + [_ONE_PLAIN]
+    return lines + target_root(scan, argv_C, p0)[1]
+
+
+def _shell_alias_lines(ctx: HookContext, scan, call, aliases: dict, p0: Policy) -> list:
+    """Decision U-1 (F-20261126-g6mw): a plain ``git <alias>`` whose chain reaches a ``!`` value runs shell text git does not
+    show the hook; each text the chain reaches (``shell_alias_texts``) that holds a git write is judged as non-plain text is."""
+    lines: list = []
+    for text in shell_alias_texts(call, aliases):
+        views = _views(text)
+        if _has(views, "git", True) and _write_words(views, aliases):
+            lines += _text_write_lines(ctx, views, scan, p0, call.argv_C)
+    return list(dict.fromkeys(lines))
+
+
+def _c_option(scan, call, other_program: bool, command: str, aliases: dict) -> bool:
+    """Ruling N1 (F-20261126-2z9y): whether ``git -c`` is in play. A plain git command: its global options (before the
+    subcommand, after alias resolution) hold ``-c``, or a ``!`` body it reaches holds a whole token ``-c`` after ``git``. Any
+    other text (not plain, or a program that is not git): a whole token ``-c`` after a ``git`` token, either view."""
+    if scan.plain and not other_program:
+        return call is not None and (any(ln.startswith("FAIL hook.bash.global-option.-c:") for ln in call.lines)
+                                     or expansion_c_option(call)
+                                     or any(c_option_in_text(t) for t in shell_alias_texts(call, aliases)))
+    return c_option_in_text(command)
+
+
 def _git_lines(ctx: HookContext, command: str) -> list:
     scan = shellscan.scan(command)
     views = _views(command)
@@ -111,13 +155,24 @@ def _git_lines(ctx: HookContext, command: str) -> list:
         aliases = {**aliases, **dict(gitinfo.aliases(top))}
         call = git_call(scan, aliases)
         p0 = _policy(ctx, ctx.root, aliases)
-    words = effective_words(command, aliases)
-    is_commit = "commit" in words
     # A plain command whose program is not git (`bash -c 'git -C X reset --hard'`, `zsh -c '...'`, `env -S '...'`) runs a
     # text this hook cannot parse: its git words are read as the text of a non-plain command is (ruling (3b) on text
     # checks: "a command that mentions `git` with ... is refused unless it is exactly one plain simple command whose
     # program is `git`"; decision Q3 for the target of a non-plain write).
     other_program = scan.plain and call is not None and any(ln.startswith("FAIL hook.bash.not-git") for ln in call.lines)
+    lines = _judged(ctx, command, scan, views, aliases, p0, call, other_program)
+    plain_git = scan.plain and not other_program and call is not None
+    if plain_git:   # U-1: the `!` bodies of the alias chain, judged as text; their lines come first
+        lines = list(dict.fromkeys(_shell_alias_lines(ctx, scan, call, aliases, p0) + lines))
+    if _c_option(scan, call, other_program, command, aliases) and _C_OPTION not in lines:
+        lines.append(_C_OPTION)   # N1: on every git command, after the lines it gets otherwise
+    return lines
+
+
+def _judged(ctx: HookContext, command: str, scan, views: tuple, aliases: dict, p0: Policy, call, other_program: bool) -> list:
+    """The lines of the commit and write judgment of ``command`` (``[]`` for a command that is neither)."""
+    words = effective_words(command, aliases)
+    is_commit = "commit" in words
     if scan.plain and not other_program:
         is_write = call is not None and call.sub is not None and is_git_write(call.sub, call.args)
     else:
@@ -132,15 +187,10 @@ def _git_lines(ctx: HookContext, command: str) -> list:
         env_lines = []
         if call is not None and call.env_refused:
             env_lines = [ln for ln in call.lines if ln.startswith("FAIL hook.bash.not-git")]
-        if any(_has(views, w) for w in ("-C", "--git-dir", "--work-tree", "cd")):
-            return env_lines + ["FAIL hook.bash.target: a git write names its worktree only as one plain command "
-                                "(git -C <dir> ... or cd <dir> && git ...); %s" % _WAY]
-        return env_lines + target_root(scan, None, p0)[1]
+        return env_lines + _text_write_lines(ctx, views, scan, p0, None)   # R3-4: the inherited-env lines too
     if is_write and not is_commit:
         lines = [ln for ln in call.lines if not ln.startswith("FAIL hook.bash.not-git")] if call is not None else []
-        for name in INHERITED_GIT_ENV:
-            if name in ctx.env:
-                lines.append("FAIL hook.bash.target: the hook inherited %s; %s" % (name, _WAY))
+        lines += _inherited_lines(ctx)
         root, fails = target_root(scan, call.argv_C if call is not None else None, p0)
         return lines + fails
     root, fails = target_root(scan, call.argv_C if call is not None else None, p0)

@@ -479,6 +479,47 @@ def _reached_texts(body: str, aliases: dict) -> list:
     return out
 
 
+def shell_alias_texts(call: GitCall, aliases: dict) -> list:
+    """The shell texts a plain call reaches through ``!`` aliases (decision U-1, F-20261126-g6mw): the body of each ``!``
+    value ``call`` followed (without the ``!``) and the texts that body reaches (``_reached_texts``; chains followed through
+    both views, cycles end). The caller judges each as a text it cannot parse as one plain command."""
+    out: list = []
+    for value in call.expansions:
+        if value.startswith("!"):
+            out.append(value[1:])
+            out.extend(_reached_texts(value[1:], aliases))
+    return out
+
+
+def c_option_in_text(text: str) -> bool:
+    """Whether, in the raw text or the quote-removed words (ruling R1), a whole token ``-c`` follows a ``git`` token (ASCII
+    fold for ``git``; ``-c`` is case-sensitive, ``-C`` is another option). Ruling N1 (F-20261126-2z9y): a text that is not one
+    plain git command is refused with the ``-c`` line when this holds, fail closed (``git log; wc -c f`` too). Linear."""
+    shellscan._check_str(text, "text")
+    for view in (text, " ".join(shellscan.scan(text).words)):
+        toks = _runs(view)
+        folded = [_fold(tok) for tok in toks]
+        if "git" in folded and "-c" in toks[folded.index("git") + 1:]:
+            return True
+    return False
+
+
+def expansion_c_option(call: GitCall) -> bool:
+    """Whether a plain (not ``!``) alias value that ``call`` followed holds ``-c`` among its leading options (``alias.x = -c
+    a=b status``): the global options of the command after alias resolution (ruling N1). ``-C`` and the options of
+    ``_VALUE_OPTIONS`` take a value, which is skipped as ``_resolve`` skips it."""
+    for value in call.expansions:
+        if value.startswith("!"):
+            continue
+        words = shellscan.scan(value).words
+        n = 0
+        while n < len(words) and words[n].startswith("-"):
+            if words[n] == "-c":
+                return True
+            n += 2 if words[n] in _VALUE_OPTIONS or words[n] == "-C" else 1
+    return False
+
+
 def _alias_lines(call: GitCall, p: Policy, out: list) -> list:
     """The lines for the alias values ``call`` followed (R1-3, plan :3697, table CD7): each value, plain or ``!``, is read
     by every ``text_refusals`` member as the command text is; a ``!`` value that reaches a ``commit`` word, in its own text
