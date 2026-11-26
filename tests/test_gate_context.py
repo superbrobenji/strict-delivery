@@ -196,7 +196,7 @@ class Enforced(Base):
         names = sorted(n for n in dir(context) if not n.startswith("_") and callable(getattr(context, n))
                        and getattr(getattr(context, n), "__module__", "") == "gates.lib.context")
         self.assertEqual(names, sorted([
-            "absolute", "context_errors", "enforced", "handoff_reads", "kind_of", "load", "needs", "parse_lines",
+            "absolute", "context_errors", "enforced", "handoff_reads", "kind_of", "load", "load_text", "needs", "parse_lines",
             "required", "resolve", "split", "values_for"]))
 
 
@@ -208,10 +208,10 @@ class Producer(Base):
         self.assertIs(type(gate_context.PRODUCES), tuple)
         self.assertTrue(all(type(x) is str for x in gate_context.PRODUCES))
 
-    def test_producer_registry_unchanged_before_rq_5_2(self):  # PR2
+    def test_producer_registry_lists_context_last(self):  # PR2 (Rq-5-2; Rq-6-2 appends gate_evidence after it)
         self.assertEqual(producers.PRODUCER_MODULES, (
             "gates.tools.index", "gates.tools.decisions_cli", "gates.tools.findings_cli", "gates.tools.claims_cli",
-            "gates.gate_checkpoint", "gates.tools.program_cli"))
+            "gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context", "gates.gate_evidence"))
 
     def schema_out(self, root, modules=None):
         out = io.StringIO()
@@ -221,27 +221,42 @@ class Producer(Base):
         return out.getvalue(), code
 
     def test_check_schema_unchanged_before_registration(self):  # PR3
-        out, code = self.schema_out(REPO)
+        before = tuple(m for m in producers.PRODUCER_MODULES if m != "gates.gate_context")
+        out, code = self.schema_out(REPO, before)  # the registry without the Rq-5-2 line: the 17-line verdict
         self.assertEqual(code, 0, out)
-        self.assertEqual(out.count("\n"), 15)
+        self.assertEqual(out.count("\n"), 17)   # Rq-6-2: the two evidence kinds
         self.assertNotIn("schema.context", out)
+        out, code = self.schema_out(REPO)  # the registry as shipped: Rq-5-2 adds the one line
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("\n"), 18)
+        self.assertIn("PASS schema.context\n", out)
 
     def test_repository_passes_with_context_declared(self):  # PR4
         out, code = self.schema_out(REPO, producers.PRODUCER_MODULES + ("gates.gate_context",))
         self.assertEqual(code, 0, out)
         lines = out.splitlines()
-        self.assertEqual(len(lines), 16)
+        self.assertEqual(len(lines), 18)
         self.assertEqual(lines.index("PASS schema.context"), lines.index("PASS schema.streams") + 1)
         self.assertEqual(lines[lines.index("PASS schema.context") + 1], "PASS schema.status")
 
     def test_producer_makes_context_yml_required(self):  # PR5 PR6
         os.remove(self.fx + "/.strict-delivery/context.yml")  # test's own fixture file
-        out, code = self.schema_out(self.fx)
+        before = tuple(m for m in producers.PRODUCER_MODULES if m != "gates.gate_context")
+        out, code = self.schema_out(self.fx, before)
         self.assertEqual(code, 0, out)
         self.assertNotIn("schema.context", out)  # PR6: before the patch
         out, code = self.schema_out(self.fx, producers.PRODUCER_MODULES + ("gates.gate_context",))
         self.assertIn("FAIL schema.context..strict-delivery/context.yml: missing\n", out)
         self.assertEqual(code, 1)
+
+    def test_make_repo_fixture_passes_check_schema(self):  # R2.1 D2/F1: a bare make_repo fixture carries a valid context.yml
+        os.mkdir(os.path.join(self.tmp, "bare"))
+        bare = make_repo(os.path.join(self.tmp, "bare"))  # no ctx() call: the helper's own output
+        self.assertTrue(os.path.isfile(bare + "/.strict-delivery/context.yml"))
+        out, code = self.schema_out(bare)  # the registry as shipped, gates.gate_context listed
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS schema.context\n", out)
+        self.assertNotIn("FAIL", out)
 
     def test_producer_valid_context_file_passes(self):  # PR7
         write_record(self.fx, ".strict-delivery/context.yml", {"schema": CTX_TAG})

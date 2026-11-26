@@ -122,6 +122,7 @@ def _make_repo_slow(tmp: str, config: Optional[dict]) -> str:
     git(tmp, "config", "maintenance.auto", "false")  # no detached auto-maintenance or auto-gc writing into .git while a test runs
     git(tmp, "config", "gc.auto", "0")
     write_record(tmp, ".strict-delivery/config.yml", config if config is not None else minimal_config())
+    write_record(tmp, ".strict-delivery/context.yml", {"schema": "context/1"})  # the gate_context producer makes this file required (Rq-5-2)
     commit_all(tmp, "fixture")
     return tmp
 
@@ -200,7 +201,7 @@ def _fast_path_ok(tmp: str, root: str) -> bool:
 
 
 def make_repo(tmp: str, config: Optional[dict] = None) -> str:
-    """Make tmp a git repository whose first branch is main, with the config committed; return tmp.
+    """Make tmp a git repository whose first branch is main, with the config and a minimal context.yml committed; return tmp.
     ``maintenance.auto`` is ``false`` and ``gc.auto`` is ``0`` in every repository returned. An empty tmp under the
     isolated git environment is a copy of a per-process template (one per emitted config text, PATH, umask and GIT_* environment, built the slow
     way, private temporary directory, removed at exit); any other tmp gets ``git init`` and the commit.

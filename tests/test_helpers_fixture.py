@@ -27,6 +27,11 @@ from tests.helpers import GitIsolatedTestCase, git, make_repo, minimal_config
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MINIMAL_TEXT = "schema: config/2\nframework_version: 0.0.0\nprofile: strict\n"
+# The second committed file of every fixture, as main's make_repo writes it (14b518a, tests/helpers.py: the line
+# `write_record(tmp, ".strict-delivery/context.yml", {"schema": "context/1"})  # the gate_context producer makes this file
+# required (Rq-5-2)` before `commit_all`; docstring "with the config and a minimal context.yml committed"): written here as
+# raw bytes, an oracle independent of ``helpers.emit``.
+CONTEXT_TEXT = "schema: context/1\n"
 RAW_ENV = {
     "GIT_AUTHOR_NAME": "Fixture Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
     "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000", "GIT_COMMITTER_NAME": "Fixture Committer",
@@ -53,7 +58,8 @@ def rawok(root, *args):
 
 
 def slow_build(root, text=MINIMAL_TEXT):
-    """What ``make_repo`` built before the template: init, five config lines, the config file, add, commit."""
+    """What ``make_repo`` built before the template: init, five config lines, the config file and main's minimal
+    context file, add, commit."""
     rawok(root, "init", "-q", "-b", "main")
     for k, v in (("user.email", "fixture@example.invalid"), ("user.name", "Fixture"), ("commit.gpgsign", "false"),
                  ("maintenance.auto", "false"), ("gc.auto", "0")):
@@ -62,6 +68,8 @@ def slow_build(root, text=MINIMAL_TEXT):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
+    with open(os.path.join(root, ".strict-delivery", "context.yml"), "w", encoding="utf-8", newline="") as fh:
+        fh.write(CONTEXT_TEXT)
     rawok(root, "add", "-A")
     rawok(root, "commit", "-q", "--allow-empty", "-m", "fixture")
     return root
@@ -162,7 +170,8 @@ class EquivalenceTest(Base):
         self.assertEqual(f["branch"], "refs/heads/main")
         self.assertEqual(f["status"], "")
         self.assertEqual(f["fsck"][0], 0, f["fsck"])
-        self.assertEqual(f["bytes"], {".strict-delivery/config.yml": MINIMAL_TEXT.encode()})
+        self.assertEqual(f["bytes"], {".strict-delivery/config.yml": MINIMAL_TEXT.encode(),
+                                      ".strict-delivery/context.yml": CONTEXT_TEXT.encode()})
         for want in ("user.email=fixture@example.invalid", "user.name=Fixture", "commit.gpgsign=false",
                      "maintenance.auto=false", "gc.auto=0", "core.bare=false"):
             self.assertIn(want, f["config"].splitlines())
