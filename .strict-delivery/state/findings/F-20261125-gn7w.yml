@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261125-gn7w
+status: open
+source: R2.1 task review 1 (residual/R2.1-review-1.md, F-R21-2)
+severity: HIGH
+class: "F1 make_repo writes .strict-delivery/context.yml (tests/helpers.py, 643aa00): tests that need the file absent or re-commit it: tests/test_context_lib.py Load test_missing_file_names_init, test_load_directory, test_load_symlink, test_load_dangling_symlink, test_load_fifo, test_load_root_forms; tests/test_schema_lib.py Files test_F1_path_items, test_F5_symlinked_path_item_is_listed (F-R23-1); full enumeration owed by fix round 1"
+siblings: []
+cites:
+  - file: tests/helpers.py
+    lines: "102"
+    sha: 643aa00b88ede2761a684385a63a39cebb40882c
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: R2.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1df729587a5fe7a8c20b9a63c67a01cd9badf355
+    by: stream-residual
+review_round: 1
+caused_by_change: true
+dimension: F1

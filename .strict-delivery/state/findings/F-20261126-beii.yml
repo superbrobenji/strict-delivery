@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-beii
+status: open
+source: residual fix round 4 re-review (review round 5), residual/fix-r4-review.md (F-R5-1)
+severity: LOW
+class: "test checkout form: a hard-coded remote-tracking base ref in a self-adoption test: tests/test_gate_evidence.py:1576 Versions.test_self_adoption_has_evidence_lines (X6) fails in a checkout with a local main and no origin/main (a remote not named origin, or none); tests/test_self_adoption.py H7 also passes --base origin/main but in a fixture clone it builds itself (not a member)"
+siblings: []
+cites:
+  - file: tests/test_gate_evidence.py
+    lines: "1576"
+    sha: 6a4e28a47f94a7268dce98fe02f3001a9713a1af
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: residual-batch-1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1651c32853c48f466945011d858813d3d4d7bfd7
+    by: stream-residual
+review_round: 5
+caused_by_change: true
+dimension: "CI checkout: base ref absent"

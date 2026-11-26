@@ -324,7 +324,7 @@ class Arguments(Fx):
         out = io.StringIO()
         with contextlib.redirect_stderr(out):
             self.assertEqual(gates_main.main(["check"]), 2)
-        self.assertIn("gates: checkpoint, cites, claims, cleanup, decisions, dispatch, register, schema, streams\n", out.getvalue())
+        self.assertIn("gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, evidence, register, schema, streams\n", out.getvalue())
 
     def test_main_exit_codes(self):  # AV12
         self.build()
@@ -2735,7 +2735,7 @@ class Registration(unittest.TestCase):
         self.assertTrue(all(type(x) is str for x in gate_checkpoint.PRODUCES))
 
     def test_checkpoint_in_producer_modules(self):  # DC2, D-Q23
-        self.assertEqual(producers.PRODUCER_MODULES[-2:], ("gates.gate_checkpoint", "gates.tools.program_cli"))  # P2.2 appends last
+        self.assertEqual(producers.PRODUCER_MODULES[-4:], ("gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context", "gates.gate_evidence"))  # Rq-5-2, Rq-6-2 append last
         self.assertEqual(producers.PRODUCER_MODULES[2], "gates.tools.findings_cli")
 
     def test_handoff_and_ledger_unproduced_not_checked(self):  # DC3

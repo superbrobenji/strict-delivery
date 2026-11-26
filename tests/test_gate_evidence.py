@@ -1579,7 +1579,7 @@ class Versions(Base):
         """Rows: X6."""
         if "evidence" not in run_all.PROFILE_GATES["strict"]:
             self.skipTest("Rq-6-3 not on this branch")
-        out, _ = run_argv(["--root", REPO])
+        out, _ = run_argv(["--root", REPO, "--base", "origin/main"])
         self.assertTrue(out.startswith("PASS evidence.config\nPASS evidence.scope"))
 
 

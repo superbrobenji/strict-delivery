@@ -484,8 +484,8 @@ class TestMain(Fx):
             self.assertNotIn("\nfrom gates.tools import continue_cli", fh.read())
 
     def test_usage_lists_continue(self):  # CG2
-        want = ("usage: python3 -m gates <command> [args]\ncommands: check, claims, continue, decisions, findings, "
-                "githook, githooks, hook, index, loopstats, program, questions, run_all\n")
+        want = ("usage: python3 -m gates <command> [args]\ncommands: check, claims, context, continue, decisions, findings, "
+                "githook, githooks, hook, index, loopstats, program, questions, receipt, run_all\n")
         for argv in ([], ["bogus"]):
             p = subprocess.run([sys.executable, "-m", "gates"] + argv, cwd=REPO, env=dict(os.environ, PYTHONPATH=REPO),
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
