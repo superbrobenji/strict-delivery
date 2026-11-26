@@ -14,7 +14,7 @@ import re
 import subprocess
 from typing import Optional
 
-from gates.lib import checkpoints, gitinfo, programs, worktrees
+from gates.lib import checkpoints, gitinfo, programs
 from gates.lib.result import GateError, GitNotFound, _exact, safe_text
 
 _HEADS = "refs/heads/"
@@ -128,30 +128,53 @@ def base_errors(root: str, cfg: dict) -> list:
         return [("base", "update %s from its upstream %s: it is not %s/%s, so no update command is given"
                  % (_shown(bb), _shown(gitinfo._text(p.stdout, "rev-parse").strip()), _shown(remote), _shown(bb)))]
     try:
-        listed = worktrees.worktree_list(root)
+        path = _checkout_of(root, bb)
     except GitNotFound:
         raise
     except GateError as e:
         return [("base", "update %s from the remote: the worktrees cannot be listed: %s, so no update command is given"
                  % (_shown(bb), _shown(str(e))))]
-    for path, branch in listed:
-        if branch == bb:
-            return [("base", "update %s from the remote: git -C %s fetch %s, then git -C %s merge --ff-only %s/%s"
-                     % (_shown(bb), path, remote, path, remote, _shown(bb)))]
+    if path is not None:
+        return [("base", "update %s from the remote: git -C %s fetch %s, then git -C %s merge --ff-only %s/%s"
+                 % (_shown(bb), path, remote, path, remote, _shown(bb)))]
     return [("base", "update %s from the remote: no worktree has %s checked out, so no update command is given"
              % (_shown(bb), _shown(bb)))]
 
 
 def _same_name_upstream(root: str, bb: str, remote: str) -> bool:
-    """True when the upstream of ``bb`` is ``<remote>/<bb>``: ``branch.<bb>.remote`` is a configured remote (not ``.``,
-    not unset) and ``branch.<bb>.merge`` is ``refs/heads/<bb>`` (plan :5446; F-20261124-urap)."""
+    """True when the upstream git resolves for ``bb`` is ``<remote>/<bb>``: ``branch.<bb>.remote`` is set and is not
+    ``.``, and ``git rev-parse --symbolic-full-name <bb>@{upstream}`` (local refs only) prints exactly
+    ``refs/remotes/<remote>/<bb>``. It is the resolved upstream that decides, not the ``git remote`` list or the
+    ``branch.<bb>.merge`` value, so a legacy ``.git/remotes`` remote is accepted, and a several-valued merge, a fetch
+    refspec into another namespace, a ``.git/branches`` remote and a merge naming another branch are not (plan :5446;
+    F-20261124-urap, -9bes, -mev2)."""
     if remote == "<remote>" or remote == ".":
         return False
-    names = gitinfo._text(gitinfo._run(root, "remote", ["remote"]).stdout, "remote").split("\n")
-    if remote not in names:
-        return False
-    p = gitinfo._run(root, "config", ["config", "--get", "branch.%s.merge" % bb], ok=(0, 1))
-    return p.returncode == 0 and gitinfo._text(p.stdout, "config").strip() == _HEADS + bb
+    p = gitinfo._run(root, "rev-parse --symbolic-full-name", ["rev-parse", "--symbolic-full-name", bb + "@{upstream}"])
+    return gitinfo._text(p.stdout, "rev-parse").rstrip("\n") == "refs/remotes/%s/%s" % (remote, bb)
+
+
+def _checkout_of(root: str, bb: str) -> Optional[str]:
+    """The path of the first entry of ``git worktree list --porcelain -z`` (one read) whose branch is ``bb``, that git
+    does not list as ``prunable`` and whose path is an existing directory (``os.path.isdir``, which follows symlinks:
+    a locked entry with its directory gone, a path that is now a file or a FIFO are skipped); ``None`` when no entry is
+    left (F-20261124-9v77). Needs git 2.36 (``-z``): an older git exits 129, a GateError. Path and branch are read from
+    the ``worktree `` and ``branch `` fields, the flag from a field ``prunable`` (git 2.31 and later lists it)."""
+    out = gitinfo._text(gitinfo._run(root, "worktree list", ["worktree", "list", "--porcelain", "-z"]).stdout,
+                        "worktree list")
+    entries: list = []
+    for field in out.split("\0"):
+        if field.startswith("worktree "):
+            entries.append([field[len("worktree "):], None, False])
+        elif field.startswith("branch ") and entries:
+            ref = field[len("branch "):]
+            entries[-1][1] = ref[len(_HEADS):] if ref.startswith(_HEADS) else ref
+        elif (field == "prunable" or field.startswith("prunable ")) and entries:
+            entries[-1][2] = True
+    for path, branch, prunable in entries:
+        if branch == bb and not prunable and os.path.isdir(path):
+            return path
+    return None
 
 
 def integration_errors(root: str, cfg: dict, p: str) -> list:

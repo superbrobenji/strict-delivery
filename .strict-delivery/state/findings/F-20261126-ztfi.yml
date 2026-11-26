@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-ztfi
+status: open
+source: PR-5c3 final review (records/PR-5c3-final-review.md, F-D)
+severity: LOW
+class: "remote names the upstream guard refuses (drift.py:105, :151; docstring :145 says is set): a remote literally named <remote> collides with the unset sentinel (self-contradictory refusal); . (refused, correct); a legacy .git/remotes remote (accepted, U8)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 13649af8d859bc4b042ffe06fe864033fee554a6
+    by: stream-records-13
+review_round: 3
+caused_by_change: false
+dimension: remote names the guard refuses
