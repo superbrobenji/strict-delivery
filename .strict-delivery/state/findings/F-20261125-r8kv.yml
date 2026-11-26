@@ -1,0 +1,34 @@
+schema: finding/1
+id: F-20261125-r8kv
+status: fixed-unpinned
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-tools-final-review.md FR-3
+severity: LOW
+class: "plan-named tests and their assertion form: P:3939 (absent; nested gate input unasserted), P:3957 (absent by name), P:3961 (absent; pure call only, WT12 not through the entry)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3c.2
+pin: null
+ruling: null
+evidence:
+  - bf961bd272704776574ec3b3bcce15b55ba313b5
+  - "bf961bd272704776574ec3b3bcce15b55ba313b5:tests/test_hook_agent.py"
+history:
+  - status: open
+    sha: 7061e89fea0d0f6da32a9dc3639238ecdfe6346c
+    by: stream-hooks-2
+  - status: planned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
+  - status: in-progress
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
+  - status: fixed-unpinned
+    sha: bf961bd272704776574ec3b3bcce15b55ba313b5
+    by: implementer
+review_round: 4
+caused_by_change: true
+dimension: plan-named tests through the production entry
