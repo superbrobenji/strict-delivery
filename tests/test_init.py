@@ -6,6 +6,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -4527,6 +4528,68 @@ class Mig(More):
         for value in ("../out", "/abs", "a/../b"):  # H7: a configured path outside the root is refused by the config
             self.init_config(paths={"specs": value})
             self.assertEqual(self.mc("plan", migrate=True)[0], 1, value)
+
+    # --- RB-1 HIGH, RB-2 MEDIUM, RB-3 MEDIUM (Amendment H4, H2, H3 for the tracked sources): the init-level cells of
+    # docmove's fix (``_source_state``); the expected lines are the D-Q3 (A) texts, written by hand --------------------
+    def symlinked_parent(self, parent):
+        """RB-1: ``parent`` (a directory of the committed tree) moves outside the root, a symlink to it takes its place."""
+        self.docs()
+        out = os.path.join(self.tmp, "outside-" + parent.replace("/", "_"))
+        os.rename(os.path.join(self.root, parent), out)
+        os.symlink(out, os.path.join(self.root, parent))
+        outside, before = snapshot(out), snapshot(self.root)
+        sources = [s for s in (PLAN_OLD, SPEC_OLD) if s.startswith(parent + "/")]  # the plan line sorts first
+        if parent == "docs":  # the targets lie below ``docs`` too: their parent is the same fault (D-Q3 (A)), lines sort first
+            sources = [PLAN_NEW, SPEC_NEW] + sources
+        want = "".join("FAIL init.conflict: %s: parent %s is not a directory\n" % (s, parent) for s in sources)
+        for sub in ("plan", "apply"):
+            self.assertEqual(self.mc(sub, migrate=True)[:2], (1, want), (parent, sub))
+        self.assertEqual((snapshot(out), snapshot(self.root)), (outside, before))
+
+    def test_rb1_docs_symlink_to_outside(self):  # RB-1 HIGH, H4; kills the ``_source_state`` parent test (Part A)
+        self.symlinked_parent("docs")
+
+    def test_rb1_superpowers_symlink_to_outside(self):  # RB-1 HIGH, H4
+        self.symlinked_parent("docs/superpowers")
+
+    def test_rb1_specs_symlink_to_outside(self):  # RB-1 HIGH, H4
+        self.symlinked_parent("docs/superpowers/specs")
+
+    def test_rb1_plans_symlink_to_outside(self):  # RB-1 HIGH, H4
+        self.symlinked_parent("docs/superpowers/plans")
+
+    def special_source(self, kind):
+        """A tracked source (``SPEC_OLD``) replaced in the work tree by a ``kind``; the plan and the apply refuse it."""
+        self.docs()
+        path = os.path.join(self.root, SPEC_OLD)
+        os.unlink(path)
+        if kind == "directory":
+            os.mkdir(path)
+        elif kind == "fifo":
+            os.mkfifo(path)
+        else:  # a socket: the whole path is too long for bind(2), so bind by its base name inside its directory
+            here = os.getcwd()
+            os.chdir(os.path.dirname(path))
+            try:
+                sock = socket.socket(socket.AF_UNIX)
+                self.addCleanup(sock.close)
+                sock.bind(os.path.basename(path))
+            finally:
+                os.chdir(here)
+        before = snapshot(self.root)
+        want = "FAIL init.conflict: %s: not a regular file; not moved\n" % SPEC_OLD
+        for sub in ("plan", "apply"):
+            self.assertEqual(helpers.within(lambda: self.mc(sub, migrate=True))[:2], (1, want), (kind, sub))
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_rb2_source_replaced_by_a_directory(self):  # RB-2 MEDIUM, H2
+        self.special_source("directory")
+
+    def test_rb3_source_replaced_by_a_fifo(self):  # RB-3 MEDIUM, H3: no read blocks (``within``)
+        self.special_source("fifo")
+
+    def test_rb3_source_replaced_by_a_socket(self):  # RB-3 MEDIUM, H3
+        self.special_source("socket")
 
 
 class TestPartBFindings(More):
