@@ -24,6 +24,8 @@ FDIR = ".strict-delivery/state/findings"
 DDIR = ".strict-delivery/state/decisions"
 REVIEW = "docs/strict-delivery/reviews/p/r.md"
 TRANSCRIPT = ".strict-delivery/state/plans/p/mutations/t.txt"
+TTAG = "<!-- schema: mutation-transcript/1 -->"   # Rq-6-2: check schema reads every transcript and report
+RTAG = "<!-- schema: review-report/1 -->"
 D_OK = "DEC-20261031-k3f9"      # answered, class scope
 D_OPEN = "DEC-20261031-m4n5"    # open
 D_GRANT = "DEC-20261031-p6q7"   # answered merge-grant
@@ -76,7 +78,7 @@ class Base(GitIsolatedTestCase):
     def setUp(self):
         super().setUp()
         self.root = make_repo(self.work)
-        for rel, text in ((REVIEW, "review\n"), (TRANSCRIPT, "t\n"), ("src/a.py", "a\n"), ("notes.txt", "n\n"),
+        for rel, text in ((REVIEW, RTAG + "\n"), (TRANSCRIPT, TTAG + "\n"), ("src/a.py", "a\n"), ("notes.txt", "n\n"),
                           ("docs/strict-delivery/plans/x.md", "x\n")):
             self.write(rel, text)
         for d in (dec(D_OK), dec(D_OPEN, "open"), dec(D_GRANT, **{"class": "merge-grant", "plan": "p"}),
@@ -727,7 +729,7 @@ class TestMove(Base):
         self.refused("move", F, "--to", "pinned", "--by", "c", "--pin-test", "t", "--pin-transcript", tr,
                      has="evidence: a pinned finding needs a review report")
         other = ".strict-delivery/state/plans/q/mutations/t.txt"
-        self.write(other, "t\n")
+        self.write(other, TTAG + "\n")
         sha2 = commit_all(self.root, "q")
         for t, has in ((TRANSCRIPT, "pin.transcript: must be <sha>:<normalised repo-relative path>"),
                        ("%s:%s" % (sha2, other), "must be under .strict-delivery/state/plans/p/mutations/"),

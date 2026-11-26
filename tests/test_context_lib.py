@@ -893,6 +893,9 @@ class Load(GitIsolatedTestCase):
         self.root = make_repo(self.work)
         self.cfg = config.load(self.root)
         self.path = os.path.join(self.root, ".strict-delivery/context.yml")
+        os.remove(self.path)   # make_repo writes a valid context.yml; these rows need it absent (committed away, so a later commit has a change)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "no context")
 
     def put(self, text):
         write(self.path, text.encode("utf-8"))

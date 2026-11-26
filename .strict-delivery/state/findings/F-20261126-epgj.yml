@@ -1,0 +1,27 @@
+schema: finding/1
+id: F-20261126-epgj
+status: open
+source: residual fix round 1 re-review (residual/fix-r1-review.md, F-RR-1)
+severity: LOW
+class: "rel type through load, str subclasses overriding __format__ (old yamlsub.load f-string route): (f) __format__ returns another str, (g) __format__ returns a non-str, (h) __format__ raises, (i) __str__ returns a subclass with its own __format__; YAML-error and non-UTF-8 paths; open-grammar member of F-FR-2, closed by restricting load's rel to exact str or a str subclass overriding neither __str__ nor __format__"
+siblings: []
+cites:
+  - file: gates/lib/context.py
+    lines: "234"
+    sha: 67273f74aa2e82c04a12fc6a2ece4c572816141b
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: residual-batch-1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 67273f74aa2e82c04a12fc6a2ece4c572816141b
+    by: stream-residual
+parent: F-20261126-t9pu
+review_round: 2
+caused_by_change: false
+dimension: "load parity: rel type"

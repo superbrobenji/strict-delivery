@@ -252,7 +252,7 @@ class ArgvTests(Base):  # A1-A4
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gates_main.main(["check"]), 2)
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                                         "gates: checkpoint, cites, claims, cleanup, decisions, dispatch, register, schema, streams\n")
+                                         "gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, evidence, register, schema, streams\n")
         self.assertEqual(gates_main.GATES["register"], "gates.gate_register")
 
     def test_a2_config_invalid(self):  # A2
