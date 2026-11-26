@@ -113,14 +113,19 @@ def _git_lines(ctx: HookContext, command: str) -> list:
         p0 = _policy(ctx, ctx.root, aliases)
     words = effective_words(command, aliases)
     is_commit = "commit" in words
-    if scan.plain:
+    # A plain command whose program is not git (`bash -c 'git -C X reset --hard'`, `zsh -c '...'`, `env -S '...'`) runs a
+    # text this hook cannot parse: its git words are read as the text of a non-plain command is (ruling (3b) on text
+    # checks: "a command that mentions `git` with ... is refused unless it is exactly one plain simple command whose
+    # program is `git`"; decision Q3 for the target of a non-plain write).
+    other_program = scan.plain and call is not None and any(ln.startswith("FAIL hook.bash.not-git") for ln in call.lines)
+    if scan.plain and not other_program:
         is_write = call is not None and call.sub is not None and is_git_write(call.sub, call.args)
     else:
         is_write = _has(views, "git", True) and _write_words(views, aliases)
     if not (is_commit or is_write):
         return []
     run = _run_gates(ctx)
-    if not scan.plain:
+    if not scan.plain or (other_program and not is_commit):
         if is_commit:
             return commit_refusals(command, p0, run)
         if any(_has(views, w) for w in ("-C", "--git-dir", "--work-tree", "cd")):

@@ -1387,5 +1387,101 @@ class ErrorPathTest(HookCase):
         self.refused(r, "bypass.no-verify", "git")
 
 
+# ---- fix round 2, part A: the inherited 3b.1-era classes LG1-LG10 (records vc8g, grp8, wrtm, sjya). One generated test
+# per member and actor (``test_<row>_<k>_session`` / ``_agent``). Expected values are hand-written from the rows of
+# "Inherited 3b.1-era classes" (task-3b.2-domain.md): a member is refused (exit 2 and the exact FAIL lines) or handled
+# exactly as its plain spelled-out form is (the note names which). ``<O>`` is a worktree the caller may not write in,
+# ``<A>`` the one it may: the session (cwd R, no program live) may write in R only, the subagent bound to W (cwd W) in W.
+LG_WAY = "run it with the ! prefix if you must, or ask the owner"
+LG_BANG = "the human can run the command with the ! prefix"
+LG_ONE_PLAIN = ("FAIL hook.bash.target: a git write names its worktree only as one plain command "
+                "(git -C <dir> ... or cd <dir> && git ...); " + LG_WAY)
+LG_NOT_GIT = "FAIL hook.bash.not-git: the program is not git; " + LG_WAY
+LG_OUTSIDE = "FAIL hook.bash.target: <O> is not a worktree this caller may write in (allowed: <A>); " + LG_WAY
+LG_NO_VERIFY = "FAIL hook.bash.bypass.no-verify: --no-verify and its abbreviations are refused; " + LG_BANG
+LG_DECIDE = ("FAIL hook.bash.decide: decisions decide and withdraw come only from the human, who runs them with the ! "
+             "prefix, or from the main session recording the owner's exact words (spec §7.1)")
+LG_PASS = "pass"                  # exit 0, nothing printed, no commit gate run
+LG_PASS_GATES = "pass+gates"      # exit 0, nothing printed, the commit gates ran (the command was checked as a commit)
+LG_COMPOUND = "FAIL hook.bash.compound: git commit runs as its own command (%s); " + LG_WAY
+LG_SAME = ([LG_ONE_PLAIN], [LG_ONE_PLAIN])
+PLAIN_RESET = "handled as its plain form `git reset --hard` in the cwd"
+STATED_LIMIT = ("stated limit: Q2 (b) 'a commit run by a program not named git and not quoted with git is not caught' and "
+                "plan ruling (3b) 'a script file or interpreter ... whose text names neither word is not caught'")
+
+
+def _same(want):
+    return (want, want)
+
+
+# (row, command, session verdict, subagent verdict, note); the note "out" runs the subagent with cwd R (outside its bound W).
+LG_MEMBERS = [
+    # LG4 vc8g: the shell chosen by $SHELL
+    ("LG4", "bash -c 'git commit -m m'", *_same([LG_NOT_GIT]), ""),
+    ("LG4", "bash -c 'git -C <O> reset --hard'", *LG_SAME, ""),
+    ("LG4", "zsh -c 'git commit -m m'", *_same([LG_NOT_GIT]), ""),
+    ("LG4", "zsh -c 'git reset --hard'", LG_PASS, LG_PASS, PLAIN_RESET),
+    ("LG4", "zsh -c 'git -C <O> reset --hard'", *LG_SAME, ""),
+    ("LG4", "env -S 'git -C <O> reset --hard'", *LG_SAME, ""),
+    # NG: a plain command whose program is not git, its text holding a git write (the narrowing of this fix)
+    ("NG", "sh -c 'cd <O> && git reset --hard'", *LG_SAME, ""),
+    ("NG", "bash -c 'git --git-dir=<O>/.git reset --hard'", *LG_SAME, ""),
+    ("NG", "echo git reset --hard", LG_PASS, LG_PASS, "as the non-plain `echo x; echo git reset`: the cwd is the target"),
+    ("NG", "echo git reset --hard", None, [LG_OUTSIDE], "out"),
+    ("NG", "ls", LG_PASS, LG_PASS, "no git word: unchanged"),
+    ("NG", "grep -n \"git status\" notes.md", LG_PASS, LG_PASS, "a git word that is no write: unchanged"),
+]
+
+
+class InheritedClassesTest(HookCase):
+    """Each member of LG1-LG10 through ``python3 -m gates hook PreToolUse``: as the main session (cwd R) and as a subagent
+    bound to its worktree W (cwd W)."""
+
+    def setUp(self):
+        super().setUp()
+        self.W = self.worktree("W", "-b", "wb")
+        self.X = os.path.join(self.work, "X")   # another repository; L is a symlink to it
+        os.mkdir(self.X)
+        git(self.X, "init", "-q", "-b", "main")
+        self.L = os.path.join(self.work, "L")
+        os.symlink(self.X, self.L)
+
+    def member(self, command, want, actor, cwd_outside=False):
+        if actor == "session":
+            cwd, allowed, other, kw = self.R, self.R, self.W, {}
+        else:
+            cwd, allowed, other, kw = (self.R if cwd_outside else self.W), self.W, self.R, {"agent": self.agent(self.W)}
+        text = command
+        for key, value in (("<W>", self.W), ("<O>", other), ("<A>", allowed), ("<L>", self.L), ("<NL>", "\n")):
+            text = text.replace(key, value)
+        r = self.B(text, cwd=cwd, **kw)
+        if want in (LG_PASS, LG_PASS_GATES):
+            self.passes(r, text)
+            self.assertEqual(self.gates_ran(), want == LG_PASS_GATES, text)
+            return
+        lines = [ln.replace("<O>", other).replace("<A>", allowed) for ln in want]
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", "".join(ln + "\n" for ln in lines)), text)
+
+
+def _member_test(command, want, actor, cwd_outside):
+    def test(self):
+        self.member(command, want, actor, cwd_outside)
+    return test
+
+
+def _add_member_tests():
+    for k, (row, command, session, agent, note) in enumerate(LG_MEMBERS):
+        for actor, want in (("session", session), ("agent", agent)):
+            if note == "out" and actor == "session":
+                continue
+            test = _member_test(command, want, actor, note == "out")
+            test.__doc__ = "%s: %s%s" % (row, command.replace("\n", "\\n"),
+                                         " (%s)" % note if note != "out" else " (subagent, cwd outside W)")
+            setattr(InheritedClassesTest, "test_%s_%02d_%s" % (row, k, actor), test)
+
+
+_add_member_tests()
+
+
 if __name__ == "__main__":
     unittest.main()
