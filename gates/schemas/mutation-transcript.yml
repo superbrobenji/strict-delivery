@@ -6,6 +6,20 @@ files:
     glob: "*/mutations/*"
     exclude:
       - "2026-10-31-strict-delivery-framework-b/mutations/*"
+      # legacy transcripts written before the schema existed, excluded as history (owner answer Q-RS1-1 (a),
+      # 2026-11-24, "Exclude as history"; precedent: the -b entry above, owner answer 2026-11-21 (a)); one entry per file
+      - "2026-10-31-strict-delivery-framework/mutations/F-20261124-3a2a.md"
+      - "2026-10-31-strict-delivery-framework/mutations/F-20261124-5gfw.md"
+      - "2026-10-31-strict-delivery-framework/mutations/F-20261124-fbwp.md"
+      - "2026-10-31-strict-delivery-framework/mutations/F-20261124-tcyn.md"
+      - "2026-10-31-strict-delivery-framework/mutations/F-20261124-ui2n.md"
+      - "2026-10-31-strict-delivery-framework/mutations/F-20261124-wtu5.md"
+      - "2026-11-10-v01-hooks/mutations/3b.1.txt"
+      - "2026-11-10-v01-hooks/mutations/3b.1-fix1.txt"
+      - "2026-11-10-v01-hooks/mutations/3b.1-fix2.txt"
+      - "2026-11-10-v01-hooks/mutations/3b.1-fix3.txt"
+      - "2026-11-10-v01-hooks/mutations/3b.1-fix4.txt"
+      - "2026-11-10-v01-runtime/mutations/3a.1.txt"
 first_line: "<!-- schema: mutation-transcript/1 -->"
 lines:
   - word: FINDING

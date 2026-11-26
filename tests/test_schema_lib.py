@@ -784,8 +784,9 @@ class Producers(unittest.TestCase):
             return produced_kinds()
 
     def test_P1_union(self):
-        self.assertEqual(produced_kinds(), {"breakdown", "claim", "decision", "decision-index", "finding", "finding-index", "in-force", "merged-log",
-                                           "overview", "request", "status", "streams", "sync-log"})  # Tasks 1c.3, 1d.1, 1d.2, 2c.1; P2.2: the program tool's six
+        self.assertEqual(produced_kinds(), {"breakdown", "claim", "context", "decision", "decision-index", "finding", "finding-index", "in-force", "merged-log",
+                                           "mutation-transcript", "overview", "request", "review-report", "status", "streams",
+                                           "sync-log"})  # Tasks 1c.3, 1d.1, 1d.2, 2c.1; P2.2: the program tool's six; Rq-6-2: the two evidence kinds
         self.assertEqual(self.kinds([]), set())
         self.assertEqual(self.kinds(["prod_claim"]), {"claim"})
         self.assertEqual(self.kinds(["prod_claim_decision", "prod_decision", "prod_empty"]), {"claim", "decision"})
@@ -828,6 +829,7 @@ class Files(GitIsolatedTestCase):
 
     def test_F1_path_items(self):
         self.assertEqual(files_of(self.sch([{"path": "config"}]), self.root, self.cfg), [".strict-delivery/config.yml"])
+        os.remove(os.path.join(self.root, ".strict-delivery/context.yml"))  # make_repo writes a valid context.yml; this row needs it absent
         self.assertEqual(files_of(self.sch([{"path": "context"}]), self.root, self.cfg), [])
         self.touch(".strict-delivery/context.yml")
         self.assertEqual(files_of(self.sch([{"path": "context"}]), self.root, self.cfg), [".strict-delivery/context.yml"])
@@ -886,6 +888,7 @@ class Files(GitIsolatedTestCase):
     def test_F5_symlinked_path_item_is_listed(self):
         s = self.sch([{"path": "context"}])
         self.touch("real.yml")
+        os.remove(os.path.join(self.root, ".strict-delivery/context.yml"))  # make_repo writes a valid context.yml; this test needs the link in its place
         os.symlink("../real.yml", os.path.join(self.root, ".strict-delivery/context.yml"))
         self.assertEqual(files_of(s, self.root, self.cfg), [".strict-delivery/context.yml"])
 

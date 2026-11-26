@@ -1,0 +1,25 @@
+schema: finding/1
+id: F-20261125-rhwg
+status: open
+source: R2.3 implementer report (residual/R2.3-impl.md, F-R23-2)
+severity: MEDIUM
+class: "fixtures holding nonconforming mutation-transcript or review-report text once gate_evidence is a producer: tests/test_findings_cli.py TestEnd.test_e1 (p/mutations/t.txt, p/r.md); fixed in 9647380"
+siblings: []
+cites:
+  - file: tests/test_findings_cli.py
+    lines: 27-28
+    sha: 9647380b151d95dd3b843c412d799addf121b853
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: R2.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1df729587a5fe7a8c20b9a63c67a01cd9badf355
+    by: stream-residual
+caused_by_change: true
+dimension: S1
