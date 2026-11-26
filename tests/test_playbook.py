@@ -1321,8 +1321,8 @@ TIERS = {"implementer_transcription": "tier1", "implementer": "tier2",
 ROLES_HEADER = "| role | prompt block | minimum tier | needs brief | finding states |"
 ROLES_SECTIONS = ["Model tiers", "Budget cap", "Dispatch contract", "Report contract"]     # layout proposed (PC3)
 OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
-              "rule-override", "program-create", "stream-ownership", "stream-merge", "request-dispute",
-              "program-close"]    # row D8: hand-written, the 13 of gates/lib/config.py DEFAULTS on main
+              "rule-override", "profile-override", "program-create", "stream-ownership", "stream-merge",
+              "request-dispute", "program-close"]    # row D8: hand-written, the 13 of gates/lib/config.py DEFAULTS on main
 NEW_PLAYBOOKS = ("roles", "decisions", "sessions", "streams", "review")
 PLAYBOOK_SECTIONS = {   # file stem -> [(heading, key phrases)]; each phrase is quoted from the source cited on its line
     "decisions": [("Asking", ["`decisions ask`", "decisions find", "search before asking", "`decisions batch --since`",

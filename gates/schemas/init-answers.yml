@@ -1,0 +1,57 @@
+kind: init-answers
+version: 1
+format: yaml
+files: []
+fields:
+  schema:
+    type: str
+  profile:
+    type: enum
+    values:
+      - light
+      - standard
+      - strict
+  models:
+    type: any-map
+  commands:
+    type: map
+    fields:
+      test:
+        type: str
+        required: false
+      test_one:
+        type: str
+        required: false
+      lint:
+        type: str
+        required: false
+      build:
+        type: str
+        required: false
+  git_hooks:
+    type: bool
+  ci:
+    type: bool
+  merge_mode:
+    type: enum
+    values:
+      - host
+      - controller
+  subagents:
+    type: map
+    fields:
+      depth:
+        type: int
+        required: false
+        min: 1
+      concurrent:
+        type: int
+        required: false
+        min: 1
+  protect_base:
+    type: bool
+  migrate:
+    type: bool
+    required: false
+  base_branch:
+    type: str

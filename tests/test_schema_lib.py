@@ -153,7 +153,8 @@ class KnownKinds(unittest.TestCase):
         self.assertEqual(KNOWN_KINDS, ("config", "decision", "finding", "claim", "request", "streams", "context",
                                        "handoff", "ledger", "status", "sync-log", "merged-log", "breakdown", "overview", "in-force",
                                        "decision-index", "finding-index", "mutation-transcript", "review-report",
-                                       "receipt", "claude-block", "gitignore-block"))
+                                       "receipt", "claude-block", "gitignore-block", "profile",
+                                       "init-answers"))  # Task 4a.1 appends profile and init-answers (D3)
 
     def test_K1_generated_set_is_the_four(self):  # N3 data
         self.assertEqual(schema.GENERATED_KINDS, ("decision-index", "finding-index", "in-force", "overview"))
@@ -162,10 +163,11 @@ class KnownKinds(unittest.TestCase):
 class SchemasDir(Dirs):
     def test_K6_default_dir_loads_and_stems_known(self):
         got = schemas()
-        self.assertEqual(sorted(got), ["breakdown", "claim", "config", "context", "decision", "decision-index", "finding", "finding-index",
-                                       "handoff", "in-force", "ledger", "merged-log", "mutation-transcript", "overview", "receipt",
+        self.assertEqual(sorted(got), ["breakdown", "claim", "claude-block", "config", "context", "decision", "decision-index",
+                                       "finding", "finding-index", "gitignore-block", "handoff", "in-force",
+                                       "init-answers", "ledger", "merged-log", "mutation-transcript", "overview", "profile", "receipt",
                                        "request", "review-report", "status", "streams",
-                                       "sync-log"])  # Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds; 6E.1: the two evidence kinds
+                                       "sync-log"])  # Task 4a.1: four more; Task 1c.3: the four generated kinds; P1.2: handoff, ledger; P2.1 part i: the five program kinds; 6E.1: the two evidence kinds; 5a: context, receipt
         self.assertTrue(all(stem in KNOWN_KINDS for stem in got))
 
     def test_K6_fixture_dir_and_bad_file_raises_naming_it(self):
@@ -211,7 +213,7 @@ class SchemasDir(Dirs):
         bad = self.put("claim.yml", dict(BASE, kind="claim", format="json"))
         loaded, problems = schema.scan_dir(self.sd)
         self.assertEqual(sorted(loaded), ["decision"])
-        self.assertEqual(problems, [("claim", "%s: format: must be yaml, markdown or front-matter" % bad)])  # D-Q3
+        self.assertEqual(problems, [("claim", "%s: format: must be yaml, markdown, front-matter or managed-block" % bad)])  # D-Q3, 4a.1 D-Q3 (a)
 
     def test_K3_missing_dir_is_empty_unreadable_dir_raises(self):
         self.assertEqual(schema.scan_dir(os.path.join(self.tmp, "nope")), ({}, []))
@@ -264,11 +266,11 @@ class LoadSchema(Dirs):
     def test_L4_format(self):
         for val in ("json", "YAML", None):
             p, m = self.bad(dict(BASE, format=val))
-            self.assertEqual(m, "%s: format: must be yaml, markdown or front-matter" % p, val)  # D-Q3 (changed on purpose)
+            self.assertEqual(m, "%s: format: must be yaml, markdown, front-matter or managed-block" % p, val)  # D-Q3 (changed on purpose; 4a.1 D-Q3 (a))
         d = dict(BASE)
         del d["format"]
         p, m = self.bad(d)
-        self.assertEqual(m, "%s: format: must be yaml, markdown or front-matter" % p)
+        self.assertEqual(m, "%s: format: must be yaml, markdown, front-matter or managed-block" % p)
 
     def test_L5_top_level_keys_by_format(self):
         p, m = self.bad(dict(BASE, first_line="x"))
@@ -1108,16 +1110,17 @@ class FrontMatterSchema(Dirs):
         for val in ("Front-Matter", "frontmatter", "front_matter", "json", "front-matter ", None, 5, ["front-matter"]):
             with self.subTest(format=val):
                 p, m = self.bad(self.fm_data(format=val), name="h.yml")
-                self.assertEqual(m, "%s: format: must be yaml, markdown or front-matter" % p)
+                self.assertEqual(m, "%s: format: must be yaml, markdown, front-matter or managed-block" % p)
 
-    def test_formats_literal(self):  # FS6
-        self.assertEqual(schema.FORMATS, ("yaml", "markdown", "front-matter"))
+    def test_formats_literal(self):  # FS6 (changed on purpose: 4a.1 appends managed-block, D3)
+        self.assertEqual(schema.FORMATS, ("yaml", "markdown", "front-matter", "managed-block"))
 
     def test_old_schemas_unchanged(self):  # FS7
         listed = sorted(os.listdir(schema.SCHEMAS_DIR))
         later = ["breakdown.yml", "context.yml", "handoff.yml", "ledger.yml", "merged-log.yml", "mutation-transcript.yml", "receipt.yml", "request.yml",
                  "review-report.yml", "status.yml", "streams.yml",
-                 "sync-log.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas; Task 6E.1 the two evidence ones
+                 "sync-log.yml", "claude-block.yml", "gitignore-block.yml", "profile.yml",
+                 "init-answers.yml"]  # Task P1.2 adds two; Task P2.1 part i adds the five program schemas; 4a.1 four; Task 6E.1 the two evidence ones
         self.assertEqual(listed, sorted([k + ".yml" for k, _ in EXPECTED_FILES] + later))
         got = [name for name in listed if name not in later]  # the old vocabulary's files only
         loaded = [load_schema(os.path.join(schema.SCHEMAS_DIR, name)) for name in got]
@@ -2083,6 +2086,959 @@ class VersionRows(Dirs):
                     with self.assertRaises(beg) as cm:
                         validate_front_matter(hs, "---\nschema: %s\nplan: p\n---\n" % HTAG, CFG)
                 self.assertIs(cm.exception, exc)
+
+
+# ---------------------------------------------------------------- Task 4a.1: managed blocks, file items, four schemas
+CB_BEGIN = "<!-- strict-delivery:begin schema=claude-block/1 version=0.1.0 -->"
+CB_END = "<!-- strict-delivery:end -->"
+GB_BEGIN = "# strict-delivery:begin schema=gitignore-block/1 version=0.1.0"
+GB_END = "# strict-delivery:end"
+FILE_ITEM_BAD = "files.0.file: must match [A-Za-z0-9._-]+ and not be . or .."
+NON_EMPTY = "files: must be a non-empty list"
+KIND_TUPLE_24 = ("config", "decision", "finding", "claim", "request", "streams", "context", "handoff", "ledger",
+                 "status", "sync-log", "merged-log", "breakdown", "overview", "in-force", "decision-index",
+                 "finding-index", "mutation-transcript", "review-report", "receipt", "claude-block",
+                 "gitignore-block", "profile", "init-answers")
+
+
+def real(kind):
+    """The production schema file of ``kind``, read from the working tree."""
+    return load_schema(os.path.join(schema.SCHEMAS_DIR, kind + ".yml"))
+
+
+def cbv(text):
+    return schema.validate_managed_block(real("claude-block"), text)
+
+
+def gbv(text):
+    return schema.validate_managed_block(real("gitignore-block"), text)
+
+
+def lines_of(*parts):
+    return "\n".join(parts)
+
+
+class ManagedSchemaLoad(Dirs):
+    """Producers 1-3 (rows FI, CM, LO): ``load_schema`` of file items, ``format: managed-block``, ``files: []``."""
+
+    def mb_data(self, **over):
+        d = {"kind": "claude-block", "version": 1, "format": "managed-block", "files": [{"file": "CLAUDE.md"}],
+             "comment": "html"}
+        d.update(over)
+        return d
+
+    def mb(self, **over):
+        return load_schema(self.put("claude-block.yml", self.mb_data(**over)))
+
+    def mb_bad(self, **over):
+        return self.bad(self.mb_data(**over), name="claude-block.yml")
+
+    def bad(self, data, name="thing.yml", raw=False):
+        """As ``Dirs.bad``; a value ``yamlsub.emit`` cannot write (an empty mapping) is fed to ``load_schema``
+        through a patched ``yamlsub.load`` (the rest of ``load_schema`` is the production path)."""
+        try:
+            return super().bad(data, name, raw)
+        except yamlsub.EmitError:
+            path = os.path.join(self.sd, name)
+            with mock.patch.object(yamlsub, "load", return_value=data):
+                with self.assertRaises(SchemaError) as cm:
+                    load_schema(path)
+            return path, str(cm.exception)
+
+    def test_file_item_valid_names(self):  # FI1, FI8
+        for name in ("CLAUDE.md", ".gitignore", "a", "A_b-c.d", "claude.md"):
+            with self.subTest(name=name):
+                self.assertEqual(self.mb(files=[{"file": name}]).files, [{"file": name}])
+
+    def test_file_item_bad_names_refused(self):  # FI2, FI3, FI4, FI5, FI6
+        for name in ("a/b", "/a", "a/", "a\\b", "..", ".", "", 3, True, None, ["a"], {"a": 1}, "CLAUDE.md\n",
+                     "CLAUDE.md ", " CLAUDE.md", "CLAUDE\u00c9.md", "a\u0661", "a\x00b", "a\u212a", "a\tb"):
+            with self.subTest(name=name):
+                p, m = self.mb_bad(files=[{"file": name}])
+                self.assertEqual(m, "%s: %s" % (p, FILE_ITEM_BAD))
+
+    def test_file_item_type_test_is_exact(self):  # FI4 (a str subclass: the loader never makes one; patch the loader)
+        class S(str):
+            pass
+        data = self.mb_data(files=[{"file": S("CLAUDE.md")}])
+        path = os.path.join(self.sd, "claude-block.yml")
+        with mock.patch.object(yamlsub, "load", return_value=data):
+            with self.assertRaises(SchemaError) as cm:
+                load_schema(path)
+        self.assertEqual(str(cm.exception), "%s: %s" % (path, FILE_ITEM_BAD))
+
+    def test_file_item_dot_names(self):  # FI7
+        for name in ("...", "-x", ".a", "a.", ".."[:1] + "a"):
+            with self.subTest(name=name):
+                self.assertEqual(self.mb(files=[{"file": name}]).files, [{"file": name}])
+
+    def test_file_item_long_name(self):  # FI9: no length limit in the grammar
+        for n in (255, 256, 5000):
+            with self.subTest(n=n):
+                self.assertEqual(self.mb(files=[{"file": "a" * n}]).files, [{"file": "a" * n}])
+
+    def test_file_item_exact_form(self):  # FI10
+        for extra in ({"path": "Y"}, {"dir": "d"}, {"glob": "g"}, {"exclude": []}, {"other": 1}):
+            with self.subTest(extra=extra):
+                item = dict({"file": "X"}, **extra)
+                p, m = self.mb_bad(files=[item])
+                self.assertEqual(m, "%s: files.0: a file item is exactly {file: <name>}" % p)
+
+    def test_file_item_key_spelling(self):  # FI11
+        for item, want in (({"File": "X"}, "files.0.File: unknown key"), ({"file ": "X"}, "files.0.file : unknown key"),
+                           ({}, "files.0: a managed-block schema takes only {file: <name>} items")):
+            with self.subTest(item=item):
+                p, m = self.mb_bad(files=[item])
+                self.assertEqual(m, "%s: %s" % (p, want))
+
+    def test_file_item_not_mapping(self):  # FI12
+        for item in ("a", ["a"], None, 3):
+            with self.subTest(item=item):
+                p, m = self.mb_bad(files=[item])
+                self.assertEqual(m, "%s: files.0: must be a mapping" % p)
+
+    def test_file_item_two_items(self):  # FI13
+        self.assertEqual(self.mb(files=[{"file": "CLAUDE.md"}, {"file": ".gitignore"}]).files,
+                         [{"file": "CLAUDE.md"}, {"file": ".gitignore"}])
+        self.assertEqual(self.mb(files=[{"file": ".gitignore"}, {"file": "CLAUDE.md"}]).files,
+                         [{"file": ".gitignore"}, {"file": "CLAUDE.md"}])
+
+    def test_file_item_duplicate(self):  # FI14, D-Q1 (a)
+        p, m = self.mb_bad(files=[{"file": "A"}, {"file": "B"}, {"file": "A"}])
+        self.assertEqual(m, "%s: files.2.file: repeats the file of an earlier item" % p)
+
+    def test_file_item_mixed(self):  # FI15, FI17, D-Q2 (a)
+        took = "files.%d: a managed-block schema takes only {file: <name>} items"
+        for files, i in (([{"file": "A"}, {"path": "config"}], 1), ([{"file": "A"}, {"dir": "d", "glob": "g"}], 1),
+                         ([{"path": "config"}], 0), ([{"dir": "d", "glob": "g"}], 0)):
+            with self.subTest(files=files):
+                p, m = self.mb_bad(files=files)
+                self.assertEqual(m, "%s: %s" % (p, took % i))
+
+    def test_file_item_by_format(self):  # FI16, D-Q2 (a)
+        want = "files.0.file: a file item is only for a managed-block schema"
+        md = {"kind": "thing", "version": 1, "format": "markdown", "first_line": "x"}
+        fm = {"kind": "thing", "version": 1, "format": "front-matter", "fields": {"schema": {"type": "str"}}}
+        for base in (BASE, md, fm):
+            with self.subTest(format=base["format"]):
+                p, m = self.bad(dict(base, files=[{"file": "CLAUDE.md"}]))
+                self.assertEqual(m, "%s: %s" % (p, want))
+
+    def test_managed_block_schema_loads_html(self):  # CM1, CM12
+        s = self.mb()
+        self.assertEqual((s.kind, s.version, s.format, s.comment, s.files),
+                         ("claude-block", 1, "managed-block", "html", [{"file": "CLAUDE.md"}]))
+        self.assertEqual((s.fields, s.first_line, s.table, s.headings, s.lines), (None, None, None, None, None))
+
+    def test_managed_block_schema_loads_hash(self):  # CM2
+        s = load_schema(self.put("gitignore-block.yml", self.mb_data(kind="gitignore-block", comment="hash")))
+        self.assertEqual((s.comment, s.format), ("hash", "managed-block"))
+
+    def test_schema_comment_attribute(self):  # CM12
+        self.assertIsNone(self.sch().comment)
+        self.assertIsNone(self.md().comment)
+        self.assertIsNone(self.fm().comment)
+
+    def test_comment_missing_refused(self):  # CM3
+        d = self.mb_data()
+        del d["comment"]
+        p, m = self.bad(d, name="claude-block.yml")
+        self.assertEqual(m, "%s: comment: required key is missing" % p)
+
+    def test_comment_values_refused(self):  # CM4, CM5
+        for val in ("Html", "HTML", "html ", "text", "markdown", "", None, 1, True, ["html"], {}):
+            with self.subTest(comment=val):
+                p, m = self.mb_bad(comment=val)
+                self.assertEqual(m, "%s: comment: must be html or hash" % p)
+
+    def test_comment_type_test_is_exact(self):  # CM5 (a str subclass through a patched loader)
+        class S(str):
+            pass
+        path = os.path.join(self.sd, "claude-block.yml")
+        with mock.patch.object(yamlsub, "load", return_value=self.mb_data(comment=S("html"))):
+            with self.assertRaises(SchemaError) as cm:
+                load_schema(path)
+        self.assertEqual(str(cm.exception), "%s: comment: must be html or hash" % path)
+
+    def test_comment_not_for_other_formats(self):  # CM6
+        md = {"kind": "thing", "version": 1, "format": "markdown", "files": [{"path": "config"}], "first_line": "x"}
+        fm = {"kind": "thing", "version": 1, "format": "front-matter", "files": [{"path": "config"}],
+              "fields": {"schema": {"type": "str"}}}
+        for base in (BASE, md, fm):
+            with self.subTest(format=base["format"]):
+                p, m = self.bad(dict(base, comment="html"))
+                self.assertEqual(m, "%s: comment: unknown key for a %s schema" % (p, base["format"]))
+
+    def test_managed_block_unknown_keys(self):  # CM7
+        for key, val in (("fields", {"schema": {"type": "str"}}), ("first_line", "x"), ("table", ["a"]),
+                         ("headings", ["## A"]), ("lines", [{"word": "A", "pattern": "A"}]), ("other", 1)):
+            with self.subTest(key=key):
+                p, m = self.mb_bad(**{key: val})
+                self.assertEqual(m, "%s: %s: unknown key for a managed-block schema" % (p, key))
+
+    def test_format_values(self):  # CM8, D-Q3 (a)
+        self.assertEqual(self.mb().format, "managed-block")
+        for val in ("Managed-Block", "managed_block", "managed-block ", "managedblock", "json", None, 5):
+            with self.subTest(format=val):
+                p, m = self.mb_bad(format=val)
+                self.assertEqual(m, "%s: format: must be yaml, markdown, front-matter or managed-block" % p)
+
+    def test_managed_block_version_and_kind_checks_unchanged(self):  # CM10
+        for val in (0, True, "1"):
+            p, m = self.mb_bad(version=val)
+            self.assertEqual(m, "%s: version: must be a positive integer" % p)
+        p, m = self.mb_bad(kind="other")
+        self.assertEqual(m, "%s: kind: must equal the file stem 'claude-block'" % p)
+
+    def test_managed_block_kind_in_marker(self):  # CM11: a direct load of another kind only changes the marker text
+        s = load_schema(self.put("other.yml", self.mb_data(kind="other", version=3)))
+        text = lines_of("<!-- strict-delivery:begin schema=other/3 version=0.1.0 -->", "<!-- strict-delivery:end -->", "")
+        self.assertEqual(schema.validate_managed_block(s, text), [])
+
+    def test_empty_files_only_for_loader_only_kinds(self):  # LO1, LO2, LO3, F-B4p-5
+        for kind in ("profile", "init-answers"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.sch(kind=kind, files=[]).files, [])
+        p, m = self.bad(dict(BASE, kind="decision", files=[]), name="decision.yml")
+        self.assertEqual(m, "%s: %s" % (p, NON_EMPTY))
+
+    def test_empty_files_unknown_kind(self):  # LO4
+        p, m = self.bad(dict(BASE, files=[]))
+        self.assertEqual(m, "%s: %s" % (p, NON_EMPTY))
+
+    def test_empty_files_managed_block_refused(self):  # LO5
+        for kind, comment in (("claude-block", "html"), ("gitignore-block", "hash")):
+            with self.subTest(kind=kind):
+                p, m = self.bad(self.mb_data(kind=kind, comment=comment, files=[]), name=kind + ".yml")
+                self.assertEqual(m, "%s: %s" % (p, NON_EMPTY))
+        p, m = self.bad(dict(BASE, kind="config", files=[]), name="config.yml")
+        self.assertEqual(m, "%s: %s" % (p, NON_EMPTY))
+
+    def test_loader_only_files_not_list(self):  # LO6, LO7
+        for val in ("x", {}, 3, None, True):
+            with self.subTest(files=val):
+                p, m = self.bad(dict(BASE, kind="profile", files=val), name="profile.yml")
+                self.assertEqual(m, "%s: %s" % (p, NON_EMPTY))
+        d = dict(BASE, kind="profile")
+        del d["files"]
+        p, m = self.bad(d, name="profile.yml")
+        self.assertEqual(m, "%s: files: required key is missing" % p)
+
+    def test_loader_only_nonempty_files_checked(self):  # LO8
+        self.assertEqual(self.sch(kind="profile", files=[{"path": "config"}]).files, [{"path": "config"}])
+        p, m = self.bad(dict(BASE, kind="profile", files=[{"dir": "d"}]), name="profile.yml")
+        self.assertEqual(m, "%s: files.0.glob: a dir item needs a non-empty string dir and glob" % p)
+
+    def test_loader_only_exact_kind(self):  # LO9
+        for kind in ("Profile", "PROFILE", "Init-Answers"):
+            with self.subTest(kind=kind):
+                p, m = self.bad(dict(BASE, kind=kind, files=[]), name=kind + ".yml")
+                self.assertEqual(m, "%s: %s" % (p, NON_EMPTY))
+                p, m = self.bad(dict(BASE, kind="profile", files=[]), name=kind + ".yml")
+                self.assertEqual(m, "%s: kind: must equal the file stem '%s'" % (p, kind))
+
+    def test_loader_only_kind_by_format(self):  # LO10: the kind decides, not the format
+        md = {"kind": "profile", "version": 1, "format": "markdown", "files": [], "first_line": "x"}
+        self.assertEqual(load_schema(self.put("profile.yml", md)).files, [])
+
+    def test_loader_only_kinds_literal(self):  # LO11
+        self.assertEqual(schema.LOADER_ONLY_KINDS, ("profile", "init-answers"))
+        self.assertTrue(set(schema.LOADER_ONLY_KINDS) <= set(KNOWN_KINDS))
+
+    def test_known_kinds_gain_two(self):  # KK1
+        self.assertEqual(KNOWN_KINDS, KIND_TUPLE_24)
+        self.assertEqual(len(set(KNOWN_KINDS)), 24)
+        self.assertTrue({"profile", "init-answers"} <= set(KNOWN_KINDS))
+
+    def test_stem_outside_known_kinds_still_fails(self):  # KK2
+        for name in ("widget.yml", "claude_block.yml", "Profile.yml", "init-answer.yml"):
+            self.put(name, dict(BASE, kind=name[:-4]))
+        self.put("profile.yaml", dict(BASE, kind="profile"))
+        self.put("profile.yml.bak", dict(BASE, kind="profile"))
+        loaded, problems = schema.scan_dir(self.sd)
+        self.assertEqual(loaded, {})
+        self.assertEqual(sorted(problems), [
+            ("Profile", "Profile.yml: kind 'Profile' is not in KNOWN_KINDS"),
+            ("claude_block", "claude_block.yml: kind 'claude_block' is not in KNOWN_KINDS"),
+            ("init-answer", "init-answer.yml: kind 'init-answer' is not in KNOWN_KINDS"),
+            ("profile.yaml", "profile.yaml: not a regular *.yml schema file"),
+            ("profile.yml.bak", "profile.yml.bak: not a regular *.yml schema file"),
+            ("widget", "widget.yml: kind 'widget' is not in KNOWN_KINDS")])
+
+    def test_current_version_of_new_kinds(self):  # KK3
+        from gates.lib import migrations
+        for kind in ("claude-block", "gitignore-block", "profile", "init-answers"):
+            with self.subTest(kind=kind):
+                self.assertEqual(migrations.current_version(kind), 1)
+
+    def test_pc1_long_number_4300(self):  # PC-1a
+        for digits in (4300, 4301):
+            with self.subTest(digits=digits):
+                p, m = self.bad("kind: thing\nversion: %s\nformat: yaml\n" % ("1" * digits), raw=True)
+                self.assertIn("integer too large", m)
+                text = "schema: init-answers/1\nsubagents:\n  depth: %s\n" % ("1" * digits)
+                path = self.put("answers.yml", text, raw=True)
+                with self.assertRaises(yamlsub.YamlError) as cm:
+                    yamlsub.load(path, "answers.yml")
+                self.assertIn("integer too large", cm.exception.reason)
+
+    def test_pc3_no_exception_group_reference(self):  # PC-3: the two files neither catch nor name an exception group
+        for rel in ("gates/lib/schema.py", "gates/gate_schema.py"):
+            with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), rel),
+                      encoding="utf-8") as fh:
+                src = fh.read()
+            self.assertNotIn("except*", src)
+            self.assertNotIn("ExceptionGroup", src)
+
+
+class FileItemEntries(GitIsolatedTestCase):
+    """Producer 4 (rows FL): ``files_of`` / ``entries_of`` for file items and loader-only kinds."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = make_repo(self.work)
+        self.cfg = config.load(self.root)
+        self.sd = os.path.join(self.tmp, "sd")
+        os.mkdir(self.sd)
+
+    def mb(self, files, kind="claude-block", comment="html"):
+        d = {"kind": kind, "version": 1, "format": "managed-block", "files": files, "comment": comment}
+        with open(os.path.join(self.sd, kind + ".yml"), "w") as fh:
+            fh.write(yamlsub.emit(d))
+        return load_schema(os.path.join(self.sd, kind + ".yml"))
+
+    def touch(self, rel, text="x\n"):
+        with open(os.path.join(self.root, rel), "w") as fh:
+            fh.write(text)
+
+    def test_file_item_lists_root_file(self):  # FL1
+        self.touch("CLAUDE.md")
+        self.assertEqual(files_of(self.mb([{"file": "CLAUDE.md"}]), self.root, self.cfg), ["CLAUDE.md"])
+
+    def test_entries_of_file_item(self):  # FL13, D4
+        self.touch("CLAUDE.md")
+        self.assertEqual(entries_of(self.mb([{"file": "CLAUDE.md"}]), self.root, self.cfg), [("CLAUDE.md", False)])
+
+    def test_file_item_missing_not_listed(self):  # FL2
+        self.assertEqual(files_of(self.mb([{"file": "CLAUDE.md"}]), self.root, self.cfg), [])
+
+    def test_file_items_order(self):  # FL12
+        self.touch("CLAUDE.md")
+        self.touch(".gitignore")
+        s = self.mb([{"file": ".gitignore"}, {"file": "CLAUDE.md"}])
+        self.assertEqual(files_of(s, self.root, self.cfg), [".gitignore", "CLAUDE.md"])
+
+    def test_file_item_symlink_refused(self):  # FL3, FL4, FL5
+        self.touch("real.md")
+        os.mkdir(os.path.join(self.root, "adir"))
+        for target in ("real.md", "adir", "nowhere"):
+            with self.subTest(target=target):
+                link = os.path.join(self.root, "CLAUDE.md")
+                os.symlink(target, link)
+                self.addCleanup(lambda p=link: os.path.lexists(p) and os.unlink(p))
+                with self.assertRaises(LayoutError) as cm:
+                    files_of(self.mb([{"file": "CLAUDE.md"}]), self.root, self.cfg)
+                self.assertEqual((cm.exception.rel, str(cm.exception)),
+                                 ("CLAUDE.md", "is a symlink; a file item must be a regular file"))
+                os.unlink(link)
+
+    def test_file_item_directory(self):  # FL6
+        os.mkdir(os.path.join(self.root, "CLAUDE.md"))
+        with self.assertRaises(LayoutError) as cm:
+            files_of(self.mb([{"file": "CLAUDE.md"}]), self.root, self.cfg)
+        self.assertEqual((cm.exception.rel, str(cm.exception)), ("CLAUDE.md", "is not a regular file"))
+
+    def test_file_item_fifo_not_opened(self):  # FL7: lstat only, never an open (an open of a FIFO would block)
+        os.mkfifo(os.path.join(self.root, "CLAUDE.md"))
+        s = self.mb([{"file": "CLAUDE.md"}])
+        real_open = os.open
+
+        def guarded(p, *a, **k):
+            if os.path.basename(str(p)) == "CLAUDE.md":
+                raise AssertionError("opened the FIFO")
+            return real_open(p, *a, **k)
+        with mock.patch.object(builtins, "open", side_effect=AssertionError("opened")), \
+                mock.patch.object(os, "open", side_effect=guarded):
+            with self.assertRaises(LayoutError) as cm:
+                files_of(s, self.root, self.cfg)
+        self.assertEqual((cm.exception.rel, str(cm.exception)), ("CLAUDE.md", "is not a regular file"))
+
+    def test_file_item_socket(self):  # FL8
+        import socket
+        path = os.path.join(self.root, "s")
+        s = socket.socket(socket.AF_UNIX)
+        self.addCleanup(s.close)
+        try:
+            s.bind(path)
+        except OSError:
+            self.skipTest("cannot bind a Unix socket here")
+        with self.assertRaises(LayoutError) as cm:
+            files_of(self.mb([{"file": "s"}]), self.root, self.cfg)
+        self.assertEqual((cm.exception.rel, str(cm.exception)), ("s", "is not a regular file"))
+
+    def test_file_item_lstat_error(self):  # FL9
+        real_lstat = os.lstat
+
+        def fake(p, *a, **k):
+            if os.path.basename(p) == "CLAUDE.md":
+                raise PermissionError(13, "Permission denied")
+            return real_lstat(p, *a, **k)
+        s = self.mb([{"file": "CLAUDE.md"}])
+        with mock.patch.object(os, "lstat", side_effect=fake):
+            with self.assertRaises(LayoutError) as cm:
+                files_of(s, self.root, self.cfg)
+        self.assertEqual((cm.exception.rel, str(cm.exception)), ("CLAUDE.md", "cannot read (Permission denied)"))
+
+    def test_file_item_name_too_long(self):  # FL11: ENAMETOOLONG is an error, never "missing"
+        name = "a" * 5000
+        with self.assertRaises(LayoutError) as cm:
+            files_of(self.mb([{"file": name}]), self.root, self.cfg)
+        self.assertEqual((cm.exception.rel, str(cm.exception)), (name, "cannot read (File name too long)"))
+
+    def test_files_of_root_forms(self):  # FL14: the top-level check comes first, also for a loader-only kind
+        from tests.helpers import check_root_forms, root_forms
+        forms = root_forms(self.tmp, self.root)
+        loader = load_schema(self.write_loader())
+        check_root_forms(self, forms, {"file item": lambda r: files_of(self.mb([{"file": "CLAUDE.md"}]), r, self.cfg),
+                                       "loader-only": lambda r: files_of(loader, r, self.cfg)})
+
+    def write_loader(self):
+        path = os.path.join(self.sd, "profile.yml")
+        with open(path, "w") as fh:
+            fh.write(yamlsub.emit(dict(BASE, kind="profile", files=[])))
+        return path
+
+    def test_loader_only_kind_lists_no_files(self):  # FL15
+        s = load_schema(self.write_loader())
+        self.assertEqual((files_of(s, self.root, self.cfg), entries_of(s, self.root, self.cfg),
+                          schema.expected_paths(s, self.cfg)), ([], [], []))
+
+    def test_expected_paths_ignores_file_items(self):  # FL16, D5
+        self.assertEqual(schema.expected_paths(self.mb([{"file": "CLAUDE.md"}]), self.cfg), [])
+
+    def test_file_item_symlinked_root(self):  # FL17
+        self.touch("CLAUDE.md")
+        link = os.path.join(self.tmp, "rootlink")
+        os.symlink(self.root, link)
+        self.assertEqual(files_of(self.mb([{"file": "CLAUDE.md"}]), link, self.cfg), ["CLAUDE.md"])
+
+    def test_file_item_makes_no_git_call(self):  # Global Constraints :33 (D: lstat only)
+        self.touch("CLAUDE.md")
+        s = self.mb([{"file": "CLAUDE.md"}])
+        with mock.patch.object(schema.gitinfo, "_require_toplevel"):
+            with mock.patch("subprocess.run", side_effect=AssertionError("git called")):
+                self.assertEqual(files_of(s, self.root, self.cfg), ["CLAUDE.md"])
+
+
+class ManagedBlockValidate(unittest.TestCase):
+    """Producer 5 (rows VM): ``validate_managed_block``."""
+
+    def test_vm_text_types(self):  # VM1, VM2, VM3
+        class S(str):
+            pass
+        for text in (None, b"x", 5, ["x"], {}, True, S(lines_of(CB_BEGIN, CB_END))):
+            with self.subTest(text=text):
+                self.assertEqual(cbv(text), ["block: text must be a string"])
+
+    def test_vm_schema_types(self):  # VM4
+        for sch in (None, real("decision"), real("in-force"), real("handoff"), real("profile")):
+            with self.subTest(schema=sch):
+                with self.assertRaises(ValueError):
+                    schema.validate_managed_block(sch, "x")
+        s = real("claude-block")
+        s.comment = None
+        with self.assertRaises(ValueError):
+            schema.validate_managed_block(s, "x")
+
+    def test_vm_style_from_schema(self):  # VM5
+        self.assertEqual(cbv(lines_of(CB_BEGIN, "b", CB_END, "")), [])
+        self.assertEqual(gbv(lines_of(GB_BEGIN, "b", GB_END, "")), [])
+        self.assertEqual(cbv(lines_of(GB_BEGIN, "b", GB_END, "")), [])  # SC4: not marker-like for html
+        self.assertEqual(gbv(lines_of(CB_BEGIN, "b", CB_END, "")), [])
+
+    def test_no_marker_lines_is_not_a_framework_file(self):  # VM6, VM7, VM8
+        for text in ("", "# Project\ntext\n", "\n\n", "   ", "x"):
+            with self.subTest(text=text):
+                self.assertEqual(cbv(text), [])
+                self.assertEqual(gbv(text), [])
+
+    def test_header_line_not_marker_like(self):  # VM9
+        text = "# strict-delivery: generated by init; do not edit\n"
+        self.assertEqual((cbv(text), gbv(text)), ([], []))
+        self.assertEqual(gbv("#!/bin/sh\n" + text), [])
+
+    def test_hash_block_ignores_html_markers(self):  # VM10
+        self.assertEqual(gbv("<!-- strict-delivery:end -->\n"), [])
+
+    def test_html_block_ignores_hash_markers(self):  # VM11
+        self.assertEqual(cbv("# strict-delivery:end\n"), [])
+
+    def test_marker_opener_exact(self):  # VM12, VM13, VM14
+        for text in ("<!--strict-delivery:begin schema=claude-block/1 version=0.1.0 -->\n",
+                     "<!--  strict-delivery:begin schema=claude-block/1 version=0.1.0 -->\n",
+                     "x " + CB_BEGIN + "\n", "x " + CB_END + "\n"):
+            with self.subTest(text=text):
+                self.assertEqual(cbv(text), [])
+        for text in ("#strict-delivery:begin schema=gitignore-block/1 version=0.1.0\n",
+                     "#  strict-delivery:begin schema=gitignore-block/1 version=0.1.0\n",
+                     "x " + GB_BEGIN + "\n", "x " + GB_END + "\n"):
+            with self.subTest(text=text):
+                self.assertEqual(gbv(text), [])
+
+    def test_marker_case_sensitive(self):  # VM15
+        for text in ("<!-- STRICT-DELIVERY:BEGIN schema=claude-block/1 version=0.1.0 -->\n",
+                     "<!-- Strict-Delivery:end -->\n", "<!-- strict-delivery:End -->\n"):
+            with self.subTest(text=text):
+                self.assertEqual(cbv(text), [])
+
+    def test_marker_in_fence_counts(self):  # VM16
+        text = lines_of("```", CB_BEGIN, "b", CB_END, "```", "")
+        self.assertEqual(cbv(text), [])
+        self.assertEqual(cbv(lines_of("```", CB_BEGIN, "```", "")), ["block: no end marker"])
+
+    def test_managed_block_valid(self):  # VM17
+        text = lines_of("x", CB_BEGIN, "b", CB_END, "y", "")
+        self.assertEqual(cbv(text), [])
+
+    def test_vm_block_at_start(self):  # VM18
+        self.assertEqual(cbv(lines_of(CB_BEGIN, "b", CB_END, "y", "")), [])
+
+    def test_vm_block_at_eof(self):  # VM19
+        self.assertEqual(cbv(lines_of("x", CB_BEGIN, "b", CB_END, "")), [])
+        self.assertEqual(cbv(lines_of("x", CB_BEGIN, "b", CB_END)), [])
+
+    def test_vm_empty_body(self):  # VM20
+        self.assertEqual(cbv(lines_of(CB_BEGIN, CB_END, "")), [])
+
+    def test_vm_split_on_newline_only(self):  # VM21, PC-4: U+2028, \x0b, \x85 do not shift the line numbers
+        body = "a\u2028b\x0bc\x85d\x00e <!-- strict-delivery: x --> " + "y" * 100000
+        self.assertEqual(cbv(lines_of(CB_BEGIN, body, CB_END, "")), [])
+        bad = "<!-- strict-delivery:begin schema=claude-block/1 version=1.2 -->"
+        self.assertEqual(cbv(lines_of("a\u2028b\x0bc\x85d", bad, CB_END, "")), ["block: begin marker malformed: line 2"])
+
+    def test_vm_hash_block_valid(self):  # VM22
+        self.assertEqual(gbv(lines_of("a", GB_BEGIN, "x", GB_END, "")), [])
+
+    def test_vm_version_leading_zero_matches(self):  # VM23
+        t = "<!-- strict-delivery:begin schema=claude-block/1 version=01.2.3 -->"
+        self.assertEqual(cbv(lines_of(t, CB_END, "")), [])
+
+    def test_vm_version_long(self):  # VM24, PC-1c: V is never converted
+        for n in (200000, 4300, 4301):
+            with self.subTest(n=n):
+                v = "%s.%s.%s" % ("1" * n, "2" * n, "3" * n)
+                t = "<!-- strict-delivery:begin schema=claude-block/1 version=%s -->" % v
+                self.assertEqual(cbv(lines_of(t, CB_END, "")), [])
+
+    def begin(self, tail="schema=claude-block/1 version=0.1.0 -->"):
+        return "<!-- strict-delivery:begin " + tail
+
+    def test_managed_block_errors(self):  # VM25-VM29, VM38, VM41-VM43
+        mal = "block: begin marker malformed: line %d"
+        cases = [
+            ("schema=claude-block/1 version=1.2 -->", mal % 2), ("schema=claude-block/1 version=1.2.3.4 -->", mal % 2),
+            ("schema=claude-block/1 version=v1.2.3 -->", mal % 2), ("schema=claude-block/1 version= -->", mal % 2),
+            ("schema=claude-block/1 version=1.2.x -->", mal % 2), ("schema=claude-block/1 version=1.2.3-rc1 -->", mal % 2),
+            ("schema=claude-block/1 version=\uff11.2.3 -->", mal % 2),
+            ("schema=claude-block/1 version=1.2.3\u200b -->", mal % 2),
+            ("schema=claude-block/1 version=1.2.3\n -->", mal % 2),
+            ("-->", mal % 2), ("schema=claude-block/1 -->", mal % 2),
+        ]
+        for tail, want in cases:
+            with self.subTest(tail=tail):
+                self.assertEqual(cbv(lines_of("x", self.begin(tail), CB_END, "")), [want])
+        self.assertEqual(cbv(lines_of("x", "<!-- strict-delivery:begin -->", CB_END, "")), [mal % 2])
+        self.assertEqual(cbv(lines_of("x", "<!-- strict-delivery:beginx schema=claude-block/1 version=0.1.0 -->",
+                                      CB_END, "")), [mal % 2])
+        self.assertEqual(cbv(lines_of(CB_BEGIN, CB_BEGIN, CB_END, "")), ["block: more than one begin marker"])
+        self.assertEqual(cbv(lines_of(CB_BEGIN, CB_END, CB_END, "")), ["block: more than one end marker"])
+        self.assertEqual(cbv(lines_of("a", CB_END, CB_BEGIN, "")), ["block: end marker before begin marker: line 2"])
+        self.assertEqual(cbv(lines_of(CB_BEGIN, "b", "")), ["block: no end marker"])
+
+    def test_vm_begin_grammar(self):  # VM30, VM31, D-Q6 (a)
+        mal = ["block: begin marker malformed: line 1"]
+        for tail in ("schema=/2 version=0.1.0 -->", "schema=claude-block/ version=0.1.0 -->", "version=0.1.0 -->",
+                     "schema=claude-block version=0.1.0 -->", "schema=Claude-Block/1 version=0.1.0 -->",
+                     "schema=claude-block/1/2 version=0.1.0 -->", "schema=cl\ua7c0ude-block/1 version=0.1.0 -->",
+                     "schema=claude block/1 version=0.1.0 -->", "schema=-a/1 version=0.1.0 -->",
+                     "schema=claude-block/01 version=0.1.0 -->", "schema=claude-block/1x version=0.1.0 -->",
+                     "schema=claude-block/1 version=0.1.0 extra=1 -->", "version=0.1.0 schema=claude-block/1 -->",
+                     "schema=claude-block/1  version=0.1.0 -->", "schema=claude-block/1 version=0.1.0-->",
+                     "schema=claude-block/1 version=0.1.0 --> x", "schema=claude-block/1 version=0.1.0",
+                     "schema=claude-block/%s version=0.1.0 -->" % ("1" * 601)):
+            with self.subTest(tail=tail):
+                self.assertEqual(cbv(lines_of(self.begin(tail), CB_END, "")), mal)
+        got = "block: x"
+        for tail, want in (("schema=claude-block/0 version=0.1.0 -->", "claude-block/0"),
+                           ("schema=claude-block/%s version=0.1.0 -->" % ("1" * 600), "claude-block/" + "1" * 600),
+                           ("schema=a/1 version=0.1.0 -->", "a/1")):
+            with self.subTest(tail=tail):
+                self.assertEqual(cbv(lines_of(self.begin(tail), CB_END, "")), [
+                    "schema: expected claude-block/1, got %s; run /strict-delivery:upgrade" % want])
+
+    def test_pc1_marker_long_digits(self):  # PC-1c
+        for n in (4300, 4301):
+            t = self.begin("schema=claude-block/%s version=0.1.0 -->" % ("1" * n))
+            self.assertEqual(cbv(lines_of(t, CB_END, "")), ["block: begin marker malformed: line 1"])
+
+    def test_vm_trailing_whitespace(self):  # VM32
+        for tail in (" ", "\t", "\u00a0", "\u3000"):
+            with self.subTest(tail=repr(tail)):
+                self.assertEqual(cbv(lines_of(CB_BEGIN + tail, CB_END, "")), ["block: begin marker malformed: line 1"])
+                self.assertEqual(cbv(lines_of(CB_BEGIN, CB_END + tail, "")), ["block: end marker malformed: line 2"])
+
+    def test_vm_cr(self):  # VM33
+        self.assertEqual(cbv(lines_of(CB_BEGIN + "\r", CB_END, "")), ["block: begin marker malformed: line 1"])
+        self.assertEqual(cbv(lines_of("x", CB_BEGIN, CB_END + "\r", "")), ["block: end marker malformed: line 3"])
+
+    def test_vm_crlf_file(self):  # VM34, VM49
+        text = lines_of(CB_BEGIN + "\r", "b\r", CB_END + "\r", "")
+        self.assertEqual(cbv(text), ["block: begin marker malformed: line 1"])
+
+    def test_vm_bare_cr_file(self):  # VM35
+        self.assertEqual(cbv(CB_BEGIN + "\rb\r" + CB_END + "\r"), ["block: begin marker malformed: line 1"])
+        self.assertEqual(cbv("x\r" + CB_BEGIN + "\r" + CB_END), [])
+
+    def test_vm_leading_space(self):  # VM36, D-Q8 (a)
+        for lead in (" ", "\t", "  \t "):
+            with self.subTest(lead=repr(lead)):
+                self.assertEqual(cbv(lines_of("x", lead + CB_BEGIN, CB_END, "")), ["block: begin marker malformed: line 2"])
+                self.assertEqual(cbv(lines_of(CB_BEGIN, lead + CB_END, "")), ["block: end marker malformed: line 2"])
+                self.assertEqual(gbv(lines_of("x", lead + GB_BEGIN, GB_END, "")), ["block: begin marker malformed: line 2"])
+
+    def test_vm_only_space_and_tab_are_skipped(self):  # VM36 (D-Q8: spaces and tabs only; no str.strip, PC-2)
+        for lead in ("\x0b", "\x0c", " ", "　", " "):
+            with self.subTest(lead=repr(lead)):
+                self.assertEqual(cbv(lines_of("x", lead + CB_BEGIN, lead + CB_END, "")), [])
+                self.assertEqual(gbv(lines_of("x", lead + GB_BEGIN, lead + GB_END, "")), [])
+
+    def test_vm_schema_object_forms(self):  # VM4: a Schema built directly with a wrong format or comment is refused
+        for data in ({"kind": "k", "version": 1, "format": "yaml", "files": [], "comment": "html"},
+                     {"kind": "k", "version": 1, "format": "managed-block", "files": [], "comment": "xml"},
+                     {"kind": "k", "version": 1, "format": "managed-block", "files": []}):
+            with self.subTest(data=data):
+                with self.assertRaises(ValueError):
+                    schema.validate_managed_block(schema.Schema("p", data), "x")
+
+    def test_vm_bom(self):  # VM37, D-Q8 (a), D-Q14: skipped for the marker-like test only, never accepted
+        self.assertEqual(cbv(lines_of("\ufeff" + CB_BEGIN, CB_END, "")), ["block: begin marker malformed: line 1"])
+        self.assertEqual(cbv(lines_of("\ufeff " + CB_BEGIN, CB_END, "")), ["block: begin marker malformed: line 1"])
+        self.assertEqual(cbv(lines_of("x", "\ufeff" + CB_BEGIN, CB_END, "")),  # only line 1 skips a BOM
+                         ["block: end marker before begin marker: line 3"])
+        self.assertEqual(cbv("\ufeff" + "text\n"), [])
+
+    def test_vm_first_malformed_line(self):  # VM39, D6
+        bad = self.begin("schema=claude-block/1 version=1.2 -->")
+        self.assertEqual(cbv(lines_of("x", "y", bad, "z", bad, CB_END, "")), ["block: begin marker malformed: line 3"])
+
+    def test_vm_nul(self):  # VM40
+        self.assertEqual(cbv(lines_of(CB_BEGIN + "\x00", CB_END, "")), ["block: begin marker malformed: line 1"])
+        self.assertEqual(cbv(lines_of(CB_BEGIN, "a\x00b", CB_END, "")), [])
+
+    def test_vm_lone_end(self):  # VM45, D-Q9 (a)
+        self.assertEqual(cbv(lines_of("x", CB_END, "")), ["block: end marker before begin marker: line 2"])
+        self.assertEqual(cbv(lines_of(CB_END, CB_END, "")), ["block: end marker before begin marker: line 1"])
+
+    def test_vm_error_order(self):  # VM46, D-Q10 (a): one error, in the plan's order
+        bad = self.begin("schema=claude-block/1 version=1.2 -->")
+        old = self.begin("schema=claude-block/0 version=0.1.0 -->")
+        cases = [
+            (lines_of(CB_BEGIN, CB_END, CB_BEGIN, ""), "block: more than one begin marker"),
+            (lines_of(CB_BEGIN, CB_BEGIN, ""), "block: more than one begin marker"),
+            (lines_of(bad, CB_BEGIN, CB_END, ""), "block: begin marker malformed: line 1"),
+            (lines_of(bad, CB_END + " ", ""), "block: begin marker malformed: line 1"),
+            (lines_of(CB_BEGIN, CB_END + " ", CB_BEGIN, ""), "block: end marker malformed: line 2"),
+            (lines_of(old, CB_END, CB_END, ""), "block: more than one end marker"),
+            (lines_of(CB_END, CB_BEGIN, CB_END, ""), "block: end marker before begin marker: line 1"),
+            (lines_of(CB_END, CB_END, CB_BEGIN, ""), "block: end marker before begin marker: line 1"),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(cbv(text), [want])
+
+    def test_vm_malformed_end(self):  # VM47, D-Q11 (a)
+        for end in (CB_END + " ", CB_END + "\r", "<!-- strict-delivery:end", CB_END + " extra", "<!-- strict-delivery:endx -->"):
+            with self.subTest(end=end):
+                self.assertEqual(cbv(lines_of(CB_BEGIN, "b", end, "")), ["block: end marker malformed: line 3"])
+        self.assertEqual(gbv(lines_of(GB_BEGIN, "b", GB_END + " ", "")), ["block: end marker malformed: line 3"])
+
+    def test_vm_structure_before_tag(self):  # VM48, D-Q12 (a)
+        old = self.begin("schema=claude-block/0 version=0.1.0 -->")
+        self.assertEqual(cbv(lines_of(old, "b", "")), ["block: no end marker"])
+        self.assertEqual(cbv(lines_of(old, CB_END, CB_END, "")), ["block: more than one end marker"])
+
+    def test_vm_big_text(self):  # VM50: one pass, no recursion
+        text = lines_of(CB_BEGIN, *(["x"] * 300000), CB_END, "z" * 10000000, "")
+        self.assertEqual(cbv(text), [])
+        self.assertEqual(cbv(lines_of(*([" " * 3 + "y"] * 300000), CB_BEGIN, "")), ["block: no end marker"])
+
+    def test_managed_block_old_version_names_upgrade(self):  # VM51
+        old = self.begin("schema=claude-block/0 version=0.1.0 -->")
+        self.assertEqual(cbv(lines_of(old, "b", CB_END, "")),
+                         ["schema: expected claude-block/1, got claude-block/0; run /strict-delivery:upgrade"])
+
+    def test_vm_newer_version(self):  # VM52
+        t = self.begin("schema=claude-block/2 version=0.1.0 -->")
+        self.assertEqual(cbv(lines_of(t, CB_END, "")),
+                         ["schema: expected claude-block/1, got claude-block/2; run /strict-delivery:upgrade"])
+
+    def test_vm_other_kind(self):  # VM53, D-Q13 (a)
+        t = self.begin("schema=gitignore-block/1 version=0.1.0 -->")
+        self.assertEqual(cbv(lines_of(t, CB_END, "")),
+                         ["schema: expected claude-block/1, got gitignore-block/1; run /strict-delivery:upgrade"])
+
+    def test_vm_version_not_compared(self):  # VM54
+        t = self.begin("schema=claude-block/1 version=9.9.9 -->")
+        self.assertEqual(cbv(lines_of(t, CB_END, "")), [])
+
+    def test_vm_hash_tag_mismatch(self):  # VM56
+        t = "# strict-delivery:begin schema=claude-block/1 version=0.1.0"
+        self.assertEqual(gbv(lines_of(t, GB_END, "")),
+                         ["schema: expected gitignore-block/1, got claude-block/1; run /strict-delivery:upgrade"])
+
+    def test_vm_got_text(self):  # VM55
+        t = self.begin("schema=claude-block/%s version=0.1.0 -->" % ("9" * 500))
+        self.assertEqual(cbv(lines_of(t, CB_END, "")), [
+            "schema: expected claude-block/1, got claude-block/%s; run /strict-delivery:upgrade" % ("9" * 500)])
+
+    def test_pc2_unicode_version_independent(self):  # PC-2: no lower/isprintable/unicodedata in the verdict
+        for ch in ("\ua7c0", "\U0001e030"):
+            with self.subTest(ch=hex(ord(ch))):
+                self.assertEqual(cbv(ch + CB_BEGIN + "\n"), [])
+                self.assertEqual(cbv(lines_of(self.begin("schema=cl%sude-block/1 version=0.1.0 -->" % ch), CB_END, "")),
+                                 ["block: begin marker malformed: line 1"])
+                self.assertEqual(cbv(lines_of(CB_BEGIN, ch, CB_END, "")), [])
+
+
+class NewSchemaFiles(unittest.TestCase):
+    """Producer 7 (rows SC, SP, SA): the four schema files, through load_schema and validate."""
+
+    PROFILE = {"schema": "profile/1", "profile": "strict", "defaults": {"top_tier_roles": ["final_verifier"]},
+               "policy": {"block": {"max_tasks": 3}}}
+    ANSWERS = {"schema": "init-answers/1", "profile": "standard", "models": {"tiers": {"tier1": "x"}},
+               "commands": {"test": "t", "test_one": "t {id}", "lint": "l", "build": "b"}, "git_hooks": True,
+               "ci": False, "merge_mode": "host", "subagents": {}, "protect_base": False, "base_branch": "main"}
+
+    def pv(self, value):
+        return validate(real("profile"), value, CFG)
+
+    def av(self, value):
+        return validate(real("init-answers"), value, CFG)
+
+    def pdict(self, **over):
+        d = copy.deepcopy(self.PROFILE)
+        d.update(over)
+        return d
+
+    def adict(self, **over):
+        d = copy.deepcopy(self.ANSWERS)
+        d.update(over)
+        return d
+
+    def test_claude_block_schema_file(self):  # SC1, SC5
+        s = real("claude-block")
+        self.assertEqual((s.kind, s.version, s.format, s.comment, s.files),
+                         ("claude-block", 1, "managed-block", "html", [{"file": "CLAUDE.md"}]))
+        self.assertIsNone(s.fields)
+
+    def test_gitignore_block_schema_file(self):  # SC2, SC5
+        s = real("gitignore-block")
+        self.assertEqual((s.kind, s.version, s.format, s.comment, s.files),
+                         ("gitignore-block", 1, "managed-block", "hash", [{"file": ".gitignore"}]))
+        self.assertIsNone(s.fields)
+
+    def test_real_schemas_accept_their_markers(self):  # SC3, SC4
+        self.assertEqual(cbv(lines_of(CB_BEGIN, CB_END, "")), [])
+        self.assertEqual(gbv(lines_of(GB_BEGIN, GB_END, "")), [])
+
+    def test_profile_schema_loads(self):  # SP1
+        s = real("profile")
+        self.assertEqual((s.kind, s.version, s.format, s.files), ("profile", 1, "yaml", []))
+
+    def test_profile_schema_accepts_the_three_presets(self):  # SP2, SP4
+        self.assertEqual(self.pv(self.PROFILE), [])
+        for name, tasks in (("light", None), ("standard", 5), ("strict", 3)):
+            with self.subTest(profile=name):
+                policy = {} if tasks is None else {"block": {"max_tasks": tasks}}
+                self.assertEqual(self.pv(self.pdict(profile=name, policy=policy)), [])
+
+    def test_profile_schema_tag(self):  # SP3
+        base = copy.deepcopy(self.PROFILE)
+        del base["schema"]
+        self.assertEqual(self.pv(base), ["schema: expected profile/1, got (missing)"])
+        for tag, want in (("profile/2", "profile/2; run /strict-delivery:upgrade"), ("profile/0", "profile/0"),
+                          ("config/1", "config/1"), ("profile/1 ", "profile/1 "), (3, "3")):
+            with self.subTest(tag=tag):
+                self.assertEqual(self.pv(self.pdict(schema=tag)), ["schema: expected profile/1, got %s" % want])
+
+    def test_profile_enum(self):  # SP5, SP6
+        for val in ("Strict", "strict ", "minimal", "", None, 3, True, ["strict"]):
+            with self.subTest(profile=val):
+                want = "profile: must not be null" if val is None else "profile: must be one of light, standard, strict"
+                self.assertEqual(self.pv(self.pdict(profile=val)), [want])
+        d = copy.deepcopy(self.PROFILE)
+        del d["profile"]
+        self.assertEqual(self.pv(d), ["profile: required key is missing"])
+
+    def test_profile_defaults_shape(self):  # SP7-SP10
+        d = copy.deepcopy(self.PROFILE)
+        del d["defaults"]
+        self.assertEqual(self.pv(d), ["defaults: required key is missing"])
+        for val, want in ((None, "defaults: must not be null"), ([], "defaults: must be a mapping"),
+                          ("x", "defaults: must be a mapping")):
+            self.assertEqual(self.pv(self.pdict(defaults=val)), [want])
+        self.assertEqual(self.pv(self.pdict(defaults={})), [])
+        self.assertEqual(self.pv(self.pdict(defaults={"top_tier_roles": [], "top_tier_fallback": "tier3"})), [])
+        for roles, want in (([""], "defaults.top_tier_roles.0: must be a non-empty string"),
+                            ([1], "defaults.top_tier_roles.0: must be a non-empty string"),
+                            ("x", "defaults.top_tier_roles: must be a list"),
+                            (None, "defaults.top_tier_roles: must not be null")):
+            with self.subTest(roles=roles):
+                self.assertEqual(self.pv(self.pdict(defaults={"top_tier_roles": roles})), [want])
+        for fb, want in (("", "defaults.top_tier_fallback: must be a non-empty string"),
+                         (3, "defaults.top_tier_fallback: must be a non-empty string"),
+                         (None, "defaults.top_tier_fallback: must not be null")):
+            with self.subTest(fallback=fb):
+                self.assertEqual(self.pv(self.pdict(defaults={"top_tier_fallback": fb})), [want])
+        self.assertEqual(self.pv(self.pdict(defaults={"x": 1})), ["defaults.x: unknown key"])
+
+    def test_profile_policy_shape(self):  # SP11, SP12
+        d = copy.deepcopy(self.PROFILE)
+        del d["policy"]
+        self.assertEqual(self.pv(d), ["policy: required key is missing"])
+        self.assertEqual(self.pv(self.pdict(policy={})), [])
+        self.assertEqual(self.pv(self.pdict(policy={"block": {}})), [])
+        self.assertEqual(self.pv(self.pdict(policy={"block": []})), ["policy.block: must be a mapping"])
+        self.assertEqual(self.pv(self.pdict(policy={"x": 1})), ["policy.x: unknown key"])
+        self.assertEqual(self.pv(self.pdict(policy=[])), ["policy: must be a mapping"])
+        self.assertEqual(self.pv(self.pdict(policy={"block": {"x": 1}})), ["policy.block.x: unknown key"])
+
+    def test_profile_max_tasks(self):  # SP13, PC-1
+        for val in (1, 3, 5, 10 ** 999):
+            with self.subTest(max_tasks=val):
+                self.assertEqual(self.pv(self.pdict(policy={"block": {"max_tasks": val}})), [])
+        key = "policy.block.max_tasks: "
+        for val, want in ((0, "must be at least 1"), (-1, "must be at least 1"), (True, "must be an integer"),
+                          ("3", "must be an integer"), (3.0, "must be an integer"), (None, "must not be null")):
+            with self.subTest(max_tasks=val):
+                self.assertEqual(self.pv(self.pdict(policy={"block": {"max_tasks": val}})), [key + want])
+        with self.assertRaises(yamlsub.YamlError):
+            yamlsub.parse("policy:\n  block:\n    max_tasks: %s\n" % ("1" * 1001))
+        self.assertEqual(yamlsub.parse("a: %s\n" % ("1" * 1000))["a"], int("1" * 1000))
+
+    def test_profile_unknown_key(self):  # SP14, SP15
+        self.assertEqual(self.pv(self.pdict(extra=1)), ["extra: unknown key"])
+        for val in ([], "x", None, 3):
+            self.assertEqual(self.pv(val), ["top level: must be a mapping"])
+
+    def test_init_answers_schema_loads(self):  # SA1
+        s = real("init-answers")
+        self.assertEqual((s.kind, s.version, s.format, s.files), ("init-answers", 1, "yaml", []))
+
+    def test_init_answers_accepts_full_file(self):  # SA2
+        self.assertEqual(self.av(self.ANSWERS), [])
+        self.assertEqual(self.av(self.adict(migrate=True)), [])
+        self.assertEqual(self.av(self.adict(subagents={"depth": 5, "concurrent": 30}, migrate=False)), [])
+        self.assertEqual(self.av(self.adict(commands={})), [])
+        self.assertEqual(self.av(self.adict(models={})), [])
+
+    def test_init_answers_each_key_required(self):  # SA3
+        for key in ("schema", "profile", "models", "commands", "git_hooks", "ci", "merge_mode", "subagents",
+                    "protect_base", "base_branch"):
+            with self.subTest(key=key):
+                d = copy.deepcopy(self.ANSWERS)
+                del d[key]
+                want = ["schema: expected init-answers/1, got (missing)"] if key == "schema" \
+                    else ["%s: required key is missing" % key]
+                self.assertEqual(self.av(d), want)
+
+    def test_init_answers_migrate_optional_bool(self):  # SA4
+        for val in (True, False):
+            self.assertEqual(self.av(self.adict(migrate=val)), [])
+        for val, want in (("yes", "must be true or false"), (1, "must be true or false"),
+                          (None, "must not be null")):
+            with self.subTest(migrate=val):
+                self.assertEqual(self.av(self.adict(migrate=val)), ["migrate: " + want])
+
+    def test_init_answers_tag(self):  # SA5
+        for tag, want in (("init-answers/2", "init-answers/2; run /strict-delivery:upgrade"),
+                          ("init-answers/0", "init-answers/0"), ("profile/1", "profile/1")):
+            self.assertEqual(self.av(self.adict(schema=tag)), ["schema: expected init-answers/1, got %s" % want])
+
+    def test_init_answers_profile_enum(self):  # SA6
+        for name in ("light", "standard", "strict"):
+            self.assertEqual(self.av(self.adict(profile=name)), [])
+        for val in ("Strict", "minimal", "", 3):
+            self.assertEqual(self.av(self.adict(profile=val)), ["profile: must be one of light, standard, strict"])
+
+    def test_init_answers_models_any_map(self):  # SA7
+        for val, want in (([], "models: must be a mapping"), ("x", "models: must be a mapping"),
+                          (None, "models: must not be null")):
+            self.assertEqual(self.av(self.adict(models=val)), [want])
+        self.assertEqual(self.av(self.adict(models={"x": 1})), [])
+
+    def test_init_answers_commands_shape(self):  # SA8
+        for key in ("test", "test_one", "lint", "build"):
+            self.assertEqual(self.av(self.adict(commands={key: "c"})), [])
+        for val, want in (("", "must be a non-empty string"), (3, "must be a non-empty string"),
+                          (None, "must not be null")):
+            with self.subTest(test=val):
+                self.assertEqual(self.av(self.adict(commands={"test": val})), ["commands.test: " + want])
+        self.assertEqual(self.av(self.adict(commands={"other": "x"})), ["commands.other: unknown key"])
+        self.assertEqual(self.av(self.adict(commands=[])), ["commands: must be a mapping"])
+
+    def test_init_answers_bools(self):  # SA9
+        for key in ("git_hooks", "ci", "protect_base"):
+            for val in (True, False):
+                self.assertEqual(self.av(self.adict(**{key: val})), [])
+            for val, want in (("true", "must be true or false"), (1, "must be true or false"),
+                              (0, "must be true or false"), (None, "must not be null")):
+                with self.subTest(key=key, val=val):
+                    self.assertEqual(self.av(self.adict(**{key: val})), ["%s: %s" % (key, want)])
+
+    def test_init_answers_merge_mode(self):  # SA10
+        for val in ("host", "controller"):
+            self.assertEqual(self.av(self.adict(merge_mode=val)), [])
+        for val in ("Host", "host ", "", 3):
+            self.assertEqual(self.av(self.adict(merge_mode=val)), ["merge_mode: must be one of host, controller"])
+        self.assertEqual(self.av(self.adict(merge_mode=None)), ["merge_mode: must not be null"])
+
+    def test_init_answers_subagents_shape(self):  # SA11, SA12
+        for val in ({}, {"depth": 5}, {"concurrent": 30}, {"depth": 1, "concurrent": 1}, {"depth": 10 ** 999}):
+            self.assertEqual(self.av(self.adict(subagents=val)), [])
+        for key in ("depth", "concurrent"):
+            for val, want in ((0, "must be at least 1"), (-1, "must be at least 1"), (True, "must be an integer"),
+                              ("5", "must be an integer"), (1.5, "must be an integer"), (None, "must not be null")):
+                with self.subTest(key=key, val=val):
+                    self.assertEqual(self.av(self.adict(subagents={key: val})), ["subagents.%s: %s" % (key, want)])
+        self.assertEqual(self.av(self.adict(subagents={"x": 1})), ["subagents.x: unknown key"])
+        self.assertEqual(self.av(self.adict(subagents=[])), ["subagents: must be a mapping"])
+        self.assertEqual(self.av(self.adict(subagents=None)), ["subagents: must not be null"])
+
+    def test_init_answers_big_int(self):  # SA12
+        with self.assertRaises(yamlsub.YamlError):
+            yamlsub.parse("subagents:\n  depth: %s\n" % ("1" * 1001))
+
+    def test_init_answers_base_branch(self):  # SA13
+        for val in ("main", "a b", "-x"):
+            self.assertEqual(self.av(self.adict(base_branch=val)), [])
+        for val in ("", 3):
+            self.assertEqual(self.av(self.adict(base_branch=val)), ["base_branch: must be a non-empty string"])
+        self.assertEqual(self.av(self.adict(base_branch=None)), ["base_branch: must not be null"])
+
+    def test_init_answers_unknown_key(self):  # SA14, SA16
+        self.assertEqual(self.av(self.adict(profle="strict")), ["profle: unknown key"])
+        self.assertEqual(self.av(self.adict(owner="x")), ["owner: unknown key"])
+        for val in ([], "", None):
+            self.assertEqual(self.av(val), ["top level: must be a mapping"])
+
+    def test_init_answers_key_order(self):  # SA15
+        self.assertEqual(self.av(dict(reversed(list(self.ANSWERS.items())))), [])
+
+    def test_old_schema_set_loads(self):  # EX3/EX1: every schema file in the directory loads, nothing else is in it
+        loaded, problems = schema.scan_dir()
+        self.assertEqual(problems, [])
+        self.assertTrue({"claude-block", "gitignore-block", "profile", "init-answers"} <= set(loaded))
 
 
 if __name__ == "__main__":

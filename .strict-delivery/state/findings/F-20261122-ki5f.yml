@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-ki5f
+status: open
+source: "4b.1 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4b1-review-1.md R1-1"
+severity: LOW
+class: "comparisons that run a str subclass's dunder methods; members: gates/gate_decisions.py:162 cls != _NEED_CLASS, :152 and :154 the status compares (a subclass __ne__ returning False makes S('scope') pass as profile-override)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4b.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 43b4bb3f375f567a2bba5ae5719faa8beade3b17
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: a str subclass's methods never run (Q-1C0FIN2-R1 (a))

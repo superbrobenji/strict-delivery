@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261126-fdjy
+status: closed
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-4c-5.md FR5-2
+severity: LOW
+class: "4a.2 skips standing after 4a.2: tests/test_gate_checkpoint.py:1819, :1835 (CA5 body only self.fail)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4a.2
+pin: null
+ruling: null
+evidence:
+  - 2323006824515b790a619fa489b37019793932f8
+  - 2323006824515b790a619fa489b37019793932f8:tests/test_gate_checkpoint.py
+history:
+  - status: open
+    sha: 2323006824515b790a619fa489b37019793932f8
+    by: stream-config
+  - status: closed
+    sha: 2323006824515b790a619fa489b37019793932f8
+    by: "stream-config-16: fixed in 2323006 (CA5 written through the gate, two 4a.2 skips removed); fix task review ch/pr4c-up-review.md DONE"
+review_round: 3
+caused_by_change: true
+dimension: test
+resolved_by: 2026-10-31-strict-delivery-framework

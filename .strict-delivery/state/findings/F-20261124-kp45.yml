@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-kp45
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-4c-2.md FR-2
+severity: LOW
+class: "_outside style chosen independently of the target's kind (managed.py:338-365): CLAUDE.md holding a HASH marker-like line without an HTML block; .gitignore holding an HTML marker-like line (plan accepts, apply refuses); apply accepting an action that swaps the block style with equal outside text"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d33a279e7fdb575c33844dee5e81b81f8e4b68ee
+    by: stream-config-hooks
+review_round: 4
+caused_by_change: false
+dimension: plan/apply agreement on the block comment style

@@ -1670,7 +1670,7 @@ F2 = "F-20261101-abce"
 FDIR = ".strict-delivery/state/findings"
 DDIR = ".strict-delivery/state/decisions"
 SPEC2 = "docs/strict-delivery/specs/s2.md"
-CAP3 = dict(minimal_config(), block={"max_tasks": 3})
+CAP3 = minimal_config()  # profile strict presets block.max_tasks 3 (Task 4a.2); a file key block.max_tasks is refused
 
 
 def ck(n, block="P1", tests="5/5", gates="PASS", nxt=None):
@@ -1683,7 +1683,9 @@ def plan_with(*ns, block="P1"):
 
 
 class FullFx(Fx):
-    """``Fx`` with a strict-like cap of 3 tasks written into the committed config (owner answer Q-RC6-1 (a))."""
+    """``Fx`` with the strict cap of 3 tasks, preset by the strict profile of the committed config (Task 4a.2; the
+    cap was a file key before it, owner answer Q-RC6-1 (a)). A test that needs another cap sets ``profile="light"``
+    (no preset) or an ``overrides`` entry."""
     CFG = CAP3
 
     def commit_push(self, msg="x"):
@@ -1786,7 +1788,7 @@ class Cap(FullFx):
         for n in (1, 4, 10):
             with self.subTest(tasks=n):
                 fx = type(self)("test_light_has_no_cap")
-                fx.CFG = minimal_config()
+                fx.CFG = dict(minimal_config(), profile="light")  # light presets no cap (strict presets 3)
                 fx.setUp()
                 try:
                     fx.build(lines=["Prose."] + [ck(i) for i in range(1, n + 1)], row={"ledger_from": n + 3})
@@ -1806,7 +1808,7 @@ class Cap(FullFx):
     def test_cap_line_at_over_under(self):  # CA3
         self.build()
         for cap in (1, 3, 5):
-            self.setcfg(block={"max_tasks": cap})
+            self.setcfg(profile="light", block={"max_tasks": cap})  # a profile that presets no cap: strict refuses a file key
             for n_led, n_plan, want in (
                     (cap, cap, "PASS checkpoint.cap"), (cap - 1, cap - 1, "PASS checkpoint.cap"),
                     (cap + 1, cap, "FAIL checkpoint.cap: block: %d tasks in ledger exceed block.max_tasks %d" % (cap + 1, cap)),
@@ -1816,7 +1818,6 @@ class Cap(FullFx):
                     self.replan(plan_with(*range(1, n_plan + 1)))
                     self.assertEqual(self.line("cap"), want)
 
-    @unittest.skip("Block 4 Task 4a.2 adds the profile presets (light none, standard 5, strict 3); this runs unchanged once it merges")
     def test_cap_profile_presets(self):  # CA4; plan :6081
         for profile, tasks, want in (("light", 10, "PASS checkpoint.cap"), ("standard", 6, "FAIL checkpoint.cap"),
                                      ("standard", 5, "PASS checkpoint.cap"), ("strict", 4, "FAIL checkpoint.cap"),
@@ -1832,26 +1833,42 @@ class Cap(FullFx):
                 finally:
                     fx.doCleanups()
 
-    @unittest.skip("Block 4 Task 4a.2 adds the overrides shape; this runs unchanged once it merges")
-    def test_cap_overrides_entry(self):  # CA5
-        self.fail("an overrides entry changing block.max_tasks (the form Task 4a.2 fixes) must raise the cap for the gate")
+    def test_cap_overrides_entry(self):  # CA5: an overrides entry changing block.max_tasks raises the strict cap of 3 for the gate
+        self.build()
+        self.rec(DDIR, D1, "answered")  # the authorising decision of the override (gate_decisions checks it; this gate reads the config)
+        self.setcfg(overrides={"block.max_tasks": {"value": 5, "decision": D1}})  # profile strict: the preset 3 is overridden to 5
+        for n_led, n_plan, want in (
+                (4, 4, "PASS checkpoint.cap"), (5, 5, "PASS checkpoint.cap"),
+                (6, 5, "FAIL checkpoint.cap: block: 6 tasks in ledger exceed block.max_tasks 5"),
+                (5, 6, "FAIL checkpoint.cap: block: 6 tasks in plan exceed block.max_tasks 5")):
+            with self.subTest(ledger=n_led, plan=n_plan):
+                self.reledger(["Prose."] + [ck(i) for i in range(1, n_led + 1)])
+                self.replan(plan_with(*range(1, n_plan + 1)))
+                self.assertEqual(self.line("cap"), want)
+
+    def test_cap_file_key_refused_under_strict_preset(self):  # seam with 4a.2 (as test_checkpoints_lib's strict preset and refusal)
+        self.build()
+        self.setcfg(block={"max_tasks": 3})  # profile strict presets block.max_tasks 3: a file key is refused, even the same value
+        self.assertEqual(self.chk(), ("FAIL checkpoint.input: .strict-delivery/config.yml: block.max_tasks: preset by profile strict; "
+                                      "change it under overrides with the authorising decision\n", 1))
 
     def test_cap_bad_value_through_gate(self):  # CA6, CA7, D-6K2-Q6 (a)
         self.build()
         for value in (0, -1, True, "3", None, [3]):  # a float is not in the YAML subset, so no config holds one
             with self.subTest(max_tasks=repr(value)):
-                self.setcfg(block={"max_tasks": value})
-                out, _ = self.chk()
-                self.assertEqual(line_of(out, "cap"), "FAIL checkpoint.cap: block.max_tasks: must be an integer of at least 1")
-                self.assertEqual(len(ids(out)), 14)
+                self.setcfg(profile="light", block={"max_tasks": value})  # light presets no cap: a file value is read, then typed
+                out, code = self.chk()
+                self.assertEqual(out, "FAIL checkpoint.input: .strict-delivery/config.yml: block.max_tasks: must be an integer of at least 1\n")
+                self.assertEqual(code, 1)
         for value in (0, True, "2"):
             with self.subTest(max_per_block=repr(value)):
                 self.setcfg(rulings={"max_per_block": value})
-                self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: rulings.max_per_block: must be an integer of at least 1")
-        self.setcfg(block=5)
-        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: block: must be a mapping")
+                self.assertEqual(self.chk(), ("FAIL checkpoint.input: .strict-delivery/config.yml: rulings.max_per_block: "
+                                              "must be an integer of at least 1\n", 1))
+        self.setcfg(profile="light", block=5)
+        self.assertEqual(self.chk(), ("FAIL checkpoint.input: .strict-delivery/config.yml: block: must be a mapping\n", 1))
         self.setcfg(rulings=[1])
-        self.assertEqual(self.line("cap"), "FAIL checkpoint.cap: rulings: must be a mapping")
+        self.assertEqual(self.chk(), ("FAIL checkpoint.input: .strict-delivery/config.yml: rulings: must be a mapping\n", 1))
 
     def test_rulings_cap_through_gate(self):  # CA8
         r = "Ruling: a -- b -- c -- d"
@@ -1966,20 +1983,27 @@ class Cap(FullFx):
                     finally:
                         fx.doCleanups()
 
-    def test_cap_config_value_digits(self):  # V1b: a 1000-digit max_tasks is a valid integer that no count exceeds
+    def test_cap_config_value_digits(self):  # V1b: a 600-digit max_tasks is a valid integer that no count exceeds
+        # The file key needs a profile that presets no cap (light); strict refuses it. Since Task 4a.3 config.load refuses
+        # an integer of more than 600 digits (MAX_DIGITS) before the gate counts anything, so 1000 digits is an input line.
+        light = yamlsub.emit(dict(minimal_config(), profile="light"))
         for limit in INT_LIMITS:
             with self.subTest(limit=limit), int_limit(limit):
                 fx = type(self)("test_cap_config_value_digits")
                 fx.setUp()
                 try:
                     fx.build()
-                    fx.put(".strict-delivery/config.yml", yamlsub.emit(minimal_config()) + "block:\n  max_tasks: %s\n" % ("9" * 1000))
+                    fx.put(".strict-delivery/config.yml", light + "block:\n  max_tasks: %s\n" % ("9" * 600))
+                    fx.commit_push()
+                    self.assertEqual(fx.line("cap"), "PASS checkpoint.cap")
+                    fx.put(".strict-delivery/config.yml", light + "block:\n  max_tasks: %s\n" % ("9" * 1000))
                     fx.commit_push()
                     if limit == 640:  # yamlsub refuses an integer beyond the limit in force (1000 digits > 640)
                         self.assertTrue(fx.chk()[0].startswith("FAIL checkpoint.input: "))
                     else:
-                        self.assertEqual(fx.line("cap"), "PASS checkpoint.cap")
-                    fx.put(".strict-delivery/config.yml", yamlsub.emit(minimal_config()) + "block:\n  max_tasks: %s\n" % ("9" * 1001))
+                        self.assertEqual(fx.chk(), ("FAIL checkpoint.input: .strict-delivery/config.yml: block.max_tasks: "
+                                                    "must be an integer of at most 600 digits\n", 1))
+                    fx.put(".strict-delivery/config.yml", light + "block:\n  max_tasks: %s\n" % ("9" * 1001))
                     fx.commit_push()
                     out, _ = fx.chk()
                     self.assertTrue(out.startswith("FAIL checkpoint.input: "), out[:300])
@@ -1989,7 +2013,7 @@ class Cap(FullFx):
 
     def test_cap_unicode_headings_not_counted(self):  # V2a: U+0870 and U+A7C1 changed category between Unicode 13 and 15
         self.build()
-        self.setcfg(block={"max_tasks": 1})
+        self.setcfg(profile="light", block={"max_tasks": 1})  # light presets no cap: strict refuses a file value
         self.replan("## Block P1\n### Task P1.1: a\n### Task P1.ࡰ: b\n### Task P1.ꟁ: c\n")
         self.assertEqual(self.line("cap"), "PASS checkpoint.cap")
 

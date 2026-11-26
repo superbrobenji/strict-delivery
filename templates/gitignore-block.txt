@@ -1,0 +1,5 @@
+{{decisions}}/index.yml
+{{decisions}}/in-force.md
+{{findings}}/index.yml
+{{index}}
+{{receipts}}/

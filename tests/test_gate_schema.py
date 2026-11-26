@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -428,8 +429,17 @@ class Config(GateCase):
     def test_C12_unlanded_keys(self):
         pre = "FAIL schema.config..strict-delivery/config.yml: "
         for key in ("commands", "models", "roles", "block", "rulings", "dispatch", "budgets", "drift", "overrides"):
-            ok = {"models": {"tiers": {"tier1": "x"}}, "drift": {"estimate_factor_pct": 5}}.get(key, {"x": [1, {"y": 2}]})
-            write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ok}))
+            ok = {"models": {"tiers": {"tier1": "x"}}, "drift": {"estimate_factor_pct": 5},
+                  # Task 4a.2: config.load now checks the shape of an override entry; this one is valid
+                  "overrides": {"limits.max_depth": {"value": 2, "decision": "DEC-20261111-abcd"}},
+                  # Task 4a.3: config.load now types these five keys; each value below is valid (hand-written)
+                  "roles": {"x": {"prompt": "p.md", "min_tier": "tier2"}}, "block": {"max_tasks": 2},
+                  "rulings": {"max_per_block": 2}, "dispatch": {"max_prompt_chars": 2},
+                  "budgets": {"controller": {"tokens": 2, "minutes": 2}},
+                  }.get(key, {"x": [1, {"y": 2}]})
+            # strict presets block.max_tasks (a file value is refused, Task 4a.2), so the block row runs under light
+            write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ok},
+                                                  **({"profile": "light"} if key == "block" else {})))
             self.assertEqual(self.lines()[0], ["PASS schema.kinds", "PASS schema.config"], key)
             write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ["a"]}))
             self.assertEqual(self.lines()[0][1:], [pre + "%s: must be a mapping" % key], key)
@@ -1008,6 +1018,164 @@ class FrontMatterKind(GateCase):
             with self.assertRaises(beg) as cm:
                 self.run_g(producers=["prod_handoff"])
         self.assertIs(cm.exception, self.exc)
+
+
+CB_BEGIN = "<!-- strict-delivery:begin schema=claude-block/1 version=0.1.0 -->"
+CB_END = "<!-- strict-delivery:end -->"
+GB_BEGIN = "# strict-delivery:begin schema=gitignore-block/1 version=0.1.0"
+GB_END = "# strict-delivery:end"
+BASE_LINES = ["PASS schema.kinds", "PASS schema.config"]
+SYM = "is a symlink; a file item must be a regular file"
+FIFTEEN = ["PASS schema.kinds", "PASS schema.config", "PASS schema.decision", "PASS schema.finding",
+           "PASS schema.claim", "PASS schema.request", "PASS schema.streams", "PASS schema.status",
+           "PASS schema.sync-log", "PASS schema.merged-log", "PASS schema.breakdown", "PASS schema.overview",
+           "PASS schema.in-force", "PASS schema.decision-index", "PASS schema.finding-index"]  # hand-written, at 3f65424
+
+
+class ManagedBlockGate(GateCase):
+    """Task 4a.1 producer 6 (rows GD): ``gate_schema`` and the managed-block, loader-only kinds. A producer module is
+    injected in ``sys.modules`` (D7); the schema files are the production ones copied from the working tree."""
+
+    def real_kinds(self, *names):
+        for n in names:
+            shutil.copy(os.path.join(schema.SCHEMAS_DIR, n + ".yml"), self.sdir)
+
+    def prod(self, *kinds):
+        mod = types.ModuleType("tests.fixtures.prod_mb")
+        mod.PRODUCES = tuple(kinds)
+        patcher = mock.patch.dict(sys.modules, {"tests.fixtures.prod_mb": mod})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return ["prod_mb"]
+
+    def test_claude_block_not_checked_before_producer(self):  # GD1, GD16
+        self.real_kinds("claude-block", "gitignore-block", "profile", "init-answers")
+        self.put("CLAUDE.md", CB_BEGIN + "\nb\n")
+        out, code = self.run_g()
+        self.assertEqual((out.splitlines(), code), (BASE_LINES, 0))
+        self.assertNotIn("claude-block", out)
+        self.assertNotIn("profile", out)
+        self.assertNotIn("init-answers", out)
+
+    def test_claude_block_checked_once_produced(self):  # GD2
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", "x\n" + CB_BEGIN + "\nb\n")
+        out, code = self.run_g(producers=self.prod("claude-block"))
+        self.assertEqual(out.splitlines(), BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: block: no end marker"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("PASS schema.claude-block", out)
+
+    def test_claude_block_valid_passes(self):  # GD3
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", "x\n" + CB_BEGIN + "\nb\n" + CB_END + "\ny\n")
+        self.assertEqual(self.lines(producers=self.prod("claude-block")), (BASE_LINES + ["PASS schema.claude-block"], 0))
+
+    def test_claude_block_no_marker_passes(self):  # GD4, GD5, GD6
+        self.real_kinds("claude-block")
+        producers = self.prod("claude-block")
+        want = (BASE_LINES + ["PASS schema.claude-block"], 0)
+        self.assertEqual(self.lines(producers=producers), want)  # GD5: no CLAUDE.md
+        self.put("CLAUDE.md", "")
+        self.assertEqual(self.lines(producers=producers), want)  # GD6
+        self.put("CLAUDE.md", "# Project\ntext\n")
+        self.assertEqual(self.lines(producers=producers), want)  # GD4
+
+    def test_claude_block_symlink_fails(self):  # GD7
+        self.real_kinds("claude-block")
+        self.put("real.md", CB_BEGIN + "\n" + CB_END + "\n")
+        os.symlink("real.md", os.path.join(self.root, "CLAUDE.md"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: " + SYM], 1))
+
+    def test_claude_block_fifo(self):  # GD8: never opened, so never blocks
+        self.real_kinds("claude-block")
+        os.mkfifo(os.path.join(self.root, "CLAUDE.md"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: is not a regular file"], 1))
+
+    def test_claude_block_directory(self):  # GD8
+        self.real_kinds("claude-block")
+        os.mkdir(os.path.join(self.root, "CLAUDE.md"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: is not a regular file"], 1))
+
+    def test_claude_block_not_utf8(self):  # GD9
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", b"\xff\n")
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: CLAUDE.md: not valid UTF-8"], 1))
+
+    def test_claude_block_bom_file(self):  # GD10, VM37
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", b"\xef\xbb\xbf" + (CB_BEGIN + "\n" + CB_END + "\n").encode("utf-8"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: "
+                                                     "block: begin marker malformed: line 1"], 1))
+
+    def test_claude_block_old_version_fails(self):  # GD11
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", CB_BEGIN.replace("claude-block/1", "claude-block/0") + "\n" + CB_END + "\n")
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + [
+            "FAIL schema.claude-block.CLAUDE.md: schema: expected claude-block/1, got claude-block/0; "
+            "run /strict-delivery:upgrade"], 1))
+
+    def test_both_block_kinds(self):  # GD12, GD14
+        self.real_kinds("claude-block", "gitignore-block")
+        self.put("CLAUDE.md", CB_BEGIN + "\nb\n" + CB_END + "\n")
+        self.put(".gitignore", GB_BEGIN + "\nx\n")
+        out, code = self.lines(producers=self.prod("claude-block", "gitignore-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["PASS schema.claude-block",
+                                                     "FAIL schema.gitignore-block..gitignore: block: no end marker"], 1))
+        self.put(".gitignore", GB_BEGIN + "\nx\n" + GB_END + "\n")
+        out, code = self.lines(producers=self.prod("claude-block", "gitignore-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["PASS schema.claude-block", "PASS schema.gitignore-block"], 0))
+
+    def test_claude_block_schema_missing(self):  # GD13
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (["FAIL schema.kinds.claude-block: gates/schemas/claude-block.yml: missing",
+                                        "PASS schema.config"], 1))
+
+    def test_loader_only_produced_passes(self):  # GD15
+        self.real_kinds("profile", "init-answers")
+        self.put("profile.yml", "not read\n")
+        out, code = self.lines(producers=self.prod("profile", "init-answers"))
+        self.assertEqual((out, code), (BASE_LINES + ["PASS schema.profile", "PASS schema.init-answers"], 0))
+
+    def test_new_schema_file_broken(self):  # GD20
+        path = os.path.join(self.sdir, "profile.yml")
+        with open(path, "w") as fh:
+            fh.write("kind: profile\nversion: 1\nformat: yaml\nfiles:\n  - x\nfields:\n  schema:\n    type: str\n")
+        out, code = self.lines()
+        self.assertEqual((out, code), (["FAIL schema.kinds.profile: %s: files.0: must be a mapping" % path,
+                                        "PASS schema.config"], 1))
+
+    def test_this_repos_schema_files_load(self):  # GD17, EX1
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "CLAUDE_PROJECT_DIR"}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "schema", "--root", REPO], cwd=REPO, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.assertEqual(p.stdout.decode().splitlines(), FIFTEEN)
+        self.assertIn("PASS schema.kinds", p.stdout.decode().splitlines())
+
+    def test_gate_subprocess_managed_block(self):  # GD18: exit code and lines of the CLI, producer declared
+        script = os.path.join(self.tmp, "run_gate.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write("import sys, types\nsys.path.insert(0, sys.argv[2])\n"
+                     "from gates import __main__ as m\nimport gates.producers as p\n"
+                     "mod = types.ModuleType('tests.fixtures.prod_mb')\nmod.PRODUCES = ('claude-block',)\n"
+                     "sys.modules['tests.fixtures.prod_mb'] = mod\n"
+                     "p.PRODUCER_MODULES = ('tests.fixtures.prod_mb',)\n"
+                     "sys.exit(m.main(['check', 'schema', '--root', sys.argv[1]]))\n")
+        self.put("CLAUDE.md", CB_BEGIN + "\nb\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "CLAUDE_PROJECT_DIR"}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        p = subprocess.run([sys.executable, script, self.root, REPO], cwd=self.tmp, env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, check=False)
+        self.assertEqual((p.returncode, p.stderr), (1, b""))
+        self.assertEqual(p.stdout.decode().splitlines(), BASE_LINES + [
+            "FAIL schema.claude-block.CLAUDE.md: block: no end marker"])
 
 
 if __name__ == "__main__":

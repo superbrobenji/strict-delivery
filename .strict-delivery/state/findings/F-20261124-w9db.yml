@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-w9db
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4c2-review-1.md F1
+severity: LOW
+class: "git-call rule (plan :33): every git call the 4c.2 diff adds in tests: tests/test_templates.py:1452 git remote get-url origin runs without gitinfo.CLEARED_ENV and LC_ALL=C (GIT_DIR set returns another repository's URL)"
+siblings: []
+cites:
+  - file: tests/test_templates.py
+    lines: 1452-1453
+    sha: f9d40b9
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f9d40b91684bf842b1a4e6ed23db560dbd4a76b7
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: git-call rule (plan :33)
