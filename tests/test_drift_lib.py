@@ -1089,7 +1089,7 @@ class Fresh(GitIsolatedTestCase):
         return root
 
     def test_base_worktree_entry_states(self):
-        "W3-W5, W7, H1, H3-H6, K2: the state of the worktree entry that has the base branch"
+        "W3-W5, W7, W12, H1, H3-H6, K2: the state of the worktree entry that has the base branch"
         with self.subTest("locked-present"):
             root = self.wcase("lp")
             wt = os.path.join(self.tmp, "lp-wt")
@@ -1102,6 +1102,15 @@ class Fresh(GitIsolatedTestCase):
             git(root, "worktree", "add", "-q", wt, "main")
             os.rename(wt, wt + ".moved")
             self.assertIn("prunable", git(root, "worktree", "list", "--porcelain"))
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("git-file-gone"):
+            # W12: the directory is present, its .git file is renamed away: git lists the entry prunable while isdir holds
+            root = self.wcase("gg")
+            wt = os.path.join(self.tmp, "gg-wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            os.rename(os.path.join(wt, ".git"), os.path.join(wt, ".git.gone"))
+            self.assertTrue(os.path.isdir(wt))
+            self.assertRegex(git(root, "worktree", "list", "--porcelain"), r"(?m)^prunable .+$")
             self.verdict(root, [("base", self.NOCO)])
         with self.subTest("locked-missing"):
             root = self.wcase("lm")
