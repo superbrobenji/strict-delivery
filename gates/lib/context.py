@@ -222,6 +222,13 @@ def load(root: str, cfg: dict) -> dict:
     _need_root(root)
     gitinfo._require_toplevel(root)
     rel = cfg["paths"]["context"]
+    if isinstance(rel, str) and type(rel) is not str:
+        # a str subclass that overrides neither __str__ nor __format__ reads as its own text (load_text takes exactly
+        # str); one that overrides either was shown differently by the old %s and f-string uses, so it is refused
+        if type(rel).__str__ is not str.__str__ or type(rel).__format__ is not str.__format__:
+            raise TypeError("rel: a str subclass that overrides __str__ or __format__ is refused, got %s"
+                            % type(rel).__name__)
+        rel = str.__str__(rel)
     path = os.path.join(root, rel)
     if not os.path.lexists(path):
         raise GateError("%s: missing; run /strict-delivery:init" % rel)
@@ -229,9 +236,7 @@ def load(root: str, cfg: dict) -> dict:
         raw = yamlsub._read_regular_file(path, rel)
     except yamlsub.YamlError as e:
         raise GateError("%s: %s" % (rel, "%s (line %d)" % (e.reason, e.line) if e.line else e.reason)) from None
-    # the pre-request load only formatted rel with %s, so a str subclass was shown by its __str__; load_text takes exactly
-    # str, and the join makes the text exact on 3.9 too (there "%s" % (x,) hands a str-subclass __str__ result back as is)
-    return load_text(raw, "".join(("%s" % (rel,),)), cfg)
+    return load_text(raw, rel, cfg)
 
 
 def load_text(text: bytes, rel: str, cfg: dict) -> dict:
