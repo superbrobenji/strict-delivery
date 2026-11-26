@@ -2,11 +2,14 @@
 a fixture repository; every ``gh`` is a fake script first on PATH; expected texts are hand-written from the plan lines and
 the task-4d.3 domain table, whose row ids are named in each comment."""
 import builtins
+import json
 import os
 import shutil
 import tempfile
+import types
 from unittest import mock
 
+from gates import gate_schema
 from gates.lib import dispatch, host, templates
 from gates.lib.result import GateError
 from gates.tools import doctor, githooks, index
@@ -34,6 +37,31 @@ class TestRegisters(Base):
                              ("finding", self.cfg()["paths"]["findings"], "F-20261031-k3f9.yml"))))
         self.assertTrue(self.line("indexes").startswith("FAIL doctor.indexes: "))
         self.assertEqual(self.line("generated-tracked"), "FAIL doctor.generated-tracked: not checked: doctor.indexes failed")
+
+    def test_doctor_registers_one_id_for_a_file_failing_twice(self):  # RG3 (survivor D37-registers-dedup-dropped)
+        # gate_schema.check puts the file in the id (`schema.<kind>.<file>`), so two files never share an id; the only
+        # way two FAIL lines share one is one file failing the same check more than once (a valid `schema:` line and
+        # two unknown keys): `doctor.registers` lists that id once (CD14: "each once")
+        p = self.cfg()["paths"]
+        for kind, tag, rel in (("decision", "decision/2", p["decisions"] + "/DEC-20261031-k3f9.yml"),
+                               ("finding", "finding/1", p["findings"] + "/F-20261031-k3f9.yml"),
+                               ("claim", "claim/1", p["claims"] + "/c.yml"),
+                               ("breakdown", "breakdown/1", p["plan_state"] + "/p/breakdown.yml"),
+                               ("streams", "streams/1", p["programs"] + "/p/streams.yml"),
+                               ("request", "request/1", p["programs"] + "/p/requests/R-20261031-k3f9.yml")):
+            path = self.write(rel, "schema: %s\nzz: 1\nyy: 2\n" % tag)
+            with self.subTest(kind=kind):
+                res = gate_schema.check(["--root", self.r])  # the precondition: the gate itself repeats the id
+                ids = [ln.id for ln in res.lines if ln.status == "FAIL"]
+                self.assertGreater(ids.count("schema.%s.%s" % (kind, rel)), 1, ids)
+                self.assertEqual(self.line("registers"), "FAIL doctor.registers: schema.%s.%s" % (kind, rel))
+            os.unlink(path)
+        self.assertEqual(self.line("registers"), "PASS doctor.registers")
+        # two such files of different kinds: each id once, in the gate's order
+        a = self.write(p["decisions"] + "/DEC-20261031-k3f9.yml", "schema: decision/2\nzz: 1\nyy: 2\n")
+        b = self.write(p["findings"] + "/F-20261031-k3f9.yml", "schema: finding/1\nzz: 1\nyy: 2\n")
+        self.assertEqual(self.line("registers"), "FAIL doctor.registers: schema.decision.%s/DEC-20261031-k3f9.yml, "
+                                                 "schema.finding.%s/F-20261031-k3f9.yml" % (p["decisions"], p["findings"]))
 
     def test_doctor_registers_non_regular_and_many(self):  # RG4, RG5, IX3
         d = self.decision_dir()
@@ -159,6 +187,38 @@ class TestSubagents(Base):
         self.assertIn("x\\x00\\n\\ua7c0\\U0001f6dd", self.line("subagents"))  # VR2: the frozen escape table
         self.settings(raw='{"env": {"%s": "\\ud800"}}' % DEPTH)
         self.assertIn("\\ud800", self.line("subagents"))
+
+    def test_doctor_subagents_shown_value_cut_at_64(self):  # SA23 (survivor D51-shown-no-cut; doctor.SHOWN_MAX = 64)
+        tail = " must be a decimal integer of at least 1"
+        for n, want in ((1, "x"), (63, "x" * 63), (64, "x" * 64), (65, "x" * 64 + "..."), (66, "x" * 64 + "..."),
+                        (1000, "x" * 64 + "..."), (100000, "x" * 64 + "...")):
+            self.env(**{DEPTH: "x" * n})
+            with self.subTest(length=n):
+                self.assertEqual(self.line("subagents"), "FAIL doctor.subagents: .claude/settings.json: %s=%s%s" % (DEPTH, want, tail))
+        # the cut counts the value's characters before escaping: 65 newlines show as 64 escaped newlines and "..."
+        self.env(**{CONC: "\n" * 65})
+        self.assertEqual(self.line("subagents"), "FAIL doctor.subagents: .claude/settings.json: %s=%s...%s" % (CONC, "\\n" * 64, tail))
+        self.env(**{CONC: "\n" * 64})
+        self.assertEqual(self.line("subagents"), "FAIL doctor.subagents: .claude/settings.json: %s=%s%s" % (CONC, "\\n" * 64, tail))
+
+    def test_doctor_subagents_bom_refused_by_the_reader_itself(self):  # SA16 (survivor D44-json-bom-allowed)
+        # doctor.py `_settings` is the only JSON reader in doctor.py. The stdlib parser already refuses a text that
+        # starts with U+FEFF (JSONDecodeError "Unexpected UTF-8 BOM", measured on 3.9 and 3.13), so the explicit BOM
+        # guard is only reachable when the parser accepts it: simulate a lenient parser through the production path
+        both = "PASS doctor.subagents: %s=%s; %s=%s" % (DEPTH, UNSET, CONC, UNSET)
+        real = json.loads
+        lenient = types.SimpleNamespace(loads=lambda text, **kw: real(text.lstrip("﻿"), **kw))
+        with mock.patch.object(doctor, "json", lenient):
+            self.settings(raw="{}")  # control: the patch is in effect and an unmarked file is read
+            self.assertEqual(self.line("subagents"), both)
+            for raw in ("﻿{}", '﻿{"env": {}}', '﻿{"env": {"%s": "5"}}' % DEPTH):
+                self.settings(raw=raw)
+                with self.subTest(raw=raw[:12]):
+                    self.assertEqual(self.line("subagents"), "FAIL doctor.subagents: .claude/settings.json: invalid JSON")
+            self.settings(raw='{"env": {"A": "﻿"}}')  # a U+FEFF that is not the first character is just text
+            self.assertEqual(self.line("subagents"), both)
+        self.settings(raw="﻿{}")  # and the stdlib parser alone gives the same verdict
+        self.assertEqual(self.line("subagents"), "FAIL doctor.subagents: .claude/settings.json: invalid JSON")
 
     def test_doctor_subagents_invalid_json_and_shapes(self):  # SA16, SA17, SA18
         invalid = ("", "{", '{"env": {"A": 1,}}', "{'a': 1}", "// c\n{}", "﻿{}", "{\x00}", "NaN", "Infinity",
