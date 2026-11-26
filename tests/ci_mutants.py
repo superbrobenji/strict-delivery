@@ -15,8 +15,10 @@ never executed, imported or evaluated by this runner):
     KILL = {"id": ("tests.test_a", "tests.test_b")}              # the test modules that should kill the id
 
 An id is ASCII ``[A-Za-z0-9][A-Za-z0-9._-]{0,63}``, unique across the changed tables. A path is relative, ASCII
-``[A-Za-z0-9_./+@=,-]``, the name of a tracked regular file reached without a symbolic link, and none of the protected
-paths (this runner and its tests, every table, every killing module of every changed table, and ``.github``). ``old``
+``[A-Za-z0-9_./+@=,-]``, the name of a tracked regular file with exactly one hard link, reached without a symbolic
+link, and none of the protected paths (this runner and its tests, every table, every killing module of every changed
+table, the ``tests.test*`` modules those import directly or through any ``tests`` module, ``tests/__init__.py``, and
+``.github``). ``old``
 must occur exactly once in the file's bytes (overlapping occurrences count; no newline translation), else NOT_APPLIED.
 
 ``split`` prints the ids of part K of N: the sorted (table, id) pairs cut into N contiguous blocks whose sizes differ by
@@ -65,6 +67,7 @@ MODULE = re.compile(r"tests\.test[A-Za-z0-9_]*")
 PATH_CHARS = re.compile(r"[A-Za-z0-9_./+@=,-]+")
 LINE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,63}): (KILLED|SURVIVED|SPLIT|NOT_APPLIED|TIMEOUT|ERROR)( \|.*)?")
 RAN = re.compile(r"^Ran (\d+) tests?", re.M)
+JOB_ENV = re.compile(r"MUTANT_(RESULT|LINES)_(.*)", re.S)  # every name that looks like a job's result or lines
 USAGE = ("usage: python -m tests.ci_mutants (split|run|summary) --base REF --head SHA --parts N [--part K] "
          "[--python LABEL=PATH --python LABEL=PATH] [--timeout SECONDS]")
 OPTIONS = {"split": ("--base", "--head", "--parts", "--part"),
@@ -237,7 +240,7 @@ def _ident_text(ident):
 
 
 def _regular_problem(root, rel, tracked):
-    """Why ``rel`` is not a tracked regular file reached without a symbolic link, or ''."""
+    """Why ``rel`` is not a tracked regular file with exactly one hard link, reached without a symbolic link, or ''."""
     mode = tracked.get(rel)
     if mode is None:
         return "is not a tracked regular file"
@@ -639,15 +642,16 @@ def _run_rows(root, rows, tracked, protected_files, pythons, timeout, execute, e
     """Run ``rows``; ``emit(line)`` gets one finished line per row, in order. Returns whether any line is an ERROR."""
     problems = {row.id: _path_problem(root, row.path, tracked, protected_files, PROTECTED_DIRS) for row in rows}
     baseline = {}
-    for module in sorted({m for row in rows if not problems[row.id] for m in row.modules}):
+    for modules in sorted({tuple(row.modules) for row in rows if not problems[row.id]}):  # each KILL tuple, as it is run
+        name = " ".join(modules)
         try:
-            results = _run_pair(execute, pythons, [module], root, timeout)
+            results = _run_pair(execute, pythons, list(modules), root, timeout)
         except Exception as err:  # noqa: BLE001
-            baseline[module] = "%s: %s: %s" % (module, type(err).__name__, _clean(str(err)))
+            baseline[modules] = "%s: %s: %s" % (name, type(err).__name__, _clean(str(err)))
             continue
         bad = [r for r in results if not r.passed]
         if bad:
-            baseline[module] = "%s failed on %s" % (module, " and ".join(r.detail for r in bad))
+            baseline[modules] = "%s failed on %s" % (name, " and ".join(r.detail for r in bad))
             for r in bad:
                 for text_line in r.text.splitlines()[-30:]:
                     emit("| " + _clean(text_line))
@@ -661,8 +665,8 @@ def _run_rows(root, rows, tracked, protected_files, pythons, timeout, execute, e
             line = "%s: ERROR | not run: %s" % (row.id, stopped)
         elif problems[row.id]:
             line = "%s: ERROR | %s" % (row.id, problems[row.id])
-        elif any(m in baseline for m in row.modules):
-            line = "%s: ERROR | baseline failed: %s" % (row.id, "; ".join(baseline[m] for m in row.modules if m in baseline))
+        elif tuple(row.modules) in baseline:
+            line = "%s: ERROR | baseline failed: %s" % (row.id, baseline[tuple(row.modules)])
         else:
             try:
                 line, restored = _one_row(root, row, pythons, timeout, execute)
@@ -681,17 +685,71 @@ def _run_rows(root, rows, tracked, protected_files, pythons, timeout, execute, e
 
 
 def _write_output(env, lines):
-    """Append the lines to the GITHUB_OUTPUT file as the multi-line output ``lines``; the problem text, or ''."""
+    """Append the lines to the GITHUB_OUTPUT file as the multi-line output ``lines``; the problem text, or ''.
+
+    GITHUB_OUTPUT missing: nothing is written (a local run; the summary fails ``no line`` for every id of the part).
+    Set, it must be an absolute path (empty or relative: refused) of a regular file, or of a file that does not exist yet;
+    a symbolic link, a directory, a FIFO or another special file is refused (nothing blocks, nothing is followed)."""
     path = env.get("GITHUB_OUTPUT")
-    if not path:
+    if path is None:
         return ""
+    if "\0" in path or not os.path.isabs(path):
+        return "GITHUB_OUTPUT must be an absolute path, got %s" % _show(path)
     delim = "ci_mutants_" + secrets.token_hex(16)
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        with open(path, "a", encoding="utf-8") as fh:
+        fd = os.open(path, flags, 0o666)
+    except OSError as err:
+        return "cannot write GITHUB_OUTPUT (%s)" % (err.strerror or type(err).__name__)
+    try:
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:  # the file object owns the descriptor from here
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return "GITHUB_OUTPUT is not a regular file"
             fh.write("lines<<%s\n%s\n%s\n" % (delim, "\n".join(lines), delim))
     except OSError as err:
         return "cannot write GITHUB_OUTPUT (%s)" % (err.strerror or type(err).__name__)
     return ""
+
+
+def _import_closure(root, modules):
+    """The ``tests/`` paths of the oracle of the killing ``modules``: every ``tests.test*`` module they import, directly or
+    through any module of ``tests`` (``tests/helpers.py`` and the like are walked but stay mutable), and the package
+    ``tests/__init__.py``. Found by ast, nothing imported or run. Forms read: ``import tests.x``, ``from tests import x``,
+    ``from tests.x import y``, the relative ``from . import x`` and ``from .x import y``, and ``import_module("tests.x")``
+    or ``__import__("tests.x")`` with a literal name (a name built at run time cannot be read, and is not followed)."""
+    found, todo, seen = {"tests/__init__.py"}, list(modules), set()
+    while todo:
+        name = todo.pop()
+        if name in seen or re.fullmatch(r"tests\.[A-Za-z0-9_]+", name) is None:
+            continue
+        seen.add(name)
+        if MODULE.fullmatch(name):
+            found.add("tests/" + name.split(".")[1] + ".py")
+        try:
+            path = os.path.join(root, "tests", name.split(".")[1] + ".py")
+            if not stat.S_ISREG(os.lstat(path).st_mode) or os.lstat(path).st_size > (8 << 20):
+                continue
+            with open(path, "rb") as fh:
+                tree = ast.parse(fh.read(), filename=path)
+        except (OSError, SyntaxError, ValueError, MemoryError, RecursionError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                todo.extend(".".join(a.name.split(".")[:2]) for a in node.names if a.name.startswith("tests."))
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "tests":
+                todo.extend("tests." + a.name for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and (node.module or "").startswith("tests."):
+                todo.append(".".join(node.module.split(".")[:2]))
+            elif isinstance(node, ast.ImportFrom) and node.level == 1:  # a module of tests/ imports its siblings
+                if node.module is None:
+                    todo.extend("tests." + a.name for a in node.names)
+                else:
+                    todo.append("tests." + node.module.split(".")[0])
+            elif isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) \
+                    and isinstance(node.args[0].value, str) and node.args[0].value.startswith("tests.") \
+                    and (getattr(node.func, "attr", None) or getattr(node.func, "id", None)) in ("import_module", "__import__"):
+                todo.append(".".join(node.args[0].value.split(".")[:2]))
+    return found
 
 
 # ---- commands -----------------------------------------------------------------------------------------------------
@@ -740,7 +798,7 @@ def _command_run(opts, root, execute, env):
             _say("ci_mutants: part %d of %d has no mutants" % (k, n))
         else:
             _say("ci_mutants: part %d of %d: %d mutants" % (k, n, len(todo)))
-            files = set(PROTECTED_FILES) | {"tests/" + m.split(".", 1)[1] + ".py" for r in rows for m in r.modules}
+            files = set(PROTECTED_FILES) | _import_closure(root, sorted({m for r in rows for m in r.modules}))
             errored = _run_rows(root, todo, tracked, {f.lower() for f in files}, opts["--python"],
                                opts.get("--timeout", DEFAULT_TIMEOUT), execute, emit)
             problem = _write_output(env, lines)
@@ -761,6 +819,11 @@ def _command_summary(opts, root, env):
         return _refusals(errors)
     expected = {r.id: r for r in rows}
     problems, seen = [], {}
+    valid = {str(k) for k in range(1, opts["--parts"] + 1)}  # the canonical decimal job indexes: no sign, no leading zero
+    for name in sorted(env):
+        m = JOB_ENV.fullmatch(name)
+        if m is not None and m.group(2) not in valid:
+            problems.append("FAIL env %s: job index %s is outside 1..%d" % (_show(name), _show(m.group(2)), opts["--parts"]))
     for k in range(1, opts["--parts"] + 1):
         result = env.get("MUTANT_RESULT_%d" % k)
         if result is None:

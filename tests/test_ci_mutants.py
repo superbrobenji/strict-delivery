@@ -13,6 +13,7 @@ import io
 import itertools
 import os
 import pathlib
+import random
 import re
 import stat
 import subprocess
@@ -845,7 +846,20 @@ class PairMatrixTest(Fx):
         "workflow": ".github/workflows/strict-delivery.yml",
         "killing-module": "tests/test_a.py",
         "runner-tests": "tests/test_ci_mutants.py",
+        "imported-test-module": "tests/test_lib.py",  # imported by the killing module tests/test_a.py (F-20261126-5nhg)
+        "imported-transitively": "tests/test_deep.py",  # imported by tests/test_lib.py
+        "imported-through-support": "tests/test_viahelper.py",  # imported by tests/support_fx.py, which test_a imports
+        "tests-package": "tests/__init__.py",
     }
+    ORACLE_FILES = {  # the import graph of the fixture: test_a -> test_lib -> test_deep; test_a -> support_fx -> test_viahelper
+        "tests/test_a.py": "import unittest\n\nfrom src.a import add\nfrom tests import support_fx\nfrom tests import test_lib\n\n\n"
+                           "class T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(1, 2), 3)\n",
+        "tests/test_lib.py": "from tests import test_deep\n\nVALUE = 1\n",
+        "tests/test_deep.py": "VALUE = 2\n",
+        "tests/support_fx.py": "from tests import test_viahelper\n\nVALUE = 3\n",
+        "tests/test_viahelper.py": "VALUE = 4\n",
+    }
+    ORACLE_PATHS = ["tests/test_lib.py", "tests/test_deep.py", "tests/test_viahelper.py", "tests/__init__.py"]
 
     @staticmethod
     def relate(path, relation):
@@ -875,10 +889,13 @@ class PairMatrixTest(Fx):
         kill["okA"] = ("tests.test_a",)
         m["okB"] = ("tests/test_c.py", "assertTrue(True)", "assertTrue(False)")  # a test module that kills nothing here
         kill["okB"] = ("tests.test_a",)
+        m["okC"] = ("tests/support_fx.py", "VALUE = 3", "VALUE = 5")  # a support module (not test*) a killer imports stays allowed
+        kill["okC"] = ("tests.test_a",)
         self.repo({TABLE: table(m, kill), ".strict-delivery/mutants/CI8.py": table(
-            {"o1": ("src/b.py", "'one'", "'uno'")}, {"o1": ("tests.test_b",)})})
+            {"o1": ("src/b.py", "'one'", "'uno'")}, {"o1": ("tests.test_b",)})}, base_extra=self.ORACLE_FILES)
         fake = Fake(self.root, watch=["src/a.py", "src/b.py", "tests/test_c.py", "tests/test_a.py", "tests/ci_mutants.py",
-                                      ".github/workflows/strict-delivery.yml", TABLE, ".strict-delivery/mutants/CI8.py"])
+                                      ".github/workflows/strict-delivery.yml", TABLE, ".strict-delivery/mutants/CI8.py",
+                                      "tests/support_fx.py"] + self.ORACLE_PATHS)
         code, out, err = self.call(self.argv(), execute=fake)
         got = verdicts(out)
         self.assertEqual(code, 1, out)
@@ -890,11 +907,12 @@ class PairMatrixTest(Fx):
                     self.assertIn("protected", lines_of(out)[ident][1], label)
         self.assertEqual(got["okA"], "SURVIVED", out)
         self.assertEqual(got["okB"], "SURVIVED", out)
+        self.assertEqual(got["okC"], "SURVIVED", out)
         self.assertEqual(got["o1"], "SURVIVED", out)
         # the invariant of every refused cell: the protected file was never altered, at any run
         for call in fake.calls:
-            for rel in ("tests/ci_mutants.py", ".github/workflows/strict-delivery.yml", TABLE,
-                        ".strict-delivery/mutants/CI8.py", "tests/test_a.py"):
+            for rel in ["tests/ci_mutants.py", ".github/workflows/strict-delivery.yml", TABLE,
+                        ".strict-delivery/mutants/CI8.py", "tests/test_a.py"] + self.ORACLE_PATHS:
                 self.assertEqual(call[2][rel], fake.pristine[rel], rel)
         self.assertEqual(self.status(), "")
 
@@ -930,13 +948,13 @@ class PairMatrixTest(Fx):
         table_second = dict(fillers if parts == 3 else {}, **(protectors if targets_first else m_t))
         kills = dict(k_t, **{ident: ("tests.test_a",) for ident in protectors}, **{ident: ("tests.test_b",) for ident in fillers})
         self.repo({first: table(table_first, {i: kills[i] for i in table_first}),
-                   second: table(table_second, {i: kills[i] for i in table_second})})
+                   second: table(table_second, {i: kills[i] for i in table_second})}, base_extra=self.ORACLE_FILES)
         order = (["targets"] + ["fillers"] * (parts == 3) + ["protectors"]) if targets_first \
             else (["protectors"] + ["fillers"] * (parts == 3) + ["targets"])
         groups = {"targets": set(m_t), "protectors": set(protectors), "fillers": set(fillers)}
         protected_files = ["tests/test_a.py", "tests/ci_mutants.py", "tests/test_ci_mutants.py",
-                           ".github/workflows/strict-delivery.yml", first, second]
-        watch = ["src/a.py", "src/b.py", "tests/test_c.py"] + protected_files
+                           ".github/workflows/strict-delivery.yml", first, second] + self.ORACLE_PATHS
+        watch =["src/a.py", "src/b.py", "tests/test_c.py"] + protected_files
         for k, name in enumerate(order, 1):
             fake = Fake(self.root, watch=watch)
             code, out, err = self.call(self.argv(part=k, parts=parts), execute=fake)
@@ -1112,25 +1130,28 @@ class OutcomeTest(Fx):
         self.assertEqual({c[3] for c in f.calls}, {7})
 
     # ---- T9
-    def test_failing_baseline_is_an_error_for_every_id_of_that_module(self):  # T9
+    def test_failing_baseline_is_an_error_for_every_id_of_that_module(self):  # T9 (a1 and a3 share the failing KILL tuple)
         self.repo({TABLE: table(
             {"a1": ("src/a.py", "a + b", "a - b"), "a2": ("src/a.py", "VERSION = 1", "VERSION = 2"),
-             "b1": ("src/b.py", "'two'", "'three'")},
-            {"a1": ("tests.test_a",), "a2": ("tests.test_a", "tests.test_c"), "b1": ("tests.test_b",)})})
+             "a3": ("src/a.py", "return a", "return 0 + a"), "b1": ("src/b.py", "'two'", "'three'")},
+            {"a1": ("tests.test_a",), "a2": ("tests.test_a", "tests.test_c"), "a3": ("tests.test_a",),
+             "b1": ("tests.test_b",)})})
 
         def policy(py, mods, mutated):
             if not mutated and mods == ("tests.test_a",) and py == PY39:
                 return FAIL
             return PASS
         code, out, err, fake = self.go(Fake(self.root, policy))
-        self.assertEqual(verdicts(out), {"a1": "ERROR", "a2": "ERROR", "b1": "SURVIVED"}, out)
-        self.assertIn("baseline", lines_of(out)["a1"][1])
-        self.assertIn("tests.test_a", lines_of(out)["a1"][1])
-        self.assertIn("3.9", lines_of(out)["a1"][1])
+        # a2's tuple (test_a, test_c) is baselined as it is run (F-20261126-rw5k): it passes, so a2 runs
+        self.assertEqual(verdicts(out), {"a1": "ERROR", "a2": "SURVIVED", "a3": "ERROR", "b1": "SURVIVED"}, out)
+        for ident in ("a1", "a3"):
+            self.assertIn("baseline", lines_of(out)[ident][1])
+            self.assertIn("tests.test_a", lines_of(out)[ident][1])
+            self.assertIn("3.9", lines_of(out)[ident][1])
         self.assertEqual(code, 1)
-        self.assertEqual({c[1] for c in fake.mutated_calls()}, {("tests.test_b",)})  # no mutation of an id with a bad baseline
+        self.assertEqual({c[1] for c in fake.mutated_calls()}, {("tests.test_b",), ("tests.test_a", "tests.test_c")})  # no mutation of an id with a bad baseline
 
-    def test_passing_baseline_runs_each_module_once_per_interpreter_before_any_mutation(self):  # T9
+    def test_passing_baseline_runs_each_kill_tuple_once_per_interpreter_before_any_mutation(self):  # T9 (the tuple, as it is run)
         self.repo({TABLE: table(
             {"a1": ("src/a.py", "a + b", "a - b"), "a2": ("src/a.py", "VERSION = 1", "VERSION = 2")},
             {"a1": ("tests.test_a", "tests.test_c"), "a2": ("tests.test_a",)})})
@@ -1138,7 +1159,7 @@ class OutcomeTest(Fx):
         base = fake.baseline_calls()
         self.assertEqual(sorted((c[0], c[1]) for c in base),
                          sorted([(PY39, ("tests.test_a",)), (PY313, ("tests.test_a",)),
-                                 (PY39, ("tests.test_c",)), (PY313, ("tests.test_c",))]))
+                                 (PY39, ("tests.test_a", "tests.test_c")), (PY313, ("tests.test_a", "tests.test_c"))]))
         first_mut = min(i for i, c in enumerate(fake.calls) if c[2] != fake.pristine)
         self.assertTrue(all(c[2] == fake.pristine for c in fake.calls[:first_mut]))
         self.assertEqual(len(base), 4)
@@ -1736,6 +1757,309 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bint\(", src)), 1)  # the one int() of a --parts/--part/--timeout value, after NUMBER
 
 
+# ---- final review: F1 (oracle import closure), F2 (baseline set), F3/F4 (G1), F5 (docstrings) ------------------------
+TEST_A_BODY = ("import unittest\n\nfrom src.a import add\n\n\nclass T(unittest.TestCase):\n"
+               "    def test_add(self):\n        self.assertEqual(add(1, 2), 3)\n")
+
+
+class ImportClosureTest(Fx):  # F-20261126-5nhg (T6: a mutant of the oracle is refused)
+    FORMS = {  # how the killing module tests/test_a.py names tests/test_lib.py
+        "from tests import x": "from tests import test_lib\n",
+        "from tests.x import y": "from tests.test_lib import VALUE\n",
+        "import tests.x": "import tests.test_lib\n",
+        "import tests.x as y": "import tests.test_lib as lib\n",
+        "from . import x": "from . import test_lib\n",
+        "from .x import y": "from .test_lib import VALUE\n",
+        "import_module literal": "import importlib\nimportlib.import_module('tests.test_lib')\n",
+        "__import__ literal": "__import__('tests.test_lib')\n",
+        "inside a function": "def f():\n    from tests import test_lib\n",
+        "two names on one line": "from tests import test_c, test_lib\n",
+    }
+
+    def mutate(self, files, path="tests/test_lib.py", old="VALUE = 1", new="VALUE = 2"):
+        base = dict({"tests/test_lib.py": "VALUE = 1\n"}, **files)
+        self.repo({TABLE: table({"x1": (path, old, new)}, {"x1": ("tests.test_a",)})}, base_extra=base)
+        code, out, err, fake = self.go()
+        return code, lines_of(out).get("x1"), fake
+
+    def test_each_form_of_import_protects_the_module(self):  # F1: one test per member of the class
+        for label, line in self.FORMS.items():
+            with self.subTest(label):
+                code, line_of, fake = self.mutate({"tests/test_a.py": line + TEST_A_BODY})
+                self.assertEqual((code, line_of[0]), (1, "ERROR"), (label, line_of))
+                self.assertIn("is protected", line_of[1], label)
+                self.assertEqual(fake.calls, [], label)  # nothing run, nothing mutated
+                self.assertEqual(self.status(), "")
+
+    def test_a_module_imported_through_a_support_module_or_a_chain_is_protected(self):  # F1: transitive
+        chain = {"tests/test_a.py": "from tests import support_fx\n" + TEST_A_BODY, "tests/support_fx.py": "from tests import test_lib\n"}
+        code, line_of, fake = self.mutate(chain)
+        self.assertEqual((code, line_of[0]), (1, "ERROR"), line_of)
+        longer = {"tests/test_a.py": "from tests import test_mid\n" + TEST_A_BODY, "tests/test_mid.py": "from tests import test_lib\n"}
+        code, line_of, fake = self.mutate(longer)
+        self.assertEqual((code, line_of[0]), (1, "ERROR"), line_of)
+
+    def test_what_is_not_an_import_or_not_a_test_module_stays_allowed(self):  # F1: controls and the stated exceptions
+        cases = {
+            "imported by nothing": ({"tests/test_a.py": TEST_A_BODY}, "tests/test_lib.py"),
+            "named in a comment": ({"tests/test_a.py": "# from tests import test_lib\n" + TEST_A_BODY}, "tests/test_lib.py"),
+            "named in a string": ({"tests/test_a.py": "X = 'tests.test_lib'\n" + TEST_A_BODY}, "tests/test_lib.py"),
+            "a name built at run time": ({"tests/test_a.py": "import importlib\nimportlib.import_module('tests.' + 'test_lib')\n"
+                                          + TEST_A_BODY}, "tests/test_lib.py"),
+            "a support module": ({"tests/test_a.py": "from tests import helpers\n" + TEST_A_BODY, "tests/helpers.py": "VALUE = 1\n"},
+                                 "tests/helpers.py"),
+            "ci_shards": ({"tests/test_a.py": "from tests import ci_shards\n" + TEST_A_BODY, "tests/ci_shards.py": "VALUE = 1\n"},
+                          "tests/ci_shards.py"),
+            "a fixture file": ({"tests/test_a.py": TEST_A_BODY, "tests/fixtures/f.py": "VALUE = 1\n"}, "tests/fixtures/f.py"),
+        }
+        for label, (files, path) in cases.items():
+            with self.subTest(label):
+                code, line_of, fake = self.mutate(files, path=path)
+                self.assertEqual((code, line_of[0]), (0, "SURVIVED"), (label, line_of))
+
+    def test_an_imported_module_that_cannot_be_read_does_not_stop_the_run(self):  # F1: unreadable or unparsable source
+        files = {"tests/test_a.py": "from tests import test_lib\n" + TEST_A_BODY, "tests/test_lib.py": "def (:\n"}
+        code, line_of, fake = self.mutate(files, old="def (:")
+        self.assertEqual((code, line_of[0]), (1, "ERROR"), line_of)  # it is itself protected
+        self.assertIn("is protected", line_of[1])
+
+    def test_the_tests_package_file_is_protected_once_it_has_content(self):  # F1: tests/__init__.py
+        files = {"tests/__init__.py": "VALUE = 1\n"}
+        code, line_of, fake = self.mutate(files, path="tests/__init__.py")
+        self.assertEqual((code, line_of[0]), (1, "ERROR"), line_of)
+        self.assertIn("is protected", line_of[1])
+
+    def test_the_case_folded_path_of_an_imported_module_is_protected(self):  # F1
+        files = {"tests/test_a.py": "from tests import test_lib\n" + TEST_A_BODY}
+        code, line_of, fake = self.mutate(files, path="TESTS/TEST_LIB.PY")
+        self.assertEqual((code, line_of[0]), (1, "ERROR"), line_of)
+        self.assertIn("is protected", line_of[1])
+
+
+class BaselineTupleTest(Fx):  # F-20261126-rw5k (T9: the named modules fail before any mutation)
+    PAIR = ("tests.test_a", "tests.test_b")
+
+    def pair_fails(self, py, mods, mutated):
+        return FAIL if tuple(mods) == self.PAIR or tuple(mods) == self.PAIR[::-1] else PASS
+
+    def test_an_id_whose_modules_fail_together_is_an_error_and_is_not_mutated(self):  # F2
+        m = {"noop": ("src/a.py", "a + b", "a - b"), "ok": ("src/b.py", "'two'", "'three'")}
+        kill = {"noop": self.PAIR, "ok": ("tests.test_b",)}
+        self.repo({TABLE: table(m, kill)})
+        fake = Fake(self.root, self.pair_fails)
+        code, out, err = self.call(self.argv(), execute=fake)
+        got = lines_of(out)
+        self.assertEqual((code, got["noop"][0], got["ok"][0]), (1, "ERROR", "SURVIVED"), out)
+        self.assertIn("baseline failed: tests.test_a tests.test_b failed on", got["noop"][1])
+        self.assertEqual([c[1] for c in fake.mutated_calls()], [("tests.test_b",)] * 2)  # noop was never mutated
+
+    def test_each_distinct_tuple_is_baselined_once_exactly_as_it_is_run(self):  # F2: same order, no union, no split
+        m = {"a1": ("src/a.py", "a + b", "a - b"), "a2": ("src/b.py", "'two'", "'three'"), "a3": ("src/b.py", "'one'", "'uno'")}
+        kill = {"a1": ("tests.test_b", "tests.test_a"), "a2": ("tests.test_b", "tests.test_a"), "a3": ("tests.test_c",)}
+        self.repo({TABLE: table(m, kill)})
+        fake = Fake(self.root, watch=["src/a.py", "src/b.py"])
+        code, out, err = self.call(self.argv(), execute=fake)
+        self.assertEqual(code, 0, out)
+        baselines = sorted({c[1] for c in fake.baseline_calls()})
+        self.assertEqual(baselines, [("tests.test_b", "tests.test_a"), ("tests.test_c",)])
+        self.assertEqual(len(fake.baseline_calls()), 4)  # two tuples, two interpreters: a shared tuple runs once
+
+    def test_a_failing_tuple_does_not_hide_a_passing_one(self):  # F2: the tuples are independent
+        m = {"p1": ("src/a.py", "a + b", "a - b"), "p2": ("src/b.py", "'two'", "'three'")}
+        kill = {"p1": self.PAIR, "p2": self.PAIR[::-1]}
+        self.repo({TABLE: table(m, kill)})
+        fake = Fake(self.root, lambda py, mods, mutated: FAIL if tuple(mods) == self.PAIR else PASS)
+        code, out, err = self.call(self.argv(), execute=fake)
+        self.assertEqual((code, verdicts(out)), (1, {"p1": "ERROR", "p2": "SURVIVED"}), out)
+
+
+class JobEnvTest(Fx):  # F-20261126-zzcq (G1: a job index outside 1..parts) and F-20261126-y8hc (G1, generated)
+    IDS = ["s%d" % i for i in range(1, 7)]
+    LINE_TEXT = "%s: KILLED | 3.9 Ran 3 tests FAILED ; 3.13 Ran 3 tests FAILED"
+
+    def setup_repo(self):
+        m = {i: ("src/a.py", "a + b", "a - b") for i in self.IDS}
+        self.repo({TABLE: table(m, {i: ("tests.test_a",) for i in self.IDS})})
+
+    def valid_env(self, parts):
+        env = {}
+        blocks = ci_mutants.split([(TABLE, i) for i in self.IDS], parts)
+        for k, block in enumerate(blocks, 1):
+            env["MUTANT_RESULT_%d" % k] = "success"
+            env["MUTANT_LINES_%d" % k] = "\n".join(self.LINE_TEXT % i for _, i in block)
+        return env
+
+    def summary(self, parts, env):
+        return self.call(self.argv("summary", parts=parts), env=env)
+
+    def test_the_valid_environment_passes(self):  # G1 control
+        self.setup_repo()
+        for parts in (1, 2, 3):
+            code, out, err = self.summary(parts, self.valid_env(parts))
+            self.assertEqual(code, 0, (parts, out))
+
+    def test_a_job_index_outside_the_closed_grammar_fails_the_summary(self):  # F3: one subtest per member
+        self.setup_repo()
+        bad = {"k=0": "0", "k>parts": "3", "k far past parts": "99", "leading zero": "01", "double zero": "00",
+               "non-ASCII digit": "٣", "full-width digit": "１", "empty": "", "sign": "+1", "negative": "-1",
+               "space": " 1", "trailing newline": "1\n", "decimal point": "1.0", "text": "x"}
+        for label, suffix in bad.items():
+            for kind in ("RESULT", "LINES"):
+                with self.subTest((label, kind)):
+                    env = self.valid_env(2)
+                    env["MUTANT_%s_%s" % (kind, suffix)] = "failure" if kind == "RESULT" else "g1: ERROR | y\nghost: TIMEOUT | z"
+                    code, out, err = self.summary(2, env)
+                    self.assertEqual(code, 1, (label, out))
+                    self.assertRegex(out, r"(?m)^FAIL env 'MUTANT_%s_.*': job index .* is outside 1\.\.2$" % kind)
+        env = self.valid_env(2)  # names that only look similar are not job names
+        env.update({"MUTANT_X_9": "1", "XMUTANT_RESULT_9": "1", "mutant_result_9": "1", "MUTANT_RESULTS_9": "1"})
+        self.assertEqual(self.summary(2, env)[0], 0)
+
+    SEPARATORS = ["\x85", " ", " ", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\r"]
+    RESULTS = ["success", "failure", "cancelled", "skipped", "", "Success", "success ", " success", "success\n", "\x85",
+               "ok", " ", "null", "SUCCESS", "success\x00x", "‮success"]
+    PATHS = ["g out", "g'out", "g\"out", "géout", "g\nout", "g;out", "g$(x)out", "-gout", "g\ud800out"]
+
+    def mutations(self, rng, parts):
+        """(label, env, expected exit code) of one generated case, built from the valid environment by one change whose
+        verdict the closed grammar fixes: a part's job result must be exactly ``success``, its lines must be exactly the
+        part's ids one per line (blank lines allowed), and every job-looking name must carry a canonical index 1..parts."""
+        env = self.valid_env(parts)
+        k = rng.randint(1, parts)
+        kind = rng.choice(["none", "result", "result-missing", "lines-text", "lines-missing", "lines-empty", "blank-lines",
+                           "separator-in-line", "extra-name", "duplicate-line", "unknown-id"])
+        if kind == "none":
+            return kind, env, 0
+        if kind == "result":
+            text = rng.choice(self.RESULTS)
+            env["MUTANT_RESULT_%d" % k] = text
+            return "%s=%r" % (kind, text), env, 0 if text == "success" else 1
+        if kind == "result-missing":
+            del env["MUTANT_RESULT_%d" % k]
+            return kind, env, 1
+        if kind == "lines-text":
+            text = "".join(rng.choice("abcxyz: |\t\x7f\x01é퟿ \x85-_.") for _ in range(rng.randint(1, 40)))
+            env["MUTANT_LINES_%d" % k] = text
+            return "%s=%r" % (kind, text), env, 1
+        if kind == "lines-missing":
+            del env["MUTANT_LINES_%d" % k]
+            return kind, env, 1
+        if kind == "lines-empty":
+            env["MUTANT_LINES_%d" % k] = ""
+            return kind, env, 1
+        if kind == "blank-lines":
+            env["MUTANT_LINES_%d" % k] = "\n" * rng.randint(0, 3) + env["MUTANT_LINES_%d" % k].replace("\n", "\n" * rng.randint(1, 3)) + "\n \n"
+            return kind, env, 0
+        if kind == "separator-in-line":  # splitlines cuts the line: the second piece is no line of the grammar
+            sep = rng.choice(self.SEPARATORS)
+            env["MUTANT_LINES_%d" % k] = env["MUTANT_LINES_%d" % k] + sep + "tail"
+            return "%s=%r" % (kind, sep), env, 1
+        if kind == "extra-name":
+            suffix = rng.choice(["0", str(parts + 1), "0%d" % k, "00", "٣", "", "1.0", "-1", " 1", "x"] + [str(parts + rng.randint(1, 50))])
+            name = "MUTANT_%s_%s" % (rng.choice(["RESULT", "LINES"]), suffix)
+            env[name] = rng.choice(["success", "x"])
+            return "%s=%r" % (kind, name), env, 1
+        if kind == "duplicate-line":
+            first = env["MUTANT_LINES_%d" % k].splitlines()[0]
+            env["MUTANT_LINES_%d" % k] += "\n" + first
+            return kind, env, 1
+        env["MUTANT_LINES_%d" % k] += "\nghost: KILLED | x"  # unknown-id
+        return kind, env, 1
+
+    def test_generated_environments_get_the_verdict_of_the_closed_grammar(self):  # G1: seeded generator, through main()
+        seed = 20261126
+        self.setup_repo()
+        rng = random.Random(seed)
+        for n in range(150):
+            parts = rng.choice([1, 2, 3])
+            label, env, want = self.mutations(rng, parts)
+            code, out, err = self.summary(parts, env)
+            self.assertEqual(code, want, "seed=%d case=%d parts=%d %s\n%s" % (seed, n, parts, label, out))
+            self.assertEqual(err, "", "seed=%d case=%d" % (seed, n))
+
+    def test_generated_github_output_values_get_the_verdict_of_the_closed_grammar(self):  # G1: seeded, through main()
+        seed = 20261126
+        self.repo()
+        rng = random.Random(seed)
+        kinds = ["missing", "empty", "relative", "directory", "fifo", "fifo-with-reader", "symlink", "dangling-symlink",
+                 "new-file", "existing-file", "nul"]
+        fds = []
+        self.addCleanup(lambda: [os.close(fd) for fd in fds])
+        for n in range(60):
+            kind = rng.choice(kinds)
+            box = os.path.join(self.tmp, "out%d" % n)  # the sandbox of the case: every path below it
+            os.mkdir(box)
+            name = rng.choice(self.PATHS)
+            try:
+                path = os.path.join(box, name)
+                path.encode("utf-8")
+            except UnicodeEncodeError:
+                path = os.path.join(box, "plain")
+            target = os.path.join(box, "target")
+            with open(target, "wb") as fh:
+                fh.write(b"KEEP\n")
+            env, want, check = {}, 1, None
+            if kind == "missing":
+                want = 0
+            elif kind == "empty":
+                env["GITHUB_OUTPUT"] = ""
+            elif kind == "relative":
+                env["GITHUB_OUTPUT"] = rng.choice(["out.txt", "./out.txt", "a/b.txt", name, "../x"])
+            elif kind == "nul":
+                env["GITHUB_OUTPUT"] = path + "\0x"
+            elif kind == "directory":
+                os.mkdir(path)
+                env["GITHUB_OUTPUT"] = path
+            elif kind in ("fifo", "fifo-with-reader"):
+                os.mkfifo(path)
+                if kind == "fifo-with-reader":
+                    fds.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
+                env["GITHUB_OUTPUT"] = path
+            elif kind == "symlink":
+                os.symlink(target, path)
+                env["GITHUB_OUTPUT"] = path
+            elif kind == "dangling-symlink":
+                os.symlink(os.path.join(box, "nothing"), path)
+                env["GITHUB_OUTPUT"] = path
+            else:
+                if kind == "existing-file":
+                    with open(path, "wb") as fh:
+                        fh.write(b"BEFORE\n")
+                env["GITHUB_OUTPUT"] = path
+                want = 0
+            before = os.getcwd()
+            os.chdir(box)  # a relative GITHUB_OUTPUT (and "../x") resolves inside this case's sandbox even if it is accepted
+            try:
+                code, out, err = self.call(self.argv(), execute=Fake(self.root), env=env)
+            finally:
+                os.chdir(before)
+            why = "seed=%d case=%d kind=%s path=%r\n%s" % (seed, n, kind, env.get("GITHUB_OUTPUT"), out)
+            self.assertEqual(code, want, why)
+            if want:
+                self.assertRegex(out, r"(?m)^ERROR output: ", why)
+            if kind in ("symlink", "dangling-symlink"):
+                with open(target, "rb") as fh:
+                    self.assertEqual(fh.read(), b"KEEP\n", why)  # nothing written through the link
+                self.assertFalse(os.path.exists(os.path.join(box, "nothing")), why)
+            if kind in ("new-file", "existing-file"):
+                with open(path, "rb") as fh:
+                    text = fh.read().decode("utf-8")
+                self.assertTrue(text.startswith("BEFORE\n" if kind == "existing-file" else "lines<<ci_mutants_"), why)
+                self.assertIn("i1: SURVIVED", text, why)
+            if kind == "relative":
+                self.assertEqual(self.status(), "", why)  # nothing was written below the repository root either
+            self.assertEqual(self.status(), "", why)
+
+
+class DocstringTest(unittest.TestCase):  # F-20261126-pwu6: the docs of the path rule name the link-count refusal
+    def test_the_module_docstring_and_regular_problem_name_the_hard_link_refusal(self):  # F5
+        doc = " ".join(ci_mutants.__doc__.split())
+        rule = doc[doc.index("A path is relative"):doc.index("must occur exactly once")]
+        self.assertIn("exactly one hard link", rule)
+        self.assertIn("exactly one hard link", " ".join(ci_mutants._regular_problem.__doc__.split()))
+        self.assertIn("exactly one hard link", " ".join(ci_mutants.open_target.__doc__.split()))  # already stated there
+
+
 # ---- E0-E4: the interface of tests/ci_mutants.py (stream-common :63 exact types; Q-CI5-1 (A) interface names) ----------
 class StrSub(str):
     pass
@@ -1786,11 +2110,16 @@ INTERNAL_NAMES = ("Refused Stop show clean number parse git tracked_files tree_p
                   "regular_problem Row literal_assignments read_literals load_table gather run_unittest Result run_pair "
                   "protected_reason path_problem Unsafe restore one_row run_rows write_output say refusals command_split "
                   "command_run command_summary").split()
-PRIVATE_NAMES = {"_" + name for name in INTERNAL_NAMES}
+# Private functions added after the rename by the final-review fixes (F-20261126-5nhg: the import closure of the oracle).
+ADDED_PRIVATE = {"_import_closure"}
+PRIVATE_NAMES = {"_" + name for name in INTERNAL_NAMES} | ADDED_PRIVATE
 # The private names of ci_mutants that this test module itself uses, each with the reason (E0: "nothing outside the module
 # uses a private name" has this one exception, because the tests name the refusal class of E2-E4).
 PRIVATE_USES_HERE = {"_Refused": "the named error of split, open_target and count_problem: a test pins the class, not a "
-                                 "TypeError or ValueError raised by something else"}
+                                 "TypeError or ValueError raised by something else",
+                     "_import_closure": "named as a string in ADDED_PRIVATE, the hand-written expected set of E0 (not called)",
+                     "_regular_problem":"F5: a test pins the text of this function's docstring (the link-count clause); a "
+                                         "docstring cannot be read through a public name"}
 
 
 def private_uses(text, names, python=True):
@@ -1824,7 +2153,7 @@ class InterfaceNamesTest(unittest.TestCase):  # E0
         self.assertEqual(public, PUBLIC_NAMES)
         self.assertEqual(len(names), len(set(names)))  # no name defined twice
         self.assertEqual(len(INTERNAL_NAMES), 33)
-        self.assertEqual(len(PRIVATE_NAMES), 33)
+        self.assertEqual(len(PRIVATE_NAMES), 34)
 
     def test_the_generated_private_list_equals_the_expected_set(self):  # E0
         self.assertEqual(self.module_names()[1], PRIVATE_NAMES)
@@ -1837,6 +2166,7 @@ class InterfaceNamesTest(unittest.TestCase):  # E0
             self.assertTrue(hasattr(ci_mutants, name), name)  # renamed, not removed
         for name in INTERNAL_NAMES:
             self.assertFalse(hasattr(ci_mutants, name), name)  # no old public name is left
+        self.assertFalse(hasattr(ci_mutants, "import_closure"))
 
     def test_the_scanner_finds_each_form_of_use(self):  # E0: the contradiction of the scan below
         names = PRIVATE_NAMES
