@@ -1385,6 +1385,35 @@ class InheritedEnvTest(Base):
         self.assertGreater(len({repr(self.draw(s, pool)) for s in self.SEEDS}), 8)
 
 
+class TranscriptCiteTest(unittest.TestCase):
+    """F-20261126-i27y: a ``path:line`` cite in a CI2 mutation transcript names the line the mutant changed, on this head."""
+    MUTATIONS = os.path.join(REPO, ".strict-delivery", "state", "plans", "2026-10-31-strict-delivery-framework", "mutations")
+    FINDINGS = ("hqt5", "765j", "ix2g", "fiw5", "zgnj")
+    CITES = {"F-20261125-fiw5.md": [("tests/helpers.py", "if os.path.isdir(src) and not os.path.islink(src):")]}
+
+    def cites(self, text):
+        return re.findall(r"\b((?:tests|gates)/[A-Za-z0-9_/.]+\.py):([0-9]+)\b", text)
+
+    def test_every_cite_in_the_ci2_transcripts_is_listed_and_points_at_its_line(self):
+        found = {}
+        for fid in self.FINDINGS:
+            name = "F-20261125-%s.md" % fid
+            with open(os.path.join(self.MUTATIONS, name), encoding="utf-8") as fh:
+                found[name] = self.cites(fh.read())
+        self.assertEqual({k: [c[0] for c in v] for k, v in found.items() if v},
+                         {k: [c[0] for c in v] for k, v in self.CITES.items()})  # no unlisted cite
+        for name, wanted in self.CITES.items():
+            for (path, line), (want_path, text) in zip(found[name], wanted):
+                with self.subTest(transcript=name, cite="%s:%s" % (path, line)):
+                    with open(os.path.join(REPO, path), encoding="utf-8") as fh:
+                        lines = fh.read().split("\n")
+                    self.assertIn(text, lines[int(line) - 1])
+
+    def test_scan_teeth(self):
+        self.assertEqual(self.cites("x tests/helpers.py:218; y gates/lib/a.py:3 and tests/b.py 4"),
+                         [("tests/helpers.py", "218"), ("gates/lib/a.py", "3")])
+
+
 class MemberOracleTest(Base):
     """Row L2: every oracle in tests/ that observes ``.git`` bytes, mtimes or the index across a probe, found by
     grep (mtime, st_mtime, getmtime, index, "writes nothing", snapshot); one test per member. A member is
