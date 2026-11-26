@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-ypgc
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-4
 severity: MEDIUM
 class: "error paths that pass: pre_bash.py:50 current_branch GateError, pre_bash.py:84 and :92 gitinfo.aliases GateError, bashpolicy.py:208-209 is_git_write empty-word GateError, pre_bash.py:131-133 the swallow"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 2d1f85c53487a66de138aa26602fd218990186f2
+  - 2d1f85c53487a66de138aa26602fd218990186f2:tests/test_hook_bash.py
 history:
   - status: open
     sha: 9cdf3697606f00a0908453466a22861766ac7fbf
     by: stream-hooks-3
+  - status: planned
+    sha: 2d1f85c53487a66de138aa26602fd218990186f2
+    by: implementer
+  - status: in-progress
+    sha: 2d1f85c53487a66de138aa26602fd218990186f2
+    by: implementer
+  - status: fixed-unpinned
+    sha: 2d1f85c53487a66de138aa26602fd218990186f2
+    by: implementer
 review_round: 1
 caused_by_change: true
 dimension: fail closed on internal error

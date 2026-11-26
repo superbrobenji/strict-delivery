@@ -455,16 +455,19 @@ class TargetTest(HookCase):
         fifo = os.path.join(self.tmp, "fifo")
         os.mkfifo(fifo)
         agent = self.agent(W)
-        start = time.time()
-        self.refused(self.B("git -C %s commit -m m" % fifo, agent=agent), "target")
-        self.refused(self.B("git -C /dev/null commit -m m", agent=agent), "target")
-        self.assertLess(time.time() - start, 30)
+        for command in ("git -C %s commit -m m" % fifo, "git -C /dev/null commit -m m"):
+            start = time.time()
+            self.refused(self.B(command, agent=agent), "target")
+            self.assertLess(time.time() - start, 5, command)   # HR3: returns within 5 s
         os.rename(os.path.join(self.R, ".strict-delivery", "config.yml"), os.path.join(self.tmp, "config.moved"))
         os.mkfifo(os.path.join(self.R, ".strict-delivery", "config.yml"))
         start = time.time()
         r = self.B("git commit -m m")
-        self.assertLess(time.time() - start, 30)
-        self.assertIn(r.returncode, (0, 2))
+        self.assertLess(time.time() - start, 5)
+        self.refused(r, "config", absent=("unstaged", "gates"))   # HR3: the config.load verdict (cfg_error) refuses the commit
+        self.assertIn("FAIL hook.bash.config: .strict-delivery/config.yml: cannot read file (not a regular file); ",
+                      r.stderr)
+        self.assertFalse(self.gates_ran())
 
     def test_hardening_parent_symlink(self):   # HR4
         W = self.worktree("W", "-b", "wb")
@@ -854,8 +857,8 @@ class CommitShapeTest(HookCase):
         r = self.B("git commit -m m")
         self.refused(r, "git")
         self.assertFalse(self.gates_ran())
-        for command in ("ls", "git status"):
-            self.passes(self.B(command), command)
+        self.passes(self.B("ls"))
+        self.refused(self.B("git status"), "git")   # D3-1 narrows CD2's "other commands pass" to commands with no git token
 
     def test_raising_handler_stand_in(self):   # V3
         import builtins
@@ -1088,7 +1091,12 @@ class TreeStateTest(HookCase):
         r = self.B("git commit -m m", cwd=U)
         self.assertNotIn("hook.bash.unstaged", r.stderr)
         self.assertNotIn("FAIL hook.PreToolUse", r.stderr)
-        self.assertIn(r.returncode, (0, 2))
+        # CU19 "unstaged_paths works on an unborn branch ... no raise": no `git diff` failure line and no unstaged line;
+        # the gates then run on the unborn tree and their own lines (block 2: merge-base needs a commit) refuse, exit 2
+        self.refused(r, "gates", absent=("unstaged", "git"))
+        self.assertNotIn("git diff", r.stderr)
+        self.assertEqual([ln.split(":")[0] for ln in r.stderr.splitlines()], ["FAIL hook.bash.gates"] * 3)
+        self.assertIn("FAIL hook.bash.gates: register.input: git merge-base failed (exit 128)", r.stderr)
 
 
 class GatesTest(HookCase):
@@ -1156,6 +1164,224 @@ class GatesTest(HookCase):
         self.passes(self.B("git commit -m m"))
         self.assertTrue(self.gates_ran())
         self.assertEqual(git(self.R, "status", "--porcelain", "--untracked-files=all"), before)
+
+
+CALLERS = ("session", "agent-R", "agent-W", "agent-nested")
+CWDS = ("R", "nested")
+TARGETS = ("R", "W", "nested", "nested/sub", "X", "/")
+
+
+def cross_cells():
+    """Every cell of the caller x target x cwd product (HR5, HR7, TR21, TR2-TR4, TR11, TR12): ``(caller, cwd, form, target)``
+    with ``form`` in ``none`` (no named directory: the target is the cwd's top level), ``-C`` and ``cd`` (``cd <dir> &&``).
+    The expected verdict is written by hand in ``cross_expected`` from the table sentences: a session may write in the top
+    level of its cwd; a subagent only in its bound worktree; the top level of ``nested/sub`` is ``nested``; ``/`` has none."""
+    cells = []
+    for caller in CALLERS:
+        for cwd in CWDS:
+            cells.append((caller, cwd, "none", "cwd"))
+            for form in ("-C", "cd"):
+                for target in TARGETS:
+                    cells.append((caller, cwd, form, target))
+    return cells
+
+
+def cross_expected(cell):
+    """``(allowed, top)``: whether the cell's write is allowed, and the top level label the refusal names (``None`` for ``/``)."""
+    caller, cwd, form, target = cell
+    top = {"cwd": cwd, "R": "R", "W": "W", "nested": "nested", "nested/sub": "nested", "X": "X", "/": None}[target]
+    allowed = {"session": cwd, "agent-R": "R", "agent-W": "W", "agent-nested": "nested"}[caller]
+    return top == allowed, top
+
+
+class CrossProductTest(HookCase):
+    """R1-9: the caller x target x cwd product, every cell (owner rule 2026-11-24)."""
+
+    def build(self):
+        self.W = self.worktree("W", "-b", "wb")
+        self.nested = os.path.join(self.R, "nested")
+        git(self.R, "worktree", "add", "-q", "-b", "nb", self.nested)
+        os.mkdir(os.path.join(self.nested, "sub"))
+        self.X = os.path.join(self.work, "X")
+        os.mkdir(self.X)
+        make_repo(self.X)
+        self.paths = {"R": self.R, "W": self.W, "nested": self.nested, "nested/sub": os.path.join(self.nested, "sub"),
+                      "X": self.X, "/": "/"}
+        self.callers = {"session": None, "agent-R": self.agent(self.R), "agent-W": self.agent(self.W),
+                        "agent-nested": self.agent(self.nested)}
+
+    def command(self, form, target):
+        if form == "none":
+            return "git tag x"
+        return "git -C %s tag x" % self.paths[target] if form == "-C" else "cd %s && git tag x" % self.paths[target]
+
+    def test_every_cell(self):   # HR5, HR7, TR21 (main session and subagent), TR2-TR4, TR11, TR12
+        self.build()
+        cells = cross_cells()
+        self.assertEqual(len(cells), 4 * 2 * (1 + 2 * 6))
+        counts = {True: 0, False: 0}
+        for cell in cells:
+            caller, cwd, form, target = cell
+            allowed, top = cross_expected(cell)
+            counts[allowed] += 1
+            with self.subTest(cell=cell):
+                r = self.B(self.command(form, target), cwd=self.paths[cwd], agent=self.callers[caller])
+                if allowed:
+                    self.passes(r)
+                else:
+                    self.refused(r, "target")
+                    if top is None:
+                        self.assertIn("FAIL hook.bash.target: / has no git top level; ", r.stderr)
+                    else:
+                        self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
+                                      % (self.paths[top], self.paths[cross_expected_allowed(caller, cwd)]), r.stderr)
+        self.assertEqual(counts, {True: 26, False: 78})   # the cells that pass are exactly the ones the table names
+
+
+def cross_expected_allowed(caller, cwd):
+    return {"session": cwd, "agent-R": "R", "agent-W": "W", "agent-nested": "nested"}[caller]
+
+
+class QuoteSplitTest(HookCase):
+    """R1-1 (ruling R1: every check reads the raw text and the quote-removed words) and R1-2 (alias resolution of a
+    non-plain write): each refused as its unsplit form is, through the hook."""
+
+    def setUp(self):
+        super().setUp()
+        self.W = self.worktree("W", "-b", "wb")
+        self.agent_w = self.agent(self.W)   # a subagent bound to W, its cwd the main checkout R (not allowed)
+        self.X = os.path.join(self.work, "X")
+        os.mkdir(self.X)
+        make_repo(self.X)
+
+    def same(self, split, plain, **kw):
+        a, b = self.B(split, **kw), self.B(plain, **kw)
+        self.refused(b, "target")
+        self.assertEqual((a.returncode, a.stdout, a.stderr), (b.returncode, b.stdout, b.stderr), split)
+        return a
+
+    def test_write_word_split(self):   # R1-1 member: _write_words
+        for split, plain in (('git re""set --hard; ls', "git reset --hard; ls"), ("git t'a'g x; ls", "git tag x; ls"),
+                             ('git wor""ktree list; ls', "git worktree list; ls")):
+            with self.subTest(command=split):
+                r = self.same(split, plain, agent=self.agent_w)
+                self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
+                              % (self.R, self.W), r.stderr)
+
+    def test_git_word_split(self):   # R1-1 member: the git token
+        self.same('gi""t reset --hard; ls', "git reset --hard; ls", agent=self.agent_w)
+        self.same("'g'it reset --hard; ls", "git reset --hard; ls", agent=self.agent_w)
+
+    def test_target_tokens_split(self):   # R1-1 members: the -C, --git-dir, --work-tree and cd tokens
+        for split, plain in (('git -""C %s reset --hard; ls' % self.X, "git -C %s reset --hard; ls" % self.X),
+                             ('git --git""-dir=%s reset --hard; ls' % self.X, "git --git-dir=%s reset --hard; ls" % self.X),
+                             ('git --work""-tree=%s reset --hard; ls' % self.X, "git --work-tree=%s reset --hard; ls" % self.X),
+                             ('c""d %s; git reset --hard' % self.X, "cd %s; git reset --hard" % self.X)):
+            with self.subTest(command=split):
+                r = self.same(split, plain)   # the main session: cwd R is allowed, the named directory decides
+                self.assertIn("names its worktree only as one plain command", r.stderr)
+
+    def test_alias_to_write_non_plain(self):   # R1-2 (GW11: alias resolved before the membership test, plain or not)
+        git(self.R, "config", "alias.rs", "reset --hard")
+        git(self.R, "config", "alias.rr", "rs")
+        git(self.R, "config", "alias.st", "status")
+        for plain, unsplit in (("git rs; ls", "git reset --hard; ls"), ("git RS; ls", "git reset --hard; ls"),
+                               ("git rr; ls", "git reset --hard; ls"), ('git r""s; ls', "git reset --hard; ls"),
+                               ("ls && git rs", "ls && git reset --hard")):
+            with self.subTest(command=plain):
+                self.same(plain, unsplit, agent=self.agent_w)
+        self.passes(self.B("git st; ls", agent=self.agent_w))   # an alias of a read stays a pass
+        self.passes(self.B("git st; ls"))
+
+    def test_alias_to_write_option_non_plain(self):   # R1-2 (branch, checkout and switch write options through an alias)
+        for name, value in (("bd", "branch -D"), ("cb", "checkout -b"), ("sc", "switch -c"), ("bf", "branch --force")):
+            git(self.R, "config", "alias." + name, value)
+        git(self.R, "config", "alias.bl", "branch --list")
+        for name in ("bd", "cb", "sc", "bf"):
+            with self.subTest(alias=name):
+                r = self.B("git %s x; ls" % name, agent=self.agent_w)
+                self.refused(r, "target")
+                self.assertIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.R, self.W), r.stderr)
+        self.passes(self.B("git bl; ls", agent=self.agent_w))
+
+    def test_alias_to_write_target_tokens_non_plain(self):   # R1-2 with R1-1: the -C refusal reads the alias form too
+        git(self.R, "config", "alias.rs", "reset --hard")
+        r = self.B("git -C %s rs; ls" % self.X)
+        self.refused(r, "target")
+        self.assertIn("names its worktree only as one plain command", r.stderr)
+
+
+class ErrorPathTest(HookCase):
+    """R1-4 (decision D3-1): when the policy or the aliases cannot be read, a command holding a ``git`` token (raw or
+    quote-removed) is refused ``hook.bash.git`` with its way out; a command with no ``git`` token passes."""
+
+    WAY = "; run it with the ! prefix if you must, or ask the owner\n"
+
+    def bad_alias(self, root):
+        with open(os.path.join(root, ".git", "config"), "ab") as fh:
+            fh.write(b"[alias]\n\tbad = \xff\n")
+
+    def git_refused(self, r):
+        self.refused(r, "git")
+        self.assertEqual(len(r.stderr.splitlines()), 1, r.stderr)
+        self.assertTrue(r.stderr.startswith("FAIL hook.bash.git: "), r.stderr)
+        self.assertTrue(r.stderr.endswith(self.WAY), r.stderr)
+
+    def test_aliases_of_cwd_root_unreadable(self):   # :84 and the swallow at :131-133
+        self.bad_alias(self.R)
+        W = self.worktree("W", "-b", "wb")
+        agent = self.agent(W)
+        for command in ("git reset --hard", "git -C %s reset --hard" % W, "git status", "git log -1", "git tag x; ls",
+                        "cd %s && git status" % W):
+            with self.subTest(command=command):
+                self.git_refused(self.B(command, agent=agent))
+                self.git_refused(self.B(command))
+        for command in ("ls", "echo hello", "echo digit gitx", "true; false", "rm -f nothing"):
+            with self.subTest(command=command):
+                self.passes(self.B(command, agent=agent))
+                self.passes(self.B(command))
+
+    def test_git_token_read_quote_removed(self):   # R1-1 member: the git and commit tokens of the fallback
+        self.bad_alias(self.R)
+        for command in ('gi""t status', "g'i't commit -m m", 'git com""mit -m m', 'gi""t com""mit -m m', "'git' log",
+                        'gi""t reset --hard; ls', "GIT status", 'GI""T status'):   # the token is folded (CD4)
+            with self.subTest(command=command):
+                self.git_refused(self.B(command))
+        for command in ('echo gi""tx', "echo digit gitx", 'echo "xgit"'):
+            with self.subTest(command=command):
+                self.passes(self.B(command))
+
+    def test_aliases_of_target_root_unreadable(self):   # :92
+        X = os.path.join(self.work, "X")
+        os.mkdir(X)
+        make_repo(X)
+        self.bad_alias(X)
+        for command in ("git -C %s status" % X, "git -C %s reset --hard" % X, "cd %s && git status" % X):
+            with self.subTest(command=command):
+                self.git_refused(self.B(command))
+
+    def test_current_branch_unreadable(self):   # :50
+        env = self.failing_git_env('*symbolic-ref*) echo "fatal: injected" >&2; exit 128;;')
+        for command in ("git status", "git reset --hard", "git commit -m m"):
+            with self.subTest(command=command):
+                self.git_refused(self.B(command, env=env))
+        self.passes(self.B("ls", env=env))
+        self.passes(self.B("echo hello", env=env))
+
+    def test_empty_git_subcommand(self):   # bashpolicy is_git_write("") GateError, caught in pre_bash
+        for command in ("git ''", 'git "" status', "git '' reset --hard"):
+            with self.subTest(command=command):
+                self.git_refused(self.B(command))
+        self.passes(self.B("echo ''"))
+
+    def test_empty_alias_expansion_word(self):   # the same GateError reached through a non-plain alias
+        git(self.R, "config", "alias.em", "''")
+        self.git_refused(self.B("git em; ls"))
+
+    def test_other_text_refusals_still_listed(self):   # the refusal list is kept ahead of the git line
+        self.bad_alias(self.R)
+        r = self.B("git status --no-verify")
+        self.refused(r, "bypass.no-verify", "git")
 
 
 if __name__ == "__main__":

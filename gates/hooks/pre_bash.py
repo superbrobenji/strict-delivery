@@ -75,12 +75,31 @@ def _named_top(ctx: HookContext, named: Optional[str]) -> Optional[str]:
         return None
 
 
-def _write_words(text: str) -> bool:
-    return any(shellscan.token_in(text, w) for w in GIT_WRITES)
+def _views(command: str) -> tuple:
+    """The raw text and the space-joined quote-removed words (ruling R1: every text check reads both)."""
+    return command, " ".join(shellscan.scan(command).words)
+
+
+def _has(views: tuple, word: str, casefold: bool = False) -> bool:
+    return any(shellscan.token_in(v, word, casefold) for v in views)
+
+
+def _write_words(views: tuple, aliases: dict) -> bool:
+    """Whether the text names a git write: a ``GIT_WRITES`` token, or an alias that resolves to a write or a write option
+    (table GW11: "the subcommand is alias-resolved before the membership test", plain or not)."""
+    if any(_has(views, w) for w in GIT_WRITES):
+        return True
+    for name in aliases:
+        if _has(views, name, True):
+            call = git_call(shellscan.scan("git " + name), aliases)
+            if call is not None and call.sub is not None and is_git_write(call.sub, call.args):
+                return True
+    return False
 
 
 def _git_lines(ctx: HookContext, command: str) -> list:
     scan = shellscan.scan(command)
+    views = _views(command)
     aliases = dict(gitinfo.aliases(ctx.root))
     p0 = _policy(ctx, ctx.root, aliases)
     call = git_call(scan, aliases) if scan.plain else None
@@ -97,14 +116,14 @@ def _git_lines(ctx: HookContext, command: str) -> list:
     if scan.plain:
         is_write = call is not None and call.sub is not None and is_git_write(call.sub, call.args)
     else:
-        is_write = shellscan.token_in(command, "git", True) and _write_words(command)
+        is_write = _has(views, "git", True) and _write_words(views, aliases)
     if not (is_commit or is_write):
         return []
     run = _run_gates(ctx)
     if not scan.plain:
         if is_commit:
             return commit_refusals(command, p0, run)
-        if any(shellscan.token_in(command, w) for w in ("-C", "--git-dir", "--work-tree", "cd")):
+        if any(_has(views, w) for w in ("-C", "--git-dir", "--work-tree", "cd")):
             return ["FAIL hook.bash.target: a git write names its worktree only as one plain command "
                     "(git -C <dir> ... or cd <dir> && git ...); %s" % _WAY]
         return target_root(scan, None, p0)[1]
@@ -129,6 +148,8 @@ def handle(ctx: HookContext) -> Outcome:
     try:
         deny += _git_lines(ctx, command)
     except GateError as e:
-        if shellscan.token_in(command, "git", True) and shellscan.token_in(command, "commit"):
+        # D3-1: the policy or the aliases cannot be read, so any git word may be a write: a command holding a `git`
+        # token (raw or quote-removed) is refused; a command with no `git` token passes (spec §4 "fail closed")
+        if _has(_views(command), "git", True):
             deny.append("FAIL hook.bash.git: %s; %s" % (safe_text(e), _WAY))
     return Outcome(deny=deny)
