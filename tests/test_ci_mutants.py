@@ -490,6 +490,53 @@ class PathTest(Fx):
         self.assertEqual(fake.mutated_calls()[0][2]["src/raw.py"], body.replace(b"a + b", b"a - b"))
         self.assertEqual(self.read("src/raw.py"), body)
 
+    def test_a_tracked_file_below_two_and_three_directories_is_mutated_and_restored(self):  # T5: parent walk, success path
+        body = b"head \xff\xfe a + b \x80 tail\n"
+        for path in ("src/sub/deep.py", "src/sub/sub2/deeper.py"):
+            with self.subTest(path):
+                self.repo({TABLE: table({"i1": (path, "a + b", "a - b")}, {"i1": ("tests.test_a",)})}, base_extra={path: body})
+                fake = Fake(self.root, watch=[path])
+                code, out, err = self.call(self.argv(), execute=fake)
+                self.assertEqual((code, verdicts(out)), (0, {"i1": "SURVIVED"}), out)
+                self.assertEqual([c[2][path] for c in fake.mutated_calls()], [body.replace(b"a + b", b"a - b")] * 2)
+                self.assertEqual(self.read(path), body)  # restored byte-exact
+                self.assertEqual(self.status(), "")
+
+    def test_a_tracked_file_with_a_second_hard_link_is_refused_at_the_check(self):  # T5 link count
+        text = BASE_FILES["src/a.py"]
+        self.repo({TABLE: table({"i1": ("src/a.py", "a + b", "a - b"), "i2": ("src/c.py", "a + b", "a - b"),
+                                 "i3": ("src/b.py", "'two'", "'three'")},
+                                {"i1": ("tests.test_a",), "i2": ("tests.test_a",), "i3": ("tests.test_b",)})},
+                  base_extra={"src/c.py": text, "src/d.py": text})
+        outside = os.path.join(self.tmp, "outside_alias.py")
+        os.link(os.path.join(self.root, "src/a.py"), outside)  # a.py is also a file outside the root (i1): two links
+        os.link(os.path.join(self.root, "src/c.py"), os.path.join(self.root, "src/d.link"))  # d.py is another tracked file
+        os.rename(os.path.join(self.root, "src/d.link"), os.path.join(self.root, "src/d.py"))  # same inode as c.py (i2)
+        self.assertEqual(self.status(), "")  # same bytes: git sees no change
+        fake = Fake(self.root, watch=["src/a.py", "src/b.py", "src/c.py", "src/d.py"])
+        code, out, err = self.call(self.argv(), execute=fake)
+        self.assertEqual((code, verdicts(out)), (1, {"i1": "ERROR", "i2": "ERROR", "i3": "SURVIVED"}), out)
+        self.assertRegex(lines_of(out)["i1"][1], r"^ \| path 'src/a\.py' has more than one hard link$")
+        self.assertRegex(lines_of(out)["i2"][1], r"^ \| path 'src/c\.py' has more than one hard link$")
+        for call in fake.mutated_calls():  # only i3 ever ran: no linked file was ever mutated
+            for rel in ("src/a.py", "src/c.py", "src/d.py"):
+                self.assertEqual(call[2][rel], fake.pristine[rel], rel)
+        for path in (outside, os.path.join(self.root, "src/a.py"), os.path.join(self.root, "src/c.py"),
+                     os.path.join(self.root, "src/d.py")):
+            with open(path, "rb") as fh:
+                self.assertEqual(fh.read(), text.encode())
+            self.assertEqual(os.stat(path).st_nlink, 2, path)
+        self.assertEqual(self.status(), "")
+
+    def test_a_killing_module_with_a_second_hard_link_is_refused(self):  # T5 link count, T4
+        self.repo({TABLE: table({"i1": ("src/a.py", "a + b", "a - b")}, {"i1": ("tests.test_a",)})})
+        os.link(os.path.join(self.root, "tests/test_a.py"), os.path.join(self.tmp, "module_alias.py"))
+        fake = Fake(self.root)
+        code, out, err = self.call(self.argv(), execute=fake)
+        self.assertEqual(code, 1, out)
+        self.assertRegex(out, r"(?m)^ERROR table %s id i1: .*killing module" % re.escape(TABLE))
+        self.assertEqual(fake.calls, [])
+
 
 class SwapAfterCheckTest(Fx):
     """T5 hardening row "a parent component is a symlink or is swapped after the check", one test per member of the class:
@@ -498,45 +545,80 @@ class SwapAfterCheckTest(Fx):
     swapped (after the check, hidden from ``git status``) at one of three moments: AFTER_CHECK (while the baseline runs, before
     the file is read), BEFORE_WRITE (after the read, before the mutated bytes are written: the hook is count_problem) and
     BEFORE_RESTORE (during the mutated run, before the restore writes the bytes back). Every swap target lives in this
-    test's own temporary directory (self.tmp, a sibling of the repository), never in a shared directory."""
+    test's own temporary directory (self.tmp, a sibling of the repository), never in a shared directory.
 
-    TARGET = "src/a.py"
+    The depth cases: the target is a file below one, two or three directories, and the directory swapped by the ``parent``
+    kinds (PARENT) is any one of its ancestors, so every level of the parent walk is hit. The link-count kinds: a hard link
+    to a file outside the root and a hard link to another tracked file, swapped in at each open of the target."""
+
     OUTSIDE_BODY = b"OUTSIDE a + b\n"
     ALL = ("symlink-inside", "symlink-outside", "directory", "fifo", "fifo-with-reader", "parent-inside", "parent-outside")
+    HARD = ("hardlink-outside", "hardlink-inside")
     MOMENTS = ("after-check", "before-write", "before-restore")
     SWAP_AT_CALL = {"after-check": 1, "before-restore": 3}  # the 1st execute call is a baseline run, the 3rd the mutated run
+    DEEP = {"src/sub/deep.py": "VALUE = a + b\n", "src/sub/b.py": "SUB = 1\n",
+            "src/sub/sub2/deeper.py": "VALUE = a + b\n", "src/sub/sub2/b.py": "SUB2 = 1\n"}
+    DEPTHS = (("src/a.py", ("src",)),  # one parent
+              ("src/sub/deep.py", ("src", "src/sub")),  # two parents
+              ("src/sub/sub2/deeper.py", ("src", "src/sub", "src/sub/sub2")))  # three parents
+    PAIRS = tuple((target, parent) for target, parents in DEPTHS for parent in parents)
 
     def setUp(self):
         super().setUp()
         self.fds = []
         self.addCleanup(lambda: [os.close(fd) for fd in self.fds])
+        self.extra, self.visible = dict(self.DEEP), set()
+        self.use("src/a.py", "src")
+
+    def use(self, target, parent):
+        """The target path of the one id, and the ancestor directory that the ``parent`` kinds swap."""
+        self.TARGET, self.PARENT = target, parent
+        self.SIBLING = os.path.dirname(target) + "/b.py"  # a tracked file beside the target
+
+    def moved(self, rel, kind):
+        """Where the tracked file ``rel`` is after the swap ``kind``: a swapped parent moves its whole directory."""
+        if kind.startswith("parent") and (rel == self.PARENT or rel.startswith(self.PARENT + "/")):
+            return self.PARENT + "real" + rel[len(self.PARENT):]
+        return rel
 
     def prepare(self):
-        self.repo({TABLE: table({"i1": (self.TARGET, "a + b", "a - b")}, {"i1": ("tests.test_a",)})})
+        self.repo({TABLE: table({"i1": (self.TARGET, "a + b", "a - b")}, {"i1": ("tests.test_a",)})}, base_extra=self.extra)
+        self.contents = dict(BASE_FILES, **self.extra)
         self.outside = os.path.join(self.tmp, "outside%d" % next(COUNTER))
-        os.mkdir(self.outside)
-        self.outside_file = os.path.join(self.outside, "a.py")
+        # the parent kinds link the swapped directory to ``outside``: the rest of the target path exists there, so a
+        # parent that was followed would open (and write) this file
+        self.outside_file = os.path.join(self.outside, self.TARGET[len(self.PARENT) + 1:])
+        os.makedirs(os.path.dirname(self.outside_file))
         with open(self.outside_file, "wb") as fh:
             fh.write(self.OUTSIDE_BODY)
         os.utime(self.outside_file, ns=(10 ** 18, 10 ** 18))  # an old mtime: any write to the file changes it
         self.outside_before = (self.OUTSIDE_BODY, os.stat(self.outside_file).st_mtime_ns)
         with open(os.path.join(self.root, ".git", "info", "exclude"), "a", encoding="utf-8") as fh:
-            fh.write("src/a.aside\nsrcreal\n/src\n")
-        for rel in ("src/__init__.py", "src/a.py", "src/b.py"):
-            git(self.root, "update-index", "--skip-worktree", rel)
+            fh.write("%s.aside\n%sreal\n/%s\n" % (self.TARGET, self.PARENT, self.PARENT))
+        for rel in git(self.root, "ls-files", "--", self.PARENT).split("\n"):
+            if rel and rel not in self.visible:
+                git(self.root, "update-index", "--skip-worktree", rel)
         self.assertEqual(self.status(), "")
 
     def swap(self, kind):
         path = os.path.join(self.root, self.TARGET)
         if kind.startswith("parent"):
-            os.rename(os.path.join(self.root, "src"), os.path.join(self.root, "srcreal"))
-            os.symlink("srcreal" if kind == "parent-inside" else self.outside, os.path.join(self.root, "src"))
+            os.rename(os.path.join(self.root, self.PARENT), os.path.join(self.root, self.PARENT + "real"))
+            os.symlink(os.path.basename(self.PARENT) + "real" if kind == "parent-inside" else self.outside,
+                       os.path.join(self.root, self.PARENT))
             return
-        os.rename(path, os.path.join(self.root, "src/a.aside"))
+        if kind == "renamed-over":  # a regular file of the tree (link count 1) renamed over the path
+            os.rename(os.path.join(self.root, "src/c.py"), path)
+            return
+        os.rename(path, path + ".aside")
         if kind == "symlink-inside":
             os.symlink("b.py", path)  # another tracked file of the repository
         elif kind == "symlink-outside":
             os.symlink(self.outside_file, path)
+        elif kind == "hardlink-outside":
+            os.link(self.outside_file, path)  # the same inode as a file outside the root
+        elif kind == "hardlink-inside":
+            os.link(os.path.join(self.root, self.SIBLING), path)  # the same inode as another tracked file
         elif kind == "directory":
             os.mkdir(path)
         else:
@@ -588,30 +670,50 @@ class SwapAfterCheckTest(Fx):
         code, out, calls = self.attempt(moment, kind)
         self.assertEqual((code, verdicts(out)), (1, {"i1": "ERROR"}), (moment, kind, out))
         line = lines_of(out)["i1"][1]
-        refused = r" \| path 'src/a\.py' changed after the check"
+        who = re.escape(self.TARGET)
+        refused = r" \| path '%s' changed after the check" % who
         if moment == "after-check":
             self.assertRegex(line, "^" + refused, (moment, kind, line))
             self.assertEqual(len(calls), 2, (moment, kind))  # the baseline only: the id never ran
         elif moment == "before-write":
-            self.assertRegex(line, refused + r".*the file src/a\.py was not restored", (moment, kind, line))
+            self.assertRegex(line, refused + r".*the file %s was not restored" % who, (moment, kind, line))
             self.assertEqual(len(calls), 2, (moment, kind))
         else:
-            self.assertRegex(line, r" \| the file src/a\.py was not restored: path 'src/a\.py' changed after the check",
+            self.assertRegex(line, r" \| the file %s was not restored: path '%s' changed after the check" % (who, who),
                              (moment, kind, line))
             self.assertEqual(len(calls), 4, (moment, kind))
+        self.assertOutsideAndSiblingUntouched(moment, kind)
+        if moment != "before-restore":  # the original file was never touched
+            original = self.moved(self.TARGET, kind) if kind.startswith("parent") else self.TARGET + ".aside"
+            self.assertEqual(self.read(original), self.contents[self.TARGET].encode(), (moment, kind))
+
+    def assertOutsideAndSiblingUntouched(self, moment, kind):
         with open(self.outside_file, "rb") as fh:  # nothing was written outside the root, through any link
             body = fh.read()
         self.assertEqual((body, os.stat(self.outside_file).st_mtime_ns), self.outside_before, (moment, kind))
-        real = "srcreal" if kind.startswith("parent") else "src"  # where the real directory is now
-        self.assertEqual(self.read(real + "/b.py"), BASE_FILES["src/b.py"].encode(), (moment, kind))  # nor to another file
-        if moment != "before-restore":  # the original file was never touched
-            original = "srcreal/a.py" if kind.startswith("parent") else "src/a.aside"
-            self.assertEqual(self.read(original), BASE_FILES["src/a.py"].encode(), (moment, kind))
+        self.assertEqual(self.read(self.moved(self.SIBLING, kind)), self.contents[self.SIBLING].encode(),
+                         (moment, kind))  # nor to another tracked file
 
     def each(self, moments, kinds):
         for moment, kind in itertools.product(moments, kinds):
             with self.subTest(moment=moment, kind=kind):
                 self.check(moment, kind)
+
+    def check_time(self, kind):
+        """The swap is done BEFORE the run, so the check itself sees it: refused at the check, nothing run or mutated."""
+        self.prepare()
+        self.swap(kind)
+        calls = []
+
+        def execute(py, mods, root, timeout):
+            calls.append(py)
+            return PASS
+        code, out, err = self.call(self.argv(), execute=execute)
+        self.assertEqual((code, verdicts(out)), (1, {"i1": "ERROR"}), (self.TARGET, kind, out))
+        self.assertRegex(lines_of(out)["i1"][1], r"^ \| path '%s' has a parent that is a symbolic link$" % re.escape(self.TARGET),
+                         (self.TARGET, kind))
+        self.assertEqual(calls, [], (self.TARGET, kind))  # not even the baseline ran
+        self.assertOutsideAndSiblingUntouched("before the check", kind)
 
     def test_o_nonblock_a_fifo_swapped_in_never_blocks_the_open(self):  # T5 swapped after the check: O_NONBLOCK
         self.each(self.MOMENTS, ("fifo", "fifo-with-reader"))
@@ -631,6 +733,56 @@ class SwapAfterCheckTest(Fx):
 
     def test_a_parent_directory_swapped_for_a_symlink_is_never_followed(self):  # T5 swapped after the check: parents
         self.each(self.MOMENTS, ("parent-inside", "parent-outside"))
+
+    def test_a_parent_at_every_depth_swapped_for_a_symlink_is_never_followed(self):  # T5 swapped after the check: depth 1-3
+        for target, parent in self.PAIRS:
+            self.use(target, parent)
+            with self.subTest(target=target, parent=parent):
+                self.each(self.MOMENTS, ("parent-inside", "parent-outside"))
+
+    def test_a_parent_at_every_depth_that_is_a_symlink_at_the_check_is_refused(self):  # T5 parent is a symlink: depth 1-3
+        for target, parent in self.PAIRS:
+            self.use(target, parent)
+            for kind in ("parent-inside", "parent-outside"):
+                with self.subTest(target=target, parent=parent, kind=kind):
+                    self.check_time(kind)
+
+    def test_a_hard_link_swapped_in_at_every_open_of_the_target_is_never_written_through(self):  # T5 link count: swapped
+        self.each(self.MOMENTS, self.HARD)  # after-check: the read open; before-write: the write open; before-restore: the restore
+
+    def test_a_hard_link_to_a_file_outside_the_root_keeps_the_outside_bytes_when_the_write_open_is_refused(self):  # T5 link count
+        self.check("before-write", "hardlink-outside")
+        with open(self.outside_file, "rb") as fh:
+            self.assertEqual(fh.read(), self.OUTSIDE_BODY)  # a write open that truncated first would leave it empty
+        self.assertEqual(os.stat(self.outside_file).st_nlink, 2)  # the link is still there: nothing was removed or rewritten
+
+    def test_a_truncate_that_fails_is_a_named_error_and_leaks_no_descriptor(self):  # T5, T10: the truncate moved out of the open
+        def refuse(fd, length):
+            raise OSError(30, "Read-only file system")
+        self.repo({TABLE: SIMPLE})
+        before = len(os.listdir("/dev/fd"))
+        with mock.patch.object(os, "ftruncate", refuse):
+            code, out, err, fake = self.go()
+        self.assertEqual((code, verdicts(out)), (1, {"i1": "ERROR", "i2": "ERROR"}), out)
+        self.assertRegex(lines_of(out)["i1"][1], r"^ \| path 'src/a\.py' changed after the check \(cannot be truncated: "
+                         r"Read-only file system\); the file src/a\.py was not restored: path 'src/a\.py' changed after the check")
+        self.assertRegex(lines_of(out)["i2"][1], r"not run: the file of i1 was not restored")
+        self.assertEqual(fake.mutated_calls(), [])
+        self.assertEqual(self.read("src/a.py"), BASE_FILES["src/a.py"].encode())
+        self.assertEqual(len(os.listdir("/dev/fd")), before)  # the descriptor of each refused open was closed
+
+    def test_a_regular_file_renamed_over_the_path_from_elsewhere_in_the_tree_is_an_error(self):  # T5 swapped, T10 tree clean
+        self.extra["src/c.py"] = "C = a + b\n"  # a tracked regular file of the tree, link count 1
+        self.visible.add("src/c.py")  # its disappearance must show in git status
+        for moment in self.MOMENTS:
+            with self.subTest(moment=moment):
+                code, out, calls = self.attempt(moment, "renamed-over")
+                self.assertEqual((code, verdicts(out)), (1, {"i1": "ERROR"}), (moment, out))
+                self.assertRegex(lines_of(out)["i1"][1],
+                                 r"^ \| the tree is not clean \(\d+ entries, first: .*\) after (the baseline|this id)$")
+                self.assertEqual(self.status().split(), ["D", "src/c.py"], moment)  # the vanished source is the only change
+                self.assertOutsideAndSiblingUntouched(moment, "renamed-over")  # and nothing written outside the root
+                self.assertEqual(len(calls), {"after-check": 2, "before-write": 4, "before-restore": 4}[moment], moment)
 
     def test_a_restore_that_does_not_read_back_the_bytes_is_an_error_and_stops_the_job(self):  # T10 restore
         class Lying:

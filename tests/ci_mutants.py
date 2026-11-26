@@ -261,6 +261,8 @@ def regular_problem(root, rel, tracked):
         return "is a symbolic link"
     if not stat.S_ISREG(st.st_mode):
         return "is not a regular file (a directory or special file)"
+    if st.st_nlink != 1:
+        return "has more than one hard link"
     return ""
 
 
@@ -520,10 +522,12 @@ class Unsafe(Exception):
 def open_target(root, rel, write):
     """The open file (``rb``, or ``r+b`` truncated when ``write``) of the checked path ``rel`` below ``root``.
 
-    Nothing is followed and nothing blocks: every parent is opened as a directory with O_NOFOLLOW (one step at a time, from
-    the root), the last component with O_NOFOLLOW and O_NONBLOCK, and the opened file must be a regular file (fstat);
-    otherwise Unsafe (the path was swapped for a symbolic link, a directory or a FIFO after the check)."""
-    flags = (os.O_RDWR | os.O_TRUNC if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    Nothing is followed, nothing blocks and nothing is truncated before the file is known to be the right one: every parent
+    is opened as a directory with O_NOFOLLOW (one step at a time, from the root), the last component with O_NOFOLLOW and
+    O_NONBLOCK (and without O_TRUNC), and the opened file must be a regular file with exactly one hard link (fstat);
+    only then is it truncated, through the descriptor. Otherwise Unsafe (the path was swapped for a symbolic link, a
+    directory, a FIFO or a hard link after the check; a hard link would write through to a file elsewhere)."""
+    flags = (os.O_RDWR if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     parts = rel.split("/")
     try:
         dfd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -538,9 +542,17 @@ def open_target(root, rel, write):
     except OSError as err:
         raise Unsafe("path %s changed after the check (cannot be opened as a regular file: %s)"
                      % (show(rel), err.strerror or type(err).__name__))
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    st = os.fstat(fd)
+    problem = ("it is not a regular file" if not stat.S_ISREG(st.st_mode)
+               else "it has more than one hard link" if st.st_nlink != 1 else "")
+    if not problem and write:
+        try:
+            os.ftruncate(fd, 0)
+        except OSError as err:
+            problem = "cannot be truncated: %s" % (err.strerror or type(err).__name__)
+    if problem:
         os.close(fd)
-        raise Unsafe("path %s changed after the check (it is not a regular file)" % show(rel))
+        raise Unsafe("path %s changed after the check (%s)" % (show(rel), problem))
     return os.fdopen(fd, "r+b" if write else "rb")
 
 
