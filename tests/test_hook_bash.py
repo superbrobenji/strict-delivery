@@ -2055,7 +2055,8 @@ class ShellAliasWriteTest(ActorCase):
                             ("g6", "g2"), ("g8", "!git -C %s reset --hard" % W), ("g3", "!git reset --hard"),
                             ("gb", "!git branch -D x"), ("eh", "!echo hi"), ("gs", "!git status"),
                             ("gn", "!git g2"), ("gm", '!git g""2'), ("gq", '!git -""C %s reset --hard' % R),
-                            ("gr", "!git rs"), ("rs", "reset --hard")):
+                            ("gr", "!git rs"), ("rs", "reset --hard"), ("gt", "!git -C %s status" % R),
+                            ("gu", "!cd %s && git status" % R)):
             git(R, "config", "alias." + name, value)
 
     def target_line(self, name):   # A3: the one-plain-command line, then what the command gets today (the cwd target)
@@ -2120,6 +2121,12 @@ class ShellAliasWriteTest(ActorCase):
 
     def test_A5_gs_no_git_write(self):
         self.same_as_today("git gs")
+
+    def test_A5_gt_names_a_directory_but_writes_nothing(self):   # no write in the body: no one-plain-command line (mutant F4)
+        self.same_as_today("git gt")
+
+    def test_A5_gu_cd_but_writes_nothing(self):
+        self.same_as_today("git gu")
 
 
 # A6, A7 and A8 (Ruling N1, F-20261126-2z9y): `git -c` before the subcommand is refused on every git command.
@@ -2212,6 +2219,14 @@ class GlobalCOptionTest(ActorCase):
                     self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", actor[3]))
                 else:
                     self.passes(r)
+
+    def test_A6_the_line_is_given_once(self):   # a plain write or commit already carries it from its global options
+        for command in ("git -c a=b tag t", "git -c a=b commit -m m", "git -c a=b reset --hard", "env -i git -c a=b tag t"):
+            for actor in self.actors():
+                with self.subTest(command=command, actor=actor[0]):
+                    r = self.run_actor(command, actor)
+                    self.assertEqual(r.returncode, 2)
+                    self.assertEqual(r.stderr.count(C_LINE), 1, r.stderr)
 
     def test_A8_other_options_named_c(self):   # `-c` after the subcommand is the subcommand's own option: plain forms unchanged
         for command in ("git log -c", "git commit -c HEAD -m m", "git diff --cc", "git -C %s status" % self.W):
