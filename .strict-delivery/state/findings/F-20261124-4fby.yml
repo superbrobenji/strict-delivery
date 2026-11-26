@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-4fby
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-4c-2.md FR-3
+severity: LOW
+class: "target path component swapped to a symlink after its lstat check: closed = last component (d33a279); open = a parent component in plan._inspect (outside read); a parent component in apply._write after the last re-check (outside write)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d33a279e7fdb575c33844dee5e81b81f8e4b68ee
+    by: stream-config-hooks
+review_round: 4
+caused_by_change: false
+dimension: parent component swapped to a symlink after its lstat check

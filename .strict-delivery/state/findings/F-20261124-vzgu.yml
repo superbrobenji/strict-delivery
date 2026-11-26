@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-vzgu
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-4c.md FR-1
+severity: LOW
+class: "target opened by name after an lstat check without O_NOFOLLOW: gates/lib/managed.py:258 _inspect follows a symlink swapped in between lstat and open (plan puts outside content into the action); members to weigh in the fix: the last component (O_NOFOLLOW) and each parent component (a directory swapped for a symlink after its lstat)"
+siblings: []
+cites:
+  - file: gates/lib/managed.py
+    lines: 256-259
+    sha: 6706e31
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 6706e31a65c925e1085b90c7a02ad43dd22b45ad
+    by: stream-config-hooks
+review_round: 3
+caused_by_change: true
+dimension: target opening after lstat

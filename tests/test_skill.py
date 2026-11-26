@@ -22,7 +22,8 @@ HEADINGS = ["When it applies", "Precedence", "Roles and tiers", "Decision classe
             "Verification method", "Change kinds", "Pipeline and gates", "Session resume", "Continuation",
             "Document locations", "Judgment, not gated"]
 OWNER_ONLY = ["triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close",
-              "rule-override", "program-create", "stream-ownership", "stream-merge", "request-dispute", "program-close"]
+              "rule-override", "profile-override", "program-create", "stream-ownership", "stream-merge",
+              "request-dispute", "program-close"]
 PRECEDENCE_KEYS = ["CLAUDE.md", "skill and prompt blocks", "project playbook", "base playbook", "superpowers"]  # spec 3
 CLASS_LINE = "Default owner-only classes: "
 SKILL_PHRASES = {   # heading -> key phrases (case-insensitive), each from the source cited on its line (plan Task B2.3)
@@ -178,8 +179,7 @@ def check_classes(t):                            # plan test_roles_and_classes_n
     for s in OWNER_ONLY:
         need("`%s`" % s in body, "classes: %s" % s)
     need("`decision_classes.owner_only`" in body, "classes: decision_classes.owner_only")
-    need(class_list(t) == OWNER_ONLY, "classes: the default list")
-    need("profile-override" not in body, "classes: profile-override (Task 4a.3 adds it)")
+    need(class_list(t) == OWNER_ONLY, "classes: the default list")  # Task 4a.3: the list now holds profile-override
 
 
 def check_search(t):                             # plan test_search_before_asking; DC3
@@ -438,7 +438,9 @@ TEXT_MUTANTS = (   # (row, old, new, check that refuses it); each applied once t
     ("U-2", "chooses a tier;", "names a tier;", "directives"),
     ("DC1", "`issue-close`, ", "", "classes"),
     ("DC1", "config `decision_classes.owner_only`", "config `decision_classes`", "classes"),
-    ("DC1b", "`program-close`.", "`program-close`, `profile-override`.", "classes"),
+    ("DC1b", "`rule-override`, `profile-override`, ", "`rule-override`, ", "classes"),            # Task 4a.3: dropped
+    ("DC1b", "`profile-override`, `program-create`", "`program-create`, `profile-override`", "classes"),  # moved
+    ("DC1b", "`program-close`.", "`program-close`, `profile-override`.", "classes"),                 # repeated
     ("DC1b", "`triage`, `spec-direction`", "`spec-direction`, `triage`", "classes"),
     ("DC1b", "`program-close`.", "`program-close`", "classes"),
     ("OQ2", "the recommended option with its cost, every alternative", "every alternative with its cost, the "

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-fdr2
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/a2-review-2.md R2-1
+severity: LOW
+class: "input-domain: test-column names in row PS8 (task-4c.1-domain.md :525 named a non-existent test; the input column omitted the root); fixed in the table at 16:44"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2013760551b39e77d4abf442109ad4d411abd299
+    by: stream-config-hooks
+review_round: 6
+caused_by_change: false
+dimension: input-domain table test-column names
