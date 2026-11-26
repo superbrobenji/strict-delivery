@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-kg95
+status: open
+source: "4c.1 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4c1-review-1.md R1-2"
+severity: LOW
+class: "plan Step 1 test names not used verbatim: test_plan_symlink_conflict is test_plan_symlink_conflicts (test_managed.py:748)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2abd288359c2b3ca4d78d22a3cf00ca791716bd0
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: plan Step 1 test names

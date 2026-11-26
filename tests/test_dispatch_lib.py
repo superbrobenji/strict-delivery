@@ -3,6 +3,7 @@ table task-2c.3-domain.md). Every expected value is written out here by hand fro
 back from ``dispatch``. The git rows run on real fixture repositories (``GitIsolatedTestCase``)."""
 import os
 import unittest
+from unittest import mock
 
 from gates.lib import dispatch, gitinfo, migrations
 from gates.lib.dispatch import (CONTROLLER_ROLES, DISPATCHERS, HEADINGS, LEVELS_BELOW, MIN_TIERS, ROLES, SMALL_ROLES,
@@ -1130,3 +1131,296 @@ class ProgramErrorsTest(ProgFx):
                 src = fh.read()
             self.assertNotIn("ExceptionGroup", src)
             self.assertNotIn("except*", src)
+
+
+# ---------------------------------------------------------------- Task 4b.2: project roles in the library (rows RO, MT, PP, BU, V)
+# Expected values are written out by hand from the plan (:4405-4410) and spec section 10, never read back from dispatch.
+
+SPEC_ROLES = ("program_controller", "stream_controller", "controller", "implementer", "implementer_transcription",
+              "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer", "audit_reviewer",
+              "audit_verifier", "investigator", "plan_writer", "plan_reviewer", "drafter")
+ENTRY = {"prompt": "p.md", "min_tier": "tier2"}
+COLLISION = "%s: a project role may not reuse a framework role id"
+EXPECTED_MIN = {"implementer_transcription": 1, "implementer": 2, "drafter": 2, "task_reviewer": 2,
+                "program_controller": 3, "stream_controller": 3, "controller": 3, "final_reviewer": 3,
+                "audit_reviewer": 3, "audit_verifier": 3, "investigator": 3, "plan_writer": 3, "plan_reviewer": 3,
+                "final_verifier": 4, "exception_reviewer": 4}
+CFG4 = {"models": {"tiers": {"tier1": "a", "tier2": "b", "tier3": "c", "tier4": "d"}}}
+
+
+def cfg_with(**roles):
+    return dict(CFG4, roles={k: dict(ENTRY) for k in roles})
+
+
+class RolesOfTest(unittest.TestCase):
+    def test_roles_of_absent_is_roles(self):                       # RO1, RO16
+        for cfg in ({}, {"models": {}}, {"roles": {}}):             # RO9
+            got = dispatch.roles_of(cfg)
+            self.assertIs(type(got), tuple)
+            self.assertEqual(got, SPEC_ROLES)
+
+    def test_roles_of_one(self):                                    # RO2
+        self.assertEqual(dispatch.roles_of(cfg_with(doc_writer=1)), SPEC_ROLES + ("doc_writer",))
+
+    def test_roles_of_sorted(self):                                 # RO3, CF2, V5
+        cfg = {"roles": {"zz": dict(ENTRY), "aa": dict(ENTRY), "m": dict(ENTRY)}}
+        self.assertEqual(dispatch.roles_of(cfg), SPEC_ROLES + ("aa", "m", "zz"))
+
+    def test_project_role_collision_fails(self):                    # RO4: each of the fifteen
+        for rid in SPEC_ROLES:
+            with self.subTest(rid):
+                with self.assertRaises(ValueError) as cm:
+                    dispatch.roles_of({"roles": {rid: dict(ENTRY)}})
+                self.assertEqual(str(cm.exception), COLLISION % rid)
+
+    def test_roles_of_two_collisions_names_first_sorted(self):      # RO5, RO6
+        with self.assertRaises(ValueError) as cm:
+            dispatch.roles_of({"roles": {"plan_writer": {}, "doc_writer": {}, "drafter": {}}})
+        self.assertEqual(str(cm.exception), COLLISION % "drafter")
+
+    def test_project_role_named_session(self):                      # RO8, Q3
+        with self.assertRaises(ValueError) as cm:
+            dispatch.roles_of({"roles": {"session": dict(ENTRY)}})
+        self.assertEqual(str(cm.exception), "session: a project role may not reuse the dispatcher id session")
+
+    def test_roles_of_near_collisions_accepted(self):               # RO7
+        ids = ["controller_x", "implementer2", "plan_writer_", "drafter1", "a", "x_"]
+        got = dispatch.roles_of({"roles": {i: dict(ENTRY) for i in ids}})
+        self.assertEqual(got, SPEC_ROLES + tuple(sorted(ids)))
+
+    def test_roles_of_wrong_shapes(self):                           # RO10, RO11, RO13
+        import collections
+
+        class D(dict):
+            pass
+        for roles in (None, 5, True, "x", [], ["a"], collections.OrderedDict(), D()):
+            with self.subTest(roles=repr(roles)):
+                with self.assertRaises(ValueError):
+                    dispatch.roles_of({"roles": roles})
+
+        class S(str):
+            pass
+        for key in (1, None, True, ("a",), b"x", S("x")):
+            with self.subTest(key=repr(key)):
+                with self.assertRaises(ValueError):
+                    dispatch.roles_of({"roles": {key: {}}})
+        for cfg in (None, [], "x", 5):
+            with self.subTest(cfg=repr(cfg)):
+                with self.assertRaises(ValueError):
+                    dispatch.roles_of(cfg)
+
+    def test_roles_of_id_grammar(self):                             # RO12, V2
+        for bad in ("X", "1x", "a-b", "a.b", "", "x\n", "x ", " x", "x\x00", "﻿x", "ｘ", "kK",
+                    "Ꟁ", "\U0001fae8", "_x"):
+            with self.subTest(repr(bad)):
+                with self.assertRaises(ValueError):
+                    dispatch.roles_of({"roles": {bad: {}}})
+
+    def test_roles_of_leaves_constants_alone(self):                 # RO14, RO17, DR11
+        before = (dispatch.ROLES, dispatch.CONTROLLER_ROLES, dict(dispatch.MIN_TIERS),
+                  {k: dict(v) for k, v in dispatch.DISPATCHERS.items()})
+        ids = (id(dispatch.ROLES), id(dispatch.CONTROLLER_ROLES), id(dispatch.MIN_TIERS), id(dispatch.DISPATCHERS))
+        a = dispatch.roles_of(cfg_with(doc_writer=1))
+        b = dispatch.roles_of(cfg_with(other=1))
+        self.assertNotIn("doc_writer", b)
+        self.assertNotIn("other", a)
+        self.assertEqual(before, (dispatch.ROLES, dispatch.CONTROLLER_ROLES, dispatch.MIN_TIERS, dispatch.DISPATCHERS))
+        self.assertEqual(ids, (id(dispatch.ROLES), id(dispatch.CONTROLLER_ROLES), id(dispatch.MIN_TIERS),
+                               id(dispatch.DISPATCHERS)))
+        self.assertNotIn("doc_writer", dispatch.CONTROLLER_ROLES)
+        self.assertEqual(dispatch.dispatchers_for(True, "doc_writer"), ("stream_controller", "controller"))
+        self.assertEqual(dispatch.dispatchers_for(False, "doc_writer"), ("session", "controller"))
+        self.assertEqual(dispatch.dispatchers_for(False, "controller"), ("session", "controller"))
+        self.assertEqual(dispatch.dispatchers_for(True, "stream_controller"), ("session", "program_controller"))
+
+    def test_roles_of_many_and_long(self):                          # RO15
+        got = dispatch.roles_of({"roles": {"a" * 5000: dict(ENTRY)}})
+        self.assertEqual(got, SPEC_ROLES + ("a" * 5000,))
+        many = ["r%04d" % i for i in range(1000)]
+        got = dispatch.roles_of({"roles": {i: dict(ENTRY) for i in reversed(many)}})
+        self.assertEqual(got, SPEC_ROLES + tuple(many))
+
+
+class MinTierOfTest(unittest.TestCase):
+    def test_min_tier_of_framework_roles(self):                     # MT1
+        for role, want in EXPECTED_MIN.items():
+            with self.subTest(role):
+                self.assertEqual(dispatch.min_tier_of(role, CFG4), want)
+
+    def test_min_tier_of_framework_fallback(self):                  # MT2, Q1 (a)
+        cfg = {"models": {"tiers": {"tier1": "a", "tier2": "b", "tier3": "c"}}}
+        self.assertEqual(dispatch.min_tier_of("final_verifier", cfg), 3)
+        self.assertEqual(dispatch.min_tier_of("exception_reviewer", cfg), 3)
+        with self.assertRaises(ValueError):
+            dispatch.min_tier_of("final_verifier", dict(cfg, top_tier_roles=[]))
+
+    def test_min_tier_of_project_role_each_tier(self):             # MT3
+        for name, want in (("tier1", 1), ("tier2", 2), ("tier3", 3), ("tier4", 4)):
+            with self.subTest(name):
+                got = dispatch.min_tier_of("x", dict(CFG4, roles={"x": {"prompt": "p.md", "min_tier": name}}))
+                self.assertIs(type(got), int)
+                self.assertEqual(got, want)
+
+    def test_project_role_tier4_unset_returns_four(self):           # MT5
+        cfg = {"models": {"tiers": {"tier1": "a"}}, "roles": {"x": {"prompt": "p.md", "min_tier": "tier4"}},
+               "top_tier_roles": ["x"]}
+        self.assertEqual(dispatch.min_tier_of("x", cfg), 4)
+
+    def test_min_tier_of_unknown_role(self):                        # MT7
+        for role in ("nosuch", "Doc_writer", ""):
+            with self.subTest(repr(role)):
+                with self.assertRaises(ValueError):
+                    dispatch.min_tier_of(role, cfg_with(doc_writer=1))
+
+    def test_min_tier_of_malformed_entry(self):                     # MT8
+        for tier in ("tier5", 3, "3", True, None, "Tier2", " tier2", "tier٢", ["tier2"]):
+            with self.subTest(repr(tier)):
+                with self.assertRaises(ValueError):
+                    dispatch.min_tier_of("x", dict(CFG4, roles={"x": {"prompt": "p.md", "min_tier": tier}}))
+        for entry in ({"prompt": "p.md"}, 5, None, []):
+            with self.subTest(repr(entry)):
+                with self.assertRaises(ValueError):
+                    dispatch.min_tier_of("x", dict(CFG4, roles={"x": entry}))
+
+    def test_min_tier_of_argument_types(self):                      # MT9
+        class S(str):
+            pass
+        for role in (None, 5, b"x", ):
+            with self.assertRaises(ValueError):
+                dispatch.min_tier_of(role, CFG4)
+        for cfg in (None, []):
+            with self.assertRaises(ValueError):
+                dispatch.min_tier_of("implementer", cfg)
+
+    def test_project_entry_never_lowers_framework_tier(self):       # MT10
+        cfg = dict(CFG4, roles={"plan_writer": {"prompt": "p.md", "min_tier": "tier1"}})
+        self.assertEqual(dispatch.min_tier_of("plan_writer", cfg), 3)
+
+    def test_min_tier_reads_one_digit_only(self):                   # MT11, V1
+        seen = []
+
+        def spy(text, *a):
+            seen.append(text)
+            return int(text, *a)
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for name, want in (("tier1", 1), ("tier2", 2), ("tier3", 3), ("tier4", 4)):
+                    with self.subTest(limit=lim, name=name):
+                        cfg = dict(CFG4, roles={"x": {"prompt": "p.md", "min_tier": name}})
+                        with mock.patch.object(dispatch, "int", spy, create=True):
+                            del seen[:]
+                            got = dispatch.min_tier_of("x", cfg)
+                        self.assertEqual((got, type(got), seen), (want, int, [name[4]]))
+                for bad in ("tier" + "9" * 5000, "tier٢", "tier2" + "0" * 5000):
+                    with self.subTest(limit=lim, bad=bad[:12]):
+                        cfg = dict(CFG4, roles={"x": {"prompt": "p.md", "min_tier": bad}})
+                        with mock.patch.object(dispatch, "int", spy, create=True):
+                            del seen[:]
+                            with self.assertRaises(ValueError):
+                                dispatch.min_tier_of("x", cfg)
+                        self.assertEqual(seen, [])
+
+
+class PromptPathTest(unittest.TestCase):
+    def test_prompt_path_framework_role(self):                      # PP1
+        for cfg in ({}, cfg_with(doc_writer=1)):
+            self.assertEqual(dispatch.prompt_path("implementer", cfg, "/pd", "/r"), "/pd/implementer.md")
+
+    def test_prompt_path_project_role(self):                        # PP2
+        for rel in ("p.md", "a/b/c.md", ".strict-delivery/prompts/x.md", "é.md"):
+            with self.subTest(rel):
+                cfg = {"roles": {"x": {"prompt": rel, "min_tier": "tier2"}}}
+                self.assertEqual(dispatch.prompt_path("x", cfg, "/pd", "/r"), "/r/" + rel)
+
+    def test_prompt_path_refuses_escaping_paths(self):              # PP21
+        class S(str):
+            pass
+        for bad in ("../p.md", "a/../p.md", "/etc/passwd", "//p.md", "a//b.md", "./p.md", "", None, 5, S("p.md"),
+                    "p.txt", "a\x00b.md", "a\nb.md", "p.md ", "a\\b.md", ".md"):
+            with self.subTest(repr(bad)):
+                with self.assertRaises(ValueError):
+                    dispatch.prompt_path("x", {"roles": {"x": {"prompt": bad, "min_tier": "tier2"}}}, "/pd", "/r")
+
+    def test_prompt_path_unknown_role(self):                        # PP22
+        for cfg in ({}, {"roles": {"x": {"min_tier": "tier2"}}}):
+            with self.assertRaises(ValueError):
+                dispatch.prompt_path("x" if cfg else "nosuch", cfg, "/pd", "/r")
+
+
+class ProjectPromptNonStrRoleTest(unittest.TestCase):
+    def test_project_prompt_non_str_role_runs_no_method(self):      # FU5 (F-20261122-8gnv)
+        calls = []
+
+        def spy(name):
+            def m(self, *a):
+                calls.append(name)
+                return getattr(str, name)(self, *a) if isinstance(self, str) else getattr(object, name)(self, *a)
+            return m
+
+        class H(str):
+            __str__, __repr__, __format__ = spy("__str__"), spy("__repr__"), spy("__format__")
+            __eq__, __ne__, __hash__, __len__ = spy("__eq__"), spy("__ne__"), spy("__hash__"), spy("__len__")
+
+        class O:
+            __str__, __repr__, __format__ = spy("__str__"), spy("__repr__"), spy("__format__")
+            __eq__, __ne__, __hash__ = spy("__eq__"), spy("__ne__"), spy("__hash__")
+        cfg = {"roles": {"x": dict(ENTRY)}}
+        for name, make, tname in (("O", O, "O"), ("H", lambda: H("x"), "H"), ("int", lambda: 1, "int"),
+                                  ("None", lambda: None, "NoneType")):
+            with self.subTest(name):
+                role = make()
+                del calls[:]
+                want = "%s is no framework role and no project role" % tname
+                with self.assertRaises(ValueError) as e:
+                    dispatch._project_prompt(role, cfg)
+                self.assertEqual((str(e.exception), calls), (want, []))
+                self.assertEqual((dispatch.project_block_errors("b", role, cfg, "/nonexistent"), calls), ([want], []))
+
+
+class RoleOfProjectTest(unittest.TestCase):
+    def test_role_of_project_role_exact(self):                      # DR9, DR10
+        roles = SPEC_ROLES + ("doc_writer",)
+        self.assertEqual(role_of("doc_writer\n", roles), "doc_writer")
+        self.assertEqual(role_of("\n\ndoc_writer\nthen text\n", roles), "doc_writer")
+        for body in ("doc_writer ", " doc_writer", "Doc_writer", "doc_writer\r", "doc_writer extra"):
+            with self.subTest(repr(body)):
+                with self.assertRaises(ValueError):
+                    role_of(body, roles)
+        with self.assertRaises(ValueError):
+            role_of("doc_writer")                                    # one argument: framework roles only
+        self.assertEqual(role_of("implementer"), "implementer")
+
+
+class BudgetNumbersTest(unittest.TestCase):
+    def head(self, t, m):
+        return "## Role\nr\n\n## Budget: tokens=%s minutes=%s\n\n## Model\n" % (t, m)
+
+    def test_budget_numbers(self):                                  # BU3 source, BU12, BU14
+        self.assertEqual(dispatch.budget_numbers(self.head(1, 2)), ("1", "2"))
+        self.assertEqual(dispatch.budget_numbers(self.head(1, 2) + "## Budget: tokens=5 minutes=6\n"), ("1", "2"))
+        for bad in ("tokens=0 minutes=1", "tokens=01 minutes=1", "tokens=-1 minutes=1", "tokens=1.5 minutes=1",
+                    "tokens=1", "tokens=1  minutes=1", "tokens=1 minutes=1 ", "tokens=١ minutes=1", ""):
+            with self.subTest(bad):
+                self.assertIsNone(dispatch.budget_numbers("## Budget: " + bad if bad else "## Budget"))
+        self.assertIsNone(dispatch.budget_numbers("body tokens=1 minutes=1"))
+
+    def test_digit_text_same_on_both(self):                         # V1, BU15, BU16
+        for lim in INT_LIMITS:
+            with int_limit(lim):
+                for n in (599, 600, 601, 4300, 4301):
+                    with self.subTest(limit=lim, digits=n):
+                        self.assertEqual(dispatch.budget_numbers(self.head("9" * n, 1)), ("9" * n, "1"))
+                        self.assertTrue(dispatch.over_cap("9" * n, 5))
+                        self.assertEqual(dispatch.over_cap("9" * n, 10 ** 600 - 1), n > 600)
+                self.assertFalse(dispatch.over_cap("5", 5))
+                self.assertTrue(dispatch.over_cap("6", 5))
+                self.assertFalse(dispatch.over_cap("4", 5))
+
+    def test_no_forbidden_calls_in_new_code(self):                 # V2, V3, MU35
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for rel in ("gates/lib/dispatch.py", "gates/gate_dispatch.py"):
+            with open(os.path.join(here, rel), encoding="utf-8") as fh:
+                src = fh.read()
+            for word in (".lower(", ".casefold(", ".isprintable(", ".isidentifier(", ".isalnum(", ".isdigit(", "import unicodedata",
+                         "except Exception", "except BaseException", "BaseExceptionGroup"):
+                self.assertNotIn(word, src, rel)

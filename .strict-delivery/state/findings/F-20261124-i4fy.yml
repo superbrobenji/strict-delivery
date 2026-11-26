@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-i4fy
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/final-review-4c-3.md FR-6
+severity: LOW
+class: "docs vs test: PS8 apply-half verdict text (apply refused: form) against code and test (plain <path>: cannot read (Permission denied)): parent (two modes) and root, tests/test_managed.py:1428, :1434; raised in 4c.1 review round 7, registered against Task 4e.1 under LOW_PLATEAU (program controller Q1 (a), 2026-11-24)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4e.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 52c5ab1e449b901545e7aa90bfacc96eb12211f9
+    by: stream-config-hooks
+review_round: 7
+caused_by_change: true
+dimension: table text

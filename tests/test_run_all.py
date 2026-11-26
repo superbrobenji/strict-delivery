@@ -1172,6 +1172,8 @@ class VersionLineTest(RunAllCase):
         ``plugin.framework_dir`` is patched to it for the rest of the test."""
         d = os.path.join(self.tmp, name + str(next(self._dirs)))
         os.makedirs(os.path.join(d, ".claude-plugin"))
+        # Task 4a.2: config.load reads <framework>/profiles/<p>.yml, so a framework fixture carries the real profiles
+        shutil.copytree(os.path.join(REPO, "profiles"), os.path.join(d, "profiles"))
         if body is not None:
             data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
             with open(os.path.join(d, ".claude-plugin", "plugin.json"), "wb") as fh:
@@ -1270,6 +1272,7 @@ class VersionLineTest(RunAllCase):
         with self.subTest("M1 .claude-plugin absent"):
             d = os.path.join(self.tmp, "fwnodir")
             os.mkdir(d)
+            shutil.copytree(os.path.join(REPO, "profiles"), os.path.join(d, "profiles"))  # Task 4a.2 (see plugin_dir)
             with mock.patch.object(plugin, "framework_dir", return_value=d):
                 self.assertEqual(self.run_main(["--root", root]),
                                  (PASS6 + "FAIL run_all.version: %s: cannot be read (FileNotFoundError)\n" % pm, 1))
@@ -1284,6 +1287,7 @@ class VersionLineTest(RunAllCase):
         copy = os.path.join(self.tmp, "copy")
         shutil.copytree(os.path.join(REPO, "gates"), os.path.join(copy, "gates"),
                         ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(os.path.join(REPO, "profiles"), os.path.join(copy, "profiles"))  # Task 4a.2 (see plugin_dir)
         os.makedirs(os.path.join(copy, ".claude-plugin"))
         with open(os.path.join(copy, ".claude-plugin", "plugin.json"), "wb") as fh:
             fh.write(b"[" * 100000)

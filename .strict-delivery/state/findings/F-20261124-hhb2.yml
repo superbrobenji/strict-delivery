@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-hhb2
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/a2-review-1.md R1-2
+severity: MEDIUM
+class: "mutant W8 (a new text holding blocks of both styles accepted) survives the targeted modules: no test feeds a path with no kind whose new text holds both styles"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 983fa277eaf30a6f2febc19f2f3eae6927681d1a
+    by: stream-config-hooks
+review_round: 5
+caused_by_change: true
+dimension: mutation evidence for the both-styles refusal

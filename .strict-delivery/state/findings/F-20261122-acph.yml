@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-acph
+status: open
+source: "4a.3 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4a3-review-1.md R1-2"
+severity: LOW
+class: "test names that no longer state the asserted behaviour; members: tests/test_profiles.py:793 (..._untouched) and :796 (..._merges), both now asserting a refusal"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4a.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e10ae15a0e6d5bcfe6aae74b6092ed4e3e5f8864
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: ST9 pin edits

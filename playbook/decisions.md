@@ -35,6 +35,7 @@ A question in one of these classes is always the owner's, never a controller rul
 | model-policy | model and cost policy |
 | issue-close | closing an issue |
 | rule-override | rule overrides |
+| profile-override | profile overrides |
 | program-create | a program, its streams, owned paths and interfaces |
 | stream-ownership | moving a path between streams or assigning an unowned path |
 | stream-merge | merge order, and stacking on another stream's unmerged branch |

@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261124-8t7e
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4c2-review-1.md F3
+severity: LOW
+class: "render scan: a {{ at offset 0 of a template whose last character is $: no test of the i > 0 guard; mutant o8 survives on both"
+siblings: []
+cites:
+  - file: gates/lib/templates.py
+    lines: "93"
+    sha: f9d40b9
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f9d40b91684bf842b1a4e6ed23db560dbd4a76b7
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: render scan
