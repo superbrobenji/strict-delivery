@@ -5,17 +5,21 @@ under a temporary directory: a base commit on ``main`` and a head commit on ``fe
 mutant tables. The test runs the runner would start are replaced by a recorded fake (``Fake``) except in
 ``RealRunTest``, which runs the real ``unittest`` of this interpreter on a tiny fixture. Expected values are written by
 hand from the table; T6 is a generated cross product (stream-common "Pair matrix" rule)."""
+import ast
+import collections
 import contextlib
 import hashlib
 import io
 import itertools
 import os
+import pathlib
 import re
 import stat
 import subprocess
 import sys
 import threading
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -1730,6 +1734,366 @@ class WorkflowTest(unittest.TestCase):
     def test_runner_sources_read_numbers_as_text_only(self):  # K1: no int() of table text
         src = sa.read_text(os.path.join(REPO, "tests/ci_mutants.py"))
         self.assertEqual(len(re.findall(r"\bint\(", src)), 1)  # the one int() of a --parts/--part/--timeout value, after NUMBER
+
+
+# ---- E0-E4: the interface of tests/ci_mutants.py (stream-common :63 exact types; Q-CI5-1 (A) interface names) ----------
+class StrSub(str):
+    pass
+
+
+class ListSub(list):
+    pass
+
+
+class TupleSub(tuple):
+    pass
+
+
+class IntSub(int):
+    pass
+
+
+class DictSub(dict):
+    pass
+
+
+class BytesSub(bytes):
+    pass
+
+
+class BoolLike:
+    """An object that is true and is not a bool."""
+
+    def __bool__(self):
+        return True
+
+
+class FsPath:
+    """An os.PathLike that is not a str."""
+
+    def __init__(self, text):
+        self.text = text
+
+    def __fspath__(self):
+        return self.text
+
+
+# The names tests/ci_mutants.py leaves without a leading underscore: the four called from outside (E1-E4; the module's
+# upper-case constants are not functions or classes), written by hand from the table row E0.
+PUBLIC_NAMES = {"main", "split", "open_target", "count_problem"}
+# The other 33 module-level functions and classes, written by hand from the finding F-20261126-qm9a: each is private.
+INTERNAL_NAMES = ("Refused Stop show clean number parse git tracked_files tree_problem check_head changed_tables ident_text "
+                  "regular_problem Row literal_assignments read_literals load_table gather run_unittest Result run_pair "
+                  "protected_reason path_problem Unsafe restore one_row run_rows write_output say refusals command_split "
+                  "command_run command_summary").split()
+PRIVATE_NAMES = {"_" + name for name in INTERNAL_NAMES}
+# The private names of ci_mutants that this test module itself uses, each with the reason (E0: "nothing outside the module
+# uses a private name" has this one exception, because the tests name the refusal class of E2-E4).
+PRIVATE_USES_HERE = {"_Refused": "the named error of split, open_target and count_problem: a test pins the class, not a "
+                                 "TypeError or ValueError raised by something else"}
+
+
+def private_uses(text, names, python=True):
+    """The names of ``names`` (private names of ci_mutants) that ``text`` refers to: an attribute of a module, a name
+    imported from it, a quoted name (patch.object, getattr), or, for text that is not Python, any whole word."""
+    found = set(re.findall(r"ci_mutants\s*\.\s*(_(?!_)\w+)", text))  # (a dunder such as __doc__ is not a name of the module)
+    if python and "ci_mutants" not in text:
+        return found  # a file that never names the module cannot use its names (a name like _git may be its own)
+    if python:
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.Attribute) and node.attr in names:
+                found.add(node.attr)
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").endswith("ci_mutants"):
+                found.update(a.name for a in node.names if a.name in names)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in names:
+                found.add(node.value)
+    else:
+        found.update(n for n in names if re.search(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(n), text))
+    return found
+
+
+class InterfaceNamesTest(unittest.TestCase):  # E0
+    def module_names(self):
+        """(public, private, all) names of the module-level functions and classes, from an ast scan of the file."""
+        tree = ast.parse(sa.read_text(os.path.join(REPO, "tests/ci_mutants.py")))
+        names = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        return ({n for n in names if not n.startswith("_")}, {n for n in names if n.startswith("_")}, names)
+
+    def test_only_the_four_called_names_are_public(self):  # E0
+        public, private, names = self.module_names()
+        self.assertEqual(public, PUBLIC_NAMES)
+        self.assertEqual(len(names), len(set(names)))  # no name defined twice
+        self.assertEqual(len(INTERNAL_NAMES), 33)
+        self.assertEqual(len(PRIVATE_NAMES), 33)
+
+    def test_the_generated_private_list_equals_the_expected_set(self):  # E0
+        self.assertEqual(self.module_names()[1], PRIVATE_NAMES)
+
+    def test_the_imported_module_agrees_with_the_scan(self):  # E0: what a caller can see
+        seen = {n for n, v in vars(ci_mutants).items() if (callable(v) and getattr(v, "__module__", None) == ci_mutants.__name__)
+                and not n.startswith("_")}
+        self.assertEqual(seen, PUBLIC_NAMES)
+        for name in PRIVATE_NAMES:
+            self.assertTrue(hasattr(ci_mutants, name), name)  # renamed, not removed
+        for name in INTERNAL_NAMES:
+            self.assertFalse(hasattr(ci_mutants, name), name)  # no old public name is left
+
+    def test_the_scanner_finds_each_form_of_use(self):  # E0: the contradiction of the scan below
+        names = PRIVATE_NAMES
+        n = "_" + "show"  # built, so that this file's own scan does not find it
+        for text in ("from tests import ci_mutants\nci_mutants.%s(1)\n" % n, "from tests.ci_mutants import %s\n" % n,
+                     "mock.patch.object(ci_mutants, '%s')\n" % n, "mock.patch('tests.ci_mutants.%s')\n" % n,
+                     "import tests.ci_mutants as cm\ncm.%s\n" % n, "getattr(ci_mutants, '%s')\n" % n):
+            self.assertEqual(private_uses(text, names), {n}, text)
+        self.assertEqual(private_uses("python -m tests.ci_mutants.%s\n" % n, names, python=False), {n})
+        self.assertEqual(private_uses("run: %s\n" % n, names, python=False), {n})
+        for text in ("from tests import ci_mutants\nci_mutants.main([])\nci_mutants.split([], 1)\nci_mutants.TABLE_DIR\n",
+                     "x = show(1)\n"):
+            self.assertEqual(private_uses(text, names), set(), text)
+
+    def test_no_file_outside_the_module_uses_a_private_name(self):  # E0: tests/*.py and .github/
+        checked = []
+        for name in sorted(os.listdir(os.path.join(REPO, "tests"))):
+            rel = "tests/" + name
+            if not name.endswith(".py") or rel in ("tests/ci_mutants.py", "tests/test_ci_mutants.py"):
+                continue
+            checked.append(rel)
+            self.assertEqual(private_uses(sa.read_text(os.path.join(REPO, rel)), PRIVATE_NAMES), set(), rel)
+        for top, _, files in os.walk(os.path.join(REPO, ".github")):
+            for name in sorted(files):
+                path = os.path.join(top, name)
+                checked.append(os.path.relpath(path, REPO))
+                self.assertEqual(private_uses(sa.read_text(path), PRIVATE_NAMES, python=False), set(), path)
+        self.assertIn(sa.WORKFLOW, checked)
+        self.assertIn("tests/test_self_adoption.py", checked)
+
+    def test_this_test_module_uses_only_the_listed_private_names(self):  # E0
+        got = private_uses(sa.read_text(os.path.abspath(__file__)), PRIVATE_NAMES)
+        self.assertEqual(got, set(PRIVATE_USES_HERE))
+
+    def test_the_refusal_class_is_a_value_error(self):  # E2-E4: the named error
+        self.assertTrue(issubclass(ci_mutants._Refused, ValueError))
+
+
+class MainTypesTest(Fx):  # E1
+    PREFIX = "ci_mutants: refused: "
+
+    def attempt(self, argv=None, **kw):
+        fake = Fake(self.root)
+        kw.setdefault("root", self.root)
+        kw.setdefault("execute", fake)
+        kw.setdefault("env", {})
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ci_mutants.main(self.argv() if argv is None else argv, **kw)
+        return code, out.getvalue(), err.getvalue(), fake
+
+    def refused(self, label, needle, argv=None, **kw):
+        code, out, err, fake = self.attempt(argv, **kw)
+        self.assertEqual((code, out), (2, ""), (label, err))
+        self.assertTrue(err.startswith(self.PREFIX + needle + " "), (label, err))
+        self.assertEqual(len(err.splitlines()), 1, (label, err))
+        self.assertEqual(fake.calls, [], label)  # nothing run
+        self.assertEqual(self.status(), "", label)  # nothing mutated
+
+    def passed_the_guards(self, label, argv=None, marker="unknown command ", **kw):
+        """An unknown command is refused by the argument parser itself: the value went through every type guard."""
+        code, out, err, fake = self.attempt(["frobnicate"] if argv is None else argv, **kw)
+        self.assertEqual((code, out), (2, ""), (label, err))
+        self.assertTrue(err.startswith(self.PREFIX + marker), (label, err))
+
+    def test_argv(self):  # E1
+        self.repo()
+        code, out, err, fake = self.attempt()
+        self.assertEqual((code, err), (0, ""), out)  # an exact list of exact str is accepted and runs
+        self.assertEqual(len(fake.mutated_calls()), 4)
+        self.passed_the_guards("empty list", argv=[], marker="usage: ")
+        for label, argv in (("list subclass", ListSub(self.argv())), ("tuple", tuple(self.argv())),
+                            ("str subclass element", [StrSub(self.argv()[0])] + self.argv()[1:]),
+                            ("str subclass option", self.argv()[:1] + [StrSub("--base")] + self.argv()[2:]),
+                            ("bytes element", self.argv()[:-1] + [b"x"]), ("int element", self.argv()[:-1] + [1]),
+                            ("None element", self.argv()[:-1] + [None]), ("a str", "run"),
+                            ("a generator", (a for a in self.argv()))):
+            with self.subTest(label):
+                self.refused(label, "argv must be", argv=argv)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):  # None is no list (attempt() reads None as "the default argv")
+            self.assertEqual(ci_mutants.main(None, root=self.root, env={}), 2)
+        self.assertTrue(err.getvalue().startswith(self.PREFIX + "argv must be "), err.getvalue())
+
+    def test_root(self):  # E1
+        self.repo()
+        self.passed_the_guards("exact str", root=self.root)
+        self.passed_the_guards("None", root=None)
+        for label, root in (("str subclass", StrSub(self.root)), ("bytes", self.root.encode("utf-8")),
+                            ("PathLike", FsPath(self.root)), ("pathlib", pathlib.Path(self.root)),
+                            ("int", 3)):
+            with self.subTest(label):
+                self.refused(label, "root must be", root=root)
+
+    def test_execute(self):  # E1
+        self.repo()
+        self.passed_the_guards("None", execute=None)
+        self.passed_the_guards("a callable", execute=Fake(self.root))
+        self.passed_the_guards("a lambda", execute=lambda *a: PASS)
+        for label, execute in (("str", "run"), ("int", 1), ("a tuple", (1, 2)), ("a dict", {})):
+            with self.subTest(label):
+                self.refused(label, "execute must be", execute=execute)
+
+    def test_env(self):  # E1
+        self.repo()
+        self.passed_the_guards("None", env=None)
+        self.passed_the_guards("an empty dict", env={})
+        self.passed_the_guards("an exact dict of str", env={"A": "b", "MUTANT_RESULT_1": "success"})
+        self.passed_the_guards("os.environ itself", env=os.environ)
+        self.passed_the_guards("a copy of os.environ is an exact dict", env=dict(os.environ))
+        code, out, err, fake = self.attempt(self.argv("split"), env=os.environ)  # the real call path, nothing is written
+        self.assertEqual((code, err), (0, ""), out)
+        bad = (("dict subclass", DictSub()), ("dict subclass with items", DictSub(A="b")),
+               ("a Mapping that is no dict", collections.UserDict()),
+               ("a read-only mapping", types.MappingProxyType({})), ("a Mapping of os.environ", types.MappingProxyType(os.environ)),
+               ("os.environ.copy() as a subclass", DictSub(os.environ)), ("str subclass key", {StrSub("A"): "b"}),
+               ("str subclass value", {"A": StrSub("b")}), ("int key", {1: "b"}), ("int value", {"A": 1}),
+               ("bytes value", {"A": b"b"}), ("None value", {"A": None}), ("a list of pairs", [("A", "b")]), ("a str", "A=b"))
+        for label, env in bad:
+            with self.subTest(label):
+                self.refused(label, "env must be", env=env)
+        for label, env in bad:  # the same on the split command: the refusal does not depend on the command
+            with self.subTest("split " + label):
+                self.refused("split " + label, "env must be", argv=self.argv("split"), env=env)
+
+    def test_the_type_guards_run_before_the_arguments_are_read(self):  # E1: a bad command and a bad env: the type is named
+        self.repo()
+        code, out, err, fake = self.attempt(["frobnicate"], env=DictSub())
+        self.assertEqual((code, out), (2, ""))
+        self.assertTrue(err.startswith(self.PREFIX + "env must be "), err)
+
+
+class SplitTypesTest(unittest.TestCase):  # E2
+    KEYS = [("t1.py", "b"), ("t1.py", "a"), ("t2.py", "c")]
+
+    def refused(self, label, needle, keys, parts):
+        with self.assertRaises(ci_mutants._Refused, msg=label) as caught:
+            ci_mutants.split(keys, parts)
+        self.assertTrue(str(caught.exception).startswith(needle + " "), (label, str(caught.exception)))
+
+    def test_keys(self):  # E2
+        want = [[("t1.py", "a"), ("t1.py", "b")], [("t2.py", "c")]]
+        self.assertEqual(ci_mutants.split(list(self.KEYS), 2), want)
+        self.assertEqual(ci_mutants.split([], 3), [[], [], []])
+        first = self.KEYS[:1]
+        for label, keys in (("list subclass", ListSub(self.KEYS)), ("tuple", tuple(self.KEYS)), ("a set", set(self.KEYS)),
+                            ("a generator", (k for k in self.KEYS)), ("None", None), ("a str", "ab"),
+                            ("list item", first + [["t1.py", "a"]]), ("tuple subclass item", first + [TupleSub(("t1.py", "a"))]),
+                            ("str subclass table", first + [(StrSub("t1.py"), "a")]),
+                            ("str subclass id", first + [("t1.py", StrSub("a"))]),
+                            ("1-tuple", first + [("t1.py",)]), ("3-tuple", first + [("t1.py", "a", "x")]),
+                            ("empty tuple", first + [()]), ("int id", first + [("t1.py", 1)]),
+                            ("bytes table", first + [(b"t1.py", "a")]), ("str item", first + ["ab"])):
+            with self.subTest(label):
+                self.refused(label, "keys must be", keys, 2)
+
+    def test_keys_refused_before_any_work(self):  # E2: split builds nothing
+        touched = []
+
+        class Watched(ListSub):
+            def __iter__(self):
+                touched.append("iter")
+                return ListSub.__iter__(self)
+        self.refused("watched", "keys must be", Watched(self.KEYS), 2)
+        self.assertEqual(touched, [])
+
+    def test_parts(self):  # E2
+        self.assertEqual(len(ci_mutants.split(list(self.KEYS), 1)), 1)
+        self.assertEqual(len(ci_mutants.split(list(self.KEYS), 5)), 5)
+        for label, parts in (("True", True), ("False", False), ("int subclass", IntSub(2)), ("0", 0), ("-1", -1),
+                             ("float", 2.0), ("str", "2"), ("None", None), ("bytes", b"2"), ("a list", [2])):
+            with self.subTest(label):
+                self.refused(label, "parts must be", list(self.KEYS), parts)
+
+
+class OpenTargetTypesTest(GitIsolatedTestCase):  # E3
+    def setUp(self):
+        super().setUp()
+        self.box = os.path.join(self.tmp, "box")  # the sandbox: every path this class passes is below it
+        os.mkdir(self.box)
+        self.file = os.path.join(self.box, "f.bin")
+        with open(self.file, "wb") as fh:
+            fh.write(b"data\n")
+        self.opens = []
+        real_open = os.open
+
+        def recording(*args, **kw):
+            self.opens.append(args)
+            return real_open(*args, **kw)
+        self.patcher = mock.patch.object(os, "open", recording)
+
+    def read(self):
+        with open(self.file, "rb") as fh:
+            return fh.read()
+
+    def refused(self, label, needle, root, rel, write):
+        self.patcher.start()
+        try:
+            with self.assertRaises(ci_mutants._Refused, msg=label) as caught:
+                ci_mutants.open_target(root, rel, write)
+        finally:
+            self.patcher.stop()
+        self.assertTrue(str(caught.exception).startswith(needle + " "), (label, str(caught.exception)))
+        self.assertEqual(self.opens, [], label)  # opens nothing
+        self.assertEqual(self.read(), b"data\n", label)  # and truncates nothing
+
+    def test_exact_values_are_accepted(self):  # E3
+        with ci_mutants.open_target(self.box, "f.bin", False) as fh:
+            self.assertEqual(fh.read(), b"data\n")
+        with ci_mutants.open_target(self.box, "f.bin", True) as fh:
+            fh.write(b"new")
+        self.assertEqual(self.read(), b"new")
+
+    def test_root(self):  # E3
+        for label, root in (("str subclass", StrSub(self.box)), ("bytes", self.box.encode("utf-8")),
+                            ("PathLike", FsPath(self.box)), ("pathlib", pathlib.Path(self.box)), ("None", None)):
+            for write in (False, True):
+                with self.subTest((label, write)):
+                    self.refused(label, "root must be", root, "f.bin", write)
+
+    def test_rel(self):  # E3
+        for label, rel in (("str subclass", StrSub("f.bin")), ("bytes", b"f.bin"), ("PathLike", FsPath("f.bin")),
+                           ("pathlib", pathlib.PurePosixPath("f.bin")), ("None", None)):
+            for write in (False, True):
+                with self.subTest((label, write)):
+                    self.refused(label, "rel must be", self.box, rel, write)
+
+    def test_write(self):  # E3
+        for label, write in (("int 1", 1), ("int 0", 0), ("bool-like", BoolLike()), ("None", None), ("str", "yes"),
+                             ("a list", [True])):
+            with self.subTest(label):
+                self.refused(label, "write must be", self.box, "f.bin", write)
+
+
+class CountProblemTypesTest(unittest.TestCase):  # E4: data and old are bytes (the file's bytes and the row's encoded old text)
+    def refused(self, label, needle, data, old):
+        with self.assertRaises(ci_mutants._Refused, msg=label) as caught:
+            ci_mutants.count_problem(data, old)
+        self.assertTrue(str(caught.exception).startswith(needle + " "), (label, str(caught.exception)))
+
+    def test_exact_bytes_are_accepted(self):  # E4
+        self.assertEqual(ci_mutants.count_problem(b"abc", b"b"), (1, ""))
+        self.assertEqual(ci_mutants.count_problem(b"abc", b"x"), (-1, "0 matches"))
+        self.assertEqual(ci_mutants.count_problem(b"aaa", b"aa"), (-1, "2 or more matches"))
+        self.assertEqual(ci_mutants.count_problem(b"", b"a"), (-1, "0 matches"))
+
+    def test_data(self):  # E4
+        for label, data in (("str", "abc"), ("bytes subclass", BytesSub(b"abc")), ("bytearray", bytearray(b"abc")),
+                            ("memoryview", memoryview(b"abc")), ("None", None), ("int", 1), ("a list", [b"abc"])):
+            with self.subTest(label):
+                self.refused(label, "data must be", data, b"b")
+
+    def test_old(self):  # E4
+        for label, old in (("str", "b"), ("bytes subclass", BytesSub(b"b")), ("bytearray", bytearray(b"b")),
+                           ("memoryview", memoryview(b"b")), ("None", None), ("int", 98), ("a list", [b"b"])):
+            with self.subTest(label):
+                self.refused(label, "old must be", b"abc", old)
 
 
 # the sha256 of the pull-request job's text on origin/main at 22b9cb2 (the job Task CI3 leaves unchanged)

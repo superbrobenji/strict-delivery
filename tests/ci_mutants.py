@@ -74,11 +74,12 @@ REQUIRED = {"split": ("--base", "--head", "--parts", "--part"), "run": ("--base"
             "summary": ("--base", "--head", "--parts")}
 
 
-class Refused(Exception):
-    """An argument the command refuses: main() prints it and exits 2."""
+class _Refused(ValueError):
+    """An argument the command refuses: main() prints it and exits 2. split, open_target and count_problem raise it for an
+    argument of the wrong type (exact types only: an exact type is accepted, a subclass is refused)."""
 
 
-class Stop(Exception):
+class _Stop(Exception):
     """A refusal that ends the command before anything runs: printed as ``ERROR <where>: <reason>``, exit 1."""
 
     def __init__(self, where, message):
@@ -87,12 +88,12 @@ class Stop(Exception):
         self.message = message
 
 
-def show(text):
+def _show(text):
     """A bounded ASCII form of untrusted text for a message (quoted)."""
     return ascii(text if len(text) <= 80 else text[:80] + "...")
 
 
-def clean(text, limit=200):
+def _clean(text, limit=200):
     """Untrusted text as one printable ASCII line: escapes, no quotes, bounded."""
     text = text if len(text) <= limit else text[:limit] + "..."
     text = text.encode("ascii", "backslashreplace").decode("ascii")
@@ -100,73 +101,73 @@ def clean(text, limit=200):
 
 
 # ---- arguments ----------------------------------------------------------------------------------------------------
-def number(option, text):
+def _number(option, text):
     if NUMBER.fullmatch(text) is None:
-        raise Refused("%s needs a whole number from 1 to 999999 (ASCII digits, no sign, no leading zero), got %s"
-                      % (option, show(text)))
+        raise _Refused("%s needs a whole number from 1 to 999999 (ASCII digits, no sign, no leading zero), got %s"
+                      % (option, _show(text)))
     return int(text)
 
 
-def parse(argv):
+def _parse(argv):
     """(command, {option: value}); ``--python`` holds a list of (label, path)."""
     if not argv:
-        raise Refused(USAGE)
+        raise _Refused(USAGE)
     command = argv[0]
     if command not in OPTIONS:
-        raise Refused("unknown command %s; %s" % (show(command), USAGE))
+        raise _Refused("unknown command %s; %s" % (_show(command), USAGE))
     given = {"--python": []}
     i = 1
     while i < len(argv):
         option = argv[i]
         if option not in OPTIONS[command]:
-            raise Refused("unknown argument %s; %s" % (show(option), USAGE))
+            raise _Refused("unknown argument %s; %s" % (_show(option), USAGE))
         if option != "--python" and option in given:
-            raise Refused("%s given twice; %s" % (option, USAGE))
+            raise _Refused("%s given twice; %s" % (option, USAGE))
         if i + 1 >= len(argv):
-            raise Refused("%s needs a value; %s" % (option, USAGE))
+            raise _Refused("%s needs a value; %s" % (option, USAGE))
         value = argv[i + 1]
         if option in ("--parts", "--part", "--timeout"):
-            given[option] = number(option, value)
+            given[option] = _number(option, value)
         elif option == "--base":
             if REF.fullmatch(value) is None or ".." in value or value.endswith(("/", ".lock")):
-                raise Refused("--base needs a branch or ref name (letters, digits, _ . / -, no .., not starting with - or "
-                              "a dot-dot), got %s" % show(value))
+                raise _Refused("--base needs a branch or ref name (letters, digits, _ . / -, no .., not starting with - or "
+                              "a dot-dot), got %s" % _show(value))
             given[option] = value
         elif option == "--head":
             if HEAD.fullmatch(value) is None:
-                raise Refused("--head needs the full lowercase hex commit sha (40 or 64 digits), got %s" % show(value))
+                raise _Refused("--head needs the full lowercase hex commit sha (40 or 64 digits), got %s" % _show(value))
             given[option] = value
         else:
             label, sep, path = value.partition("=")
             if not sep or LABEL.fullmatch(label) is None or not path or "\0" in path:
-                raise Refused("--python needs LABEL=PATH (label of 1-16 letters, digits, . _ -), got %s" % show(value))
+                raise _Refused("--python needs LABEL=PATH (label of 1-16 letters, digits, . _ -), got %s" % _show(value))
             if not os.path.isabs(path):
-                raise Refused("--python path must be absolute, got %s" % show(path))
+                raise _Refused("--python path must be absolute, got %s" % _show(path))
             if any(label == other for other, _ in given["--python"]):
-                raise Refused("--python label %s given twice" % show(label))
+                raise _Refused("--python label %s given twice" % _show(label))
             given["--python"].append((label, path))
         i += 2
     for option in REQUIRED[command]:
         if option not in given:
-            raise Refused("%s is required; %s" % (option, USAGE))
+            raise _Refused("%s is required; %s" % (option, USAGE))
     if command == "run" and len(given["--python"]) != 2:
-        raise Refused("run needs two --python LABEL=PATH options, got %d" % len(given["--python"]))
+        raise _Refused("run needs two --python LABEL=PATH options, got %d" % len(given["--python"]))
     if "--part" in given and given["--part"] > given["--parts"]:
-        raise Refused("--part %d is past --parts %d" % (given["--part"], given["--parts"]))
+        raise _Refused("--part %d is past --parts %d" % (given["--part"], given["--parts"]))
     return command, given
 
 
 # ---- git ----------------------------------------------------------------------------------------------------------
-def git(root, *args):
+def _git(root, *args):
     p = subprocess.run(["git", "-C", root] + list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.returncode, p.stdout
 
 
-def tracked_files(root):
+def _tracked_files(root):
     """{path: mode} of the index (mode ``conflict`` for an unmerged path)."""
-    code, out = git(root, "ls-files", "-s", "-z")
+    code, out = _git(root, "ls-files", "-s", "-z")
     if code != 0:
-        raise Stop("tree", "git ls-files failed")
+        raise _Stop("tree", "git ls-files failed")
     found = {}
     for record in out.split(b"\0"):
         if not record:
@@ -174,45 +175,45 @@ def tracked_files(root):
         meta, _, name = record.partition(b"\t")
         fields = meta.split()
         if len(fields) != 3:
-            raise Stop("tree", "git ls-files printed an entry this runner cannot read")
+            raise _Stop("tree", "git ls-files printed an entry this runner cannot read")
         path = os.fsdecode(name)
         found[path] = fields[0].decode("ascii") if fields[2] == b"0" else "conflict"
     return found
 
 
-def tree_problem(root):
+def _tree_problem(root):
     """The text of a problem with the tree (``git status`` shows any change, tracked or untracked), or ''."""
-    code, out = git(root, "status", "--porcelain", "--untracked-files=all")
+    code, out = _git(root, "status", "--porcelain", "--untracked-files=all")
     if code != 0:
         return "git status failed"
     text = out.decode("utf-8", "replace").strip()
     if text:
         first = text.splitlines()[0]
-        return "the tree is not clean (%d entries, first: %s)" % (len(text.splitlines()), clean(first, 80))
+        return "the tree is not clean (%d entries, first: %s)" % (len(text.splitlines()), _clean(first, 80))
     return ""
 
 
-def check_head(root, head):
-    code, out = git(root, "rev-parse", "--verify", "--quiet", head + "^{commit}")
-    code2, out2 = git(root, "rev-parse", "HEAD")
+def _check_head(root, head):
+    code, out = _git(root, "rev-parse", "--verify", "--quiet", head + "^{commit}")
+    code2, out2 = _git(root, "rev-parse", "HEAD")
     if code != 0 or code2 != 0 or out.strip() != out2.strip():
-        raise Stop("head", "the checkout is at %s, not at --head %s" % (clean(out2.decode("ascii", "replace").strip(), 64), head))
+        raise _Stop("head", "the checkout is at %s, not at --head %s" % (_clean(out2.decode("ascii", "replace").strip(), 64), head))
 
 
-def changed_tables(root, base, head):
-    """The table paths the head adds or changes against the merge base; Stop for an unusable base or an unreadable diff."""
-    code, out = git(root, "merge-base", base, head)
+def _changed_tables(root, base, head):
+    """The table paths the head adds or changes against the merge base; _Stop for an unusable base or an unreadable diff."""
+    code, out = _git(root, "merge-base", base, head)
     if code != 0 or HEAD.fullmatch(out.decode("ascii", "replace").strip()) is None:
-        raise Stop("base %s" % base, "is missing or shares no history with the head")
+        raise _Stop("base %s" % base, "is missing or shares no history with the head")
     merge_base = out.decode("ascii").strip()
-    code, out = git(root, "diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", merge_base, head, "--", TABLE_DIR)
+    code, out = _git(root, "diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", merge_base, head, "--", TABLE_DIR)
     if code != 0:
-        raise Stop("base %s" % base, "git diff against the merge base failed")
+        raise _Stop("base %s" % base, "git diff against the merge base failed")
     tokens = out.split(b"\0")
     if tokens and tokens[-1] == b"":
         tokens.pop()
     if len(tokens) % 2:
-        raise Stop("base %s" % base, "git diff printed output this runner cannot read")
+        raise _Stop("base %s" % base, "git diff printed output this runner cannot read")
     paths, errors = [], []
     for status, name in zip(tokens[0::2], tokens[1::2]):
         path = os.fsdecode(name)
@@ -222,20 +223,20 @@ def changed_tables(root, base, head):
         prefix = TABLE_DIR + "/"
         if not path.startswith(prefix) or TABLE_NAME.fullmatch(path[len(prefix):]) is None:
             errors.append("ERROR table %s: not a table file name (a table is %s/<task-id>.py, the name from [A-Za-z0-9._-])"
-                          % (clean(path), TABLE_DIR))
+                          % (_clean(path), TABLE_DIR))
         elif letter not in ("A", "M", "T"):
-            errors.append("ERROR table %s: unexpected change status %s" % (path, clean(letter, 8)))
+            errors.append("ERROR table %s: unexpected change status %s" % (path, _clean(letter, 8)))
         else:
             paths.append(path)
     return sorted(paths), errors
 
 
 # ---- tables -------------------------------------------------------------------------------------------------------
-def ident_text(ident):
-    return ident if type(ident) is str and ID.fullmatch(ident) else show(repr(ident))
+def _ident_text(ident):
+    return ident if type(ident) is str and ID.fullmatch(ident) else _show(repr(ident))
 
 
-def regular_problem(root, rel, tracked):
+def _regular_problem(root, rel, tracked):
     """Why ``rel`` is not a tracked regular file reached without a symbolic link, or ''."""
     mode = tracked.get(rel)
     if mode is None:
@@ -266,7 +267,7 @@ def regular_problem(root, rel, tracked):
     return ""
 
 
-class Row:
+class _Row:
     def __init__(self, table, ident, path, old, new, modules):
         self.table, self.id, self.path, self.old, self.new, self.modules = table, ident, path, old, new, modules
 
@@ -275,7 +276,7 @@ class Row:
         return (self.table, self.id)
 
 
-def literal_assignments(tree):
+def _literal_assignments(tree):
     """{name: value node} of the two assignments; a list of problems when the module holds anything else."""
     found, problems = {}, []
     for node in tree.body:
@@ -295,7 +296,7 @@ def literal_assignments(tree):
     return found, problems
 
 
-def read_literals(node, name):
+def _read_literals(node, name):
     """(value, problem): the literal of ``node`` and, for a dict, a problem when one key repeats."""
     try:
         value = ast.literal_eval(node)
@@ -305,17 +306,17 @@ def read_literals(node, name):
     seen = set()
     for key in keys:
         if key in seen:
-            return None, "duplicate key %s in %s" % (show(repr(key)), name)
+            return None, "duplicate key %s in %s" % (_show(repr(key)), name)
         seen.add(key)
     return value, None
 
 
-def load_table(root, rel, tracked):
+def _load_table(root, rel, tracked):
     """(rows, errors) of one table file; errors are finished ``ERROR table ...`` lines."""
     errors = []
 
     def err(message, ident=None):
-        errors.append("ERROR table %s%s: %s" % (rel, "" if ident is None else " id " + ident_text(ident), message))
+        errors.append("ERROR table %s%s: %s" % (rel, "" if ident is None else " id " + _ident_text(ident), message))
 
     try:
         st = os.lstat(os.path.join(root, *rel.split("/")))
@@ -340,14 +341,14 @@ def load_table(root, rel, tracked):
     except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
         err("cannot be parsed (syntax error, a NUL byte or nesting too deep: %s)" % type(e).__name__)
         return [], errors
-    found, problems = literal_assignments(tree)
+    found, problems = _literal_assignments(tree)
     for problem in problems:
         err(problem)
     if problems:
         return [], errors
     values = {}
     for name in ("M", "KILL"):
-        values[name], problem = read_literals(found[name], name)
+        values[name], problem = _read_literals(found[name], name)
         if problem:
             err(problem)
     if errors:
@@ -386,25 +387,25 @@ def load_table(root, rel, tracked):
                 err("no killing module (the KILL tuple is empty)", ident)
             else:
                 for module in modules:
-                    if MODULE.fullmatch(module) is None or regular_problem(root, module.replace(".", "/") + ".py", tracked):
-                        err("killing module %s is not a tracked tests/test*.py module (name it tests.test_x)" % show(module),
+                    if MODULE.fullmatch(module) is None or _regular_problem(root, module.replace(".", "/") + ".py", tracked):
+                        err("killing module %s is not a tracked tests/test*.py module (name it tests.test_x)" % _show(module),
                             ident)
         if len(errors) == before:
-            rows.append(Row(rel, ident, value[0], old, new, modules))
+            rows.append(_Row(rel, ident, value[0], old, new, modules))
     for ident in kill:
         if ident not in m:
             err("id is in KILL but not in M", ident)
     return rows, errors
 
 
-def gather(root, base, head):
+def _gather(root, base, head):
     """(changed table paths, rows, errors, tracked): every changed table read; errors are finished lines."""
-    check_head(root, head)
-    paths, errors = changed_tables(root, base, head)
-    tracked = tracked_files(root)
+    _check_head(root, head)
+    paths, errors = _changed_tables(root, base, head)
+    tracked = _tracked_files(root)
     rows = []
     for rel in paths:
-        got, errs = load_table(root, rel, tracked)
+        got, errs = _load_table(root, rel, tracked)
         rows.extend(got)
         errors.extend(errs)
     owners = {}
@@ -420,7 +421,17 @@ def gather(root, base, head):
 
 def split(keys, parts):
     """``keys`` is a list of (table, id); returns ``parts`` lists: the sorted keys in contiguous blocks, sizes differing by
-    at most one, the larger blocks first."""
+    at most one, the larger blocks first. Exact types only: ``keys`` an exact list of exact 2-tuples of exact str,
+    ``parts`` an exact int of at least 1 (not a bool); anything else raises _Refused before any work."""
+    if type(keys) is not list:
+        raise _Refused("keys must be an exact list of (table, id) tuples of exact str (a subclass or another type is "
+                       "refused), got type %s" % _clean(type(keys).__name__, 40))
+    if not all(type(k) is tuple and len(k) == 2 and type(k[0]) is str and type(k[1]) is str for k in keys):
+        raise _Refused("keys must be an exact list of (table, id) tuples of exact str: an item is not an exact 2-tuple of "
+                       "exact str")
+    if type(parts) is not int or parts < 1:
+        raise _Refused("parts must be an exact int of at least 1 (a bool, a subclass or another type is refused), got "
+                       "type %s" % _clean(type(parts).__name__, 40))
     ordered = sorted(keys)
     size, extra = divmod(len(ordered), parts)
     out, at = [], 0
@@ -432,7 +443,7 @@ def split(keys, parts):
 
 
 # ---- running ------------------------------------------------------------------------------------------------------
-def run_unittest(python, modules, root, timeout):
+def _run_unittest(python, modules, root, timeout):
     """One test run: (exit code, output text, timed out). The run is a new session so a timeout kills its whole group."""
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     proc = subprocess.Popen([python, "-m", "unittest"] + list(modules), cwd=root, env=env, stdin=subprocess.DEVNULL,
@@ -450,7 +461,7 @@ def run_unittest(python, modules, root, timeout):
     return proc.returncode, out.decode("utf-8", "replace"), timed_out
 
 
-class Result:
+class _Result:
     def __init__(self, label, code, text, timed_out):
         ran = RAN.search(text)
         self.label, self.text, self.timed_out = label, text, timed_out
@@ -461,14 +472,14 @@ class Result:
             self.detail = "%s %s %s" % (label, ran.group(0) if ran else "no Ran line", "OK" if self.passed else "FAILED")
 
 
-def run_pair(execute, pythons, modules, root, timeout):
+def _run_pair(execute, pythons, modules, root, timeout):
     """Run ``modules`` on both interpreters at once; the two Results in order. An exception of execute is re-raised."""
     slots = [None, None]
 
     def work(i):
         label, path = pythons[i]
         try:
-            slots[i] = Result(label, *execute(path, modules, root, timeout))
+            slots[i] = _Result(label, *execute(path, modules, root, timeout))
         except Exception as err:  # noqa: BLE001 - re-raised below, after both runs ended
             slots[i] = err
     threads = [threading.Thread(target=work, args=(i,)) for i in range(2)]
@@ -482,7 +493,7 @@ def run_pair(execute, pythons, modules, root, timeout):
     return slots
 
 
-def protected_reason(path, files, dirs):
+def _protected_reason(path, files, dirs):
     low = path.lower()  # ASCII only by now, so lower() is the same on every interpreter
     for f in files:
         if low == f:
@@ -493,19 +504,27 @@ def protected_reason(path, files, dirs):
     return ""
 
 
-def path_problem(root, path, tracked, files, dirs):
+def _path_problem(root, path, tracked, files, dirs):
     if PATH_CHARS.fullmatch(path) is None or len(path) > MAX_PATH_LENGTH:
-        return "path %s must be relative, at most %d characters of A-Z a-z 0-9 _ . / + @ = , -" % (show(path), MAX_PATH_LENGTH)
+        return "path %s must be relative, at most %d characters of A-Z a-z 0-9 _ . / + @ = , -" % (_show(path), MAX_PATH_LENGTH)
     if any(p in ("", ".", "..", ".git") or p.startswith("-") for p in path.split("/")):
-        return "path %s has an empty, '.', '..', '.git' or option-like component" % show(path)
-    why = protected_reason(path, files, dirs)
+        return "path %s has an empty, '.', '..', '.git' or option-like component" % _show(path)
+    why = _protected_reason(path, files, dirs)
     if why:
-        return "path %s %s" % (show(path), why)
-    why = regular_problem(root, path, tracked)
-    return "path %s %s" % (show(path), why) if why else ""
+        return "path %s %s" % (_show(path), why)
+    why = _regular_problem(root, path, tracked)
+    return "path %s %s" % (_show(path), why) if why else ""
 
 
 def count_problem(data, old):
+    """(index of the one match, '') or (-1, why not): ``data`` is the file's bytes, ``old`` the replaced text encoded as
+    UTF-8; overlapping occurrences count. Exact bytes only (a str, a bytes subclass or another type raises _Refused)."""
+    if type(data) is not bytes:
+        raise _Refused("data must be exact bytes (a str, a subclass or another type is refused), got type %s"
+                       % _clean(type(data).__name__, 40))
+    if type(old) is not bytes:
+        raise _Refused("old must be exact bytes (a str, a subclass or another type is refused), got type %s"
+                       % _clean(type(old).__name__, 40))
     first = data.find(old)
     if first < 0:
         return -1, "0 matches"
@@ -514,7 +533,7 @@ def count_problem(data, old):
     return first, ""
 
 
-class Unsafe(Exception):
+class _Unsafe(Exception):
     """The path no longer opens as the tracked regular file it was checked to be: a link or another file type was swapped
     in after the check. The message is the finished ``path ... changed after the check (...)`` text."""
 
@@ -525,8 +544,20 @@ def open_target(root, rel, write):
     Nothing is followed, nothing blocks and nothing is truncated before the file is known to be the right one: every parent
     is opened as a directory with O_NOFOLLOW (one step at a time, from the root), the last component with O_NOFOLLOW and
     O_NONBLOCK (and without O_TRUNC), and the opened file must be a regular file with exactly one hard link (fstat);
-    only then is it truncated, through the descriptor. Otherwise Unsafe (the path was swapped for a symbolic link, a
-    directory, a FIFO or a hard link after the check; a hard link would write through to a file elsewhere)."""
+    only then is it truncated, through the descriptor. Otherwise _Unsafe (the path was swapped for a symbolic link, a
+    directory, a FIFO or a hard link after the check; a hard link would write through to a file elsewhere).
+
+    Exact types only: ``root`` and ``rel`` exact str, ``write`` an exact bool; anything else raises _Refused before
+    anything is opened."""
+    if type(root) is not str:
+        raise _Refused("root must be an exact str (a subclass, bytes or a path object is refused), got type %s"
+                       % _clean(type(root).__name__, 40))
+    if type(rel) is not str:
+        raise _Refused("rel must be an exact str (a subclass, bytes or a path object is refused), got type %s"
+                       % _clean(type(rel).__name__, 40))
+    if type(write) is not bool:
+        raise _Refused("write must be an exact bool (an int or another object is refused), got type %s"
+                       % _clean(type(write).__name__, 40))
     flags = (os.O_RDWR if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     parts = rel.split("/")
     try:
@@ -540,8 +571,8 @@ def open_target(root, rel, write):
         finally:
             os.close(dfd)
     except OSError as err:
-        raise Unsafe("path %s changed after the check (cannot be opened as a regular file: %s)"
-                     % (show(rel), err.strerror or type(err).__name__))
+        raise _Unsafe("path %s changed after the check (cannot be opened as a regular file: %s)"
+                     % (_show(rel), err.strerror or type(err).__name__))
     st = os.fstat(fd)
     problem = ("it is not a regular file" if not stat.S_ISREG(st.st_mode)
                else "it has more than one hard link" if st.st_nlink != 1 else "")
@@ -552,11 +583,11 @@ def open_target(root, rel, write):
             problem = "cannot be truncated: %s" % (err.strerror or type(err).__name__)
     if problem:
         os.close(fd)
-        raise Unsafe("path %s changed after the check (%s)" % (show(rel), problem))
+        raise _Unsafe("path %s changed after the check (%s)" % (_show(rel), problem))
     return os.fdopen(fd, "r+b" if write else "rb")
 
 
-def restore(root, rel, data):
+def _restore(root, rel, data):
     """'' when the file holds ``data`` again (written and read back through one open), else why it does not."""
     try:
         with open_target(root, rel, True) as fh:
@@ -564,19 +595,19 @@ def restore(root, rel, data):
             fh.flush()
             fh.seek(0)
             back = fh.read()
-    except Unsafe as err:
+    except _Unsafe as err:
         return str(err)
     except OSError as err:
-        return "%s: %s" % (type(err).__name__, clean(str(err)))
+        return "%s: %s" % (type(err).__name__, _clean(str(err)))
     return "" if back == data else "the bytes read back differ"
 
 
-def one_row(root, row, pythons, timeout, execute):
+def _one_row(root, row, pythons, timeout, execute):
     """The finished line of one id whose path and baseline are fine, and whether the tree is still clean."""
     try:
         with open_target(root, row.path, False) as fh:
             data = fh.read()
-    except Unsafe as err:
+    except _Unsafe as err:
         return "%s: ERROR | %s" % (row.id, err), True
     first, problem = count_problem(data, row.old)
     if first < 0:
@@ -585,12 +616,12 @@ def one_row(root, row, pythons, timeout, execute):
     try:
         with open_target(root, row.path, True) as fh:
             fh.write(data[:first] + row.new + data[first + len(row.old):])
-        results = run_pair(execute, pythons, list(row.modules), root, timeout)
+        results = _run_pair(execute, pythons, list(row.modules), root, timeout)
     except Exception as err:  # noqa: BLE001 - one ERROR line; the file is restored below
-        line = "%s: ERROR | %s" % (row.id, err if isinstance(err, Unsafe) else "%s: %s" % (type(err).__name__, clean(str(err))))
+        line = "%s: ERROR | %s" % (row.id, err if isinstance(err, _Unsafe) else "%s: %s" % (type(err).__name__, _clean(str(err))))
         results = None
     finally:
-        problem = restore(root, row.path, data)
+        problem = _restore(root, row.path, data)
     if problem:
         head = line + "; " if line else "%s: ERROR | " % row.id
         return "%sthe file %s was not restored: %s" % (head, row.path, problem), False
@@ -604,23 +635,23 @@ def one_row(root, row, pythons, timeout, execute):
     return "%s: %s | %s" % (row.id, verdict, " ; ".join(r.detail for r in results)), True
 
 
-def run_rows(root, rows, tracked, protected_files, pythons, timeout, execute, emit):
+def _run_rows(root, rows, tracked, protected_files, pythons, timeout, execute, emit):
     """Run ``rows``; ``emit(line)`` gets one finished line per row, in order. Returns whether any line is an ERROR."""
-    problems = {row.id: path_problem(root, row.path, tracked, protected_files, PROTECTED_DIRS) for row in rows}
+    problems = {row.id: _path_problem(root, row.path, tracked, protected_files, PROTECTED_DIRS) for row in rows}
     baseline = {}
     for module in sorted({m for row in rows if not problems[row.id] for m in row.modules}):
         try:
-            results = run_pair(execute, pythons, [module], root, timeout)
+            results = _run_pair(execute, pythons, [module], root, timeout)
         except Exception as err:  # noqa: BLE001
-            baseline[module] = "%s: %s: %s" % (module, type(err).__name__, clean(str(err)))
+            baseline[module] = "%s: %s: %s" % (module, type(err).__name__, _clean(str(err)))
             continue
         bad = [r for r in results if not r.passed]
         if bad:
             baseline[module] = "%s failed on %s" % (module, " and ".join(r.detail for r in bad))
             for r in bad:
                 for text_line in r.text.splitlines()[-30:]:
-                    emit("| " + clean(text_line))
-    why = tree_problem(root)
+                    emit("| " + _clean(text_line))
+    why = _tree_problem(root)
     errored = False
     stopped = ""
     for row in rows:
@@ -634,11 +665,11 @@ def run_rows(root, rows, tracked, protected_files, pythons, timeout, execute, em
             line = "%s: ERROR | baseline failed: %s" % (row.id, "; ".join(baseline[m] for m in row.modules if m in baseline))
         else:
             try:
-                line, restored = one_row(root, row, pythons, timeout, execute)
+                line, restored = _one_row(root, row, pythons, timeout, execute)
             except Exception as err:  # noqa: BLE001
-                line, restored = "%s: ERROR | %s: %s" % (row.id, type(err).__name__, clean(str(err))), True
+                line, restored = "%s: ERROR | %s: %s" % (row.id, type(err).__name__, _clean(str(err))), True
             if restored:
-                after = tree_problem(root)
+                after = _tree_problem(root)
                 if after:
                     line = "%s: ERROR | %s after this id" % (row.id, after)
                     stopped = "%s after %s" % (after.split(" (")[0], row.id)
@@ -649,7 +680,7 @@ def run_rows(root, rows, tracked, protected_files, pythons, timeout, execute, em
     return errored
 
 
-def write_output(env, lines):
+def _write_output(env, lines):
     """Append the lines to the GITHUB_OUTPUT file as the multi-line output ``lines``; the problem text, or ''."""
     path = env.get("GITHUB_OUTPUT")
     if not path:
@@ -664,70 +695,70 @@ def write_output(env, lines):
 
 
 # ---- commands -----------------------------------------------------------------------------------------------------
-def say(text):
+def _say(text):
     print(text)
     sys.stdout.flush()
 
 
-def refusals(errors):
+def _refusals(errors):
     for line in errors:
-        say(line)
+        _say(line)
     return 1
 
 
-def command_split(opts, root):
-    paths, rows, errors, tracked = gather(root, opts["--base"], opts["--head"])
+def _command_split(opts, root):
+    paths, rows, errors, tracked = _gather(root, opts["--base"], opts["--head"])
     if errors:
-        return refusals(errors)
+        return _refusals(errors)
     mine = split([r.key for r in rows], opts["--parts"])[opts["--part"] - 1]
-    say("ci_mutants: part %d of %d: %d mutants" % (opts["--part"], opts["--parts"], len(mine)))
+    _say("ci_mutants: part %d of %d: %d mutants" % (opts["--part"], opts["--parts"], len(mine)))
     for table, ident in mine:
-        say("  %s %s" % (table, ident))
+        _say("  %s %s" % (table, ident))
     return 0
 
 
-def command_run(opts, root, execute, env):
-    paths, rows, errors, tracked = gather(root, opts["--base"], opts["--head"])
+def _command_run(opts, root, execute, env):
+    paths, rows, errors, tracked = _gather(root, opts["--base"], opts["--head"])
     if errors:
-        return refusals(errors)
-    why = tree_problem(root)
+        return _refusals(errors)
+    why = _tree_problem(root)
     if why:
-        raise Stop("tree", why)
+        raise _Stop("tree", why)
     k, n = opts["--part"], opts["--parts"]
     lines = []
 
     def emit(line):
         if LINE.fullmatch(line):
             lines.append(line)
-        say(line)
+        _say(line)
     if not paths:
-        say("ci_mutants: no mutant tables changed")
+        _say("ci_mutants: no mutant tables changed")
     else:
         mine = set(split([r.key for r in rows], n)[k - 1])
         todo = [r for r in rows if r.key in mine]
         if not todo:
-            say("ci_mutants: part %d of %d has no mutants" % (k, n))
+            _say("ci_mutants: part %d of %d has no mutants" % (k, n))
         else:
-            say("ci_mutants: part %d of %d: %d mutants" % (k, n, len(todo)))
+            _say("ci_mutants: part %d of %d: %d mutants" % (k, n, len(todo)))
             files = set(PROTECTED_FILES) | {"tests/" + m.split(".", 1)[1] + ".py" for r in rows for m in r.modules}
-            errored = run_rows(root, todo, tracked, {f.lower() for f in files}, opts["--python"],
+            errored = _run_rows(root, todo, tracked, {f.lower() for f in files}, opts["--python"],
                                opts.get("--timeout", DEFAULT_TIMEOUT), execute, emit)
-            problem = write_output(env, lines)
+            problem = _write_output(env, lines)
             if problem:
-                say("ERROR output: " + problem)
+                _say("ERROR output: " + problem)
                 return 1
             return 1 if errored else 0
-    problem = write_output(env, lines)
+    problem = _write_output(env, lines)
     if problem:
-        say("ERROR output: " + problem)
+        _say("ERROR output: " + problem)
         return 1
     return 0
 
 
-def command_summary(opts, root, env):
-    paths, rows, errors, tracked = gather(root, opts["--base"], opts["--head"])
+def _command_summary(opts, root, env):
+    paths, rows, errors, tracked = _gather(root, opts["--base"], opts["--head"])
     if errors:
-        return refusals(errors)
+        return _refusals(errors)
     expected = {r.id: r for r in rows}
     problems, seen = [], {}
     for k in range(1, opts["--parts"] + 1):
@@ -735,13 +766,13 @@ def command_summary(opts, root, env):
         if result is None:
             problems.append("FAIL job %d: no result" % k)
         elif result != "success":
-            problems.append("FAIL job %d: result %s" % (k, show(result)))
+            problems.append("FAIL job %d: result %s" % (k, _show(result)))
         for text_line in env.get("MUTANT_LINES_%d" % k, "").splitlines():
             if not text_line.strip():
                 continue
             m = LINE.fullmatch(text_line)
             if m is None:
-                problems.append("FAIL job %d: unreadable line %s" % (k, show(text_line)))
+                problems.append("FAIL job %d: unreadable line %s" % (k, _show(text_line)))
             else:
                 seen.setdefault(m.group(1), []).append((m.group(2), (m.group(3) or "")[3:]))
     counts, listed = {}, []
@@ -757,44 +788,64 @@ def command_summary(opts, root, env):
             verdict, detail = got[0]
             counts[verdict] = counts.get(verdict, 0) + 1
             if verdict in ("NOT_APPLIED", "TIMEOUT", "ERROR"):
-                problems.append("FAIL %s: %s %s" % (ident, verdict, clean(detail, 120)))
+                problems.append("FAIL %s: %s %s" % (ident, verdict, _clean(detail, 120)))
             elif verdict in ("SURVIVED", "SPLIT"):
                 listed.append("%s: %s (%s) %s" % ("survivor" if verdict == "SURVIVED" else "split", ident,
-                                                  expected[ident].table, clean(detail, 120)))
+                                                  expected[ident].table, _clean(detail, 120)))
     if not paths:
-        say("ci_mutants: no mutant tables changed")
+        _say("ci_mutants: no mutant tables changed")
     elif not expected:
-        say("ci_mutants: no mutants in the changed tables")
+        _say("ci_mutants: no mutants in the changed tables")
     else:
-        say("ci_mutants: summary: %d mutants: %s" % (len(expected), ", ".join(
+        _say("ci_mutants: summary: %d mutants: %s" % (len(expected), ", ".join(
             "%s %d" % (v, counts[v]) for v in VERDICTS if v in counts)))
     for item in listed:
-        say(item)
+        _say(item)
     for item in problems:
-        say(item)
+        _say(item)
     if problems:
-        say("ci_mutants: summary FAILED (%d problems)" % len(problems))
+        _say("ci_mutants: summary FAILED (%d problems)" % len(problems))
         return 1
     return 0
 
 
 def main(argv, root=None, execute=None, env=None):
-    """Exit code of the command; see the module docstring."""
+    """Exit code of the command; see the module docstring. Exact types only (an exact type is accepted, a subclass is
+    refused): ``argv`` an exact list of exact str; ``root`` None or an exact str; ``execute`` None or a callable; ``env``
+    None, an exact dict of exact str to exact str, or ``os.environ`` itself. Any other value: exit 2 and one
+    ``ci_mutants: refused:`` line on stderr, before anything runs."""
+    if type(argv) is not list or any(type(a) is not str for a in argv):
+        print("ci_mutants: refused: argv must be an exact list of exact str (a subclass, a tuple or another type is refused), "
+              "got type %s" % _clean(type(argv).__name__, 40), file=sys.stderr)
+        return 2
+    if root is not None and type(root) is not str:
+        print("ci_mutants: refused: root must be None or an exact str (a subclass, bytes or a path object is refused), "
+              "got type %s" % _clean(type(root).__name__, 40), file=sys.stderr)
+        return 2
+    if execute is not None and not callable(execute):
+        print("ci_mutants: refused: execute must be None or a callable, got type %s" % _clean(type(execute).__name__, 40),
+              file=sys.stderr)
+        return 2
+    if env is not None and env is not os.environ and not (
+            type(env) is dict and all(type(k) is str and type(v) is str for k, v in env.items())):
+        print("ci_mutants: refused: env must be None, os.environ itself, or an exact dict of exact str to exact str (a "
+              "subclass or another mapping is refused), got type %s" % _clean(type(env).__name__, 40), file=sys.stderr)
+        return 2
     root = os.path.abspath(root if root is not None else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
-        command, opts = parse(argv)
-    except Refused as err:
+        command, opts = _parse(argv)
+    except _Refused as err:
         print("ci_mutants: refused: %s" % err, file=sys.stderr)
         return 2
     env = os.environ if env is None else env
     try:
         if command == "split":
-            return command_split(opts, root)
+            return _command_split(opts, root)
         if command == "run":
-            return command_run(opts, root, execute or run_unittest, env)
-        return command_summary(opts, root, env)
-    except Stop as stop:
-        say("ERROR %s: %s" % (stop.where, stop.message))
+            return _command_run(opts, root, execute or _run_unittest, env)
+        return _command_summary(opts, root, env)
+    except _Stop as stop:
+        _say("ERROR %s: %s" % (stop.where, stop.message))
         return 1
 
 
