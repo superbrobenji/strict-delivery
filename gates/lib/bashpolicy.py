@@ -103,27 +103,30 @@ def _segments(view: str) -> list:
 
 
 def _home_moved(view: str) -> bool:
+    """Whether the folded ``view`` moves ``HOME`` or ``XDG_CONFIG_HOME``. Linear in the length of ``view`` (rows TX53,
+    PB5, F-20261126-mqie): no slice of the text or of the tokens after the current one is made per occurrence or token."""
     for name in HOME_NAMES:
         at = view.find(name)
         while at >= 0:
             before = view[at - 1] if at > 0 else ""
-            rest = view[at + len(name):]
-            if before not in _TOKEN and (rest.startswith("=") or rest.startswith("+=")) and before != "$":
+            end = at + len(name)
+            if before not in _TOKEN and (view.startswith("=", end) or view.startswith("+=", end)) and before != "$":
                 return True
             at = view.find(name, at + 1)
     for seg in _segments(view):
-        for n, tok in enumerate(seg):
-            tail = seg[n + 1:]
-            hit = [t for t in tail if t in HOME_NAMES]
-            if tok in _BINDERS and hit:
+        # One pass from the right: what the tokens after the current one hold (a name of HOME_NAMES; for ``env`` also a
+        # ``-uNAME`` of it; for ``printf`` whether the first ``-v`` after it is followed by a name of HOME_NAMES).
+        name_after = env_after = printf_after = False
+        for n in range(len(seg) - 1, -1, -1):
+            tok = seg[n]
+            if (tok in _BINDERS and name_after) or (tok == "printf" and printf_after) or (tok == "env" and env_after):
                 return True
-            if tok == "printf" and "-v" in tail and tail[tail.index("-v") + 1:tail.index("-v") + 2] and \
-                    tail[tail.index("-v") + 1] in HOME_NAMES:
-                return True
-            if tok == "env":
-                for t in tail:
-                    if t in HOME_NAMES or (t.startswith("-u") and t[2:] in HOME_NAMES):
-                        return True
+            if tok in HOME_NAMES:
+                name_after = env_after = True
+            elif tok.startswith("-u") and tok[2:] in HOME_NAMES:
+                env_after = True
+            if tok == "-v":
+                printf_after = n + 1 < len(seg) and seg[n + 1] in HOME_NAMES
     return False
 
 

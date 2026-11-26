@@ -1362,5 +1362,60 @@ class HooksDirPathsTest(Repo):
         self.assertEqual(rec.calls, [])
 
 
+# ---- fix round 2, C4-1 (F-20261126-mqie): linear time in the command length (rows TX53, PB5) ----
+HOME_LINE = ("FAIL hook.bash.bypass.home: moving HOME or XDG_CONFIG_HOME is refused; the human can run the command "
+             "with the ! prefix")
+
+
+def bounded(fn, seconds=30):
+    """``fn()`` under a hard wall-clock bound: linear code takes well under 1 s at 10**5 tokens, the quadratic scan
+    of every remaining token took tens of minutes."""
+    def alarm(_sig, _frm):
+        raise AssertionError("no answer within %d s: the check is not linear in the command length" % seconds)
+    old = signal.signal(signal.SIGALRM, alarm)
+    signal.alarm(seconds)
+    try:
+        return fn()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+class LinearTimeTest(unittest.TestCase):
+    N = 100000
+    # Every shape of the per-token and per-occurrence scan in ``_home_moved`` (the tail slice and list per token, the
+    # ``tail.index("-v")`` per ``printf``, the ``env`` tail loop, the remaining-text slice per name occurrence).
+    SHAPES = ("a ", "home ", "xdg_config_home ", "printf ", "printf -v ", "env ", "env -u ", "export ", "unset ",
+              "git ", "git commit ", "git a ", "'a' ", "a\"\" ", "--no-v ", "decision ")
+
+    def test_text_refusals_linear(self):  # TX53, PB5
+        for unit in self.SHAPES:
+            out = bounded(lambda: bp.text_refusals(unit * self.N, "a1"))
+            self.assertIs(type(out), list, unit)
+
+    def test_text_refusals_linear_when_refusing(self):  # TX53, PB5: the refusing tail is read in linear time too
+        for unit, tail in (("a ", "; export HOME"), ("home ", "; printf -v HOME x"), ("env ", "; env HOME=x ls"),
+                           ("export ", "; export HOME"), ("printf ", "; printf -v XDG_CONFIG_HOME x"),
+                           ("a ", "; env -uHOME ls"), ("a ", "; home=x")):
+            self.assertEqual(bounded(lambda: bp.text_refusals(unit * self.N + tail)), [HOME_LINE], unit + tail)
+
+    def test_commit_refusals_linear(self):  # TX53, PB5
+        for unit in ("git commit ", "git ", "a "):
+            out = bounded(lambda: bp.commit_refusals(unit * self.N, pol(), Recorder()))
+            self.assertIs(type(out), list, unit)
+        out = bounded(lambda: bp.commit_refusals("git commit -n " * self.N, pol(), Recorder()))
+        self.assertIn("hook.bash.bypass.n-flag", ids(out))
+
+    def test_short_verdicts_unchanged(self):  # TX26-TX30, TX32, TX34, TX35: the shapes still refuse (hand-written rows)
+        for t in ("printf -v HOME x", "printf -v XDG_CONFIG_HOME x", "printf %s -v HOME x", "env HOME=x ls", "env -u HOME ls",
+                  "env -uHOME ls", "env -u XDG_CONFIG_HOME ls", "export HOME=x", "export A=1 HOME=x", "unset HOME",
+                  "declare -x HOME", "read HOME", "for HOME in a; do :; done", "home=x", "xdg_config_home+=x",
+                  "echo ok; env HOME=x ls", "echo ok; export A HOME"):
+            self.assertEqual(bp.text_refusals(t), [HOME_LINE], t)
+        for t in ("printf -v A -v HOME x", "printf -v", "printf x -v", "printf %s HOME", "env A=1 ls", "env -u A ls",
+                  "export A", "echo HOME; export A", "env; echo HOME", "export; HOME", "echo $HOME", "a home b"):
+            self.assertEqual(bp.text_refusals(t), [], t)
+
+
 if __name__ == "__main__":
     unittest.main()
