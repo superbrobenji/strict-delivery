@@ -6,9 +6,10 @@ agents are dispatched by role under a fixed contract, and gates enforce all of i
 sessions and, optionally, in git hooks and CI. Large efforts run as programs of parallel
 streams.
 
-Status: **pre-release, under active development toward v0.1.** Nothing here is installable
-yet. The repository builds itself with its own process, so the history, ledger and plan are
-public on purpose.
+Status (2026-11-26): **pre-release, under active development toward v0.1.** Nothing here is
+installable yet: `init`, `doctor` and `upgrade` are not merged. The plugin will be enabled in
+this repository once its Bash hook lands (see "Where v0.1 stands"). The repository builds itself with its own process, so the history,
+ledger and plan are public on purpose.
 
 ## What it will look like in your project (v0.1)
 
@@ -52,8 +53,9 @@ only), so the target project can be in any language.
 | pre-commit | schema, register, decisions gates | `run_all` (every gate) | `run_all`, then `commands.test` |
 | tasks per block | no cap | 5 | 3 |
 
-This repository is configured as `strict` and follows it by hand for now: `run_all`, the git
-hooks and CI that will enforce it arrive in the next steps of the roadmap.
+This repository is configured as `strict`. `run_all`, the git hooks and CI already enforce it
+here; the Claude Code hooks are being finished (the Bash hook is the last one), and until the
+plugin is enabled the agents follow the remaining rules by hand.
 
 ## Repository layout
 
@@ -89,26 +91,81 @@ planned owner step.
 - This overview itself (#14)
 - `run_all`, every enabled gate in one command (#17), `loopstats`, the fix-loop stopping math (#22), and the git hooks tool `gates/tools/githooks.py` with the CI workflow (#23)
 - `findings new` loop fields: `--review-round`, `--caused-by-change` and `--dimension` write the finding fields `loopstats` counts (#24)
+- Process rules rolled in: the binding fix loop, narrow-only fixes, merge on demand (#25)
+- Plugin packaging: `plugin.json`, `marketplace.json`, the `run_all` version check (#26)
+- Config version 2 and `gate_dispatch`: every agent dispatch checked for its contract and model tier (#27); the claims tool (`claims add`, `claims verify`) and decision options (#28)
+- Programs of parallel streams: the schema vocabulary, handoff and ledger schemas (#29); the programs library, the `program` command and `gate_streams` (#30); owner questions, automatic continuation and dispatch for live programs (#32); pull-request merge policy, final merge and cleanup pull requests (#35)
+- Evidence: the evidence schemas, `check evidence` and mutation-transcript checks (#31)
+- Context and docs: context files, read receipts and `gate_context` (#33); the generated overview and `gate_index`, the checkpoints library (#37); the drift facts library and `gate_drift` (#39, #43)
+- Stream runtime for the Claude Code hooks (#36); the Edit/Write and Agent hooks (#42)
+- `gate_checkpoint` in full (#41)
+- CI: the test suite split into five parallel shard jobs per cell (#40); tests never start git's file-system monitor (#34)
 
-Merged pull requests: #1-#24.
+- Config profiles and their checks: profile presets and overrides, config errors, the decision gate's override checks (#38)
 
-## Roadmap to v0.1
+Merged pull requests: #1-#43.
 
-1. `run_all`, git hooks and CI as this repository's own commit gate
-2. The claims tool, config version 2, and `gate_dispatch`: every agent dispatch checked for its contract and model tier
-3. Checkpoints and handoffs; the `program` tool for parallel streams; merge policy and cleanup; the owner-question path and automatic continuation
-4. Packaging as a plugin: runtime, Claude Code hooks, records and evidence, config profiles, `init`, `doctor`, `upgrade`
-5. Context and docs: required reads per session and role with read receipts, the generated overview (`INDEX.md`), drift checks
-6. Release 0.1.0: end-to-end tests of the three profiles, release script, changelog
+## Where v0.1 stands
 
-A few smaller follow-up blocks (for example Block 1d3) are registered, not yet scheduled; the plan has the full list.
+The work runs as five parallel streams. Every code pull request gets a final review, mutation
+evidence for each pinned finding and a green CI run on its exact head before it merges.
 
-Target: about 60.0 hours of work from 2026-11-17 14:00 to the v0.1.0 tag (revision 7 of the
-stream breakdown, `.strict-delivery/state/plans/2026-10-31-strict-delivery-framework/breakdown.md`,
-section 7, after the delivery-process redesign of that day). That is Friday 2026-11-20 if the
-work ran around the clock, and Friday 2026-11-27 at eight working hours a day. The estimate
-does not include waiting for owner answers or for usage limits. Progress and every decision
-are in the ledger under `.strict-delivery/state/plans/`.
+| Stream | Done | In progress | Still to come |
+|---|---|---|---|
+| config | config profiles and their checks (4a-4c, #38) | `init` (4d.1-4d.2) and `doctor` (4d.3) | `upgrade` (4e.1), the slash command files and this repository's adoption (4e.2), fixture repositories and the `init` end-to-end tests (4e.3) |
+| hooks | runtime, Edit/Write and Agent hooks (#36, #42) | the Bash hook (3b.2), on a branch and not merged: by the owner's decision it will refuse a chained or piped command that mixes git with a write, rather than guessing where it points | 3b.3, then the Bash hook PR; the plugin is enabled in this repository after it |
+| records | overview, checkpoints, drift (#37, #39, #41, #43) | the tip-reader task 5b.3 | drift hardening (5c.4) |
+| residual | the program controller's sync text (#37) | residual batch 1, the registry requests (#44 open) | the process-learning tasks L1 and L2, batch 2 (the index and drift registry rows, context in the hooks, loopstats conditions in `gate_dispatch`, the interim skill's removal) |
+| ci | the sharded CI suite (#40) | mutation tests per pull request on CI (CI3) and a faster local suite (CI2), both at top priority | |
+
+After the streams: one adversarial verifier pass over everything each stream delivered,
+then the `release` stream (6R: end-to-end tests of the three profiles, the release script,
+the changelog) and the 0.1.0 tag.
+
+Estimate (ledger, 2026-11-26 14:15): the plugin enabled in this repository around 2026-11-29
+to 2026-11-30, and the v0.1.0 tag around 2026-12-04 to 2026-12-06. No date is committed; the
+estimate does not include usage-limit stops. Progress and every decision are in the ledger under `.strict-delivery/state/plans/`.
+
+## v0.2 (designed, planning in progress)
+
+v0.2 makes the framework faster to deliver with, without lowering the quality bar. Its
+design is approved: `docs/strict-delivery/specs/2026-11-26-v02-design.md`, on the
+`block/docs-resume` branch until it merges. Work starts after the v0.1.0 tag, with a target
+of under one week from the start of v0.2 work to the v0.2 tag (one more week of leeway). It
+is built in five stages, each merged before the next:
+
+1. Stage B, the tool gaps that slowed v0.1 down: who found a finding and in which round;
+   loop statistics that count only a task's own review findings, while findings carried in
+   from other tasks still block sign-off; findings that close
+   automatically once the fix is merged and its test pinned (including squash merges); briefs
+   with empty sections refused.
+2. Stage A, records and process tooling: a finding records every member of its class; a
+   fixed hardening section in every input-domain table; a schema for every record kind from
+   its first record; handoffs written only by a tool; `gates timeuse`, which measures where
+   agent time goes against targets.
+3. Stage C, the recorded fixes: one shared safe-read helper and the open findings left from
+   v0.1; git 2.30 as the minimum version.
+4. Stage F, CI and mutation rules: mutation tests per pull request on changed lines; the
+   full suite on a pull request is CI on its exact head; profiles that set how much each run
+   costs; CI optional, with local `gates suite` and `gates mutants` as the fallback; CI jobs
+   named for what they do.
+5. Stage D, gates, views and stated limits: automatic clean-up of merged work, with history
+   kept for a configurable time (six months by default); role and method rules turned into
+   gates; required config keys (`config/3`); pressure-test scenarios for agents; checks on
+   merge, cherry-pick, revert and rebase commits; a program status view; claims whose checks
+   are re-run; an interactive `init`; drift checks for single plans; detection of orphaned
+   agents; the Bash hook reading the scripts it is asked to run.
+
+## v0.3 (candidates)
+
+Tracked in `docs/strict-delivery/specs/2026-11-26-v03-candidates.md` (on `block/docs-resume`
+until it merges); none of these is designed yet:
+
+- Windows support
+- agent harnesses other than Claude Code
+- CI systems other than GitHub Actions
+- optional language-specific lint adapters
+- a strict pre-commit cell that also runs the touched tests
 
 ## License
 
