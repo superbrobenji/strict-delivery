@@ -7,8 +7,8 @@ sessions and, optionally, in git hooks and CI. Large efforts run as programs of 
 streams.
 
 Status (2026-11-26): **pre-release, under active development toward v0.1.** Nothing here is
-installable yet: the plugin is enabled in this repository only after its Bash hook lands (see
-"Where v0.1 stands"). The repository builds itself with its own process, so the history,
+installable yet: `init`, `doctor` and `upgrade` are not merged. The plugin will be enabled in
+this repository once its Bash hook lands (see "Where v0.1 stands"). The repository builds itself with its own process, so the history,
 ledger and plan are public on purpose.
 
 ## What it will look like in your project (v0.1)
@@ -105,24 +105,24 @@ Merged pull requests: #1-#37 and #39-#43 (#38 is open).
 
 ## Where v0.1 stands
 
-The work runs as five parallel streams. Every pull request gets a final review, mutation
-evidence and a green CI run on its exact head before it merges.
+The work runs as five parallel streams. Every code pull request gets a final review, mutation
+evidence for each pinned finding and a green CI run on its exact head before it merges.
 
 | Stream | Done | In progress | Still to come |
 |---|---|---|---|
-| config | config profiles and their checks (4a-4c, #38 open and green) | `init` (4d.1-4d.2) and `doctor` (4d.3) | `upgrade` (4e), then `init` and `doctor` finishing touches |
-| hooks | runtime, Edit/Write and Agent hooks (#36, #42) | the Bash hook (3b.2): it now refuses a chained or piped command that mixes git with a write, rather than guessing where it points | 3b.3, then the Bash hook PR; the plugin is enabled in this repository after it |
+| config | (none merged yet) | config profiles and their checks (4a-4c, #38: open, CI green on its head, a records commit still owed); `init` (4d.1-4d.2) and `doctor` (4d.3) | `upgrade` (4e.1), the slash command files and this repository's adoption (4e.2), fixture repositories and the `init` end-to-end tests (4e.3) |
+| hooks | runtime, Edit/Write and Agent hooks (#36, #42) | the Bash hook (3b.2), on a branch and not merged: by the owner's decision it will refuse a chained or piped command that mixes git with a write, rather than guessing where it points | 3b.3, then the Bash hook PR; the plugin is enabled in this repository after it |
 | records | overview, checkpoints, drift (#37, #39, #41, #43) | the tip-reader task 5b.3 | drift hardening (5c.4) |
-| residual | the program controller's sync text (#37) | residual batch 1, the registry requests (#44 open) | the process-learning tasks L1 and L2, batch 2 (context in the hooks, the interim skill's removal), release script (6R) |
+| residual | the program controller's sync text (#37) | residual batch 1, the registry requests (#44 open) | the process-learning tasks L1 and L2, batch 2 (the index and drift registry rows, context in the hooks, loopstats conditions in `gate_dispatch`, the interim skill's removal) |
 | ci | the sharded CI suite (#40) | mutation tests per pull request on CI (CI3) and a faster local suite (CI2), both at top priority | |
 
 After the streams: one adversarial verifier pass over everything each stream delivered,
-then release 0.1.0 (end-to-end tests of the three profiles, the release script, the
-changelog).
+then the `release` stream (6R: end-to-end tests of the three profiles, the release script,
+the changelog) and the 0.1.0 tag.
 
-Expected: the v0.1.0 tag around 2026-12-04 to 2026-12-06, and the plugin enabled in this
-repository around 2026-11-29 to 2026-11-30. The estimate does not include usage-limit
-stops. Progress and every decision are in the ledger under `.strict-delivery/state/plans/`.
+Estimate (ledger, 2026-11-26 14:15): the plugin enabled in this repository around 2026-11-29
+to 2026-11-30, and the v0.1.0 tag around 2026-12-04 to 2026-12-06. No date is committed; the
+estimate does not include usage-limit stops. Progress and every decision are in the ledger under `.strict-delivery/state/plans/`.
 
 ## v0.2 (designed, planning in progress)
 
@@ -133,7 +133,8 @@ of under one week from the start of v0.2 work to the v0.2 tag (one more week of 
 is built in five stages, each merged before the next:
 
 1. Stage B, the tool gaps that slowed v0.1 down: who found a finding and in which round;
-   loop statistics that ignore findings carried in from other tasks; findings that close
+   loop statistics that count only a task's own review findings, while findings carried in
+   from other tasks still block sign-off; findings that close
    automatically once the fix is merged and its test pinned (including squash merges); briefs
    with empty sections refused.
 2. Stage A, records and process tooling: a finding records every member of its class; a
