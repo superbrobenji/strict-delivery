@@ -520,6 +520,55 @@ def expansion_c_option(call: GitCall) -> bool:
     return False
 
 
+# RULE-A (owner answer Q-HK5-1 (a), task-3b.2-domain-r2-draft.md section 0): the whole tokens that make a text which is not
+# one plain git command a git write: the GIT_WRITES names, branch, checkout and switch (no option needed), fetch (owner
+# answer Q-HK5-4 (a)); and every alias name of the policy aliases (``write_text_refusals``).
+WRITE_TEXT_WORDS = GIT_WRITES + ("branch", "checkout", "switch", "fetch")
+_NOT_GIT = "the program is not git"
+_NOT_GIT_ID = "hook.bash.not-git"   # the id of git_call's lines for a program that is not git or a refused env wrapper
+
+
+def _write_indicated(text: str, aliases: dict) -> bool:
+    """Whether ``text`` holds, in its raw view or its quote-removed words (ruling R1), a ``git`` token (ASCII fold) and an
+    INDICATOR: a ``WRITE_TEXT_WORDS`` token (case-sensitive) or an alias name of ``aliases`` (ASCII fold)."""
+    views = (text, " ".join(shellscan.scan(text).words))
+    if not any(shellscan.token_in(view, "git", True) for view in views):
+        return False
+    return (any(shellscan.token_in(view, word) for view in views for word in WRITE_TEXT_WORDS)
+            or any(shellscan.token_in(view, name, True) for view in views for name in aliases))
+
+
+def write_text_refusals(text: str, aliases: dict, agent_key: str) -> list:
+    """RULE-A (Q-HK5-1 (a); T:690 for ``!`` bodies; CDP2-CDP4): the lines for a git write in a text that is not one plain git
+    command, for every actor (``agent_key`` is checked, the verdict does not read it). The text is not plain (``<reason>``:
+    the scanner's reason), or plain with a program word that is not git after the ``env`` unwrap, or no program word (``the
+    program is not git``); or it is a plain git command whose alias chain reaches ``!`` bodies, which git hands to ``sh``
+    (``the program is not git``, each body judged). When such a text holds a ``git`` token and an INDICATOR the result is
+    ruling N1's ``-c`` line when a ``-c`` follows ``git`` in it, then the compound write line; otherwise ``[]``. A text whose
+    effective words hold ``commit`` gives ``[]``: it keeps its own compound line (T:691), and so does a ``!`` body that
+    reaches ``commit`` (decision R2-2's alias line). Expected lines: ``FAIL hook.bash.compound: a git write runs as its own
+    command (<reason>); <way out>``."""
+    scan = shellscan.scan(text)   # raises TypeError("text must be str, not <type>") for any other type (row ET37)
+    _check_aliases(aliases)
+    shellscan._check_str(agent_key, "agent_key")
+    call = git_call(scan, aliases) if scan.plain else None
+    if scan.plain and call is not None and not any(ln.startswith("FAIL " + _NOT_GIT_ID) for ln in call.lines):
+        texts = shell_alias_texts(call, aliases)   # a plain git command: only its `!` bodies are text git does not show
+        if any(_has_word(body, "commit") for body in texts):
+            return []
+    else:
+        if "commit" in effective_words(text, aliases):
+            return []
+        texts = [text]
+    if not any(_write_indicated(t, aliases) for t in texts):
+        return []
+    lines = []
+    if any(c_option_in_text(t) for t in texts):
+        lines.append("FAIL hook.bash.global-option.-c: git option -c before the subcommand is refused; %s" % _WAY)
+    reason = safe_text(scan.reason) if not scan.plain else _NOT_GIT
+    return lines + ["FAIL hook.bash.compound: a git write runs as its own command (%s); %s" % (reason, _WAY)]
+
+
 def _alias_lines(call: GitCall, p: Policy, out: list) -> list:
     """The lines for the alias values ``call`` followed (R1-3, plan :3697, table CD7): each value, plain or ``!``, is read
     by every ``text_refusals`` member as the command text is; a ``!`` value that reaches a ``commit`` word, in its own text

@@ -1618,5 +1618,176 @@ class GlobalCRuleTest(unittest.TestCase):
         self.assertEqual(out, ["git b", "git a", "git b"])   # the body, then the values of b and a it reaches (each once)
 
 
+# ---- fix round 3, part B (hooks stream controller 6; table revision 2): RULE-A as ``write_text_refusals`` (CDP4), its
+# exact types (ET37-ET39), the batch-1 survivor P19. Expected lines are written by hand from the table (draft section 0).
+RA_WAY = "run it with the ! prefix if you must, or ask the owner"
+RA_LINE = "FAIL hook.bash.compound: a git write runs as its own command (%s); " + RA_WAY
+RA_C_LINE = "FAIL hook.bash.global-option.-c: git option -c before the subcommand is refused; " + RA_WAY
+RA_NOT_GIT = "the program is not git"
+# the 13 GIT_WRITES names of ruling (3b), branch, checkout and switch, fetch (owner answer Q-HK5-4 (a)), an alias name
+RA_INDICATORS = ("commit", "push", "merge", "pull", "rebase", "cherry-pick", "revert", "am", "reset", "update-ref", "tag",
+                 "stash", "worktree", "branch", "checkout", "switch", "fetch", "zz")
+RA_ALIASES = {"zz": "log"}   # an alias of a read: its NAME is the indicator, whatever it expands to (GW11, revision 2)
+# one text form per reason of the scanner (draft section 0 `<reason>`), and the plain other-program form; X is the indicator
+RA_FORMS = (("git X; ls", "operator ;"), ("ls && git X", "operator &&"), ("ls || git X", "operator ||"),
+            ("git X | cat", "operator |"), ("git X &", "operator &"), ("ls\ngit X", "operator newline"),
+            ("(git X)", "grouping"), ("echo $(git X)", "substitution"), ("git X > f", "redirection"),
+            ("git X $y", "expansion"), ("git X # c", "comment"), ("if git X", "reserved word"), ('git X a""b', "quoting"),
+            ("FOO=1 git X", "assignment"), ('gi""t X', "command word"), ("git X é", "character"),
+            ("git X 'a", "unbalanced quote"), ("git X \x00", "nul character"), ("echo git X", RA_NOT_GIT))
+
+
+class WriteTextRefusalsTest(unittest.TestCase):
+    """B1 (L tier, hand-written): ``write_text_refusals`` over every INDICATOR member whole crossed with one text form per
+    scanner reason, the negatives, the ``!`` bodies of a plain git command (B2) and the lines that go with the rule."""
+
+    def test_every_indicator_in_every_form(self):
+        for word in RA_INDICATORS:
+            for form, reason in RA_FORMS:
+                text = form.replace("X", word)
+                # T:691: a text whose effective words hold `commit` keeps its own compound line (commit_refusals), no second
+                want = [] if word == "commit" else [RA_LINE % reason]
+                for agent_key in ("session", "a1"):   # every actor: the rule does not read the caller
+                    with self.subTest(text=text, agent_key=agent_key):
+                        self.assertEqual(bp.write_text_refusals(text, RA_ALIASES, agent_key), want)
+
+    def test_the_git_token_spellings(self):   # draft 3.2 dimension B, positive members (either view, ASCII fold)
+        for git_word in ("git", "GIT", "/usr/bin/git", 'gi""t', "'git'", '"git"', "g\\it", '"git"x'):
+            text = "ls; %s reset --hard" % git_word
+            with self.subTest(text=text):
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), [RA_LINE % "operator ;"])
+
+    def test_no_git_token_or_no_indicator(self):   # negatives: exit 0 at the hook, nothing here
+        for text in ("gitk reset; ls", "legit reset; ls", "git-x reset; ls", "git_x reset; ls", "ls; reset --hard",
+                     "git status; git log -1", "git log --oneline | head -5", "git resetx; ls", "git xreset; ls",
+                     "git reset-x; ls", "git reset_x; ls", "git reset9; ls", "git RESET; ls", "git Branch; ls",
+                     "echo git status", "grep -n \"git status\" notes.md", "ls", "", "git zzz; ls", "git status",
+                     "git reset --hard", "git branch -D x", "git -C x reset --hard", "git fetch", "git tag t"):
+            with self.subTest(text=text):
+                self.assertEqual(bp.write_text_refusals(text, RA_ALIASES, "session"), [])
+
+    def test_indicator_neighbours(self):   # a token ends at a character outside [0-9A-Za-z_-]: `reset.txt` holds `reset`
+        for text in ("git log reset.txt; ls", "git log a/reset; ls", "git log x=reset; ls", "git log a:reset; ls"):
+            with self.subTest(text=text):
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), [RA_LINE % "operator ;"])
+
+    def test_alias_names_fold_ascii(self):   # alias names with the ASCII fold; the fixed words are case-sensitive
+        for text in ("git ZZ; ls", "git Zz | cat"):
+            with self.subTest(text=text):
+                self.assertEqual(len(bp.write_text_refusals(text, RA_ALIASES, "session")), 1)
+        self.assertEqual(bp.write_text_refusals("git ZZ; ls", {}, "session"), [])
+
+    def test_the_c_line_goes_before_the_rule_line(self):   # CDP2 and ruling N1: a `-c` after `git` in the same text
+        self.assertEqual(bp.write_text_refusals("git -c a=b reset --hard; ls", {}, "session"),
+                         [RA_C_LINE, RA_LINE % "operator ;"])
+        self.assertEqual(bp.write_text_refusals("git switch -c z; ls", {}, "session"), [RA_C_LINE, RA_LINE % "operator ;"])
+        self.assertEqual(bp.write_text_refusals("git -c a=b log; ls", {}, "session"), [])   # no indicator: N1 alone, elsewhere
+
+    def test_commit_text_keeps_its_own_line(self):   # T:691 and draft Q4: no second compound line
+        for text in ("git commit -m m; ls", "git commit -m m; git reset --hard", "bash -c 'git commit -m m'", "git ci; ls"):
+            with self.subTest(text=text):
+                self.assertEqual(bp.write_text_refusals(text, {"ci": "commit"}, "session"), [])
+
+    def test_shell_alias_bodies(self):   # B2, T:690: a `!` body holding `git` and an INDICATOR, whatever the actor
+        aliases = {"g3": "!git reset --hard", "gb": "!git branch -D x", "gf": "!git fetch", "g6": "g3", "gn": "!git g3",
+                   "gm": '!git g""3', "gr": "!git rs", "rs": "reset --hard", "eh": "!echo hi", "gs": "!git status",
+                   "gt": "!git -C /x status", "gk": "!git commit -m m && git reset --hard", "gy": "!git eh",
+                   "gc": "!git -c a=b reset --hard", "gd": "!gi\"\"t tag t"}
+        for name in ("g3", "gb", "gf", "g6", "gn", "gm", "gr", "gy", "gd"):
+            with self.subTest(alias=name):
+                self.assertEqual(bp.write_text_refusals("git " + name, aliases, "session"), [RA_LINE % RA_NOT_GIT])
+        self.assertEqual(bp.write_text_refusals("git gc", aliases, "a1"), [RA_C_LINE, RA_LINE % RA_NOT_GIT])
+        for name in ("eh", "gs", "gt", "gk", "rs"):   # no git token, no indicator, or a commit (R2-2's alias line refuses it)
+            with self.subTest(alias=name):
+                self.assertEqual(bp.write_text_refusals("git " + name, aliases, "session"), [])
+
+    def test_shell_alias_bodies_of_the_pins(self):   # draft 1.2 P-f: the library `commit_refusals` pins keep their meaning
+        for aliases, name in (({"x": "!echo hi", "y": "!git x"}, "y"), ({"a": "!git b", "b": "!git a"}, "a"),
+                              ({"y": "!git x", "x": "status"}, "y")):
+            with self.subTest(aliases=aliases):
+                out = bounded(lambda: bp.write_text_refusals("git " + name, aliases, "session"), CYCLE_BOUND, CYCLE_WHAT)
+                self.assertEqual(out, [RA_LINE % RA_NOT_GIT])
+        self.assertEqual(bp.write_text_refusals("git x", {"x": "!echo hi"}, "session"), [])   # P-e: no git token
+
+    def test_no_program_word(self):   # assignments alone are not plain (the scanner's `assignment`); empty text holds nothing
+        self.assertEqual(bp.write_text_refusals("A=git B=reset", {}, "session"), [RA_LINE % "assignment"])
+        for text in ("A=1 B=2", "", " "):
+            with self.subTest(text=text):
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), [])
+
+    def test_version_digits_and_code_points(self):   # V1: the same verdict on both interpreters (the runner runs both)
+        for n in (4300, 4301):
+            digits = "9" * n
+            self.assertEqual(bp.write_text_refusals("git reset --hard %s; ls" % digits, {}, "session"),
+                             [RA_LINE % "operator ;"])
+            self.assertEqual(bp.write_text_refusals("git dg; ls", {"dg": "reset --hard " + digits}, "session"),
+                             [RA_LINE % "operator ;"])
+            self.assertEqual(bp.write_text_refusals("git dh", {"dh": "!git reset --hard " + digits}, "session"),
+                             [RA_LINE % RA_NOT_GIT])
+            self.assertEqual(bp.write_text_refusals("git status %s; ls" % digits, {}, "session"), [])
+        cp = "Ꟁ"   # unassigned in Unicode 13 (3.9), Lu in 14+ (3.13)
+        for text, want in (("git %sx; ls" % cp, []), ("git %sx reset --hard" % cp, [RA_LINE % "character"]),
+                           ("git -c %s=1 reset --hard" % cp, [RA_C_LINE, RA_LINE % "character"]),
+                           ('env "%s=1" git reset --hard' % cp, [RA_LINE % RA_NOT_GIT]),
+                           ("env %s=1 git reset --hard" % cp, [RA_LINE % "character"])):
+            with self.subTest(text=text):
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), want)
+
+    def test_linear(self):   # C4-1 / HR3: one pass over the text per indicator and alias name
+        for unit in ("git ", "reset ", "a; ", "git reset; "):
+            bounded(lambda: bp.write_text_refusals(unit * 20000, {"zz": "log"}, "session"), 30,
+                    "write_text_refusals is not linear in the command length")
+
+
+class WriteTextRefusalsTypesTest(unittest.TestCase):
+    """B6 (Q-RS4-1 (A)): rows ET37-ET39, one test per parameter, exact types accepted, both kinds refused."""
+
+    class S(str):
+        pass
+
+    class D(dict):
+        pass
+
+    def test_ET37_text(self):
+        self.assertEqual(bp.write_text_refusals("git reset; ls", {}, "session"), [RA_LINE % "operator ;"])
+        for bad in (self.S("git reset; ls"), None, b"git reset; ls"):
+            with self.subTest(bad=type(bad).__name__):
+                with self.assertRaisesRegex(TypeError, "^text must be str, not "):
+                    bp.write_text_refusals(bad, {}, "session")
+
+    def test_ET38_aliases(self):
+        self.assertEqual(bp.write_text_refusals("git zz; ls", {"zz": "log"}, "session"), [RA_LINE % "operator ;"])
+        for bad in (self.D(zz="log"), None, b"zz", [("zz", "log")]):
+            for text in ("git zz; ls", "git status", "echo hi"):   # each branch of the rule: not plain, plain git, other program
+                with self.subTest(bad=type(bad).__name__, text=text):
+                    with self.assertRaisesRegex(TypeError, "^aliases must be a dict$"):
+                        bp.write_text_refusals(text, bad, "session")
+        for bad in ({self.S("zz"): "log"}, {"zz": self.S("log")}, {"zz": None}, {b"zz": "log"}, {"zz": b"log"}):
+            with self.subTest(bad=repr(bad)):
+                with self.assertRaisesRegex(TypeError, "^aliases must map str to str$"):
+                    bp.write_text_refusals("git zz; ls", bad, "session")
+
+    def test_ET39_agent_key(self):
+        self.assertEqual(bp.write_text_refusals("git reset; ls", {}, "a1"), [RA_LINE % "operator ;"])
+        for bad in (self.S("session"), None, b"session"):
+            with self.subTest(bad=type(bad).__name__):
+                with self.assertRaisesRegex(TypeError, "^agent_key must be str, not "):
+                    bp.write_text_refusals("git reset; ls", {}, bad)
+
+
+class EnvUnwrapSurvivorTest(unittest.TestCase):
+    """B10, batch-1 survivor P19 (``_env_unwrap``'s final ``False``): a wrapper that consumes every word with accepted
+    options and operands is not refused (its docstring: ``refused`` is true only for an option, an operand off the
+    allow-list and an operand-shaped word that is not accepted)."""
+
+    def test_all_words_consumed_is_not_refused(self):
+        for text in ("env -i", "env TZ=x", "env -u FOO", "env -i TZ=x", "env"):
+            with self.subTest(text=text):
+                call = bp.git_call(shellscan.scan(text), {})
+                self.assertIs(call.env_refused, False)
+                self.assertEqual(call.lines, [])
+        self.assertIs(bp.git_call(shellscan.scan("env -x"), {}).env_refused, True)
+
+
 if __name__ == "__main__":
     unittest.main()

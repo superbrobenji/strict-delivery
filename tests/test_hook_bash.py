@@ -8,7 +8,7 @@ import resource
 import subprocess
 import unittest
 
-from gates.lib import gitinfo, session
+from gates.lib import gitinfo, session, shellscan
 from gates.lib.yamlsub import emit
 from gates.tools import githooks
 from tests import hookrun
@@ -575,13 +575,13 @@ class GatesAndWritesTest(HookCase):
         self.passes(self.B("git commit -m m"))
         self.assertTrue(self.gates_ran())
 
-    def test_non_plain_write_names_no_other_worktree(self):   # TR26 (decision Q3)
+    def test_non_plain_write_names_no_other_worktree(self):   # TR26, revision 2 (RULE-A, Q-HK5-1 (a)): refused outright
         W = self.worktree("W", "-b", "wb")
         r = self.B("ls && git -C %s reset --hard" % W)
-        self.refused(r, "target")
-        self.assertIn("names its worktree only as one plain command", r.stderr)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator &&"))
         self.passes(self.B("ls && git status"))
-        self.assertNotIn("hook.bash.target", self.B("ls; git tag x").stderr)   # the target is cwd's top level
+        r = self.B("ls; git tag x")   # no target step remains: the compound write line alone
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))
 
     def test_other_write_refusals_of_global_options_and_env(self):   # Q3
         for command in ("GIT_DIR=x git reset --hard", "git --git-dir=x reset --hard", "git -c a=b tag t"):
@@ -1307,18 +1307,20 @@ class QuoteSplitTest(HookCase):
         make_repo(self.X)
 
     def same(self, split, plain, **kw):
-        a, b = self.B(split, **kw), self.B(plain, **kw)
-        self.refused(b, "target")
-        self.assertEqual((a.returncode, a.stdout, a.stderr), (b.returncode, b.stdout, b.stderr), split)
-        return a
+        """Revision 2 (RULE-A, Q-HK5-1 (a)): ``split`` and its unsplit form ``plain`` are both refused outright, each with the
+        compound write line and the scanner's reason for its own text (the oracle of draft section 3.2)."""
+        for text in (plain, split):
+            r = self.B(text, **kw)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % shellscan.scan(text).reason), text)
+        return r
 
-    def test_write_word_split(self):   # R1-1 member: _write_words
+    def test_write_word_split(self):   # R1-1 member (the indicator split by quotes)
         for split, plain in (('git re""set --hard; ls', "git reset --hard; ls"), ("git t'a'g x; ls", "git tag x; ls"),
                              ('git wor""ktree list; ls', "git worktree list; ls")):
             with self.subTest(command=split):
                 r = self.same(split, plain, agent=self.agent_w)
-                self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
-                              % (self.R, self.W), r.stderr)
+                self.assertNotIn("FAIL hook.bash.target: %s is not a worktree this caller may write in (allowed: %s)"
+                                 % (self.R, self.W), r.stderr)   # no target step remains (RULE-A)
 
     def test_git_word_split(self):   # R1-1 member: the git token
         self.same('gi""t reset --hard; ls', "git reset --hard; ls", agent=self.agent_w)
@@ -1330,8 +1332,8 @@ class QuoteSplitTest(HookCase):
                              ('git --work""-tree=%s reset --hard; ls' % self.X, "git --work-tree=%s reset --hard; ls" % self.X),
                              ('c""d %s; git reset --hard' % self.X, "cd %s; git reset --hard" % self.X)):
             with self.subTest(command=split):
-                r = self.same(split, plain)   # the main session: cwd R is allowed, the named directory decides
-                self.assertIn("names its worktree only as one plain command", r.stderr)
+                r = self.same(split, plain)   # the main session: refused outright, the directory is not read
+                self.assertNotIn("names its worktree only as one plain command", r.stderr)   # the removed line (revision 2)
 
     def test_alias_to_write_non_plain(self):   # R1-2 (GW11: alias resolved before the membership test, plain or not)
         git(self.R, "config", "alias.rs", "reset --hard")
@@ -1342,8 +1344,10 @@ class QuoteSplitTest(HookCase):
                                ("ls && git rs", "ls && git reset --hard")):
             with self.subTest(command=plain):
                 self.same(plain, unsplit, agent=self.agent_w)
-        self.passes(self.B("git st; ls", agent=self.agent_w))   # an alias of a read stays a pass
-        self.passes(self.B("git st; ls"))
+        # pin P-a (draft 1.2): the alias NAME is an indicator whatever it expands to: refused, both actors
+        for kw in ({"agent": self.agent_w}, {}):
+            r = self.B("git st; ls", **kw)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))
 
     def test_alias_to_write_option_non_plain(self):   # R1-2 (branch, checkout and switch write options through an alias)
         for name, value in (("bd", "branch -D"), ("cb", "checkout -b"), ("sc", "switch -c"), ("bf", "branch --force")):
@@ -1352,15 +1356,16 @@ class QuoteSplitTest(HookCase):
         for name in ("bd", "cb", "sc", "bf"):
             with self.subTest(alias=name):
                 r = self.B("git %s x; ls" % name, agent=self.agent_w)
-                self.refused(r, "target")
-                self.assertIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.R, self.W), r.stderr)
-        self.passes(self.B("git bl; ls", agent=self.agent_w))
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))   # RULE-A
+                self.assertNotIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.R, self.W), r.stderr)
+        r = self.B("git bl; ls", agent=self.agent_w)   # pin P-b (draft 1.2): `bl` is an alias name: refused
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))
 
-    def test_alias_to_write_target_tokens_non_plain(self):   # R1-2 with R1-1: the -C refusal reads the alias form too
+    def test_alias_to_write_target_tokens_non_plain(self):   # R1-2 with R1-1, revision 2: refused outright
         git(self.R, "config", "alias.rs", "reset --hard")
         r = self.B("git -C %s rs; ls" % self.X)
-        self.refused(r, "target")
-        self.assertIn("names its worktree only as one plain command", r.stderr)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))
+        self.assertNotIn("names its worktree only as one plain command", r.stderr)
 
 
 class ErrorPathTest(HookCase):
@@ -1426,9 +1431,10 @@ class ErrorPathTest(HookCase):
                 self.git_refused(self.B(command))
         self.passes(self.B("echo ''"))
 
-    def test_empty_alias_expansion_word(self):   # the same GateError reached through a non-plain alias
-        git(self.R, "config", "alias.em", "''")
-        self.git_refused(self.B("git em; ls"))
+    def test_empty_alias_expansion_word(self):   # revision 2: the alias NAME is an indicator, RULE-A refuses before the
+        git(self.R, "config", "alias.em", "''")   # GateError of the empty subcommand is reached (refused either way)
+        r = self.B("git em; ls")
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))
 
     def test_other_text_refusals_still_listed(self):   # the refusal list is kept ahead of the git line
         self.bad_alias(self.R)
@@ -1443,8 +1449,10 @@ class ErrorPathTest(HookCase):
 # ``<A>`` the one it may: the session (cwd R, no program live) may write in R only, the subagent bound to W (cwd W) in W.
 LG_WAY = "run it with the ! prefix if you must, or ask the owner"
 LG_BANG = "the human can run the command with the ! prefix"
-LG_ONE_PLAIN = ("FAIL hook.bash.target: a git write names its worktree only as one plain command "
-                "(git -C <dir> ... or cd <dir> && git ...); " + LG_WAY)
+# revision 2 (RULE-A, Q-HK5-1 (a)): the one-plain-command target line is gone; a write in text that is not one plain git
+# command gets the compound write line with the scanner's reason, or `the program is not git`, for both actors
+LG_W = "FAIL hook.bash.compound: a git write runs as its own command (%s); " + LG_WAY
+LG_W_NOT_GIT = LG_W % "the program is not git"
 LG_NOT_GIT = "FAIL hook.bash.not-git: the program is not git; " + LG_WAY
 LG_ENV_S = "FAIL hook.bash.not-git: env option -S is refused; " + LG_WAY
 LG_OUTSIDE = "FAIL hook.bash.target: <O> is not a worktree this caller may write in (allowed: <A>); " + LG_WAY
@@ -1454,10 +1462,14 @@ LG_DECIDE = ("FAIL hook.bash.decide: decisions decide and withdraw come only fro
 LG_PASS = "pass"                  # exit 0, nothing printed, no commit gate run
 LG_PASS_GATES = "pass+gates"      # exit 0, nothing printed, the commit gates ran (the command was checked as a commit)
 LG_COMPOUND = "FAIL hook.bash.compound: git commit runs as its own command (%s); " + LG_WAY
-LG_SAME = ([LG_ONE_PLAIN], [LG_ONE_PLAIN])
-PLAIN_RESET = "handled as its plain form `git reset --hard` in the cwd"
-STATED_LIMIT = ("stated limit: Q2 (b) 'a commit run by a program not named git and not quoted with git is not caught' and "
-                "plan ruling (3b) 'a script file or interpreter ... whose text names neither word is not caught'")
+STATED_LIMIT = ("stated limit (owner answer Q-HK4-1 (a), beside plan P:3792 'Stated limits (narrow promise)'): a shell alias "
+                "of git defined before the session, whose text holds no git token, is not recognised; also Q2 (b) 'a commit "
+                "run by a program not named git and not quoted with git is not caught' and plan ruling (3b) 'a script file "
+                "or interpreter ... whose text names neither word is not caught'")
+
+
+def _w(reason):
+    return _same([LG_W % reason])
 
 
 def _same(want):
@@ -1468,31 +1480,31 @@ def _same(want):
 LG_MEMBERS = [
     # LG1 F-20261116-vc8g: shell aliases
     ("LG1", "alias g=git; g commit -m m", *_same([LG_COMPOUND % "operator ;"]), ""),
-    ("LG1", "alias g=git && g reset --hard", LG_PASS, LG_PASS, PLAIN_RESET),
-    ("LG1", "alias g=git && g reset --hard", None, [LG_OUTSIDE], "out"),
-    ("LG1", "alias g=git && g -C <O> reset --hard", *LG_SAME, ""),
+    ("LG1", "alias g=git && g reset --hard", *_w("operator &&"), ""),   # LG1-2: the text holds `git` through g=git
+    ("LG1", "alias g=git && g reset --hard", None, [LG_W % "operator &&"], "out"),
+    ("LG1", "alias g=git && g -C <O> reset --hard", *_w("operator &&"), ""),   # LG1-6
     ("LG1", "alias g=git && g -C <O> commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
     ("LG1", "g commit -m m", LG_PASS, LG_PASS, STATED_LIMIT),
     ("LG1", "g reset --hard", LG_PASS, LG_PASS, STATED_LIMIT),
     ("LG1", "g -C <O> reset --hard", LG_PASS, LG_PASS, STATED_LIMIT),
     # LG2 vc8g: zsh =word expansion
     ("LG2", "=git commit -m m", *_same([LG_COMPOUND % "expansion"]), ""),
-    ("LG2", "=git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG2", "=git -C <O> reset --hard", *_w("expansion"), ""),
     ("LG2", "=git -C <O> commit -m m", *_same([LG_COMPOUND % "expansion"]), ""),
-    ("LG2", "=git reset --hard", LG_PASS, LG_PASS, PLAIN_RESET),
+    ("LG2", "=git reset --hard", *_w("expansion"), ""),
     # LG4 vc8g: the shell chosen by $SHELL
     ("LG4", "SHELL=/bin/bash git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
-    ("LG4", "SHELL=/bin/bash git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG4", "SHELL=/bin/bash git -C <O> reset --hard", *_w("assignment"), ""),
     ("LG4", "$SHELL -c 'git commit -m m'", *_same([LG_COMPOUND % "expansion"]), ""),
-    ("LG4", "$SHELL -c 'git -C <O> reset --hard'", *LG_SAME, ""),
+    ("LG4", "$SHELL -c 'git -C <O> reset --hard'", *_w("expansion"), ""),
     ("LG4", "bash -c 'git commit -m m'", *_same([LG_NOT_GIT]), ""),
     ("LG4", "bash -c 'git commit -m m'", None, [LG_OUTSIDE, LG_NOT_GIT], "out"),
-    ("LG4", "bash -c 'git -C <O> reset --hard'", *LG_SAME, ""),
+    ("LG4", "bash -c 'git -C <O> reset --hard'", *_same([LG_W_NOT_GIT]), ""),
     ("LG4", "zsh -c 'git commit -m m'", *_same([LG_NOT_GIT]), ""),
-    ("LG4", "zsh -c 'git reset --hard'", LG_PASS, LG_PASS, PLAIN_RESET),
-    ("LG4", "zsh -c 'git -C <O> reset --hard'", *LG_SAME, ""),
-    # U1 (F-20261126-ej5r): the refused env option keeps its not-git line, ahead of the one-plain-command line
-    ("LG4", "env -S 'git -C <O> reset --hard'", *_same([LG_ENV_S, LG_ONE_PLAIN]), ""),
+    ("LG4", "zsh -c 'git reset --hard'", *_same([LG_W_NOT_GIT]), ""),
+    ("LG4", "zsh -c 'git -C <O> reset --hard'", *_same([LG_W_NOT_GIT]), ""),
+    # U1 (F-20261126-ej5r): the refused env option keeps its not-git line, ahead of the compound write line (CDP2)
+    ("LG4", "env -S 'git -C <O> reset --hard'", *_same([LG_ENV_S, LG_W_NOT_GIT]), ""),
     # LG5 F-20261116-grp8: quote removal before the text checks
     ("LG5", "gi't' commit -m m", *_same([LG_COMPOUND % "command word"]), ""),
     ("LG5", "git co\\mmit -m m", *_same([LG_COMPOUND % "quoting"]), ""),
@@ -1501,23 +1513,23 @@ LG_MEMBERS = [
     ("LG5", "git commit --no-v\"erify\"", *_same([LG_NO_VERIFY, LG_COMPOUND % "quoting"]), ""),
     ("LG5", "git commit --no-v\\erify -m m", *_same([LG_NO_VERIFY, LG_COMPOUND % "quoting"]), ""),
     ("LG5", "git commit -\"n\" -m m", *_same([LG_COMPOUND % "quoting"]), ""),
-    ("LG5", "git -\\C <O> reset --hard", *LG_SAME, ""),
-    ("LG5", "git -\"C\" <O> reset --hard", *LG_SAME, ""),
+    ("LG5", "git -\\C <O> reset --hard", *_w("quoting"), ""),
+    ("LG5", "git -\"C\" <O> reset --hard", *_w("quoting"), ""),
     ("LG5", "git \"-C\" <O> reset --hard", *_same([LG_OUTSIDE]), "judged as its unquoted form `git -C <O> reset --hard`"),
     ("LG5", "python3 -m gates decisions deci\"de\" X", LG_PASS, [LG_DECIDE], "judged as `decisions decide`: subagents only"),
     ("LG5", "python3 -m gates decisions de\\cide X", LG_PASS, [LG_DECIDE], "judged as `decisions decide`: subagents only"),
     # LG6 F-20261116-wrtm: a cd target with ..
-    ("LG6", "cd <W>/../R && git reset --hard", *LG_SAME, ""),
+    ("LG6", "cd <W>/../R && git reset --hard", *_w("operator &&"), ""),
     ("LG6", "cd <W>/sub/.. && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
     # LG7 wrtm: CDPATH
     ("LG7", "CDPATH=/x cd <W> && git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
-    ("LG7", "CDPATH=/x cd <O> && git reset --hard", *LG_SAME, ""),
+    ("LG7", "CDPATH=/x cd <O> && git reset --hard", *_w("assignment"), ""),
     ("LG7", "cd w && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
-    ("LG7", "cd w && git reset --hard", *LG_SAME, ""),
+    ("LG7", "cd w && git reset --hard", *_w("operator &&"), ""),
     # LG8 wrtm: cd -P / cd -L (refused: not plain)
     ("LG8", "cd -P <W> && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
-    ("LG8", "cd -P <O> && git reset --hard", *LG_SAME, ""),
-    ("LG8", "cd -L <L> && git reset --hard", *LG_SAME, ""),
+    ("LG8", "cd -P <O> && git reset --hard", *_w("operator &&"), ""),
+    ("LG8", "cd -L <L> && git reset --hard", *_w("operator &&"), ""),
     ("LG8", "cd -L <L> && git commit -m m", *_same([LG_COMPOUND % "operator &&"]), ""),
     # LG9 F-20261116-sjya: a path in argv[0]; a basename git is read as git, so the same checks run (never a skip)
     ("LG9", "/usr/bin/git commit -m m", LG_PASS_GATES, LG_PASS_GATES, "as git"),
@@ -1529,17 +1541,17 @@ LG_MEMBERS = [
     ("LG9", "/tmp/x/git reset --hard", LG_PASS, LG_PASS, "as git: `git reset --hard` in the cwd"),
     # LG10 sjya: PATH=
     ("LG10", "PATH=/x git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
-    ("LG10", "PATH=/x git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG10", "PATH=/x git -C <O> reset --hard", *_w("assignment"), ""),
     ("LG10", "PATH=/x:$PATH git commit -m m", *_same([LG_COMPOUND % "assignment"]), ""),
-    ("LG10", "PATH=/x:$PATH git reset --hard", LG_PASS, LG_PASS, PLAIN_RESET),
-    ("LG10", "PATH=/x:$PATH git -C <O> reset --hard", *LG_SAME, ""),
+    ("LG10", "PATH=/x:$PATH git reset --hard", *_w("assignment"), ""),
+    ("LG10", "PATH=/x:$PATH git -C <O> reset --hard", *_w("assignment"), ""),
     ("LG10", "export PATH=/x; git commit -m m", *_same([LG_COMPOUND % "reserved word"]), ""),
-    ("LG10", "export PATH=/x; git -C <O> reset --hard", *LG_SAME, ""),
-    # NG: a plain command whose program is not git, its text holding a git write (the narrowing of this fix)
-    ("NG", "sh -c 'cd <O> && git reset --hard'", *LG_SAME, ""),
-    ("NG", "bash -c 'git --git-dir=<O>/.git reset --hard'", *LG_SAME, ""),
-    ("NG", "echo git reset --hard", LG_PASS, LG_PASS, "as the non-plain `echo x; echo git reset`: the cwd is the target"),
-    ("NG", "echo git reset --hard", None, [LG_OUTSIDE], "out"),
+    ("LG10", "export PATH=/x; git -C <O> reset --hard", *_w("reserved word"), ""),
+    # NG: a plain command whose program is not git, its text holding a git write (revision 2: refused outright)
+    ("NG", "sh -c 'cd <O> && git reset --hard'", *_same([LG_W_NOT_GIT]), ""),
+    ("NG", "bash -c 'git --git-dir=<O>/.git reset --hard'", *_same([LG_W_NOT_GIT]), ""),
+    ("NG", "echo git reset --hard", *_same([LG_W_NOT_GIT]), ""),
+    ("NG", "echo git reset --hard", None, [LG_W_NOT_GIT], "out"),
     ("NG", "ls", LG_PASS, LG_PASS, "no git word: unchanged"),
     ("NG", "grep -n \"git status\" notes.md", LG_PASS, LG_PASS, "a git word that is no write: unchanged"),
 ]
@@ -1547,7 +1559,7 @@ LG_MEMBERS = [
 for _word in ("if", "!", "{", "time", "coproc", "builtin", "command", "exec", "noglob", "nocorrect", "-"):
     _reason = "grouping" if _word == "{" else "reserved word"
     LG_MEMBERS.append(("LG3", "%s git commit -m m" % _word, *_same([LG_COMPOUND % _reason]), ""))
-    LG_MEMBERS.append(("LG3", "%s git -C <O> reset --hard" % _word, *LG_SAME, ""))
+    LG_MEMBERS.append(("LG3", "%s git -C <O> reset --hard" % _word, *_w(_reason), ""))
 
 
 class InheritedClassesTest(HookCase):
@@ -1796,10 +1808,12 @@ class OptionWriteHookTest(HookCase):
         make_repo(self.X)
 
     def same(self, split, plain, extra="", **kw):
-        """``split`` gets the plain form's verdict, plus ``extra`` (A9: the ``-c`` line of ruling N1 for an option ``-c``)."""
+        """Revision 2 (RULE-A replaces ruling R2-7's target): the plain form keeps its target verdict (a refusal for the
+        subagent at cwd R); ``split`` is refused outright: ``extra`` (A9: the ``-c`` line of ruling N1 for an option ``-c``,
+        first by CDP2), then the compound write line with the scanner's reason."""
         a, b = self.B(split, **kw), self.B(plain, **kw)
         self.refused(b, "target")
-        self.assertEqual((a.returncode, a.stdout, a.stderr), (b.returncode, b.stdout, b.stderr + extra), split)
+        self.assertEqual((a.returncode, a.stdout, a.stderr), (2, "", extra + WLINE % shellscan.scan(split).reason), split)
         return a
 
     @staticmethod
@@ -1816,27 +1830,24 @@ class OptionWriteHookTest(HookCase):
                 plain = "git %s %s" % (sub, opt)
                 with self.subTest(command=plain):
                     r = self.same(plain + "; ls", plain, self.c_line_for(opt), agent=self.agent_w)
-                    self.assertEqual(r.stderr, outside + "run it with the ! prefix if you must, or ask the owner\n"
-                                     + self.c_line_for(opt))
+                    self.assertEqual(r.stderr, self.c_line_for(opt) + WLINE % "operator ;")
+                    self.assertNotIn(outside, r.stderr)   # revision 2: no target step for the text
 
     @staticmethod
     def is_capital_c(opt):
         return opt.split(" ")[0] == "-C"
 
     def test_capital_c_option_is_read_as_the_global_option(self):
-        # `branch -C x y` and `switch -C y` hold the token -C, which a non-plain text cannot tell from git's global -C: the
-        # ruling's "when the text also holds -C" gives the one-plain-command line (fail closed, the same for both actors)
-        one_plain = ("FAIL hook.bash.target: a git write names its worktree only as one plain command (git -C <dir> ... or "
-                     "cd <dir> && git ...); run it with the ! prefix if you must, or ask the owner\n")
-        for command in ("git branch -C x y; ls", "git switch -C y; ls", "ls && git branch -C x y"):
+        # `branch -C x y` and `switch -C y` hold the token -C; revision 2: the text is refused outright before any option
+        # is read (RULE-A), the same for both actors
+        for command, reason in (("git branch -C x y; ls", "operator ;"), ("git switch -C y; ls", "operator ;"),
+                                ("ls && git branch -C x y", "operator &&")):
             with self.subTest(command=command):
                 for kw in ({}, {"agent": self.agent_w}):
                     r = self.B(command, **kw)
-                    self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", one_plain), command)
+                    self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % reason), command)
 
     def test_non_plain_write_options_with_a_named_directory(self):   # -C <O>: the plain form names the directory's top level
-        one_plain = ("FAIL hook.bash.target: a git write names its worktree only as one plain command (git -C <dir> ... or "
-                     "cd <dir> && git ...); run it with the ! prefix if you must, or ask the owner\n")
         for sub, options in OPTION_WRITES:
             for opt in options:
                 plain = "git -C %s %s %s" % (self.X, sub, opt)
@@ -1844,45 +1855,53 @@ class OptionWriteHookTest(HookCase):
                     p = self.B(plain, agent=self.agent_w)
                     self.refused(p, "target")
                     self.assertIn("FAIL hook.bash.target: %s is not a worktree this caller may write in" % self.X, p.stderr)
-                    for split in (plain + "; ls", "ls && " + plain):
+                    for split, reason in ((plain + "; ls", "operator ;"), ("ls && " + plain, "operator &&")):
+                        want = (2, "", self.c_line_for(opt) + WLINE % reason)   # revision 2: refused outright, -c first
                         s = self.B(split, agent=self.agent_w)
-                        self.assertEqual((s.returncode, s.stdout, s.stderr), (2, "", one_plain + self.c_line_for(opt)), split)
-                        s = self.B(split)   # the main session: the named directory decides as well
-                        self.assertEqual((s.returncode, s.stdout, s.stderr), (2, "", one_plain + self.c_line_for(opt)), split)
+                        self.assertEqual((s.returncode, s.stdout, s.stderr), want, split)
+                        s = self.B(split)   # the main session: the same refusal
+                        self.assertEqual((s.returncode, s.stdout, s.stderr), want, split)
 
-    def test_non_plain_write_options_as_the_session_in_its_worktree(self):   # the plain form passes there: so does the text
+    def test_non_plain_write_options_as_the_session_in_its_worktree(self):   # pin P-c: the plain form passes there, the text does not
         for sub, options in OPTION_WRITES:
             for opt in [o for o in options if not self.is_capital_c(o)][:3]:
                 with self.subTest(sub=sub, opt=opt):
                     self.passes(self.B("git %s %s" % (sub, opt)))
                     r = self.B("git %s %s; ls" % (sub, opt))
-                    if self.c_line_for(opt):   # A9: `switch -c y; ls` holds the token -c after git: ruling N1's line, nothing else
-                        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", C_LINE))
-                    else:
-                        self.passes(r)
+                    # A9: `switch -c y; ls` holds the token -c after git: ruling N1's line first (CDP2)
+                    self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", self.c_line_for(opt) + WLINE % "operator ;"))
 
     def test_forms_of_the_text(self):   # the sub and the option read through quotes, in either position of the text
         for command in ("ls && git checkout -B y", "git branch -\"D\" x; ls", "git bra\"\"nch -D x; ls",
                         "git 'branch' --del x; ls", "git branch -D x | cat", "(git switch -c z); ls", "ls; git switch --force-create z",
                         "git chec\\kout -b y; ls", "ls\ngit branch -f q HEAD"):
             with self.subTest(command=command):
-                r = self.B(command, agent=self.agent_w)
-                self.refused(r, "target")
-                self.assertIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.R, self.W), r.stderr)
+                r = self.B(command, agent=self.agent_w)   # revision 2 (R2-7 replaced): refused outright, -c first (N1)
+                c_line = C_LINE if " -c " in command else ""
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", c_line + WLINE % shellscan.scan(command).reason))
+                self.assertNotIn("%s is not a worktree this caller may write in (allowed: %s)" % (self.R, self.W), r.stderr)
 
-    def test_non_write_options_still_pass(self):
+    def test_non_write_options_still_pass(self):   # pin P-d: the plain forms pass; the text forms are refused (RULE-A)
         for read in OPTION_READS:
-            for command in ("git %s; ls" % read, "ls && git %s" % read, "git %s" % read):
+            for command, reason in (("git %s; ls" % read, "operator ;"), ("ls && git %s" % read, "operator &&"),
+                                    ("git %s" % read, None)):
                 with self.subTest(command=command):
-                    self.passes(self.B(command, agent=self.agent_w), command)
-                    self.passes(self.B(command), command)
-        # the options of ANOTHER command in the same text do not count: a letter of ls is no option of git branch
+                    if reason is None:
+                        self.passes(self.B(command, agent=self.agent_w), command)
+                        self.passes(self.B(command), command)
+                        continue
+                    for kw in ({"agent": self.agent_w}, {}):   # every read holds branch, checkout or switch
+                        r = self.B(command, **kw)
+                        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % reason), command)
+        # the options of ANOTHER command in the same text: refused by the bare `branch` token (revision 2)
         for command in ("git branch --list; ls -fD", "ls -fD; git branch --list"):
             with self.subTest(command=command):
-                self.passes(self.B(command, agent=self.agent_w), command)
-        # A9 (ruling N1, stated cost): `-c` of another command after a `git` token reads as git's global `-c`: refused
+                r = self.B(command, agent=self.agent_w)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"), command)
+        # A9 (ruling N1, stated cost): `-c` of another command after a `git` token reads as git's global `-c`: refused,
+        # and the text holds `branch`: the compound write line follows (CDP2)
         r = self.B("git branch --list && ls -c x", agent=self.agent_w)
-        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", C_LINE))
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", C_LINE + WLINE % "operator &&"))
 
 
 class RefusedEnvWriteTest(HookCase):
@@ -1910,29 +1929,36 @@ class RefusedEnvWriteTest(HookCase):
                 for actor, cwd, kw in self.actors():
                     with self.subTest(command=command, actor=actor):
                         r = self.B(command, cwd=cwd, **kw)
-                        # A9: `switch -c y` holds the token -c after git: ruling N1's line follows the env line
+                        # A9: `switch -c y` holds the token -c after git: ruling N1's line, then the compound write line
+                        # (revision 2, CDP2: env line, -c line, compound line)
                         self.assertEqual((r.returncode, r.stdout, r.stderr),
-                                         (2, "", line + self.WAY + (C_LINE if write == "switch -c y" else "")))
+                                         (2, "", line + self.WAY + (C_LINE if write == "switch -c y" else "")
+                                          + WLINE % "the program is not git"))
 
-    def test_the_target_lines_follow_the_env_line(self):
-        other = self.R
+    def test_the_target_lines_follow_the_env_line(self):   # revision 2: the compound write line follows it, no target step
         for wrapper, line in self.WRAPPERS:
             with self.subTest(wrapper=wrapper):   # outside: the subagent's cwd R is not its worktree
                 r = self.B("%s git reset --hard" % wrapper, cwd=self.R, agent=self.agent(self.W))
-                self.assertEqual(r.stderr, line + self.WAY + "FAIL hook.bash.target: %s is not a worktree this caller may "
-                                 "write in (allowed: %s); %s" % (other, self.W, self.WAY))
+                self.assertEqual(r.stderr, line + self.WAY + WLINE % "the program is not git")
                 r = self.B("%s git -C %s reset --hard" % (wrapper, self.W))   # a named directory
-                self.assertEqual(r.stderr, line + self.WAY + "FAIL hook.bash.target: a git write names its worktree only "
-                                 "as one plain command (git -C <dir> ... or cd <dir> && git ...); " + self.WAY)
+                self.assertEqual(r.stderr, line + self.WAY + WLINE % "the program is not git")
 
     def test_unchanged_around_the_refused_wrapper(self):
-        # `env -i echo git reset --hard` and `env TZ=x bash -c ...`: the wrapper is accepted, the program is not git: the
-        # text is read as `echo git reset --hard` is (a pass in the cwd), with no env line
-        for command in ("env FOO=1 git status", "env FOO=1 ls", "env -x ls", 'env "é=1" git log', "env FOO=1 git branch --list",
-                        "env FOO=1 git branch", "env -i echo git reset --hard", "env TZ=x bash -c 'git reset --hard'"):
+        # no indicator: unchanged passes, with no env line
+        for command in ("env FOO=1 git status", "env FOO=1 ls", "env -x ls", 'env "é=1" git log'):
             for actor, cwd, kw in self.actors():
                 with self.subTest(command=command, actor=actor):
                     self.passes(self.B(command, cwd=cwd, **kw))
+        # revision 2 (RULE-A): `branch` is an indicator (the env line first, U1 and CDP2); `env -i echo ...` and
+        # `env TZ=x bash -c ...` run a program that is not git: refused outright, no env line (the wrapper is accepted)
+        for command, env_line in (("env FOO=1 git branch --list", "FAIL hook.bash.not-git: env operand FOO is refused; "),
+                                  ("env FOO=1 git branch", "FAIL hook.bash.not-git: env operand FOO is refused; "),
+                                  ("env -i echo git reset --hard", ""), ("env TZ=x bash -c 'git reset --hard'", "")):
+            for actor, cwd, kw in self.actors():
+                with self.subTest(command=command, actor=actor):
+                    r = self.B(command, cwd=cwd, **kw)
+                    self.assertEqual((r.returncode, r.stdout, r.stderr),
+                                     (2, "", (env_line + self.WAY if env_line else "") + WLINE % "the program is not git"))
         for command in ("env FOO=1 git commit -m m", "env -x git commit -m m"):   # a commit keeps its own (older) path
             r = self.B(command)
             self.assertEqual(r.returncode, 2)
@@ -1954,8 +1980,6 @@ class RefusedEnvWriteTest(HookCase):
 # code. Every call goes through ``python3 -m gates hook PreToolUse``; each member runs for the main session at cwd R, a
 # subagent bound to W at cwd R (outside its worktree) and the same subagent at cwd W (inside it).
 WAY = "run it with the ! prefix if you must, or ask the owner"
-ONE_PLAIN = ("FAIL hook.bash.target: a git write names its worktree only as one plain command (git -C <dir> ... or cd <dir> "
-             "&& git ...); " + WAY + "\n")
 C_LINE = "FAIL hook.bash.global-option.-c: git option -c before the subcommand is refused; " + WAY + "\n"
 HOOK_BOUND = 60   # R3-5: a hook that does not answer within this many seconds fails the test (C4-2 bound)
 
@@ -2011,10 +2035,10 @@ class InheritedEnvWriteTest(ActorCase):
                  "GIT_INDEX_FILE": os.path.join(self.R, ".git", "index")}[name]
         return dict(self.env, **{name: value})
 
-    def write_member(self, name, command):   # A1
+    def write_member(self, name, command):   # A1; revision 2 (draft 1.2 A1): the inherited line AND the compound write line
         env = self.inherit(name)
         line = "FAIL hook.bash.target: the hook inherited %s; %s\n" % (name, WAY)
-        self.exact(command, lambda actor: line + actor[3], env)
+        self.exact(command, lambda actor: line + wline_of(command), env)
         for actor in self.actors():   # the plain form `git reset --hard` under the same env gives the same stderr
             with self.subTest(plain=True, actor=actor[0]):
                 plain = self.run_actor("git reset --hard", actor, env)
@@ -2059,8 +2083,8 @@ class ShellAliasWriteTest(ActorCase):
                             ("gu", "!cd %s && git status" % R)):
             git(R, "config", "alias." + name, value)
 
-    def target_line(self, name):   # A3: the one-plain-command line, then what the command gets today (the cwd target)
-        self.exact("git %s" % name, lambda actor: ONE_PLAIN + actor[3])
+    def target_line(self, name):   # A3, revision 2 (T:690): refused for every actor, the compound write line alone
+        self.exact("git %s" % name, lambda actor: WLINE % NOT_GIT)
 
     def test_A3_g2_dash_C_in_the_body(self):
         self.target_line("g2")
@@ -2089,11 +2113,11 @@ class ShellAliasWriteTest(ActorCase):
     def test_A3_gq_the_option_is_split_by_quotes(self):
         self.target_line("gq")
 
-    def test_A4_gr_the_body_names_an_alias_of_a_write(self):   # the body holds `git rs`, rs = reset --hard, no token of the target list
-        self.same_as_today("git gr")
+    def test_A4_gr_the_body_names_an_alias_of_a_write(self):   # the body holds `git rs`: the alias name is an indicator
+        self.target_line("gr")
 
-    def cwd_target(self, name):   # A4: the cwd target, as the plain form: refused only where cwd is outside
-        self.same_as_today("git %s" % name)
+    def cwd_target(self, name):   # A4, revision 2: refused for every actor (no cwd target remains)
+        self.target_line(name)
 
     def test_A4_g3_cwd_target(self):
         self.cwd_target("g3")
@@ -2106,9 +2130,8 @@ class ShellAliasWriteTest(ActorCase):
         line = "FAIL hook.bash.target: the hook inherited GIT_DIR; %s\n" % WAY
         for actor in self.actors():
             with self.subTest(alias=name, actor=actor[0]):
-                r = self.run_actor("git %s" % name, actor, env)
-                self.assertEqual((r.returncode, r.stdout), (2, ""))
-                self.assertCountEqual(r.stderr.splitlines(True), [line] + ([actor[3]] if actor[3] else []))
+                r = self.run_actor("git %s" % name, actor, env)   # revision 2 (CDP2): the inherited line, then RULE-A's
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", line + WLINE % NOT_GIT))
 
     def test_A4_g3_with_GIT_DIR_inherited(self):
         self.inherited("g3")
@@ -2239,22 +2262,11 @@ class GlobalCOptionTest(ActorCase):
 # A12 (FP3 survivor): a `git` token only in the raw view of the text.
 class RawViewGitTokenTest(ActorCase):
     def test_A12_git_token_only_in_the_raw_view(self):   # raw tokens git, x, reset; quote-removed `gitx reset --hard`
-        for actor in self.actors():
-            with self.subTest(actor=actor[0]):
-                r = self.run_actor('ls; "git"x reset --hard', actor)
-                if actor[3]:
-                    self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", actor[3]))   # decision R1: a hit in either view
-                else:
-                    self.passes(r)
+        # revision 2 (draft 1.2 A12, B10 P15): the compound write line for every actor (decision R1: a hit in either view)
+        self.exact('ls; "git"x reset --hard', lambda actor: WLINE % "operator ;")
 
     def test_A12_quote_removed_view_only(self):   # the sibling: `gi""t` has the token only quote-removed
-        for actor in self.actors():
-            with self.subTest(actor=actor[0]):
-                r = self.run_actor('ls; gi""t reset --hard', actor)
-                if actor[3]:
-                    self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", actor[3]))
-                else:
-                    self.passes(r)
+        self.exact('ls; gi""t reset --hard', lambda actor: WLINE % "operator ;")
 
 
 # V1 (PC1 skeleton): rows that depend on the interpreter (3.9 and 3.13 both run this module through the runner). A
@@ -2268,21 +2280,21 @@ class InterpreterRowsTest(ActorCase):
                 for actor in self.actors():
                     with self.subTest(n=n, command=command[:24], actor=actor[0]):
                         r = self.run_actor(command, actor)
-                        if writes and actor[3]:
-                            self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", actor[3]))
+                        if writes:   # revision 2 (RULE-A): refused for every actor
+                            self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))
                         else:
                             self.passes(r)
 
     def test_V1_code_point_whose_category_differs_between_3_9_and_3_13(self):   # U+A7C0: unassigned in Unicode 13, Lu in 14+
         name = "Ꟁx"
-        # the text holds a non-ASCII character, so it is not plain: `reset` is read as a git write in the cwd's top level
+        # the text holds a non-ASCII character, so it is not plain (`character`): `reset` makes it RULE-A's, every actor
         for command, want in (("git %s; ls" % name, "pass"), ("git %s reset --hard" % name, "write"),
                               ("git -c %s=1 log" % name, C_LINE), ("git -c a=b %s; ls" % name, C_LINE),
                               ("git reset --hard %s; ls" % name, "write")):
             for actor in self.actors():
                 with self.subTest(command=command, actor=actor[0]):
                     r = self.run_actor(command, actor)
-                    want_text = {"pass": "", "write": actor[3]}.get(want, want)
+                    want_text = {"pass": "", "write": WLINE % "character"}.get(want, want)
                     if want_text:
                         self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", want_text))
                     else:
@@ -2314,13 +2326,198 @@ class HookAliasCycleTest(HookCase):
 
     def test_shell_alias_cycle_without_commit(self):
         self.alias(p="!git q", q="!git p")
-        self.passes(self.call("git p"))
+        r = self.call("git p")   # revision 2 (T:690): the body holds `git` and the alias name q: refused, within the bound
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % NOT_GIT))
 
     def test_shell_alias_cycle_reaching_commit(self):   # R2-2: cycles end, the commit word in the cycle is still found
         self.alias(x="!git y commit", y="!git x")
         r = self.call("git x")
         self.assertEqual(r.returncode, 2)
         self.assertIn("FAIL hook.bash.alias", r.stderr)
+
+
+# ---- fix round 3, part B (hooks stream controller 6; table revision 2, binding): RULE-A (owner answer Q-HK5-1 (a)), the `!`
+# bodies (T:690), LG1 (Q-HK4-1 (a)), the alias only in the named repository (Q-HK5-3 (a)), V1. Expected lines are hand-written
+# from draft sections 0-2; the `<reason>` of a looped form is the scanner's (shellscan, 3b.1's grammar: draft 3.2's oracle).
+# Parts C (generators) and D (exact types of other functions) append their own blocks after this one.
+NOT_GIT = "the program is not git"
+WLINE = "FAIL hook.bash.compound: a git write runs as its own command (%s); " + WAY + "\n"
+INH_GIT_DIR = "FAIL hook.bash.target: the hook inherited GIT_DIR; " + WAY + "\n"
+
+
+def wline_of(command):
+    """The compound write line of ``command``: the scanner's reason for text that is not plain, else ``the program is not
+    git`` (a plain other program, or a plain git command reaching a ``!`` body)."""
+    s = shellscan.scan(command)
+    return WLINE % (s.reason if not s.plain else NOT_GIT)
+
+
+class RuleAHookTest(ActorCase):
+    """B1 hand-written (draft 1.3 H2-H23, F1-F34, P1-P16, CS2 siblings, fetch): through the hook, for every actor."""
+
+    def setUp(self):
+        super().setUp()
+        for name, value in (("br", "branch"), ("b2", "branch"), ("co", "checkout"), ("sw", "switch"), ("st", "status"),
+                            ("bl", "branch --list")):
+            git(self.R, "config", "alias." + name, value)
+        self.gd = dict(self.env, GIT_DIR=os.path.join(self.R, ".git"))
+
+    def refused_all(self, command, reason, env=None, first=""):
+        self.exact(command, lambda actor: first + WLINE % reason, env)
+
+    def passes_all(self, command, env=None):
+        for actor in self.actors():
+            with self.subTest(command=command, actor=actor[0]):
+                self.passes(self.run_actor(command, actor, env), command)
+
+    def test_H_aliases_and_split_options(self):   # H2-H8: was PASS for the subagent at R
+        for command, reason in (("git br -D x; ls", "operator ;"), ("git b2 -D x; ls", "operator ;"),
+                                ("git co -b y; ls", "operator ;"), ("git branch ';' -D x; ls", "operator ;"),
+                                ("git checkout '&' -b y; ls", "operator ;"), ("git branch $'-D' x; ls", "expansion")):
+            self.refused_all(command, reason)
+        self.refused_all("git sw -c z; ls", "operator ;", first=C_LINE)   # H5: `-c` after git (ruling N1) first, CDP2
+
+    def test_H_inherited_git_dir(self):   # H10-H12 and F23, P3, P12: the inherited line, then the compound write line
+        for command, reason in (("git reset --hard; ls", "operator ;"), ("bash -c 'git reset --hard'", NOT_GIT),
+                                ("git branch -D x; ls", "operator ;"), ("git tag -l | head", "operator |"),
+                                ("echo git reset --hard", NOT_GIT)):
+            self.refused_all(command, reason, self.gd, first=INH_GIT_DIR)
+        for command in ("ls", "git status; ls", "git status"):   # F21, F22, F24: unchanged
+            self.passes_all(command, self.gd)
+
+    def test_H_target_tokens_need_no_listing(self):   # H17-H19 (N2, ypxp) and H23
+        X = os.path.join(self.work, "X")
+        for command, reason in (("export GIT_DIR=%s/.git; git reset --hard" % X, "reserved word"),
+                                ("pushd %s; git reset --hard" % X, "operator ;"),
+                                ("GIT_DIR=%s/.git git reset --hard; ls" % X, "operator ;")):
+            self.refused_all(command, reason)
+        self.refused_all("git -c alias.zz=reset zz --hard; ls", "operator ;", first=C_LINE)
+
+    def test_F_read_only_members_by_name(self):   # F1-F9, F12-F16, F29, F31, F32, P8, P14, P16: was PASS
+        for command, reason in (("git branch --list; ls -fD", "operator ;"), ("ls -fD; git branch --list", "operator ;"),
+                                ("cd sub && git branch && ls -d", "operator &&"), ("git checkout feat; ls", "operator ;"),
+                                ("git branch; git log -1", "operator ;"), ("git tag -l | head", "operator |"),
+                                ("git stash list | cat", "operator |"), ("git worktree list | grep x", "operator |"),
+                                ("git st; ls", "operator ;"), ("git bl; ls", "operator ;"),
+                                ('grep -n "git reset" notes.md; ls', "operator ;"), ("cd sub && git tag -l && ls", "operator &&"),
+                                ("git branch -D x; ls", "operator ;"), ("git reset --hard; ls", "operator ;"),
+                                ("git branch --list; ls", "operator ;")):
+            self.refused_all(command, reason)
+        self.refused_all("git branch --list && ls -c x", "operator &&", first=C_LINE)   # F3 (ruling N1's stated cost)
+
+    def test_F_no_indicator_unchanged(self):   # F10, F11, F25, F30: PASS
+        for command in ("git status; git log -1", "git log --oneline | head -5", "git log -1 | cat", "ls; git status"):
+            self.passes_all(command)
+
+    def test_P_other_programs(self):   # P1, P2, P4, P15 and the CS2 siblings around a non-commit write
+        for command in ('grep -n "git reset" notes.md', "echo git reset --hard", "nice git reset --hard", "echo git st",
+                        "sh -c 'git reset --hard'", "bash -c 'git reset --hard'", "eval git tag t", "xargs git stash",
+                        "nohup git reset --hard", "time git reset --hard", "(git reset --hard)", "{ git reset --hard; }",
+                        "echo $(git reset --hard)", "echo `git reset --hard`"):
+            self.exact(command, lambda actor, command=command: wline_of(command))
+
+    def test_fetch_is_an_indicator(self):   # owner answer Q-HK5-4 (a): non-plain and other-program text; plain unchanged
+        self.refused_all("git fetch; ls", "operator ;")
+        self.refused_all("echo git fetch origin", NOT_GIT)
+        self.refused_all("ls && git fetch --all", "operator &&")
+        for actor in self.actors():   # the plain form is no write (not in GIT_WRITES): unchanged
+            with self.subTest(actor=actor[0]):
+                r = self.run_actor("git fetch", actor)
+                self.assertNotIn("hook.bash.compound", r.stderr)
+
+    def test_commit_text_keeps_its_own_line(self):   # T:691, draft Q4: the commit compound line alone, for every actor
+        for command, reason in (("git commit -m m; ls", "operator ;"), ("git commit -m m; git reset --hard", "operator ;"),
+                                ("ls && git commit -m m", "operator &&")):
+            self.exact(command, lambda actor, reason=reason: "FAIL hook.bash.compound: git commit runs as its own command "
+                       "(%s); %s\n" % (reason, WAY))
+
+    def test_negatives(self):   # draft 3.2 B and C negatives: no `git` token, or no whole indicator token
+        for command in ("gitk reset; ls", "legit reset; ls", "git-x reset; ls", "git resetx; ls", "git reset_x; ls",
+                        "git xreset; ls", "git RESET; ls"):
+            self.passes_all(command)
+
+
+class ShellAliasBodyHookTest(ActorCase):
+    """B2 hand-written (draft 1.2 P-e/P-f at the hook, A4 `!` body with fetch, the commit body of decision R2-2)."""
+
+    def alias(self, **aliases):
+        for name, value in aliases.items():
+            git(self.R, "config", "alias." + name, value)
+
+    def test_P_f_pins_at_the_hook(self):   # the bodies hold `git` and an alias name: refused outright, every actor
+        for aliases, name in (({"x": "!echo hi", "y": "!git x"}, "y"), ({"a": "!git b", "b": "!git a"}, "a"),
+                              ({"p": "!git q", "q": "status"}, "p")):
+            self.alias(**aliases)
+            self.exact("git " + name, lambda actor: WLINE % NOT_GIT)
+
+    def test_bodies_with_an_indicator(self):
+        self.alias(gf="!git fetch", gd='!gi""t tag t', gy="!git st", st="status")
+        for name in ("gf", "gd", "gy"):
+            self.exact("git " + name, lambda actor: WLINE % NOT_GIT)
+
+    def test_body_reaching_commit_keeps_the_alias_line(self):   # decision R2-2 unchanged: no compound write line
+        self.alias(gk="!git commit -m m && git reset --hard")
+        for actor in self.actors():
+            with self.subTest(actor=actor[0]):
+                r = self.run_actor("git gk", actor)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn("FAIL hook.bash.alias: a git alias that runs a shell command holding commit", r.stderr)
+                self.assertNotIn("a git write runs as its own command", r.stderr)
+
+    def test_body_without_git_or_indicator_unchanged(self):   # P-e, F17, F18, F27, F34: the verdict of A5 (EW7)
+        self.alias(eh="!echo hi", gs="!git status")
+        for name in ("eh", "gs"):
+            self.same_as_today("git " + name)
+
+
+class StatedLimitHookTest(ActorCase):
+    """B8 (LG1, Q-HK4-1 (a)) and B9 (Q-HK5-3 (a)): pinned passes, each a stated limit beside plan P:3792."""
+
+    LG1_NOTE = ("stated limit (owner answer Q-HK4-1 (a), beside plan P:3792): a shell alias of git defined before the "
+                "session, whose text holds no git token, is not recognised")
+    B9_NOTE = ("stated limit (owner answer Q-HK5-3 (a), beside plan P:3792): an alias defined only in the repository named "
+               "by -C or cd, used in text that is not one plain command, is not seen by RULE-A")
+
+    def test_B8_pre_session_shell_alias_of_git(self):   # LG1-3..5: no git token in the text (InheritedClassesTest pins too)
+        for command in ("g commit -m m", "g reset --hard", "g -C %s reset --hard" % self.R):
+            for actor in self.actors():
+                with self.subTest(command=command, actor=actor[0]):
+                    self.passes(self.run_actor(command, actor), self.LG1_NOTE)
+                    self.assertFalse(self.gates_ran(), self.LG1_NOTE)
+
+    def test_B9_alias_only_in_the_named_repository(self):
+        X = os.path.join(self.work, "X")
+        os.mkdir(X)
+        make_repo(X)
+        git(X, "config", "alias.zz", "reset --hard")
+        for command in ("git -C %s zz; ls" % X, "cd %s && git zz; ls" % X):
+            for actor in self.actors():
+                with self.subTest(command=command, actor=actor[0]):
+                    self.passes(self.run_actor(command, actor), self.B9_NOTE)
+        for actor in self.actors():   # the same alias in cwd's repository is an indicator: refused (the limit is narrow)
+            with self.subTest(actor=actor[0], in_cwd=True):
+                git(self.R, "config", "alias.zz", "reset --hard")
+                r = self.run_actor("git -C %s zz; ls" % X, actor)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "operator ;"))
+
+
+class RuleAInterpreterRowsTest(ActorCase):
+    """V1 for the rows of this part: 4300/4301-digit words in an alias value and a `!` body, U+A7C0 (category differs
+    between 3.9 and 3.13) in an `env` operand; the runner runs both interpreters. BaseExceptionGroup does not exist on 3.9:
+    nothing in this part catches an exception (write_text_refusals raises only the TypeError of its exact-type rows)."""
+
+    def test_V1_digits_in_alias_values(self):
+        for n in (4300, 4301):
+            git(self.R, "config", "alias.dg", "reset --hard " + "9" * n)
+            git(self.R, "config", "alias.dh", "!git reset --hard " + "9" * n)
+            self.exact("git dg; ls", lambda actor: WLINE % "operator ;")
+            self.exact("git dh", lambda actor: WLINE % NOT_GIT)
+
+    def test_V1_code_point_in_an_env_operand(self):
+        cp = "Ꟁ"
+        self.exact('env "%s=1" git reset --hard' % cp,
+                   lambda actor: "FAIL hook.bash.not-git: the program is not git; " + WAY + "\n" + WLINE % NOT_GIT)
+        self.exact("env %s=1 git reset --hard" % cp, lambda actor: WLINE % "character")
 
 
 if __name__ == "__main__":
