@@ -905,6 +905,10 @@ class TipKindTests(Cx):
                 with self.assertRaises(GateError) as cm:
                     plan_effort(self.root, self.cfg, "p", at)
                 self.assertEqual(str(cm.exception), refusal(at, plan_md))
+        with self.subTest("regular beside a sibling whose name is not UTF-8"):  # R5-2 (F-20261126-g6un): edb6aa7's verdict
+            set_entry(self.root, self.MAIN, PG + "/b\udcff.md", "regular", "s\n")  # git is given b"b\xff.md"
+            at = set_entry(self.root, self.MAIN, plan_md, "regular", "plan\n")
+            self.assertEqual(plan_effort(self.root, self.cfg, "p", at), [plan_md])
 
     def test_walk_entry_kinds(self):  # F24: _walk refuses a symlink or gitlink, walks a tree; :124 skips a non-tree folder
         d = PS + "/p"

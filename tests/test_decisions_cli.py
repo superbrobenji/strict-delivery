@@ -1061,6 +1061,16 @@ class Batch(Base):
                                        "%s:%s/%s: cannot be read as a UTF-8 regular file (not a regular file)" % (cut, DEC, shown))
                     self.assertEqual(err, "decisions batch: %s:%s/%s: cannot be read as a UTF-8 regular file "
                                           "(not a regular file)\n" % (cut, DEC, shown))
+        # R5-2b (F-20261126-g6un): a name in the decisions folder at the cut that is not UTF-8 (git is given b"b\xff...")
+        # keeps main's verdict: gitinfo.ls_tree at 9b3a1c6 decoded every listed name, so the cut listing is refused
+        for name in ("b\udcff.yml", "b\udcff.txt"):
+            with self.subTest("non-UTF-8 name " + name.encode("utf-8", "backslashreplace").decode("ascii")):
+                try:
+                    cut = set_entry(self.root, "refs/heads/main", DEC + "/" + name, "regular", text)
+                finally:
+                    set_entry(self.root, "refs/heads/main", DEC + "/" + name, "absent")
+                err = self.refused(("batch", "--since", cut), "not valid UTF-8")
+                self.assertEqual(err, "decisions batch: git ls-tree gave output that is not valid UTF-8\n")
         # R2-H, parent component a symlink: paths.decisions itself is a symlink at the cut; git does not follow it, so the
         # listing at the cut is empty and every open record is new (exit 0, as at 9b3a1c6). Last: it replaces the directory.
         with self.subTest("paths.decisions symlink"):

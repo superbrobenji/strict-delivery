@@ -773,6 +773,22 @@ class BaseTests(RepoCase):
                     if doc_too:
                         git(self.root, "rm", "-q", doc)
                     self.assertEqual(self.errs(), want)
+        # R5-2 (F-20261126-g6un): a sibling of the document whose name is not UTF-8 (git is given b"docs/b\xff.md") changes
+        # nothing: the edb6aa7 verdict (gitinfo.blob_exists listed the document alone). The sibling is at the merge base
+        # only; the index is built without it, since gitinfo.tracked_files decodes every index name (on main too)
+        sib = "docs/b\udcff.md"
+        for doc_too, want in ((False, kept), (True, [])):
+            with self.subTest("regular beside a non-UTF-8 sibling, document %s" % ("deleted too" if doc_too else "kept")):
+                set_entry(self.root, "refs/heads/side", sib, "regular", "s\n")
+                mb = set_entry(self.root, "refs/heads/side", doc, "regular", "doc\n")
+                git(self.root, "reset", "-q", "--soft", mb)
+                git(self.root, "read-tree", mb)
+                git(self.root, "rm", "-q", "--cached", "--", sib)
+                git(self.root, "checkout-index", "-q", "-f", "-a")
+                git(self.root, "rm", "-q", self.fb)
+                if doc_too:
+                    git(self.root, "rm", "-q", doc)
+                self.assertEqual(self.errs(), want)
 
     def test_removed_claim_id_fails(self):  # B5
         self.write("docs--a.yml", self.row(ids=(CID2,)))

@@ -1944,20 +1944,21 @@ class Overview2(Ov):
 
     def test_stream_tip_kind_read_propagates_keyboard_interrupt(self):  # K3
         self.tip_fixture("regular")
-        # 5b.3 R4-1: the tip entry-kind read lists through tipread.entries (replace-honoured), no longer through
-        # gitinfo.ls_tree_entries; the interrupt is raised in that listing, and below it in git's ls-tree run
-        real, real_run = index.tipread.entries, index.gitinfo._run
+        # 5b.3 R4-1: the tip entry-kind read is tipread's replace-honoured listing, no longer gitinfo.ls_tree_entries;
+        # R5-2 (F-20261126-g6un): it lists the handoff itself (tipread._listing with the pathspec TIP_HP), no longer
+        # its folder through tipread.entries; the interrupt is raised in that listing, and below it in git's ls-tree run
+        real, real_run = index.tipread._listing, index.gitinfo._run
 
-        def read(root, ref, directory):
-            if directory == PS + "/a-plan":  # the tip entry-kind read only (other callers list other folders)
+        def read(root, ref, spec):
+            if spec == self.TIP_HP:  # the tip entry-kind read only (other callers list other paths)
                 raise KeyboardInterrupt
-            return real(root, ref, directory)
+            return real(root, ref, spec)
 
         def run(root, name, args, **kw):
-            if name == "ls-tree" and args[-1:] == [PS + "/a-plan/"]:  # the same listing, at the git call
+            if name == "ls-tree" and args[-1:] == [self.TIP_HP]:  # the same listing, at the git call
                 raise KeyboardInterrupt
             return real_run(root, name, args, **kw)
-        for target, fake in (((index.tipread, "entries"), read), ((index.gitinfo, "_run"), run)):
+        for target, fake in (((index.tipread, "_listing"), read), ((index.gitinfo, "_run"), run)):
             with self.subTest(target[1]), mock.patch.object(*target, fake):
                 with self.assertRaises(KeyboardInterrupt):
                     self.render()
