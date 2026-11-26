@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-kiqw
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk2-3b2-review-1.md R1-8
 severity: LOW
 class: "assertions accepting both outcomes: test_hook_bash.py:467 FIFO config, test_hook_bash.py:1091 unborn HEAD"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - b17de1bd6ee9816692b5acd6b67a6cf9c90be874
+  - b17de1bd6ee9816692b5acd6b67a6cf9c90be874:tests/test_hook_bash.py
 history:
   - status: open
     sha: 9cdf3697606f00a0908453466a22861766ac7fbf
     by: stream-hooks-3
+  - status: planned
+    sha: b17de1bd6ee9816692b5acd6b67a6cf9c90be874
+    by: implementer
+  - status: in-progress
+    sha: b17de1bd6ee9816692b5acd6b67a6cf9c90be874
+    by: implementer
+  - status: fixed-unpinned
+    sha: b17de1bd6ee9816692b5acd6b67a6cf9c90be874
+    by: implementer
 review_round: 1
 caused_by_change: true
 dimension: "oracle: tests that cannot fail"
