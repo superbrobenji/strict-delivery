@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-yfpy
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-2.md R2-3
+severity: MEDIUM
+class: "R1 raw-and-quote-removed reading of alias expansions: bashpolicy.py:191 _words_of(expansion), :192 alias names inside an expansion"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: b2e51eb247de741f7280ddde01290901da20a67c
+    by: stream-hooks-4
+review_round: 2
+caused_by_change: false
+dimension: "Ruling R1: text checks read raw and quote-removed words"

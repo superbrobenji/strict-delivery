@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-5xx3
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-2.md R2-1
+severity: LOW
+class: "fallback after GateError: bashpolicy.py:436 _unstaged_paths retries after any cause: _require_toplevel failure (subdirectory root), UTF-8 error (intended), git diff exit != 0"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: b2e51eb247de741f7280ddde01290901da20a67c
+    by: stream-hooks-4
+review_round: 2
+caused_by_change: true
+dimension: "hardening: non-UTF-8 names (fix rule: no newly accepted input)"

@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261126-ej5r
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-2.md U1
+severity: MEDIUM
+class: "wrappers before a git write that make call.sub None: env NAME=V git <write> (NAME not in _ALLOW), env -x git <write>, env <non-ASCII>=1 git <write>"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: b2e51eb247de741f7280ddde01290901da20a67c
+    by: stream-hooks-4
+review_round: 2
+caused_by_change: false
+dimension: target check on every GIT_WRITES subcommand (decision Q3)
