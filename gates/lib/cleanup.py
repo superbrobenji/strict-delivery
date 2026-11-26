@@ -192,7 +192,7 @@ def plan_effort(root: str, cfg: dict, plan: str, at: str) -> list:
         raise GateError("at: %s is not a commit in this repository" % at)
     out: set = set()
     plan_md = "%s/%s.md" % (plans, plan)
-    if tipread.show_file(root, at, plan_md) is not None:  # a symlink, tree or gitlink plan file is refused, never left out
+    if tipread.is_file(root, at, plan_md):  # a symlink, tree or gitlink plan file is refused, never left out
         out.add(plan_md)
     out.update(_walk(root, at, "%s/%s" % (plan_state, plan)))
     out.update(_walk(root, at, "%s/%s" % (reviews, plan)))

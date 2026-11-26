@@ -892,7 +892,7 @@ class TipKindTests(Cx):
 
     def test_plan_effort_plan_file_entry_kinds(self):  # F28: the plan file at `at` (cleanup.plan_effort), never left out
         plan_md = "%s/p.md" % PG
-        for kind in ("regular", "executable"):
+        for kind in ("regular", "executable", "non-utf8"):  # R4-2: non-UTF-8 bytes are listed, as at edb6aa7 (blob_exists)
             with self.subTest(kind):
                 at = set_entry(self.root, self.MAIN, plan_md, kind, "plan\n")
                 self.assertEqual(plan_effort(self.root, self.cfg, "p", at), [plan_md])

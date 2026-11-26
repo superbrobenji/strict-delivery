@@ -1068,6 +1068,31 @@ class Batch(Base):
             out = self.ok("--since", cut)
             self.assertEqual((new_ids(out), also_ids(out)), ([DA, DB], []))
 
+    def test_since_cut_replace_view(self):  # R4-1b (F-20261126-a826): the cut is listed in gitinfo.ls_tree's view at 9b3a1c6
+        self.put(dec(DA, "open"), dec(DB, "open"), commit=True)
+        path = "%s/%s.yml" % (DEC, DB)
+        text = git(self.root, "show", "HEAD:" + path) + "\n"
+        # (label, the record at the cut, the record in the cut's replacement, the ids (new, also) without the replace ref)
+        for label, kind1, kind2, control in (("added by the replacement", "absent", "regular", ([DB], [DA])),
+                                             ("made a symlink by the replacement", "regular", "symlink", ([], [DA, DB]))):
+            with self.subTest(label):
+                cut = set_entry(self.root, "refs/heads/main", path, kind1, text)
+                git(self.root, "update-ref", "refs/heads/repl", git(self.root, "rev-parse", cut + "^"))
+                repl = set_entry(self.root, "refs/heads/repl", path, kind2, text)
+                set_entry(self.root, "refs/heads/main", path, "regular", text)
+                out = self.ok("--since", cut)
+                self.assertEqual((new_ids(out), also_ids(out)), control)
+                git(self.root, "replace", cut, repl)
+                try:
+                    if kind2 == "regular":  # a record the replacement adds is at the cut
+                        out = self.ok("--since", cut)
+                        self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+                    else:  # a record the replacement makes a symlink is refused by name (row F22)
+                        err = self.refused(("batch", "--since", cut), refusal(cut, path))
+                        self.assertEqual(err, "decisions batch: %s\n" % refusal(cut, path))
+                finally:
+                    git(self.root, "replace", "-d", cut)
+
     def test_batch_since_ancestor_splits_new_and_also_open(self):  # C3, C4, C28, C35, C37
         c1 = self.two_commits()
         for since in (c1, c1[:7]):

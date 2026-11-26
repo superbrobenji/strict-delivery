@@ -359,7 +359,7 @@ def base_errors(root: str, cfg: dict, files: list, base: str) -> list:
         existed = False
         if type(doc) is str and _path_ok(doc):
             try:
-                existed = tipread.show_file(root, mb, doc) is not None
+                existed = tipread.is_file(root, mb, doc)
             except GateError as e:  # a symlink, tree or gitlink document at the merge base is named, never read as absent
                 out.append(("deleted." + file, "%s exists on %s and its document %s cannot be read at the merge base (%s); "
                             "claim files are never deleted" % (file, base, doc, e)))

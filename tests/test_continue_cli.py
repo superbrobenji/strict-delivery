@@ -1730,8 +1730,8 @@ class TestVersion(Fx):
         commit_all(self.root, "state")
         f = os.path.join(self.tmp, "grp.json")
         for exc in (builtins.ExceptionGroup("x", [ValueError()]), builtins.BaseExceptionGroup("x", [KeyboardInterrupt()])):
-            for target in ((tipread, "show_file"),):
-                with self.subTest(type(exc).__name__), mock.patch.object(*target, side_effect=exc):
+            for target in ((gitinfo, "show"), (tipread, "show_file")):  # R4-3: the edb6aa7 target kept (regular state files)
+                with self.subTest(type(exc).__name__, target=target[1]), mock.patch.object(*target, side_effect=exc):
                     out = io.StringIO()
                     with contextlib.redirect_stdout(out), self.assertRaises(type(exc)):
                         self.run_c(*self.base(), "--ref", "main", *self.flags(f))

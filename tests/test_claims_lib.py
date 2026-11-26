@@ -760,6 +760,19 @@ class BaseTests(RepoCase):
                     want = ("%s exists on HEAD and its document docs/b.md cannot be read at the merge base (%s); "
                             "claim files are never deleted") % ("%s", refusal(mb, doc))
                 self.assertEqual(self.errs(), [("deleted." + self.fb, want % self.fb)])
+        # R4-2 (F-20261126-swwg): the probe never reads the blob, so a regular document whose bytes are not UTF-8 has the
+        # edb6aa7 verdict (gitinfo.blob_exists): kept, the "is kept" line; deleted with the claim file, no line
+        kept = [("deleted." + self.fb, "%s exists on HEAD and its document docs/b.md is kept; claim files are never "
+                                       "deleted" % self.fb)]
+        for kind in ("non-utf8", "regular"):
+            for doc_too, want in ((False, kept), (True, [])):
+                with self.subTest("%s, document %s" % (kind, "deleted too" if doc_too else "kept")):
+                    mb = set_entry(self.root, "refs/heads/side", doc, kind, "doc\n")
+                    git(self.root, "reset", "-q", "--hard", mb)
+                    git(self.root, "rm", "-q", self.fb)
+                    if doc_too:
+                        git(self.root, "rm", "-q", doc)
+                    self.assertEqual(self.errs(), want)
 
     def test_removed_claim_id_fails(self):  # B5
         self.write("docs--a.yml", self.row(ids=(CID2,)))

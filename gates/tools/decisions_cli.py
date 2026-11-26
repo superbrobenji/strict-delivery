@@ -401,7 +401,7 @@ def _batch(ns) -> int:
         new, also, note = open_, [], _NO_CUT
     elif _is_ancestor(root, ns.since):
         at_cut = set()
-        for mode, _, name in gitinfo.ls_tree_entries(root, ns.since, cfg["paths"]["decisions"]):
+        for mode, _, name in tipread.entries(root, ns.since, cfg["paths"]["decisions"]):
             if mode in ("100644", "100755"):
                 at_cut.add(name)
             elif store._is_record_name(name.rpartition("/")[2]):

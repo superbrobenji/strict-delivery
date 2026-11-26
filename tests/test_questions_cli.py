@@ -772,6 +772,8 @@ class QuestionFields(Fx):
             self.skipTest("BaseExceptionGroup does not exist before Python 3.11")
         self.hand("a", [Q()])
         grp = getattr(builtins, "ExceptionGroup")("x", [ValueError()])
+        with mock.patch.object(gitinfo, "show", side_effect=grp), self.assertRaises(getattr(builtins, "ExceptionGroup")):
+            self.lst()  # R4-3: the edb6aa7 case, kept (the handoff is a regular entry, so the read reaches gitinfo.show)
         with mock.patch.object(tipread, "show_file", side_effect=grp), self.assertRaises(getattr(builtins, "ExceptionGroup")):
             self.lst()
         self.hand("a", [Q(), Q("q2")])

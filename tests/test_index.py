@@ -1944,15 +1944,23 @@ class Overview2(Ov):
 
     def test_stream_tip_kind_read_propagates_keyboard_interrupt(self):  # K3
         self.tip_fixture("regular")
-        real = index.gitinfo.ls_tree_entries
+        # 5b.3 R4-1: the tip entry-kind read lists through tipread.entries (replace-honoured), no longer through
+        # gitinfo.ls_tree_entries; the interrupt is raised in that listing, and below it in git's ls-tree run
+        real, real_run = index.tipread.entries, index.gitinfo._run
 
         def read(root, ref, directory):
             if directory == PS + "/a-plan":  # the tip entry-kind read only (other callers list other folders)
                 raise KeyboardInterrupt
             return real(root, ref, directory)
-        with mock.patch.object(index.gitinfo, "ls_tree_entries", read):
-            with self.assertRaises(KeyboardInterrupt):
-                self.render()
+
+        def run(root, name, args, **kw):
+            if name == "ls-tree" and args[-1:] == [PS + "/a-plan/"]:  # the same listing, at the git call
+                raise KeyboardInterrupt
+            return real_run(root, name, args, **kw)
+        for target, fake in (((index.tipread, "entries"), read), ((index.gitinfo, "_run"), run)):
+            with self.subTest(target[1]), mock.patch.object(*target, fake):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.render()
         import inspect
         src = inspect.getsource(index._specs_and_plans)
         self.assertNotIn("except", src)

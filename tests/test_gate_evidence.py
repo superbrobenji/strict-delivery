@@ -1208,7 +1208,11 @@ class Transcript(Base):
                 fh.write(text.replace(info.transcript, "%s:%s" % (info.tsha, target)))
             out, _ = self.run_()
             self.assertTrue(bad(out, "transcript." + F), out)
-            self.assertIn("not a regular file", line(out, "transcript." + F))  # "is not ..." (missing), "(not ..." (a directory)
+            if target == TDIR + "/gone.md":  # the missing target's text is unchanged: the edb6aa7 assertion, kept
+                self.assertIn("is not a regular file", line(out, "transcript." + F))
+            else:  # R4-3, 5b.3 F15: the directory is refused by name through tipread.show_file
+                self.assertEqual(line(out, "transcript." + F), "FAIL evidence.transcript.%s: transcript %s:%s: %s"
+                                 % (F, info.tsha, target, refusal(info.tsha, target)))
             with open(row, "w", encoding="utf-8") as fh:
                 fh.write(text)
 
@@ -1509,7 +1513,8 @@ class Versions(Base):
         self.make()
         self.pin()
         group = getattr(builtins, "ExceptionGroup")("g", [ValueError()])
-        for target in ("gates.lib.evidence.run_pin", "gates.lib.tipread.show_file"):
+        # R4-3: the edb6aa7 target gitinfo.show (the pinned transcript is a regular entry, so its read reaches it) is kept
+        for target in ("gates.lib.evidence.run_pin", "gates.lib.gitinfo.show", "gates.lib.tipread.show_file"):
             with self.subTest(target), mock.patch(target, side_effect=group):
                 out, code = self.run_()
                 self.assertTrue(out.startswith("FAIL evidence.input: ExceptionGroup: g (1 sub-exception)"), out)
