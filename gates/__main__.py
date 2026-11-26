@@ -5,8 +5,10 @@ from typing import Callable, Dict, List
 
 GATES: Dict[str, str] = {"checkpoint": "gates.gate_checkpoint", "cites": "gates.gate_cites", "claims": "gates.gate_claims",
                          "cleanup": "gates.gate_cleanup",
+                         "context": "gates.gate_context",
                          "decisions": "gates.gate_decisions",
                          "dispatch": "gates.gate_dispatch",
+                         "evidence": "gates.gate_evidence",
                          "register": "gates.gate_register",
                          "schema": "gates.gate_schema",
                          "streams": "gates.gate_streams"}  # gate name -> module defining check(args)
@@ -44,6 +46,16 @@ def _index(args: List[str]) -> int:
 def _claims(args: List[str]) -> int:
     from gates.tools import claims_cli
     return claims_cli.main(args)
+
+
+def _context(args: List[str]) -> int:
+    from gates.tools import context_cli
+    return context_cli.main(args)
+
+
+def _receipt(args: List[str]) -> int:
+    from gates.tools import receipt_cli
+    return receipt_cli.main(args)
 
 
 def _continue(args: List[str]) -> int:
@@ -132,10 +144,11 @@ def _hook(args: List[str]) -> int:
     return rc
 
 
-COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "claims": _claims, "continue": _continue, "decisions": _decisions,
+COMMANDS: Dict[str, Callable[[List[str]], int]] = {"check": _check, "claims": _claims, "context": _context, "continue": _continue,
+                                                   "decisions": _decisions,
                                                    "findings": _findings, "githook": _githook, "githooks": _githooks, "hook": _hook,
                                                    "index": _index, "loopstats": _loopstats, "program": _program, "questions": _questions,
-                                                   "run_all": _run_all}
+                                                   "receipt": _receipt, "run_all": _run_all}
 
 
 def main(argv: List[str]) -> int:

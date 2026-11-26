@@ -1,0 +1,6 @@
+kind: claude-block
+version: 1
+format: managed-block
+comment: html
+files:
+  - file: CLAUDE.md

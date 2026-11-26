@@ -55,6 +55,8 @@ def _check_file(root: str, sch: schema.Schema, rel: str, from_glob: bool, cfg: d
             return schema.validate_markdown(sch, _read_text(root, rel))
         if sch.format == "front-matter":
             return schema.validate_front_matter(sch, _read_text(root, rel), cfg)
+        if sch.format == "managed-block":
+            return schema.validate_managed_block(sch, _read_text(root, rel))
         return schema.validate(sch, yamlsub.load(full, rel), cfg)
     except yamlsub.YamlError as e:
         return ["%s (line %d)" % (e.reason, e.line) if e.line else e.reason]

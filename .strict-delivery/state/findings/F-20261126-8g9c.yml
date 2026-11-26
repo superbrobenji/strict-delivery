@@ -1,0 +1,27 @@
+schema: finding/1
+id: F-20261126-8g9c
+status: open
+source: residual fix rounds 2-3 re-review (residual/fix-r23-review.md, F-R23-2)
+severity: LOW
+class: "rel type through load: non-str values os.path.join accepts: pathlib.PurePath (PurePosixPath, PureWindowsPath, Path), an __fspath__ object returning str; accepted and loaded at 78ff2e6^ and 7f3bf3b, read and then refused by load_text (TypeError rel must be str) from 5a4775e; an __fspath__ returning bytes stays refused by os.path.join"
+siblings: []
+cites:
+  - file: gates/lib/context.py
+    lines: 224-236
+    sha: 1756c3182c0bfec879fd22829de4bd1a7580064a
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: residual-batch-1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 1756c3182c0bfec879fd22829de4bd1a7580064a
+    by: stream-residual
+parent: F-20261126-t9pu
+review_round: 3
+caused_by_change: true
+dimension: "load parity: rel type"

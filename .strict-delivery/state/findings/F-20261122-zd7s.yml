@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-zd7s
+status: open
+source: "4b.2 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4b2-review-1.md F2"
+severity: LOW
+class: "a non-str budgets key formatted with %; members: gate_dispatch.py:~143 '%s' % k with a tuple key raises TypeError, the line names no key"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: dee23c1fb01f0f3fe1343bb125ce8a0402293a81
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: every non-str key of budgets, dispatch and max_children is refused with a named reason

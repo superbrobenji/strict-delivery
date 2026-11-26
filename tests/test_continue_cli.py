@@ -483,8 +483,8 @@ class TestMain(Fx):
             self.assertNotIn("\nfrom gates.tools import continue_cli", fh.read())
 
     def test_usage_lists_continue(self):  # CG2
-        want = ("usage: python3 -m gates <command> [args]\ncommands: check, claims, continue, decisions, findings, "
-                "githook, githooks, hook, index, loopstats, program, questions, run_all\n")
+        want = ("usage: python3 -m gates <command> [args]\ncommands: check, claims, context, continue, decisions, findings, "
+                "githook, githooks, hook, index, loopstats, program, questions, receipt, run_all\n")
         for argv in ([], ["bogus"]):
             p = subprocess.run([sys.executable, "-m", "gates"] + argv, cwd=REPO, env=dict(os.environ, PYTHONPATH=REPO),
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1412,7 +1412,8 @@ class TestPrompt(Fx):
         self.assertEqual([l.id for l in res.lines], ["dispatch.input", "dispatch.fork", "dispatch.grammar", "dispatch.role",
                          "dispatch.dispatcher", "dispatch.program", "dispatch.stream", "dispatch.depth",
                          "dispatch.concurrency", "dispatch.children", "dispatch.model", "dispatch.tier",
-                         "dispatch.top-tier", "dispatch.block", "dispatch.claims", "dispatch.decisions"])
+                         "dispatch.top-tier", "dispatch.block", "dispatch.budget", "dispatch.size",
+                         "dispatch.claims", "dispatch.decisions"])
         self.assertTrue(res.ok())
 
     def test_self_check(self):  # GD7

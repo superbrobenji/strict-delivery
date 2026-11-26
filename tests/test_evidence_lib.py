@@ -27,6 +27,20 @@ TS_YML = os.path.join(schema.SCHEMAS_DIR, "mutation-transcript.yml")
 RR_YML = os.path.join(schema.SCHEMAS_DIR, "review-report.yml")
 EVIDENCE_PY = os.path.join(os.path.dirname(os.path.abspath(evidence.__file__)), "evidence.py")
 
+# owner answers 2026-11-21 (a) (the -b glob) and Q-RS1-1 (a), 2026-11-24 ("Exclude as history": one entry per file), written by hand
+EXCLUDED = ["2026-10-31-strict-delivery-framework-b/mutations/*",
+            "2026-10-31-strict-delivery-framework/mutations/F-20261124-3a2a.md",
+            "2026-10-31-strict-delivery-framework/mutations/F-20261124-5gfw.md",
+            "2026-10-31-strict-delivery-framework/mutations/F-20261124-fbwp.md",
+            "2026-10-31-strict-delivery-framework/mutations/F-20261124-tcyn.md",
+            "2026-10-31-strict-delivery-framework/mutations/F-20261124-ui2n.md",
+            "2026-10-31-strict-delivery-framework/mutations/F-20261124-wtu5.md",
+            "2026-11-10-v01-hooks/mutations/3b.1.txt",
+            "2026-11-10-v01-hooks/mutations/3b.1-fix1.txt",
+            "2026-11-10-v01-hooks/mutations/3b.1-fix2.txt",
+            "2026-11-10-v01-hooks/mutations/3b.1-fix3.txt",
+            "2026-11-10-v01-hooks/mutations/3b.1-fix4.txt",
+            "2026-11-10-v01-runtime/mutations/3a.1.txt"]
 TAG_T = "<!-- schema: mutation-transcript/1 -->"
 TAG_R = "<!-- schema: review-report/1 -->"
 F = "F-20261031-zzzz"
@@ -133,8 +147,7 @@ class SchemaFiles(GitIsolatedTestCase):
         self.assertEqual((s.kind, s.version, s.format), ("mutation-transcript", 1, "markdown"))
         self.assertEqual(s.first_line, TAG_T)
         # owner answer 2026-11-22 (a), legacy pre-schema transcripts (Task 6E.1-x, row X11): exactly the owner's entry
-        self.assertEqual(s.files, [{"dir": "plan_state", "glob": "*/mutations/*",
-                                    "exclude": ["2026-10-31-strict-delivery-framework-b/mutations/*"]}])
+        self.assertEqual(s.files, [{"dir": "plan_state", "glob": "*/mutations/*", "exclude": EXCLUDED}])
         self.assertEqual(sorted(s.rules), ["FINDING", "MUTANT", "RUN", "TEST"])
         self.assertIsNone(s.table)
         self.assertIsNone(s.headings)
@@ -152,7 +165,7 @@ class SchemaFiles(GitIsolatedTestCase):
 
     def test_every_schema_file_loads(self):  # SC2
         names = sorted(n for n in os.listdir(schema.SCHEMAS_DIR) if n.endswith(".yml"))
-        self.assertEqual(len(names), 20)  # 6E.1's 18 plus 5a's context and receipt
+        self.assertEqual(len(names), 24)  # 6E.1's 18 plus 4a.1's claude-block, gitignore-block, profile, init-answers, plus 5a's context and receipt
         self.assertIn("mutation-transcript.yml", names)
         self.assertIn("review-report.yml", names)
         for n in names:

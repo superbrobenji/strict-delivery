@@ -127,7 +127,7 @@ class FixtureEnvIsolationTest(GitIsolatedTestCase):
                         self.assertEqual(fh.read().strip(), head)  # GIT_DIR, GIT_COMMON_DIR
                     self.assertTrue(os.path.isfile(os.path.join(dot, "objects", head[:2], head[2:])))
                     self.assertTrue(os.path.isfile(os.path.join(dot, "index")))  # GIT_INDEX_FILE
-                    self.assertEqual(git(root, "ls-files"), ".strict-delivery/config.yml")  # GIT_WORK_TREE
+                    self.assertEqual(git(root, "ls-files"), ".strict-delivery/config.yml\n.strict-delivery/context.yml")  # GIT_WORK_TREE
                     self.assertEqual(git(root, "cat-file", "-t", other_head, check=False), "")
                     clone = os.path.join(probe.tmp, "clone")
                     git(probe.tmp, "clone", "-q", "--depth", "1", "--no-local", "--branch", "main",
@@ -588,7 +588,7 @@ class BlobExistsTest(Fixture):
 class TrackedFilesTest(Fixture):
     def test_modes_100644_and_100755_only(self):  # G5
         want = frozenset([
-            ".strict-delivery/config.yml", "a.txt", "crlf.txt", "empty.txt", "dir/x.txt",
+            ".strict-delivery/config.yml", ".strict-delivery/context.yml", "a.txt", "crlf.txt", "empty.txt", "dir/x.txt",
             "dir/sub/y.txt", "bin/run", "sp ace/f g.txt", "é/ü.txt", "-lead.txt",
             "co:lon.txt", "nl\nname.txt", "gl*ob/f.txt", "glxob/h.txt", "bad.bin", ":(top)tm.txt",
             ":(top)md/f.txt"])
@@ -2317,7 +2317,7 @@ class P23GitinfoTest(GitIsolatedTestCase):
 
     def test_commit_paths_plain_rename_root_merge_empty(self):  # CP1-CP7, CP16
         first = git(self.root, "rev-list", "--max-parents=0", "HEAD")
-        self.assertEqual(gitinfo.commit_paths(self.root, first), [".strict-delivery/config.yml"])      # CP3: a root commit
+        self.assertEqual(gitinfo.commit_paths(self.root, first), [".strict-delivery/config.yml", ".strict-delivery/context.yml"])      # CP3: a root commit
         self.put("a.txt", "a\n")
         self.put("dir/b c.txt", "b\n")
         c1 = commit_all(self.root, "c1")
@@ -2490,7 +2490,7 @@ class P23dGitinfoTest(GitIsolatedTestCase):
         git(self.tmp, "clone", "-q", "--depth", "1", "file://" + self.root, clone)
         self.assertTrue(gitinfo.is_shallow(clone))
         self.assertEqual(gitinfo.parents(clone, "HEAD"), [])
-        self.assertEqual(gitinfo.commit_paths(clone, "HEAD"), [".strict-delivery/config.yml", "a.txt", "c.txt", "dir/b.txt"])
+        self.assertEqual(gitinfo.commit_paths(clone, "HEAD"), [".strict-delivery/config.yml", ".strict-delivery/context.yml", "a.txt", "c.txt", "dir/b.txt"])
 
     def test_sha_forms(self):  # CP9
         self.put("one.txt", "1\n")
@@ -2654,7 +2654,7 @@ class P23dGitinfoTest(GitIsolatedTestCase):
         head = git(self.root, "rev-parse", "HEAD")
         self.assertEqual(git(self.root, "rev-list", "-n", "1", "--end-of-options", "HEAD"), head)
         git(self.root, "diff", "--no-renames", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "HEAD", "HEAD")
-        self.assertEqual(gitinfo.commit_paths(self.root, head), [".strict-delivery/config.yml"])
+        self.assertEqual(gitinfo.commit_paths(self.root, head), [".strict-delivery/config.yml", ".strict-delivery/context.yml"])
 
 
 

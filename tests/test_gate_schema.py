@@ -10,11 +10,12 @@ import shutil
 import stat
 import subprocess
 import sys
+import types
 import unittest
 from unittest import mock
 
 from gates import __main__ as gates_main
-from gates import gate_schema
+from gates import gate_schema, producers
 from gates.lib import config, schema, yamlsub
 from gates.lib.result import GateError, run_gate
 from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
@@ -428,8 +429,17 @@ class Config(GateCase):
     def test_C12_unlanded_keys(self):
         pre = "FAIL schema.config..strict-delivery/config.yml: "
         for key in ("commands", "models", "roles", "block", "rulings", "dispatch", "budgets", "drift", "overrides"):
-            ok = {"models": {"tiers": {"tier1": "x"}}, "drift": {"estimate_factor_pct": 5}}.get(key, {"x": [1, {"y": 2}]})
-            write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ok}))
+            ok = {"models": {"tiers": {"tier1": "x"}}, "drift": {"estimate_factor_pct": 5},
+                  # Task 4a.2: config.load now checks the shape of an override entry; this one is valid
+                  "overrides": {"limits.max_depth": {"value": 2, "decision": "DEC-20261111-abcd"}},
+                  # Task 4a.3: config.load now types these five keys; each value below is valid (hand-written)
+                  "roles": {"x": {"prompt": "p.md", "min_tier": "tier2"}}, "block": {"max_tasks": 2},
+                  "rulings": {"max_per_block": 2}, "dispatch": {"max_prompt_chars": 2},
+                  "budgets": {"controller": {"tokens": 2, "minutes": 2}},
+                  }.get(key, {"x": [1, {"y": 2}]})
+            # strict presets block.max_tasks (a file value is refused, Task 4a.2), so the block row runs under light
+            write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ok},
+                                                  **({"profile": "light"} if key == "block" else {})))
             self.assertEqual(self.lines()[0], ["PASS schema.kinds", "PASS schema.config"], key)
             write_record(self.root, CFGFILE, dict(minimal_config(), **{key: ["a"]}))
             self.assertEqual(self.lines()[0][1:], [pre + "%s: must be a mapping" % key], key)
@@ -582,6 +592,7 @@ class Generated(GateCase):
 
     def test_N4_absent_non_generated_path_file_fails(self):
         self.kinds("context")
+        os.remove(os.path.join(self.root, CTX))  # make_repo writes a valid context.yml; this test needs it absent
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:],
                          ["FAIL schema.context.%s: missing" % CTX])
         self.put(CTX, "schema: " + CTXTAG + "\nx: y\n")
@@ -589,6 +600,7 @@ class Generated(GateCase):
 
     def test_N4_dangling_symlink_path_file_is_a_read_failure_not_missing(self):
         self.kinds("context")
+        os.remove(os.path.join(self.root, CTX))  # make_repo writes a valid context.yml; this test needs the link in its place
         os.symlink("nowhere", os.path.join(self.root, CTX))
         self.assertEqual(self.lines(producers=["prod_context"])[0][2:], [
             "FAIL schema.context.%s: %s: cannot read file (No such file or directory)" % (CTX, CTX)])
@@ -763,11 +775,29 @@ class Enabling(unittest.TestCase):
             self.assertEqual(gates_main.main(["bogus"]), 2)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "usage: python3 -m gates check <gate> [args]\n"
-                         "gates: checkpoint, cites, claims, cleanup, decisions, dispatch, register, schema, streams\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, claims, continue, decisions, findings, githook, githooks, hook, index, loopstats, program, questions, run_all\n")
+                         "gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, evidence, register, schema, streams\n" * 2 +"usage: python3 -m gates <command> [args]\ncommands: check, claims, context, continue, decisions, findings, githook, githooks, hook, index, loopstats, program, questions, receipt, run_all\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch("gates.producers.PRODUCER_MODULES", ()):
             self.assertEqual(gates_main.main(["check", "schema", "--root", REPO]), 0)
         self.assertEqual(out.getvalue().splitlines()[:2], ["PASS schema.kinds", "PASS schema.config"])
+
+    def test_context_commands_registered(self):  # R2.1 D3: Rq-5-1 (context and receipt rows), literals from the plan
+        self.assertEqual(gates_main.GATES, {
+            "checkpoint": "gates.gate_checkpoint", "cites": "gates.gate_cites", "claims": "gates.gate_claims",
+            "cleanup": "gates.gate_cleanup", "context": "gates.gate_context", "decisions": "gates.gate_decisions",
+            "dispatch": "gates.gate_dispatch", "evidence": "gates.gate_evidence", "register": "gates.gate_register",
+            "schema": "gates.gate_schema", "streams": "gates.gate_streams"})
+        self.assertEqual(sorted(gates_main.COMMANDS), [
+            "check", "claims", "context", "continue", "decisions", "findings", "githook", "githooks", "hook", "index",
+            "loopstats", "program", "questions", "receipt", "run_all"])
+
+    def test_context_producer_listed(self):  # R2.1 D3: Rq-5-2
+        from gates import producers
+        self.assertEqual(producers.PRODUCER_MODULES, (
+            "gates.tools.index", "gates.tools.decisions_cli", "gates.tools.findings_cli", "gates.tools.claims_cli",
+            "gates.gate_checkpoint", "gates.tools.program_cli", "gates.gate_context", "gates.gate_evidence"))
+        self.assertEqual(producers.PRODUCER_MODULES.count("gates.gate_context"), 1)
+        self.assertEqual(producers.PRODUCER_MODULES.count("gates.gate_evidence"), 1)  # Rq-6-2
 
 
 
@@ -874,7 +904,7 @@ class CitesDispatchTest(GitIsolatedTestCase):
     def test_json_flag_position(self):  # D8
         code, out, err = self.run_main(["check", "--json", "cites"])
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("gates: checkpoint, cites, claims, cleanup, decisions, dispatch, register, schema, streams\n", err)
+        self.assertIn("gates: checkpoint, cites, claims, cleanup, context, decisions, dispatch, evidence, register, schema, streams\n", err)
 
 
 HEAD = ["PASS schema.kinds", "PASS schema.config"]
@@ -948,6 +978,7 @@ class FrontMatterKind(GateCase):
     def test_front_matter_kind_missing_path_file(self):  # GS7
         self.kinds("handoff", extra={"handoff": SCHEMA_TEXT["handoff"].replace(
             "  - dir: plan_state\n    glob: \"*/handoff.md\"\n", "  - path: context\n")})
+        os.remove(os.path.join(self.root, CTX))  # make_repo writes a valid context.yml; this test needs it absent
         self.assertEqual(self.lines(producers=["prod_handoff"]),
                          (HEAD + ["FAIL schema.handoff.%s: missing" % CTX], 1))
         self.put(CTX, HOK)
@@ -1008,6 +1039,283 @@ class FrontMatterKind(GateCase):
             with self.assertRaises(beg) as cm:
                 self.run_g(producers=["prod_handoff"])
         self.assertIs(cm.exception, self.exc)
+
+
+# ---------------------------------------------------------------- Task R2.3, Rq-6-2: gate_evidence is a producer
+EV_TAG = "<!-- schema: mutation-transcript/1 -->"
+EV_FIRST = "first line: expected '%s'" % EV_TAG
+HOOKS = PS + "/2026-11-10-v01-hooks/mutations"
+BAD_TRANSCRIPT = "legacy text, no schema tag\n"
+# owner answers 2026-11-21 (a) and Q-RS1-1 (a), 2026-11-24 ("Exclude as history"), one entry per file, written by hand
+LEGACY_TRANSCRIPTS = (
+    PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261124-3a2a.md",
+    PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261124-5gfw.md",
+    PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261124-fbwp.md",
+    PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261124-tcyn.md",
+    PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261124-ui2n.md",
+    PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261124-wtu5.md",
+    PS + "/2026-11-10-v01-hooks/mutations/3b.1.txt",
+    PS + "/2026-11-10-v01-hooks/mutations/3b.1-fix1.txt",
+    PS + "/2026-11-10-v01-hooks/mutations/3b.1-fix2.txt",
+    PS + "/2026-11-10-v01-hooks/mutations/3b.1-fix3.txt",
+    PS + "/2026-11-10-v01-hooks/mutations/3b.1-fix4.txt",
+    PS + "/2026-11-10-v01-runtime/mutations/3a.1.txt")
+
+
+class EvidenceProducer(GateCase):
+    """Rows S1-S5 and H1-H5 of Task R2.3's input-domain table (H6 is test_schema_lib X7, the loader's refusal of
+    ``..`` and absolute exclude entries). The real schema files and the real ``gates.gate_evidence`` producer."""
+
+    def ev(self, root=None):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch("gates.producers.PRODUCER_MODULES", ("gates.gate_evidence",)):
+            code = run_gate("schema", gate_schema.check, ["--root", root or self.root])
+        return out.getvalue().splitlines()[2:], code
+
+    def mt(self, rel):
+        return "FAIL schema.mutation-transcript.%s: %s" % (rel, EV_FIRST)
+
+    def test_S1_evidence_kinds_are_produced(self):
+        self.assertEqual(producers.PRODUCER_MODULES.count("gates.gate_evidence"), 1)
+        self.assertLessEqual({"mutation-transcript", "review-report"}, schema.produced_kinds())
+
+    def test_S1_fixture_without_transcripts_passes_both_kinds(self):
+        self.assertEqual(self.ev(), (["PASS schema.mutation-transcript", "PASS schema.review-report"], 0))
+
+    def test_S2_this_repository_passes(self):
+        out, code = self.run_repo()
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS schema.mutation-transcript", out)
+        self.assertIn("PASS schema.review-report", out)
+        self.assertEqual([ln for ln in out if not ln.startswith("PASS ")], [])
+
+    def run_repo(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = run_gate("schema", gate_schema.check, ["--root", REPO])
+        return out.getvalue().splitlines(), code
+
+    def test_S3_excluded_path_unchecked_sibling_and_new_dir_fail(self):
+        for rel in (HOOKS + "/3b.1.txt", HOOKS + "/3b.1-fix5.txt", PS + "/2099-new-plan/mutations/3b.1.txt"):
+            self.put(rel, BAD_TRANSCRIPT)
+        self.assertEqual(self.ev(), ([self.mt(HOOKS + "/3b.1-fix5.txt"), self.mt(PS + "/2099-new-plan/mutations/3b.1.txt"),
+                                      "PASS schema.review-report"], 1))
+
+    def test_S3_framework_b_glob_still_excluded_and_conforming_siblings_checked(self):
+        self.put(PS + "/2026-10-31-strict-delivery-framework-b/mutations/x.md", BAD_TRANSCRIPT)
+        self.put(PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261121-zzzz.md", BAD_TRANSCRIPT)
+        self.assertEqual(self.ev(), ([self.mt(PS + "/2026-10-31-strict-delivery-framework/mutations/F-20261121-zzzz.md"),
+                                      "PASS schema.review-report"], 1))
+
+    def test_S4_exclude_list_is_exactly_the_owner_approved_one(self):
+        s = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "mutation-transcript.yml"))
+        plain = [e.replace(PS + "/", "") for e in LEGACY_TRANSCRIPTS]
+        self.assertEqual(s.files[0]["exclude"], ["2026-10-31-strict-delivery-framework-b/mutations/*"] + plain)
+        self.assertEqual(len(set(s.files[0]["exclude"])), len(s.files[0]["exclude"]))   # H4: no duplicate
+        for rel in LEGACY_TRANSCRIPTS:   # each entry names a tracked file, outside the -b glob
+            self.assertNotIn("framework-b/", rel)
+            self.assertEqual(git(REPO, "ls-files", "--", rel), rel)
+
+    def test_S5_nonconforming_review_report_fails(self):
+        self.put("docs/strict-delivery/reviews/blk/r1.md", "not a report\n")
+        self.assertEqual(self.ev(), (["PASS schema.mutation-transcript",
+                                      "FAIL schema.review-report.docs/strict-delivery/reviews/blk/r1.md: first line: "
+                                      "expected '<!-- schema: review-report/1 -->'"], 1))
+
+    def test_H1_symlinks_match_by_name_only(self):
+        self.put(HOOKS + "/3b.1.txt", BAD_TRANSCRIPT)   # excluded, a real file
+        os.symlink("3b.1.txt", os.path.join(self.root, HOOKS, "3b.1-fix9.txt"))   # not excluded: a symlink to it
+        os.symlink("nowhere", os.path.join(self.root, HOOKS, "3b.1-fix1.txt"))   # excluded, itself a (dangling) symlink
+        self.assertEqual(self.ev(), (["FAIL schema.mutation-transcript.%s: %s" % (HOOKS + "/3b.1-fix9.txt", NOT_REG),
+                                      "PASS schema.review-report"], 1))
+
+    def test_H2_directory_and_fifo_at_excluded_and_other_names(self):
+        base = os.path.join(self.root, HOOKS)
+        os.makedirs(base + "/3b.1.txt")            # excluded name: a directory
+        os.mkfifo(base + "/3b.1-fix2.txt")         # excluded name: a FIFO
+        os.makedirs(base + "/other-dir.txt")       # other name: a directory
+        os.mkfifo(base + "/other-fifo.txt")        # other name: a FIFO
+        self.assertEqual(self.ev(), (["FAIL schema.mutation-transcript.%s: %s" % (HOOKS + "/" + n, NOT_REG)
+                                      for n in ("other-dir.txt", "other-fifo.txt")] + ["PASS schema.review-report"], 1))
+
+    def test_H3_symlinked_plan_directory_is_refused_whatever_the_spelling(self):
+        self.put(self.tmp + "/real/mutations/3b.1.txt", BAD_TRANSCRIPT)
+        os.makedirs(os.path.join(self.root, PS))
+        os.symlink(os.path.join(self.tmp, "real"), os.path.join(self.root, PS, "2026-11-10-v01-hooks"))
+        self.assertEqual(self.ev(), (["FAIL schema.mutation-transcript.%s: is a symlink; directories must be real "
+                                      "directories" % (PS + "/2026-11-10-v01-hooks"), "PASS schema.review-report"], 1))
+
+    def test_H5_names_with_spaces_unicode_and_metacharacters_are_not_excluded(self):
+        names = ["3b.1 txt", "3b.1.täxt", "3b.1[.]txt", "3b.*.txt", "3b.1.tx?", "*", "[x]"]
+        for n in names:
+            self.put(HOOKS + "/" + n, BAD_TRANSCRIPT)
+        self.put(HOOKS + "/3b.1.txt", BAD_TRANSCRIPT)
+        got, code = self.ev()
+        self.assertEqual(code, 1)
+        self.assertEqual(sorted(got[:-1]), sorted(self.mt(HOOKS + "/" + n) for n in names))
+        self.assertEqual(got[-1], "PASS schema.review-report")
+
+
+CB_BEGIN = "<!-- strict-delivery:begin schema=claude-block/1 version=0.1.0 -->"
+CB_END = "<!-- strict-delivery:end -->"
+GB_BEGIN = "# strict-delivery:begin schema=gitignore-block/1 version=0.1.0"
+GB_END = "# strict-delivery:end"
+BASE_LINES = ["PASS schema.kinds", "PASS schema.config"]
+SYM = "is a symlink; a file item must be a regular file"
+FIFTEEN = ["PASS schema.kinds", "PASS schema.config", "PASS schema.decision", "PASS schema.finding",
+           "PASS schema.claim", "PASS schema.request", "PASS schema.streams", "PASS schema.context",
+           "PASS schema.status",
+           "PASS schema.sync-log", "PASS schema.merged-log", "PASS schema.breakdown", "PASS schema.overview",
+           "PASS schema.in-force", "PASS schema.decision-index", "PASS schema.finding-index",
+           "PASS schema.mutation-transcript", "PASS schema.review-report"]  # hand-written, at 3f65424; context,
+# mutation-transcript and review-report added by residual batch 1 (R2.1 context producer, R2.3 evidence producer)
+
+
+class ManagedBlockGate(GateCase):
+    """Task 4a.1 producer 6 (rows GD): ``gate_schema`` and the managed-block, loader-only kinds. A producer module is
+    injected in ``sys.modules`` (D7); the schema files are the production ones copied from the working tree."""
+
+    def real_kinds(self, *names):
+        for n in names:
+            shutil.copy(os.path.join(schema.SCHEMAS_DIR, n + ".yml"), self.sdir)
+
+    def prod(self, *kinds):
+        mod = types.ModuleType("tests.fixtures.prod_mb")
+        mod.PRODUCES = tuple(kinds)
+        patcher = mock.patch.dict(sys.modules, {"tests.fixtures.prod_mb": mod})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return ["prod_mb"]
+
+    def test_claude_block_not_checked_before_producer(self):  # GD1, GD16
+        self.real_kinds("claude-block", "gitignore-block", "profile", "init-answers")
+        self.put("CLAUDE.md", CB_BEGIN + "\nb\n")
+        out, code = self.run_g()
+        self.assertEqual((out.splitlines(), code), (BASE_LINES, 0))
+        self.assertNotIn("claude-block", out)
+        self.assertNotIn("profile", out)
+        self.assertNotIn("init-answers", out)
+
+    def test_claude_block_checked_once_produced(self):  # GD2
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", "x\n" + CB_BEGIN + "\nb\n")
+        out, code = self.run_g(producers=self.prod("claude-block"))
+        self.assertEqual(out.splitlines(), BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: block: no end marker"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("PASS schema.claude-block", out)
+
+    def test_claude_block_valid_passes(self):  # GD3
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", "x\n" + CB_BEGIN + "\nb\n" + CB_END + "\ny\n")
+        self.assertEqual(self.lines(producers=self.prod("claude-block")), (BASE_LINES + ["PASS schema.claude-block"], 0))
+
+    def test_claude_block_no_marker_passes(self):  # GD4, GD5, GD6
+        self.real_kinds("claude-block")
+        producers = self.prod("claude-block")
+        want = (BASE_LINES + ["PASS schema.claude-block"], 0)
+        self.assertEqual(self.lines(producers=producers), want)  # GD5: no CLAUDE.md
+        self.put("CLAUDE.md", "")
+        self.assertEqual(self.lines(producers=producers), want)  # GD6
+        self.put("CLAUDE.md", "# Project\ntext\n")
+        self.assertEqual(self.lines(producers=producers), want)  # GD4
+
+    def test_claude_block_symlink_fails(self):  # GD7
+        self.real_kinds("claude-block")
+        self.put("real.md", CB_BEGIN + "\n" + CB_END + "\n")
+        os.symlink("real.md", os.path.join(self.root, "CLAUDE.md"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: " + SYM], 1))
+
+    def test_claude_block_fifo(self):  # GD8: never opened, so never blocks
+        self.real_kinds("claude-block")
+        os.mkfifo(os.path.join(self.root, "CLAUDE.md"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: is not a regular file"], 1))
+
+    def test_claude_block_directory(self):  # GD8
+        self.real_kinds("claude-block")
+        os.mkdir(os.path.join(self.root, "CLAUDE.md"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: is not a regular file"], 1))
+
+    def test_claude_block_not_utf8(self):  # GD9
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", b"\xff\n")
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: CLAUDE.md: not valid UTF-8"], 1))
+
+    def test_claude_block_bom_file(self):  # GD10, VM37
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", b"\xef\xbb\xbf" + (CB_BEGIN + "\n" + CB_END + "\n").encode("utf-8"))
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["FAIL schema.claude-block.CLAUDE.md: "
+                                                     "block: begin marker malformed: line 1"], 1))
+
+    def test_claude_block_old_version_fails(self):  # GD11
+        self.real_kinds("claude-block")
+        self.put("CLAUDE.md", CB_BEGIN.replace("claude-block/1", "claude-block/0") + "\n" + CB_END + "\n")
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (BASE_LINES + [
+            "FAIL schema.claude-block.CLAUDE.md: schema: expected claude-block/1, got claude-block/0; "
+            "run /strict-delivery:upgrade"], 1))
+
+    def test_both_block_kinds(self):  # GD12, GD14
+        self.real_kinds("claude-block", "gitignore-block")
+        self.put("CLAUDE.md", CB_BEGIN + "\nb\n" + CB_END + "\n")
+        self.put(".gitignore", GB_BEGIN + "\nx\n")
+        out, code = self.lines(producers=self.prod("claude-block", "gitignore-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["PASS schema.claude-block",
+                                                     "FAIL schema.gitignore-block..gitignore: block: no end marker"], 1))
+        self.put(".gitignore", GB_BEGIN + "\nx\n" + GB_END + "\n")
+        out, code = self.lines(producers=self.prod("claude-block", "gitignore-block"))
+        self.assertEqual((out, code), (BASE_LINES + ["PASS schema.claude-block", "PASS schema.gitignore-block"], 0))
+
+    def test_claude_block_schema_missing(self):  # GD13
+        out, code = self.lines(producers=self.prod("claude-block"))
+        self.assertEqual((out, code), (["FAIL schema.kinds.claude-block: gates/schemas/claude-block.yml: missing",
+                                        "PASS schema.config"], 1))
+
+    def test_loader_only_produced_passes(self):  # GD15
+        self.real_kinds("profile", "init-answers")
+        self.put("profile.yml", "not read\n")
+        out, code = self.lines(producers=self.prod("profile", "init-answers"))
+        self.assertEqual((out, code), (BASE_LINES + ["PASS schema.profile", "PASS schema.init-answers"], 0))
+
+    def test_new_schema_file_broken(self):  # GD20
+        path = os.path.join(self.sdir, "profile.yml")
+        with open(path, "w") as fh:
+            fh.write("kind: profile\nversion: 1\nformat: yaml\nfiles:\n  - x\nfields:\n  schema:\n    type: str\n")
+        out, code = self.lines()
+        self.assertEqual((out, code), (["FAIL schema.kinds.profile: %s: files.0: must be a mapping" % path,
+                                        "PASS schema.config"], 1))
+
+    def test_this_repos_schema_files_load(self):  # GD17, EX1
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "CLAUDE_PROJECT_DIR"}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        p = subprocess.run([sys.executable, "-m", "gates", "check", "schema", "--root", REPO], cwd=REPO, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.assertEqual(p.stdout.decode().splitlines(), FIFTEEN)
+        self.assertIn("PASS schema.kinds", p.stdout.decode().splitlines())
+
+    def test_gate_subprocess_managed_block(self):  # GD18: exit code and lines of the CLI, producer declared
+        script = os.path.join(self.tmp, "run_gate.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write("import sys, types\nsys.path.insert(0, sys.argv[2])\n"
+                     "from gates import __main__ as m\nimport gates.producers as p\n"
+                     "mod = types.ModuleType('tests.fixtures.prod_mb')\nmod.PRODUCES = ('claude-block',)\n"
+                     "sys.modules['tests.fixtures.prod_mb'] = mod\n"
+                     "p.PRODUCER_MODULES = ('tests.fixtures.prod_mb',)\n"
+                     "sys.exit(m.main(['check', 'schema', '--root', sys.argv[1]]))\n")
+        self.put("CLAUDE.md", CB_BEGIN + "\nb\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "CLAUDE_PROJECT_DIR"}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        p = subprocess.run([sys.executable, script, self.root, REPO], cwd=self.tmp, env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, check=False)
+        self.assertEqual((p.returncode, p.stderr), (1, b""))
+        self.assertEqual(p.stdout.decode().splitlines(), BASE_LINES + [
+            "FAIL schema.claude-block.CLAUDE.md: block: no end marker"])
 
 
 if __name__ == "__main__":

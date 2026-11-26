@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261126-mik5
+status: open
+source: residual final review 1 (residual/final-review-1.md, F-FR-1)
+severity: MEDIUM
+class: "PC1 BaseExceptionGroup built with Exception members (an ExceptionGroup on 3.13, so no real BaseExceptionGroup reaches the code): tests/test_context_load_text.py:185 test_pc1_beg (only member; git grep of BaseExceptionGroup with ValueError/RuntimeError/Exception/OSError/TypeError members over tests; test_context_registry and test_run_all use KeyboardInterrupt)"
+siblings: []
+cites:
+  - file: tests/test_context_load_text.py
+    lines: 183-185
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: residual-batch-1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+    by: stream-residual
+review_round: 1
+caused_by_change: true
+dimension: PC1c BaseExceptionGroup version row

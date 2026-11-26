@@ -270,10 +270,10 @@ class CopyTest(CopyCase):
         code, out = self.gates_run_all(shallow, "--base", "origin/main")
         self.assertEqual(code, 1, out)
         lines = out.splitlines(True)
-        for gate in ("register", "decisions", "claims"):  # measured 2026-11-17: the three base gates, in this order
+        for gate in ("register", "decisions", "claims", "evidence"):  # measured 2026-11-17: the three base gates, in this order; Rq-6-3 appends evidence
             self.assertIn(SHALLOW % gate, lines)
         self.assertEqual([ln for ln in lines if ln.startswith("FAIL")],
-                         [SHALLOW % g for g in ("register", "decisions", "claims")])
+                         [SHALLOW % g for g in ("register", "decisions", "claims", "evidence")])
 
     def test_no_exception_group_in_task_files(self):  # K3: the files of this task use no exception group
         word = "Exception" + "Group"
