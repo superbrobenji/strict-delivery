@@ -13,6 +13,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import stat
 from typing import Mapping, Optional
 
 from gates.lib import gitinfo
@@ -51,18 +52,68 @@ MAX_DIGITS = 600
 LEVELS_BELOW: dict = {"program_controller": 2, "stream_controller": 1, "controller": 1}
 
 
+# The dispatchers a worker role (a framework worker or a project role, Q-H4) accepts, by program_live.
+WORKER_DISPATCHERS: dict = {True: ("stream_controller", "controller"), False: ("session", "controller")}
+
+
 def _dispatchers() -> dict:
     workers = tuple(r for r in ROLES if r not in CONTROLLER_ROLES)
     live = {"program_controller": ("session",), "stream_controller": ("session", "program_controller"),
             "controller": ("stream_controller", "controller")}
     plain = {"program_controller": (), "stream_controller": (), "controller": ("session", "controller")}
     for w in workers:
-        live[w] = ("stream_controller", "controller")
-        plain[w] = ("session", "controller")
+        live[w] = WORKER_DISPATCHERS[True]
+        plain[w] = WORKER_DISPATCHERS[False]
     return {True: live, False: plain}
 
 
 DISPATCHERS: dict = _dispatchers()
+
+
+_ROLE_ID = re.compile(r"[a-z][a-z0-9_]*")
+
+
+class RoleCollision(ValueError):
+    """A project role id that may not be used: a framework role id, or ``session``."""
+
+
+def _roles_map(cfg: object) -> dict:
+    if type(cfg) is not dict:
+        raise ValueError("cfg must be a mapping")
+    roles = cfg.get("roles", {})
+    if type(roles) is not dict:
+        raise ValueError("roles must be a mapping")
+    for k in roles:
+        if type(k) is not str:
+            raise ValueError("roles: a key must be a role id string")
+        if not _ROLE_ID.fullmatch(k):
+            raise ValueError("roles: '%s' is not a role id [a-z][a-z0-9_]*" % k)
+    return roles
+
+
+def project_ids(cfg: dict) -> tuple:
+    """The project role ids of ``cfg['roles']``, sorted by code point, collisions not checked (ValueError for a shape
+    ``config.load`` cannot return)."""
+    return tuple(sorted(_roles_map(cfg)))
+
+
+def roles_of(cfg: dict) -> tuple:
+    """``ROLES`` plus the project role ids in sorted order. An id equal to a framework role raises ``RoleCollision``
+    (the first in sorted order); so does ``session``, the main session's dispatcher id. Project roles are workers: they
+    are in no constant here."""
+    ids = project_ids(cfg)
+    for i in ids:
+        if i in ROLES:
+            raise RoleCollision("%s: a project role may not reuse a framework role id" % i)
+        if i == "session":
+            raise RoleCollision("session: a project role may not reuse the dispatcher id session")
+    return ROLES + ids
+
+
+def dispatchers_for(live: bool, role: str) -> tuple:
+    """The dispatchers allowed for ``role``: the ``DISPATCHERS`` row of a framework role, the worker row of any other id
+    (a project role); ``DISPATCHERS`` itself is never extended."""
+    return DISPATCHERS[live][role] if role in DISPATCHERS[live] else WORKER_DISPATCHERS[live]
 
 
 def depth_ok(role: str, dispatcher_depth: int, max_depth: int) -> bool:
@@ -144,11 +195,12 @@ def parse(prompt: str) -> tuple:
     return sections, errors
 
 
-def role_of(body: str) -> str:
-    """The first non-empty line of the ``## Role`` body, exactly a role id; anything else is a ValueError."""
+def role_of(body: str, roles: tuple = ROLES) -> str:
+    """The first non-empty line of the ``## Role`` body, exactly a role id of ``roles`` (default the framework roles; a
+    project passes ``roles_of(cfg)``); anything else is a ValueError."""
     for line in body.split("\n"):
         if line != "":
-            if line in ROLES:
+            if line in roles:
                 return line
             raise ValueError("the first non-empty line of ## Role must be exactly one role id, not '%s'" % line)
     raise ValueError("## Role is empty")
@@ -171,6 +223,94 @@ def block_errors(body: str, role: str, prompts_dir: str) -> list:
     return []
 
 
+def _project_prompt(role: str, cfg: dict) -> str:
+    """The checked ``roles.<role>.prompt`` of a project role (ValueError otherwise): an exact non-empty ``str``, a
+    normalised repository-relative path ending ``.md``, no backslash, space, control character or ``..``."""
+    entry = _roles_map(cfg).get(role) if type(role) is str else None
+    if type(entry) is not dict:
+        raise ValueError("%s is no framework role and no project role" % (role if type(role) is str else type(role).__name__))
+    pr = entry.get("prompt")
+    parts = pr.split("/") if type(pr) is str else []
+    if (type(pr) is not str or not pr.endswith(".md") or pr.startswith("/") or "\\" in pr or " " in pr
+            or any(ord(c) < 32 or ord(c) == 127 for c in pr) or any(p in ("", ".", "..") for p in parts)
+            or parts[-1] == ".md"):
+        raise ValueError("roles.%s.prompt is not a normalised repository-relative .md path" % role)
+    return pr
+
+
+def prompt_path(role: str, cfg: dict, prompts_dir: str, root: str) -> str:
+    """The framework prompt file of a framework role (unchanged); ``<root>/<roles.<role>.prompt>`` of a project role."""
+    if role in ROLES:
+        return os.path.join(prompts_dir, role + ".md")
+    return os.path.join(root, _project_prompt(role, cfg))
+
+
+def project_block_errors(body: str, role: str, cfg: dict, root: str) -> list:
+    """Like ``block_errors`` for a project role, reading ``<root>/<prompt>`` from the working tree: every component below
+    ``root`` is ``lstat``ed (a symlink or non-directory component, a symlink or non-regular file is refused before any
+    open), the file is opened with ``O_NOFOLLOW`` and ``O_NONBLOCK`` and ``fstat``ed, and a file larger than the body is
+    refused without being read (Decision D8)."""
+    try:
+        rel = _project_prompt(role, cfg)
+    except ValueError as e:
+        return [str(e)]
+    cur = root
+    parts = rel.split("/")
+    for i, part in enumerate(parts):
+        cur = os.path.join(cur, part)
+        try:
+            mode = os.lstat(cur).st_mode
+        except OSError as e:
+            return ["strict block file %s cannot be read (%s)" % (rel, e.strerror or type(e).__name__)]
+        if i < len(parts) - 1:
+            if not stat.S_ISDIR(mode):
+                return ["strict block file %s: the component '%s' is a symlink or not a directory" % (rel, part)]
+        elif stat.S_ISLNK(mode):
+            return ["strict block file %s is a symlink, never followed" % rel]
+        elif not stat.S_ISREG(mode):
+            return ["strict block file %s is not a regular file" % rel]
+    try:
+        fd = os.open(cur, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError as e:
+        return ["strict block file %s cannot be read (%s)" % (rel, e.strerror or type(e).__name__)]
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return ["strict block file %s is not a regular file" % rel]
+        limit = len(body.encode("utf-8", "surrogatepass"))
+        if st.st_size > limit:
+            return ["## Strict block is not the block %s byte for byte (blank line, the file, blank line)" % rel]
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            raw = fh.read(limit + 1)
+    except OSError as e:
+        return ["strict block file %s cannot be read (%s)" % (rel, e.strerror or type(e).__name__)]
+    finally:
+        os.close(fd)
+    try:
+        want = "\n" + raw.decode("utf-8") + "\n"
+    except UnicodeDecodeError:
+        return ["strict block file %s is not valid UTF-8" % rel]
+    if body != want:
+        return ["## Strict block is not the block %s byte for byte (blank line, the file, blank line)" % rel]
+    return []
+
+
+def budget_numbers(prompt: str) -> Optional[tuple]:
+    """The two digit texts ``(tokens, minutes)`` of the first valid ``## Budget`` heading line of ``prompt``, else None.
+    The texts are never converted here: a caller compares by length first (no ``int()`` of unbounded text, row V1)."""
+    for ln in prompt.split("\n"):
+        if ln.startswith("## Budget") and _BUDGET.fullmatch(ln):
+            tokens, minutes = ln[len("## Budget: "):].split(" ")
+            return tokens[len("tokens="):], minutes[len("minutes="):]
+    return None
+
+
+def over_cap(text: str, cap: int) -> bool:
+    """Whether the digit text ``text`` is greater than ``cap`` (``cap`` below ``10**MAX_DIGITS``): by length when the
+    text has more than ``MAX_DIGITS`` digits, so no ``int()`` reads unbounded text."""
+    return True if len(text) > MAX_DIGITS else int(text) > cap
+
+
 def model_line(body: str) -> Optional[str]:
     """The one line of a ``## Model`` body (leading and trailing empty lines dropped), else None (Decision D8)."""
     lines = body.split("\n")
@@ -191,6 +331,22 @@ def tier_of(model: str, cfg: dict) -> Optional[int]:
     if len(hit) > 1:
         raise ValueError("model '%s' is named by more than one tier (%s)" % (model, ", ".join(hit)))
     return int(hit[0][4]) if hit else None
+
+
+def min_tier_of(role: str, cfg: dict) -> int:
+    """``min_tier(role, cfg)`` for a framework role (the table value and the tier4 fallback); the number of ``min_tier``
+    of a project role's entry (no fallback). ValueError for any other id or a malformed entry."""
+    if type(role) is not str or type(cfg) is not dict:
+        raise ValueError("min_tier_of takes a role id (str) and a config (dict)")
+    if role in ROLES:
+        return min_tier(role, cfg)
+    entry = _roles_map(cfg).get(role)
+    if type(entry) is not dict:
+        raise ValueError("%s is no framework role and no project role" % role)
+    tier = entry.get("min_tier")
+    if type(tier) is not str or tier not in TIER_NAMES:
+        raise ValueError("roles.%s.min_tier must be one of %s" % (role, ", ".join(TIER_NAMES)))
+    return int(tier[4])
 
 
 def small_tier(role: str, cfg: dict) -> int:

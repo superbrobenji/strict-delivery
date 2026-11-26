@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261122-fp69
+status: open
+source: "4a.3 task review 1: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4a3-review-1.md R1-3"
+severity: LOW
+class: "brittle source-text tests; members: tests/test_config.py:1493-1496 counting the substring 'except ' in config.py source (V3)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4a.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e10ae15a0e6d5bcfe6aae74b6092ed4e3e5f8864
+    by: stream-config-hooks
+review_round: 1
+caused_by_change: true
+dimension: V3 version rows / test brittleness

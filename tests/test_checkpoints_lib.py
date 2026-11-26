@@ -34,7 +34,7 @@ def cfg() -> dict:
     """``config.load`` of a fixture repository whose config is ``minimal_config()`` (built once, copied per call)."""
     if not _CFG:
         with tempfile.TemporaryDirectory() as d:
-            make_repo(d, minimal_config())
+            make_repo(d, {**minimal_config(), "profile": "light"})  # light presets nothing; strict presets block.max_tasks 3
             _CFG.update(config.load(d))
     return copy.deepcopy(_CFG)
 
@@ -51,7 +51,7 @@ ROLE_IDS = ("program_controller", "stream_controller", "controller", "implemente
             "task_reviewer", "final_reviewer", "final_verifier", "exception_reviewer", "audit_reviewer",
             "audit_verifier", "investigator", "plan_writer", "plan_reviewer", "drafter")
 OWNER_ONLY = ("triage", "spec-direction", "scope", "merge-grant", "model-policy", "issue-close", "rule-override",
-              "program-create", "stream-ownership", "stream-merge", "request-dispute", "program-close")
+              "profile-override", "program-create", "stream-ownership", "stream-merge", "request-dispute", "program-close")
 
 
 def resume(ids_=()):
@@ -1599,10 +1599,11 @@ class Repository(unittest.TestCase):
 
     def test_schema_files_load(self):  # GS2
         sch = schema.schemas()
-        self.assertEqual(sorted(sch), ["breakdown", "claim", "config", "context", "decision", "decision-index", "finding", "finding-index", "handoff",
-                                       "in-force", "ledger", "merged-log", "mutation-transcript", "overview", "receipt", "request",
-                                       "review-report", "status", "streams",
-                                       "sync-log"])  # Task P2.1 part i adds the five program schemas; 6E.1 the two evidence kinds
+        self.assertEqual(sorted(sch), ["breakdown", "claim", "claude-block", "config", "context", "decision", "decision-index",
+                                       "finding", "finding-index", "gitignore-block", "handoff", "in-force",
+                                       "init-answers", "ledger", "merged-log", "mutation-transcript", "overview", "profile", "receipt",
+                                       "request", "review-report", "status", "streams",
+                                       "sync-log"])  # Task P2.1 part i adds the five program schemas; Task 4a.1 adds four; 6E.1 the two evidence kinds; 5a context and receipt
         for k in ("handoff", "ledger"):
             self.assertIn(k, schema.KNOWN_KINDS)
 
@@ -2242,12 +2243,25 @@ class CapErrors(unittest.TestCase):
 
     def test_cap_end_to_end_with_config_load(self):  # CE16: config.load of a fixture, hand-typed texts
         with tempfile.TemporaryDirectory() as d:
-            make_repo(d, {**minimal_config(), "block": {"max_tasks": 3}, "rulings": {"max_per_block": 1}})
+            make_repo(d, {**minimal_config(), "profile": "light", "block": {"max_tasks": 3}, "rulings": {"max_per_block": 1}})
             c = config.load(d)
         text = LH + "".join(L6("1a", "1a.%d" % i) + "\n" for i in range(1, 5)) + R0 + "\n" + R0 + "\n"
         errs = cap_errors(H6(rulings=2), checkpoint_lines(text), PLAN_FOUR, c, ledger_rulings(text, "1a"))
         self.assertEqual(errs, ["block: 4 tasks in ledger exceed block.max_tasks 3", "block: 4 tasks in plan exceed block.max_tasks 3",
                                 "rulings: 2 Ruling lines in the ledger exceed rulings.max_per_block 1"])
+
+    def test_cap_strict_profile_preset_and_project_refusal(self):  # seam with 4a.2: strict presets block.max_tasks 3
+        with tempfile.TemporaryDirectory() as d:
+            make_repo(d, minimal_config())
+            c = config.load(d)
+        self.assertEqual(cap_errors(H6(), FOUR, PLAN_FOUR, c, 0),
+                         ["block: 4 tasks in ledger exceed block.max_tasks 3", "block: 4 tasks in plan exceed block.max_tasks 3"])
+        with tempfile.TemporaryDirectory() as d:
+            make_repo(d, {**minimal_config(), "block": {"max_tasks": 3}})
+            with self.assertRaises(GateError) as cm:
+                config.load(d)
+        self.assertEqual(str(cm.exception), ".strict-delivery/config.yml: block.max_tasks: preset by profile strict; "
+                         "change it under overrides with the authorising decision")
 
     def test_cap_real_plan_block(self):  # CE17
         text = slurp(os.path.join(REPO, "docs", "strict-delivery", "plans", "2026-10-31-strict-delivery-framework.md"))

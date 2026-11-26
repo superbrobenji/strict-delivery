@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-9ima
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/a2-review-1.md R1-3
+severity: LOW
+class: "parents[:i + 1] replaced by parents survives: no test asserts the outermost offending parent for a deeper path with a swap (a/b/c.yml with a swapped gives parent a)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4c.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 983fa277eaf30a6f2febc19f2f3eae6927681d1a
+    by: stream-config-hooks
+review_round: 5
+caused_by_change: true
+dimension: outermost parent text in the descriptor walk

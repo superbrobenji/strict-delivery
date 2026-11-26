@@ -1426,7 +1426,8 @@ class TestPrompt(Fx):
         self.assertEqual([l.id for l in res.lines], ["dispatch.input", "dispatch.fork", "dispatch.grammar", "dispatch.role",
                          "dispatch.dispatcher", "dispatch.program", "dispatch.stream", "dispatch.depth",
                          "dispatch.concurrency", "dispatch.children", "dispatch.model", "dispatch.tier",
-                         "dispatch.top-tier", "dispatch.block", "dispatch.claims", "dispatch.decisions"])
+                         "dispatch.top-tier", "dispatch.block", "dispatch.budget", "dispatch.size",
+                         "dispatch.claims", "dispatch.decisions"])
         self.assertTrue(res.ok())
 
     def test_self_check(self):  # GD7

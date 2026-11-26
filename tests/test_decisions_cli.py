@@ -1529,7 +1529,7 @@ class Overrides(Base):
             with self.subTest(cls=cls):
                 self.refused(ask_argv(cls=cls, extra=["--overrides", "SD-R2"]), "overrides: only class rule-override")
         self.refused(ask_argv(cls="profile-override", extra=["--overrides", "SD-R2"]),
-                     "class: profile-override is not in decision_classes.owner_only")
+                     "overrides: only class rule-override")
 
     def test_ask_rule_override_class_not_owner_only(self):  # O8
         write_record(self.root, ".strict-delivery/config.yml",

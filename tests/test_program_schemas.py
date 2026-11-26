@@ -700,14 +700,14 @@ class KindsAndVersions(unittest.TestCase):
     def test_known_kinds_hold_the_program_kinds(self):  # KK1
         self.assertIn("merged-log", KNOWN_KINDS)
         self.assertEqual(KNOWN_KINDS.index("merged-log"), KNOWN_KINDS.index("sync-log") + 1)  # D-A21
-        self.assertEqual(len(KNOWN_KINDS), 22)
-        self.assertEqual(len(set(KNOWN_KINDS)), 22)
+        self.assertEqual(len(KNOWN_KINDS), 24)  # 4a.1 appends profile and init-answers
+        self.assertEqual(len(set(KNOWN_KINDS)), 24)
         self.assertEqual(KNOWN_KINDS.index("breakdown"), KNOWN_KINDS.index("merged-log") + 1)  # Task P2.2, D-Q20
 
     def test_schemas_dir_loads_and_stems_known(self):  # KK2
         loaded, problems = schema.scan_dir()
         self.assertEqual(problems, [])
-        self.assertEqual(len(loaded), 20)  # Task 6E.1 adds mutation-transcript and review-report; 5a context and receipt
+        self.assertEqual(len(loaded), 24)  # 4a.1 adds claude-block, gitignore-block, profile, init-answers; Task 6E.1 adds mutation-transcript and review-report; 5a context and receipt
         for kind in ("streams", "request", "status", "sync-log", "merged-log", "mutation-transcript", "review-report"):
             self.assertIn(kind, loaded)
             self.assertIn(kind, KNOWN_KINDS)
