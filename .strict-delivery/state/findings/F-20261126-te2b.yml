@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-te2b
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-2.md R2-7
 severity: MEDIUM
 class: "non-plain write detection of branch/checkout/switch write options: git branch -D/-d/-f/-m/-M/-c/-C x; ls, git checkout -b/-B/-f ...; ls, git switch -c/-C/-f ...; ls, ls && git checkout -B y"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+  - 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456:tests/test_hook_bash.py
 history:
   - status: open
     sha: b2e51eb247de741f7280ddde01290901da20a67c
     by: stream-hooks-4
+  - status: planned
+    sha: 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+    by: implementer
+  - status: in-progress
+    sha: 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+    by: implementer
+  - status: fixed-unpinned
+    sha: 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+    by: implementer
 review_round: 2
 caused_by_change: false
 dimension: "alias resolution: plain or not (write detection)"

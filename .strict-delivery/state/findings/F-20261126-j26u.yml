@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-j26u
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk4-3b2-review-2.md R2-6
 severity: LOW
 class: "hooks dir forms tested via a stand-in of pre_bash._run_gates: pre-commit and pre-push as symlink, directory, FIFO; core.hooksPath equal and nested (all five HooksDirPathsTest methods)"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+  - 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456:tests/test_hook_bash.py
 history:
   - status: open
     sha: b2e51eb247de741f7280ddde01290901da20a67c
     by: stream-hooks-4
+  - status: planned
+    sha: 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+    by: implementer
+  - status: in-progress
+    sha: 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+    by: implementer
+  - status: fixed-unpinned
+    sha: 5a102d1f05e9f3bb6cfd80ba1d3c89a213607456
+    by: implementer
 review_round: 2
 caused_by_change: true
 dimension: "hardening: hooks paths"
