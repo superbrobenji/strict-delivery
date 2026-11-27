@@ -1950,5 +1950,47 @@ class ExactTypesFunctionsTest(unittest.TestCase):
                 self.raises(lambda: bp.commit_refusals(text, pol(), run, bad), "stop must be a bool", text + repr(bad))
 
 
+_INPUT_LINE = "FAIL hook.bash.input: command must be a string; " + WAY   # rows ET34, ET35 (hand-written)
+
+
+class ExactTypesHandleTest(Repo):
+    """Rows ET33, ET34 (in process; ET34 through the hook in tests/test_hook_bash.py) and the cases of the "yes" row ET35
+    no earlier test pins in process (a ``str`` subclass, ``None``, ``int``, a ``list`` command)."""
+
+    def ctx(self, root, command):
+        raw = {"tool_name": "Bash", "tool_input": {"command": command, "description": "d"}, "session_id": "s1",
+               "cwd": root}
+        return hookio.context("PreToolUse", raw, {"PATH": os.environ["PATH"]}, githooks.framework_dir())
+
+    def test_exact_types_handle_ctx(self):  # ET33
+        d = self.repo()
+        c = self.ctx(d, "ls")
+        self.assertIs(type(c), hookio.HookContext)
+        self.assertEqual(pre_bash.handle(c), hookio.Outcome())
+        values = {f.name: getattr(c, f.name) for f in dataclasses.fields(c)}
+        sub = type("_CtxSub", (hookio.HookContext,), {})(**values)
+        for bad in (sub, types.SimpleNamespace(**values), None, values):
+            with self.subTest(ctx=type(bad).__name__):
+                with self.assertRaises(TypeError) as cm:
+                    pre_bash.handle(bad)
+                self.assertEqual(str(cm.exception), "ctx must be a HookContext")
+
+    def test_exact_types_handle_tool_input(self):  # ET34 (in process): never an exception
+        d = self.repo()
+        for bad in (_DictSub(command="ls"), None, [], ["ls"], _DictSub(command="git commit --no-verify")):
+            with self.subTest(tool_input=repr(bad)):
+                c = self.ctx(d, "ls")
+                c.tool_input = bad
+                self.assertEqual(pre_bash.handle(c), hookio.Outcome(deny=[_INPUT_LINE]))
+
+    def test_exact_types_handle_command_pins(self):  # ET35 (in process), V1
+        d = self.repo()
+        for bad in (_StrSub("ls"), None, 3, ["ls"], b"ls", _StrSub("echo " + _DIGITS)):
+            with self.subTest(command=repr(bad)[:20]):
+                self.assertEqual(pre_bash.handle(self.ctx(d, bad)), hookio.Outcome(deny=[_INPUT_LINE]))
+        for command in ("echo " + _DIGITS, "echo " + _NEW_CP):
+            self.assertEqual(pre_bash.handle(self.ctx(d, command)), hookio.Outcome(), command[:8])
+
+
 if __name__ == "__main__":
     unittest.main()

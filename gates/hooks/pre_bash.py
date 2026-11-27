@@ -200,6 +200,10 @@ def _judged(ctx: HookContext, command: str, scan, views: tuple, aliases: dict, p
 
 
 def handle(ctx: HookContext) -> Outcome:
+    if type(ctx) is not HookContext:   # row ET33 (Q-RS4-1 (A))
+        raise TypeError("ctx must be a HookContext")
+    if type(ctx.tool_input) is not dict:   # row ET34: the input line, never an exception
+        return Outcome(deny=["FAIL hook.bash.input: command must be a string; %s" % _WAY])
     command = ctx.tool_input.get("command")
     if type(command) is not str:
         return Outcome(deny=["FAIL hook.bash.input: command must be a string; %s" % _WAY])
