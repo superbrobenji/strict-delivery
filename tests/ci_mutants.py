@@ -715,7 +715,7 @@ def _write_output(env, lines):
     except ValueError:  # UnicodeEncodeError (a lone surrogate) and UnicodeDecodeError (a surrogate-escaped byte)
         return "GITHUB_OUTPUT must be valid UTF-8 text (a lone surrogate or a byte that is not UTF-8 is refused), got %s" % _show(path)
     names = [name for name in raw.split(b"/") if name]
-    if not names or raw.endswith(b"/"):
+    if raw.endswith(b"/"):  # (a path of slashes only ends in one too, so ``names`` is never empty below)
         return "GITHUB_OUTPUT must name a file, got %s" % _show(path)
     delim = "ci_mutants_" + secrets.token_hex(16)
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
