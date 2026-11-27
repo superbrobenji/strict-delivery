@@ -995,7 +995,7 @@ def _guard_problems(node, text, own, is_builder):
             if own and d == "Str" and len(e.args) == 1 and not e.keywords:
                 return accepted(e.args[0], seen)
             if _callee(f) in ("make_repo", "_make_repo_slow"):
-                return path_of(e) is not None and accepted(path_of(e), seen)
+                return True  # its result is its path; that nested guarded call is a call of this unit, checked on its own
             return False
         if isinstance(e, ast.IfExp):
             return accepted(e.body, seen) and accepted(e.orelse, seen)
@@ -1042,11 +1042,6 @@ def _guard_problems(node, text, own, is_builder):
         if any(isinstance(a, ast.Starred) for a in args) or any(k.arg is None for k in keywords):
             return "starred"
         return args[idx] if len(args) > idx else next((k.value for k in keywords if k.arg == kw), None)
-
-    def path_of(call):
-        """The path argument of a guarded call, or ``None`` (absent or starred)."""
-        p = guard_path(call.args, call.keywords, _callee(call.func))
-        return None if p == "starred" else p
 
     bad, refs = [], set()
     for sub in ast.walk(node):
