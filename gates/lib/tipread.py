@@ -38,7 +38,10 @@ def _mode(root: str, ref: str, path: str) -> Optional[str]:
     refused by name. ``path`` is an exact ``str`` (owner Q-RS4-1 (A), F-20261126-yyqv). The kind comes from the listing
     of ``path`` itself (a literal pathspec, as ``gitinfo.show`` lists it on main), matched by its raw name against the
     bytes git was given (``os.fsencode``), so the verdict depends only on the entry's own kind and bytes: no other name
-    is decoded, and the entry's own name is decoded as ``gitinfo.show`` decodes it (F-20261126-g6un)."""
+    is decoded, and the entry's own name is decoded as ``gitinfo.show`` decodes it (F-20261126-g6un). That decoded
+    name must equal ``path``, as ``gitinfo.show`` and ``blob_exists`` compare it: a ``path`` whose ``os.fsencode``
+    bytes are the bytes of another name (a surrogate alias such as ``"d/\\udcc3\\udca9.md"`` for ``d/é.md``) names no
+    entry (F-20261127-e5h5)."""
     if type(path) is not str:
         raise GateError("path must be a string")
     gitinfo._check_norm(path, "ls-tree: path", allow_empty=True)
@@ -47,8 +50,7 @@ def _mode(root: str, ref: str, path: str) -> Optional[str]:
     gitinfo._require_toplevel(root)
     mode = None
     for entry_mode, _, name in _listing(root, ref, path):
-        if name == os.fsencode(path):
-            gitinfo._text(name, "ls-tree")
+        if name == os.fsencode(path) and gitinfo._text(name, "ls-tree") == path:
             mode = entry_mode
     if mode is not None and mode not in gitinfo._REGULAR:
         raise GateError("%s:%s: cannot be read as a UTF-8 regular file (not a regular file)" % (ref, path))

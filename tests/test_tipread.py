@@ -1,7 +1,8 @@
 """Tests for gates.lib.tipread (Task 5b.3, table task-5b.3-domain.md rows F26, F27, FH4, FH6, FH7, FK1-FK3, R4-1,
-R4-1b, R4-1d, R4-2, R4-2b, R5-1, R5-2, R5-H, R5-K)."""
+R4-1b, R4-1d, R4-2, R4-2b, R5-1, R5-2, R5-H, R5-K, R6-1, R6-2)."""
 import os
 import posixpath
+import random
 import sys
 import tempfile
 import unittest
@@ -299,7 +300,9 @@ class Entries(GitIsolatedTestCase):
                          [("100644", "blob", "d/a.md"), ("160000", "commit", "d/x")])
         self.assertEqual(tipread.entries(self.work, REF, "nothing"), [])
         self.assertIn(("040000", "tree", "d"), tipread.entries(self.work, REF, ""))  # "" lists the root
-        self.assertEqual(tipread.entries(self.work, REF, "[d]"), [])  # a literal pathspec: "[d]" is no glob of "d"
+        # git ls-tree never globs, with or without --literal-pathspecs: this pins that, not the flag (the flag is
+        # pinned by MagicNames: the pathspec-magic names of R6-2, which only a literal pathspec reads as names)
+        self.assertEqual(tipread.entries(self.work, REF, "[d]"), [])
         with self.subTest("unreadable entry"):  # a listing line that is not <mode> <type> <id>\t<path>
             real = gitinfo._run
 
@@ -459,6 +462,275 @@ class SiblingNames(GitIsolatedTestCase):
                 for fn, absent in ((tipread.show_file, None), (tipread.is_file, False),
                                    (gitinfo.show, None), (gitinfo.blob_exists, False)):
                     self.expect(fn, path, absent, text)
+
+
+def outcome(fn, *args) -> tuple:
+    """``("ok", value)`` or ``("err", GateError text)`` of one call: two sides that both raise are compared by text."""
+    try:
+        return ("ok", fn(*args))
+    except GateError as e:
+        return ("err", str(e))
+
+
+def put_many(root: str, ref: str, base: str, entries: list) -> None:
+    """Point ``ref`` at one commit on ``base`` holding every ``(name, mode, data)`` of ``entries`` (a throwaway index,
+    names passed to ``update-index --cacheinfo`` as they are: no pathspec parsing)."""
+    with tempfile.TemporaryDirectory() as td:
+        env = {"GIT_INDEX_FILE": os.path.join(td, "index")}
+        git(root, "read-tree", base, env=env)
+        for i, (name, mode, data) in enumerate(entries):
+            blob = os.path.join(td, "blob%d" % i)
+            with open(blob, "wb") as fh:
+                fh.write(data)
+            sha = git(root, "hash-object", "-w", blob, env=env)
+            git(root, "update-index", "--add", "--cacheinfo", "%s,%s,%s" % (mode, sha, name), env=env)
+        git(root, "update-ref", ref, git(root, "commit-tree", git(root, "write-tree", env=env), "-p", base, "-m", "raw"))
+
+
+class AliasPaths(GitIsolatedTestCase):
+    """R6-1 (F-20261127-e5h5): a ``str`` whose ``os.fsencode`` bytes differ from its UTF-8 reading (a surrogate alias)
+    names no entry, even when an entry has those bytes: the entry's decoded name is not ``path``. ``show_file`` gives
+    ``None`` and ``is_file`` False (``gitinfo.show`` / ``blob_exists`` at edb6aa7, which compare the decoded name with
+    ``path``), for a regular, symlink, tree and gitlink entry, and for an alias in the file name, in a folder component
+    or in both. Expected values are written by hand from row R6-1 (the bytes of each alias are written out below); the
+    test also asserts ``gitinfo`` (unchanged since edb6aa7, Amendment 1)."""
+
+    # (label, the entry's own path, its kind, the alias path: the same bytes as surrogates)
+    CASES = (
+        ("regular, alias in the file name", "d/é.md", "regular", "d/\udcc3\udca9.md"),  # e-acute = c3 a9
+        ("executable, alias in the file name", "d/ë.md", "executable", "d/\udcc3\udcab.md"),  # c3 ab
+        ("symlink, alias in the file name", "d/è.md", "symlink", "d/\udcc3\udca8.md"),  # c3 a8
+        ("tree, alias in the entry's own name", "d/ì", "tree", "d/\udcc3\udcac"),  # c3 ac
+        ("gitlink, alias in the entry's own name", "d/í", "gitlink", "d/\udcc3\udcad"),  # c3 ad
+        ("regular, alias in a folder component", "d/ê/x.md", "regular", "d/\udcc3\udcaa/x.md"),  # c3 aa
+        ("regular, aliases in the folder and the file name", "d/ï/ð.md", "regular",
+         "d/\udcc3\udcaf/\udcc3\udcb0.md"),  # c3 af, c3 b0
+        ("regular, three-byte alias", "d/ࡰ.md", "regular", "d/\udce0\udca1\udcb0.md"),  # U+0870 = e0 a1 b0
+        ("regular, alias in the first component only", "ñ/y.md", "regular", "\udcc3\udcb1/y.md"),  # c3 b1
+    )
+
+    def setUp(self):
+        super().setUp()
+        make_repo(self.work)
+        for _, path, kind, _ in self.CASES:
+            self.put(path, kind)
+        self.put("d/a.md", "regular")
+
+    def put(self, path: str, kind: str) -> None:
+        mode = {"regular": "100644", "executable": "100755", "symlink": "120000", "tree": "100644",
+                "gitlink": "160000"}[kind]
+        put_raw(self.work, REF, path + "/inner" if kind == "tree" else path, mode,
+                b"keep.md" if kind == "symlink" else b"text of " + path.encode("utf-8") + b"\n")
+
+    def check(self, fn, path: str, want=None, text: str = "") -> None:
+        got = outcome(fn, self.work, REF, path)
+        self.assertEqual(got, ("err", text) if text else ("ok", want), "%s %s" % (fn.__name__, ascii(path)))
+
+    def test_alias_names_no_entry(self):
+        for label, real, kind, alias in self.CASES:
+            with self.subTest(label):
+                self.assertNotEqual(alias, real)  # guards the fixture: the alias holds the bytes of the real name
+                self.assertEqual(os.fsencode(alias), real.encode("utf-8"))
+                for fn, absent in ((tipread.show_file, None), (tipread.is_file, False),
+                                   (gitinfo.show, None), (gitinfo.blob_exists, False)):
+                    self.check(fn, alias, absent)
+                if kind in ("regular", "executable"):  # the entry itself is still read, by its own name
+                    self.check(tipread.show_file, real, "text of %s\n" % real)
+                    self.check(tipread.is_file, real, True)
+                else:  # a symlink, tree or gitlink is still refused by its own name
+                    for fn in (tipread.show_file, tipread.is_file):
+                        self.check(fn, real, text=refusal(REF, real))
+        with self.subTest("a path below an aliased tree"):
+            for fn, absent in ((tipread.show_file, None), (tipread.is_file, False)):
+                self.check(fn, "d/\udcc3\udcac/inner", absent)
+
+    def test_entries_of_an_alias_directory(self):  # sibling member: entries compares no name; main's ls_tree_entries lists it
+        want = [("100644", "blob", "d/ê/x.md")]  # git is given the bytes of d/ea-circumflex/: its listing
+        for fn in (tipread.entries, gitinfo.ls_tree_entries):
+            self.assertEqual(outcome(fn, self.work, REF, "d/\udcc3\udcaa"), ("ok", want), fn.__module__ + fn.__name__)
+
+    def test_round_5_members_keep_their_verdicts(self):  # R5-2 and D1: the path itself holds bytes that are not UTF-8
+        put_raw(self.work, REF, "d/b\udcff.md", "100644", b"s\n")
+        for path, text in (("d/b\udcff.md", "git ls-tree gave output that is not valid UTF-8"),  # main's refusal
+                           ("d/b\ud800.md", "git ls-tree failed: unusable argument"),  # main's refusal
+                           ("d/zz\udcfe.md", "")):  # no entry: None / False
+            for fn, absent in ((tipread.show_file, None), (tipread.is_file, False),
+                               (gitinfo.show, None), (gitinfo.blob_exists, False)):
+                with self.subTest(ascii(path), fn=fn.__name__):
+                    self.check(fn, path, absent, text)
+
+
+class MagicNames(GitIsolatedTestCase):
+    """R6-2 (F-20261127-fv4m): an entry named with pathspec magic is read literally (``--literal-pathspecs``), by
+    ``show_file``, ``is_file`` and ``entries``. Without the flag git parses ``:(top)r.md``, ``:/r.md``... as magic
+    (mutant S22): the entry reads as absent, or the listing is another folder's. The plain entries ``r.md`` and
+    ``d/other.md`` give a non-literal read something else to find."""
+
+    FORMS = (":(top)", ":(literal)", ":(glob)", ":(icase)", ":(exclude)", ":(attr:x)", ":/", ":!", ":^", ":")
+
+    def setUp(self):
+        super().setUp()
+        make_repo(self.work)
+        # the names: each form + "r.md" (":/" is the folder ":" holding r.md; ":" + "r.md" is git's empty short magic)
+        entries = [("r.md", "100644", b"plain\n"), ("d/other.md", "100644", b"other\n")]
+        entries += [(form + "r.md", "100644", ("magic " + form + "\n").encode()) for form in self.FORMS]
+        entries += [(":/s.md", "120000", b"r.md"), (":(top)t/inner", "100644", b"t\n"),
+                    (":/d/a.md", "100644", b"in :/d\n"), (":(top)e/a.md", "100644", b"in :(top)e\n"),
+                    (":!f/a.md", "100644", b"in :!f\n"), ("e/other.md", "100644", b"e\n"),
+                    ("f/other.md", "100644", b"f\n")]
+        put_many(self.work, REF, git(self.work, "rev-parse", REF), entries)
+
+    def test_magic_names_read_literally(self):
+        for form in self.FORMS:
+            path = form + "r.md"
+            for fn, want in ((tipread.show_file, "magic " + form + "\n"), (tipread.is_file, True),
+                             (gitinfo.show, "magic " + form + "\n"), (gitinfo.blob_exists, True)):
+                with self.subTest(path, fn=fn.__name__):
+                    self.assertEqual(outcome(fn, self.work, REF, path), ("ok", want))
+        with self.subTest("symlink named :/s.md"):  # the existing refusal of a non-regular entry
+            for fn in (tipread.show_file, tipread.is_file):
+                self.assertEqual(outcome(fn, self.work, REF, ":/s.md"), ("err", refusal(REF, ":/s.md")))
+        with self.subTest("tree named :(top)t"):
+            for fn in (tipread.show_file, tipread.is_file):
+                self.assertEqual(outcome(fn, self.work, REF, ":(top)t"), ("err", refusal(REF, ":(top)t")))
+        with self.subTest("a magic name that is no entry"):  # ":(top)zz.md" read as top-level "zz.md" is no entry either
+            self.assertEqual(outcome(tipread.show_file, self.work, REF, ":(top)zz.md"), ("ok", None))
+            self.assertEqual(outcome(tipread.is_file, self.work, REF, ":(top)zz.md"), ("ok", False))
+
+    def test_bare_colon_entry(self):  # an entry named exactly ":" (the folder ":" of setUp holds the other names)
+        git(self.work, "update-ref", "refs/heads/bare", git(self.work, "rev-parse", REF + "^"))
+        put_raw(self.work, "refs/heads/bare", ":", "100644", b"colon\n")
+        self.assertEqual(outcome(tipread.show_file, self.work, "refs/heads/bare", ":"), ("ok", "colon\n"))
+        self.assertEqual(outcome(tipread.is_file, self.work, "refs/heads/bare", ":"), ("ok", True))
+        self.assertEqual(outcome(gitinfo.show, self.work, "refs/heads/bare", ":"), ("ok", "colon\n"))
+
+    def test_entries_of_a_magic_folder(self):
+        for directory, want in ((":/d", [("100644", "blob", ":/d/a.md")]),  # the folder ":" holding "d", not top-level "d"
+                                (":(top)e", [("100644", "blob", ":(top)e/a.md")]),  # not the top-level "e"
+                                (":!f", [("100644", "blob", ":!f/a.md")])):  # not "everything but f"
+            with self.subTest(directory):
+                self.assertEqual(tipread.entries(self.work, REF, directory), want)
+
+
+class GeneratedPaths(GitIsolatedTestCase):
+    """R6-1 / R6-2 generated-input test (owner answer (a), 2026-11-26). The class: a repo-relative path, as ``show_file``
+    and ``is_file`` take it, whose 1-3 segments are built of 1-3 tokens each from: plain ASCII; UTF-8 letters (U+00E9,
+    U+00EA, U+0870); lone surrogates whose ``os.fsencode`` bytes are valid UTF-8 (the alias of a letter) and lone
+    surrogates whose bytes are not (``\\udcff``, and ``\\ud800``, which git cannot be given); a tab; and, for half of
+    the paths, a pathspec-magic prefix of R6-2. Per case a random subset of 1-3 entries (regular, executable, symlink,
+    tree, gitlink; names are the bytes of drawn paths, not the unencodable ones) is committed in one commit, then each
+    entry's path, its alias forms (every non-ASCII letter, or a random subset, written as its surrogate bytes) and two
+    fresh paths are read through ``show_file`` / ``is_file``. The expectation is modelled from the entry bytes alone
+    (no tipread code): an exact name gives the text / True (regular) or the refusal (non-regular); an alias or a
+    missing name gives None / False; a name whose bytes are not UTF-8 or that git cannot be given give the
+    ``gitinfo`` refusal. For every regular, absent and refused-by-gitinfo case ``gitinfo.show`` /
+    ``blob_exists`` (unchanged since edb6aa7) are asserted equal, and two sides that raise are compared by text."""
+
+    SEED = 20261128
+    CASES = 80
+    LETTERS = ("é", "ê", "ࡰ")
+    ALIASES = ("\udcc3\udca9", "\udcc3\udcaa", "\udce0\udca1\udcb0")  # the bytes of the three letters, as surrogates
+    LONE = ("\udcff", "\ud800")
+    MAGIC = (":(top)", ":(literal)", ":(glob)", ":(icase)", ":(exclude)", ":(attr:x)", ":/", ":!", ":^", ":")
+    KINDS = ("regular", "executable", "symlink", "tree", "gitlink")
+    MODES = {"regular": "100644", "executable": "100755", "symlink": "120000", "tree": "100644", "gitlink": "160000"}
+
+    @classmethod
+    def token(cls, rng) -> str:
+        pick = rng.randrange(10)
+        if pick < 4:
+            return rng.choice(("a", "b", "x", "md"))
+        if pick < 6:
+            return rng.choice(cls.LETTERS)
+        if pick < 8:
+            return rng.choice(cls.ALIASES)
+        return rng.choice(cls.LONE) if pick == 8 else "\t"
+
+    @classmethod
+    def draw_path(cls, rng) -> str:
+        segs = ["".join(cls.token(rng) for _ in range(1 + rng.randrange(3))) for _ in range(1 + rng.randrange(3))]
+        return (rng.choice(cls.MAGIC) if rng.randrange(2) == 0 else "") + "/".join(segs)
+
+    @classmethod
+    def alias(cls, path: str, rng, every: bool) -> str:
+        """``path`` with each non-ASCII letter (every one, or each with chance 1/2) written as its surrogate bytes."""
+        return "".join("".join(chr(0xdc00 + b) for b in c.encode("utf-8"))
+                       if c in cls.LETTERS and (every or rng.randrange(2)) else c for c in path)
+
+    @staticmethod
+    def clash(a: bytes, b: bytes) -> bool:
+        return a == b or a.startswith(b + b"/") or b.startswith(a + b"/")
+
+    def model(self, kinds: dict, texts: dict, path: str) -> tuple:
+        """(class, tipread outcome, gitinfo outcome or None for 'not asserted') of ``path`` from the entry bytes alone."""
+        try:
+            raw = os.fsencode(path)
+        except UnicodeEncodeError:
+            err = ("err", "git ls-tree failed: unusable argument")
+            return "unusable", err, err
+        kind = kinds.get(raw)
+        if kind is None:
+            return "absent", ("ok", None), ("ok", None)
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            err = ("err", "git ls-tree gave output that is not valid UTF-8")
+            return "not-utf8", err, err
+        if any(0xd800 <= ord(c) <= 0xdfff for c in path):  # an alias: the decoded name is not path
+            return "alias-" + ("regular" if kind in ("regular", "executable") else kind), ("ok", None), ("ok", None)
+        if kind in ("regular", "executable"):
+            return "exact-regular", ("ok", texts[raw]), ("ok", texts[raw])
+        return "exact-" + kind, ("err", refusal(self.ref, path)), None  # gitinfo.show gives None for these (not asserted)
+
+    def test_generated_paths(self):
+        print("GeneratedPaths seed=%d cases=%d" % (self.SEED, self.CASES), file=sys.stderr)
+        rng = random.Random(self.SEED)
+        make_repo(self.work)
+        base = git(self.work, "rev-parse", REF)
+        seen = {}
+        for case in range(self.CASES):
+            self.ref = "refs/heads/case%d" % case
+            kinds, texts, entries, leaves, paths = {}, {}, [], [], []
+            for _ in range(1 + rng.randrange(3)):
+                path, kind = self.draw_path(rng), rng.choice(self.KINDS)
+                try:
+                    raw = os.fsencode(path)
+                except UnicodeEncodeError:  # git cannot be given this name: it is only ever read, never an entry
+                    paths.append(path)
+                    continue
+                leaf = raw + b"/inner" if kind == "tree" else raw
+                if any(self.clash(leaf, other) for other in leaves):
+                    paths.append(path)
+                    continue
+                leaves.append(leaf)
+                kinds[raw] = kind
+                texts[raw] = "text %d\n" % len(leaves)
+                for cut in range(1, len(leaf.split(b"/"))):  # the folders above the entry are trees
+                    kinds.setdefault(b"/".join(leaf.split(b"/")[:cut]), "tree")
+                entries.append((os.fsdecode(leaf), self.MODES[kind],
+                                b"keep.md" if kind == "symlink" else texts[raw].encode()))
+                paths += [path, self.alias(path, rng, True), self.alias(path, rng, False)]
+            paths += [self.draw_path(rng), self.draw_path(rng)]
+            put_many(self.work, self.ref, base, entries)
+            for path in dict.fromkeys(paths):
+                cls, want, want_git = self.model(kinds, texts, path)
+                seen[cls] = seen.get(cls, 0) + 1
+                if path.startswith(":") and cls == "exact-regular":
+                    seen["magic-regular"] = seen.get("magic-regular", 0) + 1
+                if "\t" in path and cls == "exact-regular":
+                    seen["tab-regular"] = seen.get("tab-regular", 0) + 1
+                with self.subTest(case=case, path=ascii(path)):
+                    self.assertEqual(outcome(tipread.show_file, self.work, self.ref, path), want)
+                    self.assertEqual(outcome(tipread.is_file, self.work, self.ref, path),
+                                     want if want[0] == "err" else ("ok", want[1] is not None))
+                    if want_git is not None:  # the edb6aa7 verdicts (gitinfo.py is unchanged since edb6aa7)
+                        self.assertEqual(outcome(gitinfo.show, self.work, self.ref, path), want_git)
+                        self.assertEqual(outcome(gitinfo.blob_exists, self.work, self.ref, path),
+                                         want_git if want_git[0] == "err" else ("ok", want_git[1] is not None))
+        print("GeneratedPaths classes %s" % sorted(seen.items()), file=sys.stderr)
+        for cls in ("absent", "unusable", "not-utf8", "exact-regular", "exact-symlink", "exact-tree", "exact-gitlink",
+                    "alias-regular", "alias-symlink", "alias-tree", "alias-gitlink", "magic-regular", "tab-regular"):
+            self.assertGreater(seen.get(cls, 0), 0, "the generator drew no case of class " + cls)
 
 
 if __name__ == "__main__":
