@@ -8,10 +8,11 @@ import tempfile
 import unittest
 from unittest import mock
 
-from gates.lib import programs, session, worktrees
+from gates.lib import config, programs, session, worktrees
 from gates.lib.hookio import HookContext
 from gates.lib.result import GateError
 from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 PROMPT = "worker brief: do the task"
 HEADER = ("| stream | block | branch | worktree | next task | estimate | used | status | blockers | pending decisions "
@@ -474,6 +475,33 @@ class BoundBranchAndSameRepository(Fixture):
         with mock.patch.dict(os.environ, {"GIT_DIR": os.path.join(other, ".git"), "GIT_COMMON_DIR": os.path.join(other, ".git")}):
             self.assertIs(worktrees.same_repository(self.main, other), False)
             self.assertIs(worktrees.same_repository(self.main, self.main), True)
+
+
+class StatusPageKinds(GitIsolatedTestCase):
+    """Task 5b.3 row F19: the status page at ``<name>/integration`` on each entry kind."""
+
+    def test_status_page_entry_kinds(self):
+        root = make_repo(self.work)
+        cfg = config.load(root)
+        name = "20261101-x"
+        ref = "refs/heads/%s/integration" % name
+        page = ".strict-delivery/state/programs/%s/status.md" % name
+        with self.subTest("regular"):
+            set_entry(root, ref, page, "regular", "no table\n")
+            fails = []
+            worktrees._status_cells(root, cfg, name, set(), set(), fails)
+            self.assertEqual(fails, ["program %s: %s has no status table" % (name, page)])
+        with self.subTest("absent"):
+            set_entry(root, ref, page, "absent")
+            fails = []
+            worktrees._status_cells(root, cfg, name, set(), set(), fails)
+            self.assertEqual(fails, ["program %s: %s is not a file at the tip of %s/integration" % (name, page, name)])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(root, ref, page, kind, "no table\n")
+                fails = []
+                worktrees._status_cells(root, cfg, name, set(), set(), fails)
+                self.assertEqual(fails, ["program %s: status page unreadable (%s)" % (name, refusal(ref, page))])
 
 
 if __name__ == "__main__":

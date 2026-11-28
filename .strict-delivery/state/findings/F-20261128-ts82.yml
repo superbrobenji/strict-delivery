@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-ts82
+status: open
+source: task-CI3-final-loop-review-3.md finding 5
+severity: LOW
+class: "version-dependent verdict of the closure parse: a 4301-digit integer literal parses on 3.9 and is refused on 3.13 (named, fail closed), with no test pinning the difference"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: "770"
+    sha: 209b317dc639d3af4a1e5612b480b1ed46163ab0
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 209b317dc639d3af4a1e5612b480b1ed46163ab0
+    by: stream-ci-6a
+review_round: 3
+caused_by_change: true
+dimension: PC1 numeric text (version row)

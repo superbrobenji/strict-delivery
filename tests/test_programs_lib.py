@@ -11,7 +11,7 @@ import unicodedata
 import unittest
 from unittest import mock
 
-from gates.lib import config, gitinfo, migrations, programs, store, yamlsub
+from gates.lib import config, gitinfo, migrations, programs, store, tipread, yamlsub
 from gates.lib.programs import (NAME_RE, REQUEST_TRANSITIONS, Program, agreement_errors, branch_of, breakdown_sub_blocks,
                                 comes_before, counted_lines, event_problem, fold, group_problem, held_events,
                                 live_programs, load_program, nfc, nfd, owner_of, parse_branch, path_key,
@@ -21,6 +21,7 @@ from gates.lib.programs import (NAME_RE, REQUEST_TRANSITIONS, Program, agreement
 from gates.lib.result import GateError
 from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, check_root_forms, commit_all, git, int_limit, make_repo,
                            minimal_config, root_forms, write_record)
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 CFG = minimal_config()
 NAME = "20261101-x"
@@ -1650,7 +1651,7 @@ class LoadProgram(GitProgram):
             pass
         with self.assertRaises(GateError):
             load_program(self.root, self.cfg, Sub(NAME), None)
-        with mock.patch.object(gitinfo, "show") as m:       # refused before any file is read
+        with mock.patch.object(tipread, "show_file") as m:       # refused before any file is read
             with self.assertRaises(GateError):
                 load_program(self.root, self.cfg, "../a", "HEAD")
             m.assert_not_called()
@@ -1820,6 +1821,12 @@ class LivePrograms(GitProgram):
                 self.put(d + "/streams.yml", "" if label == "empty" else "a:\n\tb\n")
             commit_all(self.root, label)
             git(self.root, "checkout", "-q", "main")
+            if label in ("symlink", "directory"):  # 5b.3 F17 (owner Q-RC9-1 (a)): refused by name, no longer "not live"
+                with self.assertRaises(GateError) as cm:
+                    live_programs(self.root, self.cfg)
+                self.assertEqual(str(cm.exception), "refs/heads/%s/integration:%s/streams.yml: cannot be read as a UTF-8 "
+                                 "regular file (not a regular file)" % (name, d))
+                git(self.root, "branch", "-q", "-D", name + "/integration")
         self.assertEqual(live_programs(self.root, self.cfg), ["20261101-c", "20261101-d"])
 
     def test_live_programs_ignores_program_field(self):  # LV9
@@ -1887,7 +1894,7 @@ class LivePrograms(GitProgram):
                 fh.write("%s refs/heads/%s/integration\n" % (sha, n))
         self.assertEqual(len(gitinfo.local_branches(self.root)), 102)       # main, store and the 100 integration branches
         with mock.patch.object(gitinfo, "local_branches", wraps=gitinfo.local_branches) as lb, \
-                mock.patch.object(gitinfo, "show", wraps=gitinfo.show) as sh:
+                mock.patch.object(tipread, "show_file", wraps=tipread.show_file) as sh:
             got = live_programs(self.root, self.cfg)
         self.assertEqual(got, sorted(names))
         self.assertEqual(lb.call_count, 1)
@@ -2484,6 +2491,79 @@ class RequestsTo(GitProgram):
 
 def AB():
     return row(stream("a", ["a-owned.py"], merge_order=1), stream("b", ["b-owned.py"], merge_order=2))
+
+
+class TipKinds(GitProgram):
+    """Task 5b.3 rows F16, F17, F18, F25: a non-regular entry at a ref is a named refusal, never absent."""
+
+    def test_file_text_ref_entry_kinds(self):  # F16; the working-tree read (programs._fs_text, ref None) refuses the same kinds
+        ref, rel = "refs/heads/main", PROGDIR + "/status.md"
+        with self.subTest("regular"):
+            set_entry(self.root, ref, rel, "regular", "text\n")
+            self.assertEqual(programs._file_text(self.root, rel, ref), "text\n")
+        with self.subTest("absent"):
+            set_entry(self.root, ref, rel, "absent")
+            with self.assertRaises(GateError) as cm:
+                programs._file_text(self.root, rel, ref)
+            self.assertEqual(str(cm.exception), rel + ": missing")
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, ref, rel, kind, "text\n")
+                with self.assertRaises(GateError) as cm:
+                    programs._file_text(self.root, rel, ref)
+                self.assertEqual(str(cm.exception), refusal(ref, rel))
+
+    def test_integration_streams_entry_kinds(self):  # F17: a non-regular streams.yml is a refusal, never "no program"
+        ref, rel = "refs/heads/%s/integration" % NAME, PROGDIR + "/streams.yml"
+        with self.subTest("regular"):
+            set_entry(self.root, ref, rel, "regular", "x\n")
+            self.assertEqual(live_programs(self.root, self.cfg), [NAME])
+        with self.subTest("absent"):
+            set_entry(self.root, ref, rel, "absent")
+            self.assertEqual(live_programs(self.root, self.cfg), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, ref, rel, kind, "x\n")
+                with self.assertRaises(GateError) as cm:
+                    live_programs(self.root, self.cfg)
+                self.assertEqual(str(cm.exception), refusal(ref, rel))
+
+    def test_ledger_head_entry_kinds(self):  # F18: the error names "not a regular file", never "does not exist at"
+        rel = PS + "/b-plan/ledger.md"
+        text = ledger(ckpt("1a", "1a.1", self.A[:7]))
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                git(self.root, "checkout", "-q", "main")
+                head = set_entry(self.root, "refs/heads/p-" + kind, rel, kind, text)
+                git(self.root, "merge", "-q", "--no-ff", "-m", "Merge " + kind, "p-" + kind)
+                m = self.sha("main")
+                prog = make_program(merged=MERGED_HEAD + mline(1, head, m, "b", "1a") + "\n")
+                errors = counted_lines(prog, self.root, self.cfg, BDX)[2]
+                self.assertIn("merged.md pr 1: the ledger %s cannot be read: %s" % (rel, refusal(head, rel)), errors)
+                git(self.root, "reset", "-q", "--hard", "HEAD~1")
+
+    def test_ref_dir_entry_kinds(self):  # F25: already mode-aware (D-A9); pinned
+        ref, d = "refs/heads/main", PROGDIR + "/requests"
+        name = d + "/R-20261101-abcd.yml"
+        with self.subTest("regular"):
+            set_entry(self.root, ref, name, "regular", "x\n")
+            self.assertEqual(programs._request_files(self.root, d, ref), [name])
+        with self.subTest("absent"):
+            set_entry(self.root, ref, name, "absent")
+            self.assertEqual(programs._request_files(self.root, d, ref), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, ref, name, kind, "x\n")
+                with self.assertRaises(GateError) as cm:
+                    programs._request_files(self.root, d, ref)
+                self.assertEqual(str(cm.exception), "%s: not a regular file named <id>.yml" % name)
+            with self.subTest("folder " + kind):  # the requests folder itself that is no tree
+                set_entry(self.root, ref, name, "absent")
+                set_entry(self.root, ref, d, kind if kind != "tree" else "symlink", "x\n")
+                with self.assertRaises(GateError) as cm:
+                    programs._request_files(self.root, d, ref)
+                self.assertEqual(str(cm.exception), "%s: not a directory" % d)
+                set_entry(self.root, ref, d, "absent")
 
 
 if __name__ == "__main__":

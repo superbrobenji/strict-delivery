@@ -21,6 +21,7 @@ import sys
 
 from gates.lib import checkpoints, config, gitinfo, merge, schema, worktrees
 from gates.lib.result import GateError, Line, Result, _Once, gate_args, repo_root, run_gate
+from gates.lib import tipread
 from gates.lib.store import Store
 
 PRODUCES: tuple = ()
@@ -138,7 +139,7 @@ def _ledger(root: str, cfg: dict, row: dict) -> tuple:
         if not gitinfo.commit_exists(root, row["head"]):
             reasons.append("plan text: handoff head %s is not a commit" % row["head"])
         else:
-            plan_text = gitinfo.show(root, row["head"], row["plan"])
+            plan_text = tipread.show_file(root, row["head"], row["plan"])
             if plan_text is None:
                 reasons.append("plan text: %s is absent at %s" % (row["plan"], row["head"]))
     except GateError as e:

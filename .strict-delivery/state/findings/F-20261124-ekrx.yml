@@ -10,7 +10,7 @@ repro: null
 owner:
   kind: plan
   plan: 2026-10-31-strict-delivery-framework
-  task: 5b.1
+  task: 5b.3
 pin: null
 ruling: null
 evidence: []

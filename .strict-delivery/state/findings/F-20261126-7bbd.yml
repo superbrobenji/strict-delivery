@@ -1,0 +1,33 @@
+schema: finding/1
+id: F-20261126-7bbd
+status: closed
+source: task-CI3-final-loop-review-2.md F-C (residual member of F-20261126-5nhg)
+severity: LOW
+class: "protected set vs the oracle's import closure: modules reached through a tests module the walk cannot read: a symlink, a file over 8 MiB, an unparsable or unreadable module (protected but not walked)"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: 729-735
+    sha: 32d96b26e688a061e294dd92c9cec95472409c56
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence:
+  - 22ad48eb7c94f11a77fad01db9281c5f60e4aaba
+  - "22ad48eb7c94f11a77fad01db9281c5f60e4aaba:tests/test_ci_mutants.py"
+history:
+  - status: open
+    sha: 2ef9d740e17611ed37b9637bc39ffe3699712ffd
+    by: stream-ci-6a
+  - status: closed
+    sha: 22ad48eb7c94f11a77fad01db9281c5f60e4aaba
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
+parent: F-20261126-5nhg
+review_round: 2
+caused_by_change: false
+dimension: T6 protected set (oracle closure)

@@ -1,0 +1,32 @@
+schema: finding/1
+id: F-20261126-qm9a
+status: closed
+source: "stream-ci-5-log.md controller finding: task-CI3-domain.md rows E0-E4 added 2026-11-26 under stream-common :63 (owner Q-RS4-1 (A)); Q-CI5-1 option (A)"
+severity: LOW
+class: "E0-E4 exact types and interface names of tests/ci_mutants.py: main(argv, root, execute, env), split(keys, parts), open_target(root, rel, write), count_problem(data, old) accept any type (no exact-type refusal, no test); the other 33 module-level names (Refused, Stop, show, clean, number, parse, git, tracked_files, tree_problem, check_head, changed_tables, ident_text, regular_problem, Row, literal_assignments, read_literals, load_table, gather, run_unittest, Result, run_pair, protected_reason, path_problem, Unsafe, restore, one_row, run_rows, write_output, say, refusals, command_split, command_run, command_summary) are public by name"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: "781"
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence:
+  - 4ab4500c5da7d109684ea7ad4ef13503489f31ec
+  - "4ab4500c5da7d109684ea7ad4ef13503489f31ec:tests/test_ci_mutants.py"
+history:
+  - status: open
+    sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
+    by: stream-ci
+  - status: closed
+    sha: 4ab4500c5da7d109684ea7ad4ef13503489f31ec
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
+review_round: 4
+caused_by_change: false
+dimension: E exact types (stream-common :63)

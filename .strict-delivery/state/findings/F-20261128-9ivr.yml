@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-9ivr
+status: open
+source: task-CI3-final-loop-review-3.md finding 1
+severity: LOW
+class: "round trip of run lines into the narrowed grammar: a detail with a non-ASCII digit through RAN \\d is dropped from the output (fails closed: summary FAIL no line); unittest formats Ran with %d, so only non-unittest text reaches it"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: "476"
+    sha: 209b317dc639d3af4a1e5612b480b1ed46163ab0
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 209b317dc639d3af4a1e5612b480b1ed46163ab0
+    by: stream-ci-6a
+review_round: 3
+caused_by_change: true
+dimension: G1 round trip
