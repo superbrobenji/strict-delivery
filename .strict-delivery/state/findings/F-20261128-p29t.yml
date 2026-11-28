@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-p29t
+status: open
+source: 5c.4 task review 1 (records/5c.4-review-1.md, F4)
+severity: LOW
+class: "operands of the conditions 5c.4 adds (stream-common :70): .strict-delivery/mutants/5c.4.py holds whole-condition ids, not one per comparison operator, boolean operand, constant and call argument on the added lines; the review lists the missing operands, and the spot mutant .rstrip to .strip survives (from 336226c)"
+siblings: []
+cites:
+  - file: .strict-delivery/mutants/5c.4.py
+    lines: "1"
+    sha: 336226c73d437662621612fdece05404bcaf8c97
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.4
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 336226c73d437662621612fdece05404bcaf8c97
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: per-operand mutant ids of 5c.4

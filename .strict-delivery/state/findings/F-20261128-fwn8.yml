@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-fwn8
+status: open
+source: 5c.4 task review 1 (records/5c.4-review-1.md, F2)
+severity: LOW
+class: "case relation between the listed path and git's toplevel: on a case-insensitive filesystem a worktree directory renamed by case only is refused, because os.path.realpath does not fold case (drift.py:194), where c2ba203 printed the command; members: directory renamed by case only (regresses), root path called in other case (green), linked path called in other case (no test) (from 336226c)"
+siblings: []
+cites:
+  - file: gates/lib/drift.py
+    lines: "194"
+    sha: 336226c73d437662621612fdece05404bcaf8c97
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5c.4
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 336226c73d437662621612fdece05404bcaf8c97
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: case relation between listed path and git toplevel
