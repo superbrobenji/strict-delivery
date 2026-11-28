@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-f6ag
+status: open
+source: L2.1a review 1 (residual/L2.1a-review-1.md) F4
+severity: LOW
+class: "PM2 role x state product: holder, p1, p2 x dangling symlink x call, between"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: L2.1a
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 543eaae0f404f4c892b136ad76479f2e81e5d3a1
+    by: residual-controller-9
+review_round: 1
+caused_by_change: true
+dimension: PM2 role x state product

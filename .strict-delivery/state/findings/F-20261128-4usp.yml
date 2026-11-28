@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-4usp
+status: open
+source: L2.1a review 1 (residual/L2.1a-review-1.md) F15 (controller, the update gate at 9b6778a)
+severity: MEDIUM
+class: "test literals that enumerate gates or parser sites, made stale by gates/gate_pr_body.py: tests/test_argparse_text.py:902 test_parser_sites_enumerated (gate_pr_body.py gate_args site missing)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: L2.1a
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 543eaae0f404f4c892b136ad76479f2e81e5d3a1
+    by: residual-controller-9
+review_round: 1
+caused_by_change: true
+dimension: test literals the new gate makes stale

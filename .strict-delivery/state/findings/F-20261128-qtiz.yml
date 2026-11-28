@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-qtiz
+status: open
+source: L2.1a review 1 (residual/L2.1a-review-1.md) F9
+severity: LOW
+class: "B6 scan forms: git -C dir init or clone in a list call and in helpers.git calls (tests/test_gate_pr_body.py:118)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: L2.1a
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 543eaae0f404f4c892b136ad76479f2e81e5d3a1
+    by: residual-controller-9
+review_round: 1
+caused_by_change: true
+dimension: B6 scan call forms
