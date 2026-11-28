@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-57gh
-status: open
+status: fixed-unpinned
 source: residual fix rounds 2-3 re-review (residual/fix-r23-review.md, F-R23-1)
 severity: LOW
 class: "rel type through load: guard order before each use of rel: os.path.join (unpinned; the before-any-read test patches only lexists, _read_regular_file and load_text), os.path.lexists, yamlsub._read_regular_file, the formatted messages, load_text; introduced with the test in round 2 (5a4775e), kept in round 3"
@@ -19,11 +19,22 @@ owner:
   task: residual-batch-1
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 62e63b4a8d420ae436136607088dc511fb0024ee
+  - "62e63b4a8d420ae436136607088dc511fb0024ee:tests/test_context_load_text.py"
 history:
   - status: open
     sha: 1756c3182c0bfec879fd22829de4bd1a7580064a
     by: stream-residual
+  - status: planned
+    sha: 62e63b4a8d420ae436136607088dc511fb0024ee
+    by: implementer
+  - status: in-progress
+    sha: 62e63b4a8d420ae436136607088dc511fb0024ee
+    by: implementer
+  - status: fixed-unpinned
+    sha: 62e63b4a8d420ae436136607088dc511fb0024ee
+    by: implementer
 parent: F-20261126-t9pu
 review_round: 3
 caused_by_change: true
