@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-pwu6
-status: open
+status: closed
 source: task-CI3-final-review.md F5 (review 3 note b)
 severity: LOW
 class: "docs of the path rule omit the link-count refusal: module docstring :17-19, regular_problem docstring :239"
@@ -16,11 +16,17 @@ owner:
   task: CI3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - af23fb086c631eae5b43ebdb94207a97c77ba5e3
+  - "af23fb086c631eae5b43ebdb94207a97c77ba5e3:tests/test_ci_mutants.py"
 history:
   - status: open
     sha: 027c8fbc35009e21f906c2e2929f72bfc279b4e6
     by: stream-ci
+  - status: closed
+    sha: af23fb086c631eae5b43ebdb94207a97c77ba5e3
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
 review_round: 1
 caused_by_change: true
 dimension: T5 docs

@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261125-9qcf
-status: open
+status: closed
 source: task-CI3-review-1.md F3 (CI3 r1, mutants r6 and r7 SURVIVED)
 severity: LOW
 class: "T5 hardening row path swapped after the check: no test changes the target after path_problem ran; members: O_NONBLOCK and O_NOFOLLOW open flags, the fstat S_ISREG re-check in one_row (tests/ci_mutants.py:519-523), the follow-symlink write-opens (tests/ci_mutants.py:530, :537)"
@@ -16,11 +16,17 @@ owner:
   task: CI3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 3cff276ba617911dff1ab73337eef54cdef6d930
+  - "3cff276ba617911dff1ab73337eef54cdef6d930:tests/test_ci_mutants.py"
 history:
   - status: open
     sha: f8b7e5df48056d83ca9d1a735f8170f004685fbc
     by: stream-ci
+  - status: closed
+    sha: 3cff276ba617911dff1ab73337eef54cdef6d930
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
 review_round: 1
 caused_by_change: true
 dimension: "T5 hardening: swapped after the check"

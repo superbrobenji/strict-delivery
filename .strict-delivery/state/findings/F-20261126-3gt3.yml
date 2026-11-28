@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-3gt3
-status: open
+status: closed
 source: task-CI3-final-loop-review-2.md F-D
 severity: LOW
 class: "per-operand mutants of lines fix round 3 added with no mutant id: _write_output O_NONBLOCK; _import_closure size cap, S_ISREG skip, name in seen, re.fullmatch is None skip, isinstance(node.args[0].value, str)"
@@ -16,11 +16,17 @@ owner:
   task: CI3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 22ad48eb7c94f11a77fad01db9281c5f60e4aaba
+  - "22ad48eb7c94f11a77fad01db9281c5f60e4aaba:tests/test_ci_mutants.py"
 history:
   - status: open
     sha: 2ef9d740e17611ed37b9637bc39ffe3699712ffd
     by: stream-ci-6a
+  - status: closed
+    sha: 22ad48eb7c94f11a77fad01db9281c5f60e4aaba
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
 review_round: 2
 caused_by_change: true
 dimension: per-operand mutants (stream-common :70)

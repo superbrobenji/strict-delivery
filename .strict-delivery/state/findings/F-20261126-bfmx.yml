@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-bfmx
-status: open
+status: closed
 source: stream-ci-6a-log.md controller finding (fix round 3 re-review)
 severity: LOW
 class: "docs of the T9 baseline: the module docstring says run baselines every killing module of its part; af23fb0 baselines each distinct KILL tuple as run (members: module docstring :24-25, any other docstring or comment naming the per-module baseline)"
@@ -16,11 +16,17 @@ owner:
   task: CI3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 22ad48eb7c94f11a77fad01db9281c5f60e4aaba
+  - "22ad48eb7c94f11a77fad01db9281c5f60e4aaba:tests/test_ci_mutants.py"
 history:
   - status: open
     sha: 2ef9d740e17611ed37b9637bc39ffe3699712ffd
     by: stream-ci-6a
+  - status: closed
+    sha: 22ad48eb7c94f11a77fad01db9281c5f60e4aaba
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
 review_round: 2
 caused_by_change: true
 dimension: T9 baseline docs

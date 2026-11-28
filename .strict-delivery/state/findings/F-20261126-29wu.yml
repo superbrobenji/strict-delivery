@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-29wu
-status: open
+status: closed
 source: task-CI3-final-loop-review-2.md F-E
 severity: LOW
 class: "E0 private names used outside the module: _Refused (4 sites), _regular_problem (1 site) in tests/test_ci_mutants.py"
@@ -16,11 +16,17 @@ owner:
   task: CI3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 4ab4500c5da7d109684ea7ad4ef13503489f31ec
+  - "4ab4500c5da7d109684ea7ad4ef13503489f31ec:tests/test_ci_mutants.py"
 history:
   - status: open
     sha: 2ef9d740e17611ed37b9637bc39ffe3699712ffd
     by: stream-ci-6a
+  - status: closed
+    sha: 4ab4500c5da7d109684ea7ad4ef13503489f31ec
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
 review_round: 2
 caused_by_change: true
 dimension: E0 interface names
