@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-mw3y
+status: open
+source: Task 6R.2 fix round 1, residual controller 8 touched-area run at 7fa50b8 (owner Q-RS8-1 (A)); runner TIMEOUT on tests.test_release at 7fa50b8 and at 25730e4 after 17 results
+severity: MEDIUM
+class: "test runs: tests that start git's fsmonitor daemon or can block a shard: G1's core.fsmonitor pair (a true value started the daemon through a plain git call), and git or release calls of tests/test_release.py with no time limit"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6R.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bb040bf5ac70cc53eee4d5e669782b617cc65589
+    by: implementer-6r2-fix-r1
+review_round: 1
+caused_by_change: true
+dimension: "test runs: fsmonitor daemon and unbounded git calls"
