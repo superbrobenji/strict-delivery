@@ -2361,7 +2361,8 @@ class TranscriptCiteTest(unittest.TestCase):
     MUTATIONS = os.path.join(REPO, ".strict-delivery", "state", "plans", "2026-10-31-strict-delivery-framework", "mutations")
     TRANSCRIPTS = ("F-20261125-hqt5.md", "F-20261125-765j.md", "F-20261125-ix2g.md", "F-20261125-fiw5.md",
                    "F-20261125-zgnj.md", "F-20261126-hk6k.md", "F-20261126-yga8.md", "F-20261126-jth9.md",
-                   "F-20261126-eid2.md", "F-20261126-djav.md", "F-20261126-i27y.md")
+                   "F-20261126-eid2.md", "F-20261126-djav.md", "F-20261126-i27y.md", "F-20261128-jkth.md",
+                   "F-20261128-bd56.md", "F-20261128-uu6c.md")
     COPY_LINE = "if os.path.isdir(src) and not os.path.islink(src):"
     CITES = {"F-20261125-fiw5.md": [("tests/helpers.py", COPY_LINE)], "F-20261126-i27y.md": [("tests/helpers.py", COPY_LINE)]}
 
