@@ -374,6 +374,24 @@ class TestPythonInputVersion(Base):
         self.assertEqual(self.lines(), ["PASS doctor.python", "FAIL doctor.input: .strict-delivery/config.yml: "
                                         "framework_version: must be a non-empty string"])
 
+    def test_doctor_version_leading_whitespace_differs(self):  # VE5 (NR-2, survivor of D13: framework_version.lstrip() compare)
+        # every character `str.lstrip()` removes, in front of the plugin's 0.1.0 (written out here, not computed: the
+        # characters of `str.isspace` on both interpreters). config.load keeps every one of them as framework_version
+        # (its only refusal of this key is the empty string, tested above); the shown text is escaped by safe_text,
+        # a space stays a space
+        lead = [(" ", " "), ("\t", "\\t"), ("\n", "\\n"), ("\x0b", "\\x0b"), ("\x0c", "\\x0c"), ("\r", "\\r"),
+                ("\x1c", "\\x1c"), ("\x1d", "\\x1d"), ("\x1e", "\\x1e"), ("\x1f", "\\x1f"), ("\x85", "\\x85"),
+                ("\xa0", "\\xa0"), (" ", "\\u1680"), (" ", "\\u2000"), (" ", "\\u2001"),
+                (" ", "\\u2002"), (" ", "\\u2003"), (" ", "\\u2004"), (" ", "\\u2005"),
+                (" ", "\\u2006"), (" ", "\\u2007"), (" ", "\\u2008"), (" ", "\\u2009"),
+                (" ", "\\u200a"), (" ", "\\u2028"), (" ", "\\u2029"), (" ", "\\u202f"),
+                (" ", "\\u205f"), ("　", "\\u3000")]
+        for char, shown in lead:
+            with self.subTest(leading=char):
+                self.set_cfg(framework_version=char + "0.1.0")
+                self.assertEqual(self.lines()[3], "FAIL doctor.version: framework_version %s0.1.0 differs from the plugin 0.1.0; "
+                                                  "run /strict-delivery:upgrade" % shown)
+
     def test_doctor_numeric_text_4300_4301(self):  # VE6, CB9, CI19, SA13, SA15, VR1
         for limit in INT_LIMITS:
             with int_limit(limit):

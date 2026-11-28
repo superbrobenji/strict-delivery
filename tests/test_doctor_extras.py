@@ -6,7 +6,8 @@ import shutil
 from unittest import mock
 
 from gates.lib import plugin, templates
-from gates.tools import githooks
+from gates.lib.result import GateError
+from gates.tools import doctor, githooks
 from tests.helpers import commit_all, git, make_repo
 from tests.doctor_base import Base, PV, ROOT_ID, SHA40, WF, clear, put
 
@@ -244,6 +245,85 @@ class TestExtras(Base):
         with mock.patch.object(plugin, "framework_dir", return_value=inner):
             self.assertEqual(self.line("ci"), "FAIL doctor.ci: no release tag and no framework commit to pin")
 
+    def by_id(self):
+        return {ln.split(":")[0].split(" ", 1)[1]: ln for ln in self.lines()}
+
+    def test_doctor_plugin_unreadable_dependents_include_ci(self):  # CD9, CB15, CI15 (survivor D115-ci-version-failed-line)
+        # every state of the manifest that makes doctor.version fail (VE3, VE4), with a managed workflow installed: the
+        # three lines that need the plugin value each say so and none of them is judged
+        self.managed_ci()
+        mpath = os.path.join(self.fw, ".claude-plugin", "plugin.json")
+        gone = os.path.join(self.tmp, "gone.json")
+        cases = [("absent", None), ("directory", "dir"), ("dangling-symlink", "link"),
+                 ("invalid-json", b"{"), ("non-utf8", b"\xff\xfe"),
+                 ("duplicate-keys", b'{"version": "0.1.0", "version": "0.1.0"}'), ("no-version", b'{"name": "x"}'),
+                 ("int", b'{"version": 1}'), ("v-prefix", b'{"version": "v0.1.0"}'),
+                 ("leading-zero", b'{"version": "01.0.0"}'), ("two-parts", b'{"version": "0.1"}'),
+                 ("leading-space", b'{"version": " 0.1.0"}'), ("trailing-newline", b'{"version": "0.1.0\\n"}'),
+                 ("suffix", b'{"version": "0.1.0-rc1"}')]
+        if os.geteuid() != 0:
+            cases.append(("mode000", "mode000"))
+        for name, how in cases:
+            if os.path.lexists(mpath):
+                clear(mpath)
+            if how is None:
+                pass
+            elif how == "dir":
+                os.mkdir(mpath)
+            elif how == "link":
+                os.symlink(gone, mpath)
+            elif how == "mode000":
+                put(mpath, b'{"version": "0.1.0", "repository": "https://github.com/o/n"}')
+                os.chmod(mpath, 0)
+            else:
+                put(mpath, how)
+            with self.subTest(manifest=name):
+                found = self.by_id()
+                self.assertTrue(found["doctor.version"].startswith("FAIL doctor.version: "), found["doctor.version"])
+                self.assertEqual(found["doctor.extras"], "PASS doctor.extras: git hooks: not installed; CI: installed")
+                for id_ in ("ci", "claude-block", "gitignore-block"):
+                    self.assertEqual(found["doctor." + id_], "FAIL doctor.%s: not checked: doctor.version failed" % id_)
+        if os.path.lexists(mpath):
+            clear(mpath)
+        # control: a symlink to a valid manifest loads (VE4), so the workflow is judged and passes
+        put(gone, b'{"version": "0.1.0", "repository": "https://github.com/o/n"}')
+        os.symlink(gone, mpath)
+        found = self.by_id()
+        self.assertEqual(found["doctor.version"], "PASS doctor.version")
+        self.assertEqual(found["doctor.ci"], "PASS doctor.ci")
+
+    def test_doctor_extras_gateerror_reason_is_its_own_text(self):  # CK7, CD4 (survivor D117-why-guard-text), real fixture
+        # core.hooksPath holding bytes that are not UTF-8: gitinfo.hooks_dir raises GateError("git rev-parse --git-path
+        # hooks gave output that is not valid UTF-8"); the extras line shows that text with no `GateError: ` prefix
+        with open(os.path.join(self.r, ".git", "config"), "ab") as fh:
+            fh.write(b"[core]\n\thooksPath = \xff\xfe\n")
+        found = self.by_id()
+        self.assertEqual(found["doctor.extras"], "FAIL doctor.extras: cannot be checked: git rev-parse --git-path hooks "
+                                                 "gave output that is not valid UTF-8")
+        self.assertEqual(len(found), len(ROOT_ID))  # the other lines are still computed; no githooks line follows
+        self.assertEqual(found["doctor.version"], "PASS doctor.version")
+        self.assertEqual(found["doctor.registers"], "PASS doctor.registers")
+
+    def test_doctor_extras_gateerror_reason_per_producer(self):  # CK7, CD4 (survivor D117-why-guard-text), patched producers
+        # the producers the extras computation calls that can raise GateError: gitinfo.hooks_dir (the real fixture above:
+        # a non-UTF-8 hooksPath; a root that is not the top level is refused earlier, as doctor.input), `_locate` through
+        # `_common_dir` (git answering non-UTF-8 for the git common dir needs a non-UTF-8 git dir, on which hooks_dir
+        # fails first: patched), `_hooks_installed` and `_dir_safe` (no GateError in the code: patched, as CK7 allows).
+        # `_extras` and the CI kind (`_Ci`, computed outside the guard) raise none.
+        boom = GateError("no way to ask git")
+        for name, target in (("hooks_dir", (doctor.gitinfo, "hooks_dir")), ("common_dir", (doctor, "_common_dir")),
+                             ("hooks_installed", (doctor, "_hooks_installed")), ("dir_safe", (doctor, "_dir_safe"))):
+            with self.subTest(producer=name), mock.patch.object(target[0], target[1], side_effect=boom):
+                found = self.by_id()
+                self.assertEqual(found["doctor.extras"], "FAIL doctor.extras: cannot be checked: no way to ask git")
+                self.assertEqual(len(found), len(ROOT_ID))
+                self.assertEqual(found["doctor.version"], "PASS doctor.version")
+
+    def test_doctor_extras_other_exception_reason_names_its_class(self):  # CK7, CD4 (the other branch of `_why`)
+        for name, target in (("hooks_dir", (doctor.gitinfo, "hooks_dir")), ("hooks_installed", (doctor, "_hooks_installed"))):
+            with self.subTest(producer=name), mock.patch.object(target[0], target[1], side_effect=RuntimeError("boom")):
+                self.assertEqual(self.line("extras"), "FAIL doctor.extras: cannot be checked: RuntimeError: boom")
+
     def test_doctor_ci_plugin_unreadable(self):  # CI15
         self.managed_ci()
         self.fw = self.mkfw(PV, repository="http://x")
@@ -328,6 +408,45 @@ class TestBlocks(Base):
                 self.assertEqual(self.line(id_), "FAIL doctor.%s: malformed: block: no end marker" % id_)
             self.write(rel, build(body=body))
             self.assertEqual(self.line(id_), "PASS doctor.%s" % id_)
+
+    def test_blocks_stale_when_body_differs_at_its_start(self):  # CB10, GI7 (NR-1, survivor of D29: body.lstrip() compare)
+        for id_, rel, build, op, cl in self.cases():
+            body = templates.claude_block_body(self.cfg()) if id_ == "claude-block" else templates.gitignore_block_body(self.cfg())
+            want = "FAIL doctor.%s: stale; run /strict-delivery:upgrade" % id_
+            # one whitespace character in front of the first body line
+            for name, ws in (("space", " "), ("two-spaces", "  "), ("tab", "\t"), ("vtab", "\x0b"), ("formfeed", "\x0c"),
+                             ("nbsp", "\xa0"), ("emspace", " ")):
+                self.write(rel, build(body=ws + body))
+                with self.subTest(file=rel, first_line_starts_with=name):
+                    self.assertEqual(self.line(id_), want)
+            # one whitespace-only line in front of the first body line
+            for name, extra in (("blank", "\n"), ("space-line", " \n"), ("tab-line", "\t\n"), ("crlf-line", "\r\n")):
+                self.write(rel, build(body=extra + body))
+                with self.subTest(file=rel, line_before_body=name):
+                    self.assertEqual(self.line(id_), want)
+            self.write(rel, build(body=body))
+            self.assertEqual(self.line(id_), "PASS doctor.%s" % id_)
+
+    def test_blocks_version_text_extension_differs(self):  # CB9 (NR-3, survivor: block.version.startswith(plugin version))
+        # the marker's version pattern is [0-9]+.[0-9]+.[0-9]+, so the plugin text 0.1.0 can be extended only by more
+        # digits of the last part: those are accepted by the marker and are unequal text
+        for id_, rel, build, op, cl in self.cases():
+            for pv in ("0.1.00", "0.1.01", "0.1.09", "0.1.0" + "0" * 10, "0.1.0" + "9" * 30):
+                self.write(rel, build(pv=pv))
+                with self.subTest(file=rel, version=pv):
+                    self.assertEqual(self.line(id_), "FAIL doctor.%s: version %s differs from the plugin 0.1.0" % (id_, pv))
+            # every other extension of 0.1.0 is refused by the marker pattern, before the version compare
+            for pv in ("0.1.0.1", "0.1.0-rc1", "0.1.0 ", "0.1.0a", "0.1.0١", "0.1.0０"):
+                self.write(rel, build(pv=pv))
+                with self.subTest(file=rel, version=pv):
+                    self.assertEqual(self.line(id_), "FAIL doctor.%s: malformed: block: begin marker malformed: line 1" % id_)
+            # the other direction: the block's text a proper prefix of the plugin's (plugin 0.1.10, block 0.1.1)
+            self.fw = self.mkfw("0.1.10", name="fw10")
+            with mock.patch.object(plugin, "framework_dir", return_value=self.fw):
+                self.write(rel, build(pv="0.1.1"))
+                with self.subTest(file=rel, version="0.1.1", plugin="0.1.10"):
+                    self.assertEqual(self.line(id_), "FAIL doctor.%s: version 0.1.1 differs from the plugin 0.1.10" % id_)
+            self.fw = self.mkfw(PV)
 
     def test_stale_block_fails_naming_upgrade(self):  # CB10 (plan)
         self.write("CLAUDE.md", self.claude(body=templates.claude_block_body(self.cfg()) + "extra line\n"))

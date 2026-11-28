@@ -13,7 +13,7 @@ from gates import gate_schema
 from gates.lib import dispatch, host, templates
 from gates.lib.result import GateError
 from gates.tools import doctor, githooks, index
-from tests.helpers import commit_all, git, minimal_config
+from tests.helpers import commit_all, git, minimal_config, within
 from tests.test_host import j, only_path, FakeGh, NF, PROT, PROT_OK, REPO, REPO_OK
 from tests.doctor_base import Base, CONC, CONTEXT, CONTEXT_OK, DEPTH, GIT, PV, SETTINGS, STATE_KEYS, UNSET, WF, WORDS, clear, put, snap
 
@@ -553,9 +553,17 @@ class TestRowsLate(Base):
         os.symlink(copy, link)
         fifo = os.path.join(self.tmp, "index-fifo")
         os.mkfifo(fifo)
-        for value in (d, link, fifo):
+
+        def unblock():  # a git that opened the FIFO for reading (the guard missing) waits for a writer: give it one
+            try:
+                fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError:
+                return
+            os.close(fd)
+        self.addCleanup(unblock)
+        for value in (d, link, fifo):  # H3: bounded, so a read that blocks on the FIFO fails the test instead of hanging the run
             with self.subTest(value=value), mock.patch.dict(os.environ, {"GIT_INDEX_FILE": value}):
-                self.assertEqual(self.line("generated-tracked"), self.cannot(value))
+                self.assertEqual(within(lambda: self.line("generated-tracked"), 20), self.cannot(value))
         with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": copy}):  # control: a regular file keeps today's verdict
             self.assertEqual(self.line("generated-tracked"), "PASS doctor.generated-tracked")
 
