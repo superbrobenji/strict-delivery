@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-jm3h
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4d.md R4d-4
+severity: LOW
+class: "V1 version-difference rows without a test: githooks.status_result(root), status(root), pre_commit_result(root), pre_push_result(root), pre_push_result(updates), bashpolicy.git_call(scan), git_call(aliases), effective_words(text), effective_words(aliases) (4301-digit text, U+A7C0, both interpreters)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bec59a4f43e36e95c41bce0ec1d37e1da282af98
+    by: stream-hooks-7
+review_round: 4
+caused_by_change: true
+dimension: input domain, V1

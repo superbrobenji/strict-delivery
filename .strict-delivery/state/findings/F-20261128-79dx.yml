@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-79dx
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4d.md R4d-6
+severity: LOW
+class: "mutation transcript 3b.2-fix3d.txt: RUN 2 and RUN 3 are one shared run for every block and the per-row red counts live only in scratch: rows ET4, ET6-ET8, ET10, ET14-ET28, ET30-ET34, V1"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: bec59a4f43e36e95c41bce0ec1d37e1da282af98
+    by: stream-hooks-7
+review_round: 4
+caused_by_change: true
+dimension: transcript evidence
