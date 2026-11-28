@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261128-njri
-status: in-progress
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4d.md R4d-3
 severity: LOW
 class: "exact types: callable parameters whose accepted column names an arity: Policy.state_access (ET25, callable of no arguments), commit_refusals.run_gates (ET31); callable() alone accepts a callable that needs other arguments"
@@ -13,7 +13,9 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 10c01729918a9e468180d3cc2a2d38a41fc801c2
+  - 10c01729918a9e468180d3cc2a2d38a41fc801c2:tests/test_bashpolicy.py
 history:
   - status: open
     sha: bec59a4f43e36e95c41bce0ec1d37e1da282af98
@@ -23,6 +25,9 @@ history:
     by: implementer
   - status: in-progress
     sha: b1e0b4707290e4b73f908aa07545d687fe0164b4
+    by: implementer
+  - status: fixed-unpinned
+    sha: 10c01729918a9e468180d3cc2a2d38a41fc801c2
     by: implementer
 review_round: 4
 caused_by_change: false

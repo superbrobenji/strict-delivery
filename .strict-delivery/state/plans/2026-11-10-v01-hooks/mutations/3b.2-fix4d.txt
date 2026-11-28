@@ -54,3 +54,14 @@ RUN 1 fix exit=0 command=PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH 
 
 FINDING F-20261128-79dx
 R4d-6 is evidence only: each of the 26 RUN 2 lines of 3b.2-fix3d.txt now names its own row's count from that round's redcounts.txt (commit b1e0b47).
+
+FINDING F-20261128-njri
+Fix round 4 part d, the run_gates member of R4d-3 (row F4d-3r; ch/hk8-3b2-fix4d3.md), commit 10c0172. The tests came first: RUN 2 is the red run of tests.test_bashpolicy on b8f7054 plus the test change, before the check was written (the check absent: scratch fix4d3.mY1TKG/red.txt). The fix was written after it, so RUN 3 (restored) is the green gate on the committed tree, the same run as RUN 1.
+TEST tests.test_bashpolicy.RunGatesRound4dTest.test_run_gates_refused (row F4d-3r-x)
+TEST tests.test_bashpolicy.RunGatesRound4dTest.test_run_gates_accepted (row F4d-3r)
+TEST tests.test_bashpolicy.RunGatesRound4dTest.test_run_gates_not_callable (row F4d-3r-n)
+TEST tests.test_bashpolicy.RunGatesRound4dTest.test_state_access_old_recorder (row F4d-3, invariant)
+MUTANT commit_refusals: the _function_of_one_argument check absent (MD4-45 to MD4-68)
+RUN 1 fix exit=0 command=PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH /usr/bin/python3 /Users/benji/projects/personal/strict-delivery-worktrees/_program/par_suite.py --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry tests.test_githooks tests.test_claims_cli tests.test_continue_cli tests.test_gate_schema tests.test_index tests.test_merge_lib tests.test_plugin_manifest tests.test_questions_cli tests.test_self_adoption -> /usr/bin/python3: Ran 1475 tests; OK (skipped=10) | /opt/homebrew/bin/python3.13: Ran 1475 tests; OK (skipped=2) (commit 10c0172)
+RUN 2 mutant exit=1 command=PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH /usr/bin/python3 /Users/benji/projects/personal/strict-delivery-worktrees/_program/par_suite.py --modules tests.test_bashpolicy -> /usr/bin/python3: Ran 175 tests; FAILED (skipped=0) | /opt/homebrew/bin/python3.13: Ran 175 tests; FAILED (skipped=0) (failures=50 on each interpreter, all in test_run_gates_refused: its 25 members times the texts ls and git commit -m m; 0 ERROR; the other three tests and every Recorder use passed)
+RUN 3 fix exit=0 command=PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH /usr/bin/python3 /Users/benji/projects/personal/strict-delivery-worktrees/_program/par_suite.py --modules tests.test_bashpolicy tests.test_hook_bash tests.test_hook_entry tests.test_githooks tests.test_claims_cli tests.test_continue_cli tests.test_gate_schema tests.test_index tests.test_merge_lib tests.test_plugin_manifest tests.test_questions_cli tests.test_self_adoption -> /usr/bin/python3: Ran 1475 tests; OK (skipped=10) | /opt/homebrew/bin/python3.13: Ran 1475 tests; OK (skipped=2) (the same run as RUN 1, commit 10c0172)

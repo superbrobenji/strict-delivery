@@ -97,6 +97,64 @@ M = {
     # K tests.test_bashpolicy.ExactTypesRound4dTest (the _GitCallSub case)
     "MD4-44": ("gates/lib/bashpolicy.py", '# row F4d-1b (R4d-1)\n        raise TypeError("call must be a GitCall")', '# row F4d-1b (R4d-1)\n        raise TypeError("call must be GitCall")'),
     # K tests.test_bashpolicy.ExactTypesRound4dTest (message)
+    # --- R4d-3, the run_gates member (row F4d-3r, ch/hk8-3b2-fix4d3.md): _function_of_one_argument and its call. The
+    # relaxation hasattr(func, ...) -> hasattr(run, ...) is equivalent (a bound method forwards attribute reads to its
+    # __func__), so it has no entry.
+    # Equivalent mutants (owner rule 2026-11-28; each fact checked on 3.9.6 and 3.13.18 by probe5.py of ch/hk8-3b2-fix4d3.md):
+    # dropped hasattr(func, name) -> hasattr(run, name) in _function_of_one_argument: run is func, or a bound method that forwards the four attribute reads to func, or the first operand already refused it
+    # dropped type(run) is types.MethodType -> isinstance(run, types.MethodType) in _function_of_one_argument: types.MethodType cannot be subclassed
+    # dropped type(func) is not types.FunctionType -> not isinstance(func, types.FunctionType) in _function_of_one_argument: types.FunctionType cannot be subclassed
+    # dropped type(target) is not types.FunctionType -> not isinstance(target, types.FunctionType) in _function_of_no_arguments (part d, noted at MD4-13): types.FunctionType cannot be subclassed
+    # dropped type(fn) is types.MethodType -> isinstance(fn, types.MethodType) in _function_of_no_arguments (part d): types.MethodType cannot be subclassed
+    # dropped type(self.env_refused) is not bool -> not isinstance(self.env_refused, bool) in GitCall.__post_init__ (part d, noted at its entry): bool cannot be subclassed
+    "MD4-45": ("gates/lib/bashpolicy.py", '_SIGNATURE_SOURCES = ("__signature__", "__wrapped__", "_partialmethod", "__partialmethod__")', '_SIGNATURE_SOURCES = ("__wrapped__", "_partialmethod", "__partialmethod__")'),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: __signature__ of one parameter on a function of none)
+    "MD4-46": ("gates/lib/bashpolicy.py", '_SIGNATURE_SOURCES = ("__signature__", "__wrapped__", "_partialmethod", "__partialmethod__")', '_SIGNATURE_SOURCES = ("__signature__", "_partialmethod", "__partialmethod__")'),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: __wrapped__ of one parameter on a function of none)
+    "MD4-47": ("gates/lib/bashpolicy.py", '_SIGNATURE_SOURCES = ("__signature__", "__wrapped__", "_partialmethod", "__partialmethod__")', '_SIGNATURE_SOURCES = ("__signature__", "__wrapped__", "__partialmethod__")'),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: _partialmethod of *a on 3.9, _partialmethod of three on 3.13)
+    "MD4-48": ("gates/lib/bashpolicy.py", '_SIGNATURE_SOURCES = ("__signature__", "__wrapped__", "_partialmethod", "__partialmethod__")', '_SIGNATURE_SOURCES = ("__signature__", "__wrapped__", "_partialmethod")'),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: __partialmethod__ of *a on 3.13, of three on 3.9)
+    "MD4-49": ("gates/lib/bashpolicy.py", "    func = run.__func__ if type(run) is types.MethodType else run\n", "    func = run\n"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_accepted: bound method refused)
+    "MD4-50": ("gates/lib/bashpolicy.py", "if type(run) is types.MethodType else run", "if callable(run) else run"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_accepted: a function has no __func__, raw AttributeError)
+    "MD4-51": ("gates/lib/bashpolicy.py", "if type(run) is types.MethodType else run", "if type(run) is types.BuiltinMethodType else run"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_accepted: bound method refused)
+    "MD4-52": ("gates/lib/bashpolicy.py", "    if type(func) is not types.FunctionType or any(", "    if False or any("),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: callable object and partial accepted; print on 3.13)
+    "MD4-53": ("gates/lib/bashpolicy.py", "    if type(func) is not types.FunctionType or any(", "    if not callable(func) or any("),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: callable object of one argument accepted)
+    "MD4-54": ("gates/lib/bashpolicy.py", "    if type(func) is not types.FunctionType or any(", "    if type(func) is not types.BuiltinFunctionType or any("),
+    # K tests.test_bashpolicy.RunGatesRound4dTest, tests.test_bashpolicy.CommitRefusalsTest (every accepted run_gates refused)
+    "MD4-55": ("gates/lib/bashpolicy.py", "types.FunctionType or any(hasattr(func, name) for name in _SIGNATURE_SOURCES):", "types.FunctionType or False:"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: __signature__ / __wrapped__ of one parameter on a function of none)
+    "MD4-56": ("gates/lib/bashpolicy.py", "types.FunctionType or any(hasattr(func, name) for name in _SIGNATURE_SOURCES):", "types.FunctionType and any(hasattr(func, name) for name in _SIGNATURE_SOURCES):"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: callable object accepted)
+    "MD4-57": ("gates/lib/bashpolicy.py", "_SIGNATURE_SOURCES):\n        return False\n", "_SIGNATURE_SOURCES):\n        return True\n"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: callable object, print, len accepted)
+    "MD4-58": ("gates/lib/bashpolicy.py", "        inspect.signature(run).bind(None)\n", "        inspect.signature(run).bind()\n"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_accepted: lambda root refused)
+    "MD4-59": ("gates/lib/bashpolicy.py", "        inspect.signature(run).bind(None)\n", "        inspect.signature(run).bind(None, None)\n"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_accepted: lambda root refused)
+    "MD4-60": ("gates/lib/bashpolicy.py", "        inspect.signature(run).bind(None)\n", "        inspect.signature(func).bind(None)\n"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_accepted: bound method, its __func__ needs self, refused)
+    "MD4-61": ("gates/lib/bashpolicy.py", "    except (TypeError, ValueError):   # no one-argument binding", "    except TypeError:   # no one-argument binding"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: method of a function of no parameter, raw ValueError)
+    "MD4-62": ("gates/lib/bashpolicy.py", "    except (TypeError, ValueError):   # no one-argument binding", "    except ValueError:   # no one-argument binding"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: no parameter, raw binding TypeError)
+    "MD4-63": ("gates/lib/bashpolicy.py", "an unreadable signature\n        return False\n    return True\n", "an unreadable signature\n        return True\n    return True\n"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: no parameter accepted)
+    "MD4-64": ("gates/lib/bashpolicy.py", "an unreadable signature\n        return False\n    return True\n", "an unreadable signature\n        return False\n    return False\n"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest, tests.test_bashpolicy.CommitRefusalsTest (every accepted run_gates refused)
+    "MD4-65": ("gates/lib/bashpolicy.py", "    if not _function_of_one_argument(run_gates):   # row F4d-3r (R4d-3)", "    if False:   # row F4d-3r (R4d-3)"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused)
+    "MD4-66": ("gates/lib/bashpolicy.py", "    if not _function_of_one_argument(run_gates):   # row F4d-3r (R4d-3)", "    if _function_of_one_argument(run_gates):   # row F4d-3r (R4d-3)"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest, tests.test_bashpolicy.CommitRefusalsTest (every accepted run_gates refused)
+    "MD4-67": ("gates/lib/bashpolicy.py", "_function_of_one_argument(run_gates):   # row F4d-3r", "_function_of_one_argument(lambda root: None):   # row F4d-3r"),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused)
+    "MD4-68": ("gates/lib/bashpolicy.py", '"run_gates must be a function or method of one argument"', '"run_gates must be callable"'),
+    # K tests.test_bashpolicy.RunGatesRound4dTest (test_run_gates_refused: message)
 }
 KILL = {
     "MD4-1": ("tests.test_bashpolicy",),
@@ -143,4 +201,28 @@ KILL = {
     "MD4-42": ("tests.test_bashpolicy",),
     "MD4-43": ("tests.test_bashpolicy",),
     "MD4-44": ("tests.test_bashpolicy",),
+    "MD4-45": ("tests.test_bashpolicy",),
+    "MD4-46": ("tests.test_bashpolicy",),
+    "MD4-47": ("tests.test_bashpolicy",),
+    "MD4-48": ("tests.test_bashpolicy",),
+    "MD4-49": ("tests.test_bashpolicy",),
+    "MD4-50": ("tests.test_bashpolicy",),
+    "MD4-51": ("tests.test_bashpolicy",),
+    "MD4-52": ("tests.test_bashpolicy",),
+    "MD4-53": ("tests.test_bashpolicy",),
+    "MD4-54": ("tests.test_bashpolicy",),
+    "MD4-55": ("tests.test_bashpolicy",),
+    "MD4-56": ("tests.test_bashpolicy",),
+    "MD4-57": ("tests.test_bashpolicy",),
+    "MD4-58": ("tests.test_bashpolicy",),
+    "MD4-59": ("tests.test_bashpolicy",),
+    "MD4-60": ("tests.test_bashpolicy",),
+    "MD4-61": ("tests.test_bashpolicy",),
+    "MD4-62": ("tests.test_bashpolicy",),
+    "MD4-63": ("tests.test_bashpolicy",),
+    "MD4-64": ("tests.test_bashpolicy",),
+    "MD4-65": ("tests.test_bashpolicy",),
+    "MD4-66": ("tests.test_bashpolicy",),
+    "MD4-67": ("tests.test_bashpolicy",),
+    "MD4-68": ("tests.test_bashpolicy",),
 }
