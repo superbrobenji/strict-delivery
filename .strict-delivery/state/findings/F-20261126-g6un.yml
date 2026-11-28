@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-g6un
-status: open
+status: closed
 source: 5b.3 round-4 task review (records/5b.3-review-5.md, round 5 item 2)
 severity: LOW
 class: "regular entry verdict depends on a sibling entry: tipread._mode decodes every name in the parent folder listing, so a regular entry beside a sibling whose name is not UTF-8 is refused (GateError: git ls-tree gave output that is not valid UTF-8) where main's gitinfo.show and blob_exists read it; members: tipread.show_file and its 22 callers, tipread.is_file at cleanup.py:195 and claims.py:362, tipread.entries at decisions_cli.py:404 (compare gitinfo.ls_tree at 9b3a1c6); contradicts section F 'Regular and absent keep each site existing verdict' (from 06547c2)"
@@ -13,11 +13,16 @@ owner:
   task: 5b.3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 5168d4f790caee46709a217a78f5052e3d958778
 history:
   - status: open
     sha: 924270d99fc19feb65b7a8a32a135e9d693fdf71
     by: stream-records
+  - status: closed
+    sha: 8e7092de8e1ed657cad7109af7f0cce3dfcb50ac
+    by: stream-records
 review_round: 6
 caused_by_change: true
 dimension: regular entry verdict depends on a sibling entry
+resolved_by: 2026-10-31-strict-delivery-framework

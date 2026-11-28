@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261126-yyqv
-status: open
+status: closed
 source: 5b.3 round-4 task review (records/5b.3-review-5.md, round 5 item 1)
 severity: LOW
 class: "exact types of tipread public functions (owner Q-RS4-1 (A), table row R4-T): tipread.show_file path accepts a str subclass and raises TypeError or AttributeError for bytes or None instead of a named GateError; tipread.is_file path the same; tipread.entries root, ref, directory and show_file, is_file root, ref already refuse (from 06547c2; is_file from d2b10e0)"
@@ -13,11 +13,16 @@ owner:
   task: 5b.3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 5168d4f790caee46709a217a78f5052e3d958778
 history:
   - status: open
     sha: 924270d99fc19feb65b7a8a32a135e9d693fdf71
     by: stream-records
+  - status: closed
+    sha: 8e7092de8e1ed657cad7109af7f0cce3dfcb50ac
+    by: stream-records
 review_round: 6
 caused_by_change: true
 dimension: exact types of tipread public functions
+resolved_by: 2026-10-31-strict-delivery-framework

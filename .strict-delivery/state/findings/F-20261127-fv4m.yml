@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261127-fv4m
-status: open
+status: closed
 source: 5b.3 round-5 task review (records/5b.3-review-6.md, finding 2)
 severity: LOW
 class: "pathspec magic in tipread arguments (table row R6-2): no test names an entry with a pathspec-magic form, so mutant S22 (drop literal=True from _listing's gitinfo._run) survives; members tipread.show_file path, tipread.is_file path, tipread.entries directory, over the forms :(top), :(literal), :(glob), :(icase), :(exclude), :(attr:x), :/, :!, :^ and bare :"
@@ -16,11 +16,16 @@ owner:
   task: 5b.3
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 681753a48629e364e7084cba245a90e73b83e118
 history:
   - status: open
     sha: 81d344d753518a96533387996e410237ae1091f2
     by: stream-records
+  - status: closed
+    sha: 8e7092de8e1ed657cad7109af7f0cce3dfcb50ac
+    by: stream-records
 review_round: 7
 caused_by_change: true
 dimension: pathspec magic in tipread arguments
+resolved_by: 2026-10-31-strict-delivery-framework
