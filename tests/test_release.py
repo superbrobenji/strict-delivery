@@ -11,6 +11,7 @@ import ast
 import builtins
 import contextlib
 import datetime
+import errno
 import importlib.util
 import io
 import json
@@ -26,7 +27,7 @@ import unittest
 from unittest import mock
 
 from gates.lib import config, gitinfo, managed, templates
-from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, within
+from tests.helpers import INT_LIMITS, GitIsolatedTestCase, commit_all, git, int_limit, watched, within
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "release.py")
@@ -142,6 +143,55 @@ def snapshot(root):
             else:
                 out[rel] = "special"
     return out
+
+
+CHILD_SECS = 120  # every child process and git call of a test is bounded: a hang fails the test by name
+
+
+def bounded(label, fn, secs=CHILD_SECS):
+    """``fn()`` under a time limit: a call that has not returned after ``secs`` seconds fails the test with ``label``
+    in the message, so a hung git call never blocks the shard (F7)."""
+    try:
+        kind, value = watched(fn, secs)
+    except AssertionError:
+        raise AssertionError("%s did not finish within %d s (a git call or the script hung)" % (label, secs)) from None
+    if kind == "err":
+        raise value
+    return value
+
+
+def run_child(args, cwd, env=None, secs=CHILD_SECS):
+    """``(code, stdout bytes, stderr bytes)`` of ``python3 scripts/release.py <args>`` as a child process of the running
+    interpreter; ``env`` adds names (a value of ``None`` removes the name); PYTHONIOENCODING and PYTHONINTMAXSTRDIGITS
+    are never inherited."""
+    full = dict((k, v) for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONINTMAXSTRDIGITS"))
+    for k, v in (env or {}).items():
+        if v is None:
+            full.pop(k, None)
+        else:
+            full[k] = v
+    try:
+        p = subprocess.run([sys.executable, SCRIPT] + list(args), cwd=cwd, env=full, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=secs)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("the release script child did not finish within %d s" % secs) from None
+    return p.returncode, p.stdout, p.stderr
+
+
+def printout(old, new, branch, base, date="2026-12-01"):
+    """The whole stdout of a successful run, typed by hand from the plan (names that shlex.quote leaves as they are)."""
+    paths = [".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "CLAUDE.md", ".gitignore",
+             ".strict-delivery/config.yml", "CHANGELOG.md"]
+    tag = "v" + new
+    return ("release: %s -> %s (%s)\nchanged:\n" % (old, new, date) + "".join("  %s\n" % p for p in paths)
+            + "next commands (this script ran none of them):\n"
+            + "  git add -- " + " ".join(paths) + "\n"
+            + "  git commit -m 'release: %s'\n" % tag
+            + "  git push -u origin %s\n" % branch
+            + "  open a pull request into %s and merge it\n" % base
+            + "  after the merge is read back from the host, on the merge commit: "
+              "git tag -a %s -m 'strict-delivery %s' <merge commit>\n" % (tag, new)
+            + "  only on the owner's word: git push origin %s\n" % tag)
 
 
 def site_version(repo, site):
@@ -325,14 +375,12 @@ class VersionRows(ReleaseCase):
         self.assertEqual(site_version(self.repo, release.RELEASE_SITES[0]), "0.1.0")
 
     def test_runs_as_a_script(self):
-        p = subprocess.run([sys.executable, SCRIPT, "0.1.0", "--date", DATE, "--root", self.repo], cwd=self.work,
-                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        code, _out, err = run_child(["0.1.0", "--date", DATE, "--root", self.repo], self.work)
+        self.assertEqual((code, err), (0, b""))
         self.assertEqual(site_version(self.repo, release.RELEASE_SITES[2]), "0.1.0")
-        p = subprocess.run([sys.executable, SCRIPT, "0.1", "--root", self.repo], cwd=self.work,
-                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual(p.returncode, 1)
-        self.assertIn(b"MAJOR.MINOR.PATCH", p.stderr)
+        code, _out, err = run_child(["0.1", "--root", self.repo], self.work)
+        self.assertEqual(code, 1)
+        self.assertIn(b"MAJOR.MINOR.PATCH", err)
 
 
 # --------------------------------------------------------------------------- S: the sites
@@ -366,10 +414,124 @@ class SiteRows(ReleaseCase):
                 self.assertEqual(text.count('"version": "0.0.0"'), 2)
                 self.refused("0.1.0", repo=repo, want=(rel, "matches 2 times"))
 
-    def test_json_key_repeated_refused(self):  # S3
+    def test_json_key_repeated_refused(self):  # S3, F4: refused at the parse now, before the text count
         text = (PLUGIN_JSON % "0.0.0").replace('  "license"', '  "version": "0.0.0",\n  "license"')
         repo = self.fresh(texts={PLUGIN: text})
-        self.refused("0.1.0", repo=repo, want=(PLUGIN, "matches 2 times"))
+        err = self.refused("0.1.0", repo=repo)
+        self.assertEqual(err, 'release: .claude-plugin/plugin.json: repeated key "version"\n')
+
+    @staticmethod
+    def repeated(rel, key, label):
+        """``(text, hand-typed what)``: the site file ``rel`` (version 0.0.0) with ``key`` repeated as ``label`` says."""
+        base = (PLUGIN_JSON if rel == PLUGIN else MARKET_JSON) % "0.0.0"
+        entry = rel == MARKET  # the strict-delivery entry of the marketplace, else the top level of plugin.json
+        pad = "      " if entry else "  "
+        ver = pad + '"version": "0.0.0",\n'
+        if label == "version, equal values":
+            return base.replace(ver, ver + ver, 1)
+        if label == "version, different values":
+            return base.replace(ver, ver + pad + '"version": "0.0.1",\n', 1)
+        name = pad + '"name": "strict-delivery",\n'
+        if label == "name, strict-delivery then another":
+            return base.replace(name, name + pad + '"name": "other",\n', 1)
+        if label == "name, another then strict-delivery":
+            return base.replace(name, pad + '"name": "other",\n' + name, 1)
+        if label == "nested object":
+            return base.replace('"name": "Someone"\n', '"name": "Someone",\n    "name": "Someone"\n', 1)
+        if label == "top level":
+            top = '  "license": "MIT",\n' if rel == PLUGIN else '  "owner": {\n'
+            return base.replace(top, '  "marker": 1,\n  "marker": 2,\n' + top, 1)
+        raise AssertionError(label)
+
+    def test_json_repeated_key_refused(self):  # F4 (F-20261126-8meb): any key twice in any one object
+        members = (("version, equal values", "version"), ("version, different values", "version"),
+                   ("name, strict-delivery then another", "name"), ("name, another then strict-delivery", "name"),
+                   ("nested object", "name"), ("top level", "marker"))
+        for rel in (PLUGIN, MARKET):
+            for label, key in members:
+                with self.subTest(rel=rel, member=label):
+                    text = self.repeated(rel, key, label)
+                    self.assertNotEqual(text, (PLUGIN_JSON if rel == PLUGIN else MARKET_JSON) % "0.0.0")
+                    repo = self.fresh(texts={rel: text})
+                    err = self.refused("0.1.0", "--date", DATE, repo=repo)
+                    self.assertEqual(err, 'release: %s: repeated key "%s"\n' % (rel, key))
+
+    def test_json_same_key_in_different_objects_accepted(self):  # F4 invariant: only one object's repeat is refused
+        text = (PLUGIN_JSON % "0.0.0").replace('"name": "Someone"', '"name": "strict-delivery"')
+        repo = self.fresh(texts={PLUGIN: text})
+        code, _o, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+        self.assertEqual((code, err), (0, ""))
+
+    def test_json_number_is_never_a_version(self):  # F3 invariant: an integer where a version string belongs
+        for rel, text in ((PLUGIN, '{"version": 1}\n'),
+                          (MARKET, '{"plugins": [{"name": "strict-delivery", "version": 100}]}\n')):
+            with self.subTest(rel=rel):
+                repo = self.fresh(texts={rel: text})
+                err = self.refused("0.1.0", repo=repo)
+                self.assertEqual(err, "release: %s: version is missing or not a string\n" % rel)
+
+    @staticmethod
+    def with_literal(rel, where, literal):
+        """The site file ``rel`` (version 0.0.0) holding the JSON number text ``literal`` at ``where``."""
+        base = (PLUGIN_JSON if rel == PLUGIN else MARKET_JSON) % "0.0.0"
+        if where == "top level":
+            anchor = '  "license": "MIT",\n' if rel == PLUGIN else '  "owner": {\n'
+            return base.replace(anchor, '  "build": %s,\n' % literal + anchor, 1)
+        if where == "nested":
+            if rel == PLUGIN:
+                return base.replace('"name": "Someone"\n', '"name": "Someone",\n    "build": %s\n' % literal, 1)
+            return base.replace('      "source": "./",\n', '      "source": "./",\n      "build": %s,\n' % literal, 1)
+        anchor = '  "dependencies": [\n' if rel == PLUGIN else '  "allowCrossMarketplaceDependenciesOn": [\n'
+        return base.replace(anchor, anchor + "    %s,\n" % literal, 1)
+
+    def huge_cases(self):
+        """(label, literal, accepted): the digit counts of the member list; the sign is not counted."""
+        one = "1" + "0" * 4299
+        two = "1" + "0" * 4300
+        return (("4300 digits", one, True), ("4301 digits", two, False),
+                ("negative, 4300 digits", "-" + one, True), ("negative, 4301 digits", "-" + two, False))
+
+    def check_huge(self, rel, where, label, literal, accepted):
+        text = self.with_literal(rel, where, literal)
+        self.assertIn(literal, text)
+        repo = self.fresh(texts={rel: text})
+        if accepted:
+            code, out, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+            self.assertEqual((code, err), (0, ""))
+            self.assertEqual(get(repo, rel), text.encode("utf-8").replace(b'"version": "0.0.0"', b'"version": "0.1.0"'))
+        else:
+            err = self.refused("0.1.0", "--date", DATE, repo=repo)
+            self.assertEqual(err, "release: %s: holds an integer of more than 4300 digits\n" % rel)
+
+    def test_json_huge_integer_in_process(self):  # F3 (F-20261126-yr5b): the same verdict under every int limit
+        for limit in INT_LIMITS:
+            for rel in (PLUGIN, MARKET):
+                for where in ("top level", "nested", "array element"):
+                    for label, literal, accepted in self.huge_cases():
+                        if limit is not None and where == "array element":
+                            continue
+                        with self.subTest(limit=limit, rel=rel, where=where, member=label):
+                            with int_limit(limit):
+                                self.check_huge(rel, where, label, literal, accepted)
+
+    def test_json_huge_integer_in_a_child_process(self):  # F3: PYTHONINTMAXSTRDIGITS 640, 0 and unset (also on 3.9)
+        for env in (None, "640", "0"):
+            for rel, where, (_label, literal, accepted) in [(r, w, c) for r in (PLUGIN, MARKET)
+                                                           for w in ("top level", "nested") for c in self.huge_cases()]:
+                    with self.subTest(env=env, rel=rel, where=where, digits=len(literal), accepted=accepted):
+                        text = self.with_literal(rel, where, literal)
+                        repo = self.fresh(texts={rel: text})
+                        before = snapshot(self.work)
+                        code, out, err = run_child(["0.1.0", "--date", DATE, "--root", repo], self.work,
+                                                   {"PYTHONINTMAXSTRDIGITS": env} if env is not None else {})
+                        if accepted:
+                            self.assertEqual((code, err), (0, b""))
+                            self.assertEqual(get(repo, rel), text.encode("utf-8").replace(
+                                b'"version": "0.0.0"', b'"version": "0.1.0"'))
+                        else:
+                            self.assertEqual((code, out), (1, b""))
+                            self.assertEqual(err, ("release: %s: holds an integer of more than 4300 digits\n" % rel).encode())
+                            self.assertEqual(snapshot(self.work), before)
 
     def test_json_pattern_nowhere_refused(self):  # S4
         for rel, base in ((PLUGIN, PLUGIN_JSON), (MARKET, MARKET_JSON)):
@@ -393,6 +555,13 @@ class SiteRows(ReleaseCase):
             with self.subTest(rel=rel, text=text):
                 repo = self.fresh(texts={rel: text})
                 self.refused("0.1.0", repo=repo, want=(rel,))
+
+    def test_json_deeply_nested_refused(self):  # S4 invariant of the parse: RecursionError is a refusal, not a crash
+        for rel in (PLUGIN, MARKET):
+            with self.subTest(rel=rel):
+                repo = self.fresh(texts={rel: '{"a": ' * 20000 + "1" + "}" * 20000 + "\n"})
+                err = self.refused("0.1.0", repo=repo)
+                self.assertEqual(err, "release: %s: is not valid JSON\n" % rel)
 
     def test_marketplace_edits_the_strict_delivery_entry(self):  # S1
         text = (MARKET_JSON % "0.0.0").replace('"plugins": [', '"plugins": [\n    {"name": "other", "version": "7.7.7"},')
@@ -446,6 +615,31 @@ class SiteRows(ReleaseCase):
             with self.subTest(text=text):
                 repo = self.fresh(texts={CONFIG: text})
                 self.refused("0.1.0", repo=repo, want=(CONFIG,))
+
+    def test_config_version_refusal_reasons(self):  # F1 (F-20261126-3pka): the exact reason of each member
+        exact = 'framework_version line is not of the exact form framework_version: "<version>"'
+        # (label, config text, reason as printed today; who gives it: the script's _config_old, or its _agree)
+        members = (
+            ("duplicate lines (the script's check)",
+             'schema: config/2\nframework_version: "0.0.0"\nframework_version: "0.0.0"\nprofile: strict\n',
+             ".strict-delivery/config.yml: needs exactly one framework_version line, found 2"),
+            ("trailing comment (the script's check)",
+             'schema: config/2\nframework_version: "0.0.0" # pinned\nprofile: strict\n',
+             ".strict-delivery/config.yml: the " + exact),
+            ("unquoted (the script's check)", "schema: config/2\nframework_version: 0.0.0\nprofile: strict\n",
+             ".strict-delivery/config.yml: the " + exact),
+            ("single-quoted (the script's check)", "schema: config/2\nframework_version: '0.0.0'\nprofile: strict\n",
+             ".strict-delivery/config.yml: the " + exact),
+            ("missing line (the script's check)", "schema: config/2\nprofile: strict\n",
+             ".strict-delivery/config.yml: needs exactly one framework_version line, found 0"),
+            ("empty value (the script's _agree: the quoted empty text is a version that differs)",
+             'schema: config/2\nframework_version: ""\nprofile: strict\n',
+             "the sites disagree on the current version (most hold 0.0.0): .strict-delivery/config.yml holds "))
+        for label, text, reason in members:
+            with self.subTest(member=label):
+                repo = self.fresh(texts={CONFIG: text})
+                err = self.refused("0.1.0", "--date", DATE, repo=repo)
+                self.assertEqual(err, "release: " + reason + "\n")
 
     def test_invalid_config_refused(self):
         repo = self.fresh(texts={CONFIG: CONFIG_YML % "0.0.0" + "unknown_key: 1\n"})
@@ -679,6 +873,55 @@ class TreeBranchDateRows(ReleaseCase):
         self.assertIn("git push origin v0.1.0\n", out)
         self.assertIn("pull request into main", out)
         self.assertEqual(git(self.repo, "tag"), "")
+        self.assertEqual(out, printout("0.0.0", "0.1.0", "release-test", "main"))
+        # F6 (HM2): a version other than 0.1.0 prints its own tag and push lines
+        code, out, err = self.run_release("0.2.0", "--date", DATE, root=self.fresh())
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, printout("0.0.0", "0.2.0", "release-test", "main"))
+        self.assertIn("git commit -m 'release: v0.2.0'\n", out)
+        self.assertIn("git tag -a v0.2.0 -m 'strict-delivery 0.2.0' <merge commit>\n", out)
+        self.assertIn("git push origin v0.2.0\n", out)
+        self.assertNotIn("v0.1.0", out)
+
+    def test_branch_names_printable_ascii_refused(self):  # F5 (F-20261126-n924): refused before any write
+        shown = "holds a character outside printable ASCII (U+0020-U+007E)"
+        members = (("non-ASCII branch", {"branch": "rél"}, "the current branch 'r\\xe9l' " + shown),
+                   ("non-ASCII base_branch", {"base": '"café"'}, "base_branch 'caf\\xe9' " + shown),
+                   ("control character in base_branch", {"base": '"a\\tb"'}, "base_branch 'a\\tb' " + shown),
+                   ("control character (newline) in base_branch", {"base": '"a\\nb"'}, "base_branch 'a\\nb' " + shown))
+        for label, kw, reason in members:
+            for encoding in ("ascii", "utf-8"):
+                with self.subTest(member=label, PYTHONIOENCODING=encoding):
+                    repo = self.fresh(**kw)
+                    before = snapshot(self.work)
+                    head = git(repo, "rev-parse", "HEAD")
+                    code, out, err = run_child(["0.1.0", "--date", DATE, "--root", repo], self.work,
+                                               {"PYTHONIOENCODING": encoding})
+                    self.assertEqual((code, out), (1, b""))
+                    self.assertEqual(err, ("release: " + reason + "\n").encode("ascii"))
+                    self.assertEqual(snapshot(self.work), before)
+                    self.assertEqual(git(repo, "rev-parse", "HEAD"), head)
+
+    def test_branch_names_printable_ascii_refused_in_process(self):  # F5: the same verdict through release.main
+        for kw in ({"branch": "rél"}, {"base": '"café"'}, {"base": '"a\\tb"'}):
+            with self.subTest(kw=kw):
+                repo = self.fresh(**kw)
+                err = self.refused("0.1.0", "--date", DATE, repo=repo, want=("printable ASCII",))
+                err.encode("ascii")  # the reason is ASCII even though the name is not
+
+    def test_branch_names_printable_ascii_success_under_ascii_stdout(self):  # F5: the full printout, whatever the stdout
+        for encoding in ("ascii", "utf-8"):
+            with self.subTest(PYTHONIOENCODING=encoding):
+                repo = self.fresh(branch="feature/rel-0.1_x", base='"develop"')
+                code, out, err = run_child(["0.1.0", "--date", DATE, "--root", repo], self.work,
+                                           {"PYTHONIOENCODING": encoding})
+                self.assertEqual((code, err), (0, b""))
+                self.assertEqual(out.decode("ascii"), printout("0.0.0", "0.1.0", "feature/rel-0.1_x", "develop"))
+
+    def test_branch_names_printable_ascii_bounds_accepted(self):  # F5 invariant: U+0020 and U+007E are printable
+        repo = self.fresh(branch="release-test", base='"a ~b"')
+        code, _o, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+        self.assertEqual((code, err), (0, ""))
 
 
 # --------------------------------------------------------------------------- H, P, X, G
@@ -942,35 +1185,46 @@ class HardeningRows(ReleaseCase):
                     self.assertIn(param, str(cm.exception))
         self.assertEqual(self.call(list(exact[("main", "argv")]) + ["--date", "2026-02-30"])[0], 1)
 
-    def test_generated_git_environments_agree(self):  # G1
+    @staticmethod
+    def g1_pairs(excludes):
+        """The config pairs G1 sets. No test starts git's built-in file-system monitor daemon (owner direction
+        2026-11-22, main PR #34, guard ``test_no_test_file_starts_the_daemon`` of tests/test_githooks.py): the
+        ``core.fsmonitor`` pair carries a false value only; a true value, in any form (-c, GIT_CONFIG_COUNT, a config
+        file), would make any plain git call of this test start the daemon, which has hung the shard. The script's own
+        git calls pass ``-c core.fsmonitor=false`` (gitinfo.FSMONITOR_OFF)."""
+        return [("status.showUntrackedFiles", "no"), ("status.showUntrackedFiles", "normal"),
+                ("core.excludesFile", excludes), ("core.fsmonitor", "false"), ("status.relativePaths", "false"),
+                ("core.quotePath", "false"), ("color.status", "always"), ("diff.ignoreSubmodules", "all"),
+                ("core.untrackedCache", "true"), ("status.renames", "copies"), ("status.short", "true")]
+
+    def test_generated_git_environments_agree(self):  # G1, F7: every git and release call is bounded
         rng = random.Random(20261126)
         decoy = os.path.join(self.work, "decoy")
         os.makedirs(decoy)
-        git(decoy, "init", "-q", "-b", "main")
+        bounded("G1 git init", lambda: git(decoy, "init", "-q", "-b", "main"))
         excludes = os.path.join(self.tmp, "excludes")
         with open(excludes, "w", encoding="utf-8") as fh:
             fh.write("stray.txt\n")
         variants = {}
         for name in ("clean", "dirty", "base"):
-            repo = self.fresh()
+            repo = bounded("G1 fixture " + name, self.fresh)
             if name == "dirty":
                 put(repo, "stray.txt", "x\n")
             if name == "base":
-                git(repo, "checkout", "-q", "main")
+                bounded("G1 git checkout", lambda: git(repo, "checkout", "-q", "main"))
             variants[name] = repo
         expected = {}
         for name, repo in variants.items():
-            code, _o, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+            self.guard(repo)
+            code, _o, err = bounded("G1 release run " + name,
+                                    lambda: self.call(["0.1.0", "--date", DATE, "--root", repo]))
             expected[name] = (code, err)
             if code == 0:
-                git(repo, "reset", "-q", "--hard")
+                bounded("G1 git reset", lambda: git(repo, "reset", "-q", "--hard"))
         self.assertEqual(expected["clean"], (0, ""))
         self.assertEqual(expected["dirty"][0], 1)
         self.assertEqual(expected["base"][0], 1)
-        pairs = [("status.showUntrackedFiles", "no"), ("status.showUntrackedFiles", "normal"), ("core.excludesFile", excludes),
-                 ("core.fsmonitor", "true"), ("status.relativePaths", "false"), ("core.quotePath", "false"),
-                 ("color.status", "always"), ("diff.ignoreSubmodules", "all"), ("core.untrackedCache", "true"),
-                 ("status.renames", "copies"), ("status.short", "true")]
+        pairs = self.g1_pairs(excludes)
         names = ("clean", "dirty", "base")
         differing = []
         hidden_cases = []
@@ -1005,16 +1259,20 @@ class HardeningRows(ReleaseCase):
             self.guard(repo)
             hidden = False
             with mock.patch.dict(os.environ, env):
-                code, _o, err = self.call(["0.1.0", "--date", DATE, "--root", repo])
+                code, _o, err = bounded("G1 release run (case %d, %s)" % (i, name),
+                                        lambda: self.call(["0.1.0", "--date", DATE, "--root", repo]))
                 if name == "dirty":
                     # git's own answer, with the case's config and without the names gitinfo clears: is the untracked
                     # file ignored by the user's rules (a finding: gitinfo.dirty_paths then calls the tree clean)?
                     probe = dict((k, v) for k, v in os.environ.items() if k not in gitinfo.CLEARED_ENV)
-                    hidden = subprocess.run(["git", "-C", repo, "check-ignore", "-q", "--", "stray.txt"], env=probe,
-                                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                            stderr=subprocess.DEVNULL).returncode == 0
+                    try:
+                        hidden = subprocess.run(["git", "-C", repo, "check-ignore", "-q", "--", "stray.txt"], env=probe,
+                                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                                stderr=subprocess.DEVNULL, timeout=CHILD_SECS).returncode == 0
+                    except subprocess.TimeoutExpired:
+                        raise AssertionError("G1 git check-ignore (case %d) did not finish within %d s" % (i, CHILD_SECS)) from None
             if code == 0:
-                git(repo, "reset", "-q", "--hard")
+                bounded("G1 git reset (case %d)" % i, lambda: git(repo, "reset", "-q", "--hard"))
             if hidden:
                 hidden_cases.append((i, code))
             elif (code, err) != expected[name]:
@@ -1024,6 +1282,375 @@ class HardeningRows(ReleaseCase):
         # file, gitinfo.dirty_paths lists nothing and the script, like every gate that asks it, calls the tree clean.
         self.assertGreater(len(hidden_cases), 0)
         self.assertEqual([c for _i, c in hidden_cases if c != 0], [])
+
+    def test_generated_environments_start_no_fsmonitor_daemon(self):  # F7: G1's pairs never turn the daemon on
+        ipc = "fsmonitor--daemon.ipc"
+        off = ("false", "no", "off", "0")
+        for key, value in self.g1_pairs("/nowhere"):
+            if key.lower() == "core.fsmonitor":
+                self.assertIn(value, off)  # a true value would start the daemon on the first plain git call
+        for form in ("GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL file", "repository config"):
+            for value in off:
+                with self.subTest(form=form, value=value):
+                    repo = bounded("fixture", self.fresh)
+                    env = {}
+                    if form == "GIT_CONFIG_COUNT":
+                        env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": value}
+                    elif form == "GIT_CONFIG_GLOBAL file":
+                        env = {"GIT_CONFIG_GLOBAL": os.path.join(self.tmp, "gitconfig-fsm-" + value)}
+                        with open(env["GIT_CONFIG_GLOBAL"], "w", encoding="utf-8") as fh:
+                            fh.write("[core]\n\tfsmonitor = " + value + "\n")
+                    else:
+                        bounded("git config", lambda: git(repo, "config", "core.fsmonitor", value))
+                    self.guard(repo)
+                    with mock.patch.dict(os.environ, env):
+                        code, _o, err = bounded("release run", lambda: self.call(["0.1.0", "--date", DATE, "--root", repo]))
+                    self.assertEqual((code, err), (0, ""))
+                    self.assertFalse(os.path.exists(os.path.join(repo, ".git", ipc)))
+
+
+# --------------------------------------------------------------------------- F2: the write side
+
+def expected_new(rel, old):
+    """The bytes a target holds after ``0.0.0 -> 0.1.0`` on 2026-12-01, by a hand-written rule."""
+    if rel == CHANGELOG:
+        return old.replace(b"## Unreleased\n", b"## Unreleased\n\n## 0.1.0 - 2026-12-01\n", 1)
+    assert old.count(b"0.0.0") == 1, rel
+    return old.replace(b"0.0.0", b"0.1.0")
+
+
+def outside_of(snap, repo, work):
+    """The entries of ``snapshot(work)`` that are not the repository ``repo`` or inside it."""
+    name = os.path.relpath(repo, work)
+    return dict((k, v) for k, v in snap.items() if k != name and not k.startswith(name + os.sep))
+
+
+class WriteSideRows(ReleaseCase):
+    """F2 (F-20261126-eh2g): the write of every RELEASE_SITES file and CHANGELOG.md, through ``release.main``, with an
+    in-process wrapper around ``managed._write`` that changes the state just before the real write."""
+    TARGETS = SITES + [CHANGELOG]
+
+    def hooked(self, target, before):
+        real = managed._write
+        calls = []
+
+        def wrapped(root, rel, text):
+            if (rel == target or target is None) and not calls:
+                calls.append(rel)
+                before(root, rel)
+            return real(root, rel, text)
+        return calls, mock.patch.object(managed, "_write", wrapped)
+
+    def test_write_side_target_turned_into_a_link_is_replaced_not_followed(self):  # F2: inside and outside the root
+        for rel in self.TARGETS:
+            for where in ("inside", "outside"):
+                with self.subTest(rel=rel, where=where):
+                    repo = self.fresh()
+                    old = get(repo, rel)
+                    dest = os.path.join(repo if where == "inside" else self.work, "link-dest-%d" % self.n)
+
+                    def before(root, r, dest=dest):
+                        data = get(root, r)
+                        with open(dest, "wb") as fh:
+                            fh.write(data)
+                        os.unlink(os.path.join(root, *r.split("/")))
+                        os.symlink(dest, os.path.join(root, *r.split("/")))
+                    calls, patch = self.hooked(rel, before)
+                    snap = snapshot(self.work)
+                    with patch:
+                        code, out, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+                    self.assertEqual(calls, [rel])  # the wrapper ran: the write went through managed._write
+                    self.assertEqual((code, err), (0, ""))
+                    self.assertFalse(os.path.islink(os.path.join(repo, *rel.split("/"))))
+                    self.assertEqual(get(repo, rel), expected_new(rel, old))
+                    self.assertEqual(get(os.path.dirname(dest), os.path.basename(dest)), old)  # no byte through the link
+                    if where == "outside":
+                        after = snapshot(self.work)
+                        self.assertEqual(outside_of(after, repo, self.work),
+                                         dict(outside_of(snap, repo, self.work), **{os.path.basename(dest): old}))
+
+    def test_write_side_parent_swapped_for_a_link(self):  # F2: refused, nothing goes through the link
+        written = {".claude-plugin": "nothing written",
+                   ".strict-delivery": "written before it: .claude-plugin/plugin.json, .claude-plugin/marketplace.json, "
+                                       "CLAUDE.md, .gitignore"}
+        first = {".claude-plugin": PLUGIN, ".strict-delivery": CONFIG}
+        for parent in (".claude-plugin", ".strict-delivery"):
+            for where in ("inside", "outside"):
+                with self.subTest(parent=parent, where=where):
+                    repo = self.fresh()
+                    dest = os.path.join(repo if where == "inside" else self.work, "moved-%d" % self.n)
+                    kept = dict((n, get(repo, parent + "/" + n)) for n in os.listdir(os.path.join(repo, parent)))
+
+                    def before(root, r, parent=parent, dest=dest):
+                        os.rename(os.path.join(root, parent), dest)
+                        os.symlink(dest, os.path.join(root, parent))
+                    calls, patch = self.hooked(first[parent], before)
+                    with patch:
+                        code, out, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+                    self.assertEqual(calls, [first[parent]])
+                    self.assertEqual((code, out), (1, ""))
+                    self.assertEqual(err, "release: %s: a parent is a symbolic link or not a directory; %s\n"
+                                     % (first[parent], written[parent]))
+                    self.assertTrue(os.path.islink(os.path.join(repo, parent)))
+                    self.assertEqual(dict((n, get(dest, n)) for n in os.listdir(dest)), kept)  # the link target kept
+
+    def test_write_side_failed_replace_keeps_the_old_file(self):  # F2: atomic: the old file intact, no temporary left
+        for i, rel in enumerate(self.TARGETS):
+            with self.subTest(rel=rel):
+                repo = self.fresh()
+                old = dict((t, get(repo, t)) for t in self.TARGETS)
+                real = os.replace
+
+                def failing(src, dst, *a, **kw):
+                    if dst == os.path.basename(rel) and kw.get("dst_dir_fd") is not None:
+                        raise OSError(errno.EIO, os.strerror(errno.EIO))
+                    return real(src, dst, *a, **kw)
+                with mock.patch.object(os, "replace", failing):
+                    code, out, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+                tail = "written before it: " + ", ".join(self.TARGETS[:i]) if i else "nothing written"
+                self.assertEqual((code, out), (1, ""))
+                self.assertEqual(err, "release: %s: cannot be written (Input/output error); %s\n" % (rel, tail))
+                self.assertEqual(get(repo, rel), old[rel])
+                self.assertEqual([k for k in snapshot(self.work) if ".sd-managed-" in k], [])  # no temporary file
+                for j, t in enumerate(self.TARGETS):
+                    self.assertEqual(get(repo, t), expected_new(t, old[t]) if j < i else old[t], t)
+
+    def test_write_side_mode_kept(self):  # F2: 0644, 0600, 0755 (and a mix) survive the write
+        for label, modes in (("0644", [0o644] * 6), ("0600", [0o600] * 6), ("0755", [0o755] * 6),
+                             ("mixed", [0o644, 0o600, 0o755, 0o640, 0o700, 0o664])):
+            with self.subTest(modes=label):
+                repo = self.fresh()
+                for rel, mode in zip(self.TARGETS, modes):
+                    os.chmod(os.path.join(repo, *rel.split("/")), mode)
+                self.commit(repo)
+                code, _o, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+                self.assertEqual((code, err), (0, ""))
+                for rel, mode in zip(self.TARGETS, modes):
+                    self.assertEqual(stat.S_IMODE(os.lstat(os.path.join(repo, *rel.split("/"))).st_mode), mode, rel)
+                    self.assertEqual(get(repo, rel).count(b"0.1.0"), 1, rel)
+
+
+# --------------------------------------------------------------------------- PM: the generated path matrix
+# (owner 2026-11-26 21:10, stream-common :69). Path role x file state x moment; the cells are listed by ``pm_cells``,
+# the exit code of each is typed by hand in ``pm_expected`` (None: the rule settles no verdict, reported as a decision).
+
+PM_FILES = SITES + [CHANGELOG]
+PM_PARENTS = (".claude-plugin", ".strict-delivery")
+PM_FILE_STATES = ("regular", "absent", "directory", "symlink-in", "symlink-out", "fifo")
+PM_PARENT_STATES = ("directory", "absent", "regular", "symlink-dir-in", "symlink-dir-out", "symlink-file-in",
+                    "symlink-file-out", "fifo")
+PM_ROOT_STATES = ("directory", "absent", "regular", "symlink-top", "symlink-dir-out", "symlink-file", "fifo",
+                  "name-0xff")
+
+
+def pm_cells():
+    """Every (role, name, state, moment) cell: the six files, the two parents and the root, each state, each moment."""
+    out = []
+    for moment in ("check", "between"):
+        for rel in PM_FILES:
+            out += [("file", rel, st, moment) for st in PM_FILE_STATES]
+        for parent in PM_PARENTS:
+            out += [("parent", parent, st, moment) for st in PM_PARENT_STATES]
+        out += [("root", "", st, moment) for st in PM_ROOT_STATES if not (st == "name-0xff" and moment == "between")]
+    return out
+
+
+def pm_expected(role, name, state, moment):
+    """The exit code of a cell, typed by hand from the table rows H1-H5 (at the check) and decision 7 of the build report
+    (between check and use: the run refuses or reports naming the path; a file replaced at the write is replaced, not
+    followed). None: no verdict is settled by the rule."""
+    if moment == "check":
+        if role == "file":
+            return 0 if state == "regular" else 1
+        if role == "parent":
+            return 0 if state == "directory" else 1
+        return 0 if state in ("directory", "symlink-top", "name-0xff") else 1
+    if role == "file":
+        return 1 if state == "directory" else 0  # os.replace of a file over a directory fails; over a link, FIFO or nothing it works
+    if role == "parent":
+        if state == "directory":
+            return 0
+        if state == "absent":
+            return 1 if name == ".claude-plugin" else 0  # the second file of .claude-plugin finds it missing
+        return 1
+    if state in ("directory", "symlink-top"):
+        return 0
+    return None if state == "symlink-dir-out" else 1
+
+
+class PathMatrix(ReleaseCase):
+    seq = 0
+
+    def place(self, path, state, files):
+        """Make ``path`` (nothing there now) the ``state``; ``files`` is {name: bytes} of the directory that was there, or
+        {"": bytes} of the file. Returns {path: bytes} of every file a link now leads to (they must stay as they are)."""
+        guards = {}
+        PathMatrix.seq += 1
+        home = self.cell_repo if state.endswith("-in") else self.cell_out
+        dest = os.path.join(home, "dest-%d" % PathMatrix.seq)
+        if state == "absent":
+            pass
+        elif state == "regular":
+            with open(path, "wb") as fh:
+                fh.write(b"not what was here\n")
+        elif state == "directory":
+            os.mkdir(path)
+            with open(os.path.join(path, "inner.txt"), "wb") as fh:
+                fh.write(b"x\n")
+        elif state in ("symlink-in", "symlink-out", "symlink-file-in", "symlink-file-out"):
+            data = files.get("", b"a file\n")
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            guards[dest] = data
+            os.symlink(dest, path)
+        elif state in ("symlink-dir-in", "symlink-dir-out"):
+            os.mkdir(dest)
+            for name, data in files.items():
+                with open(os.path.join(dest, name), "wb") as fh:
+                    fh.write(data)
+                guards[os.path.join(dest, name)] = data
+            os.symlink(dest, path)
+        elif state == "fifo":
+            os.mkfifo(path)
+        else:
+            raise AssertionError(state)
+        return guards
+
+    def cell(self, role, name, state, moment):
+        """Run one cell; returns the notes the report lists (``untestable`` or ``observed``)."""
+        repo = self.fresh()
+        out_dir = os.path.join(self.work, "outside-%d" % self.n)
+        os.mkdir(out_dir)
+        with open(os.path.join(out_dir, "sentinel"), "wb") as fh:
+            fh.write(b"outside the root\n")
+        self.cell_repo, self.cell_out = repo, out_dir
+        old = dict((t, get(repo, t)) for t in PM_FILES)
+        guards, ctx = {}, {"final": repo, "calls": []}
+        root_arg, note = repo, None
+        want_token = {"file": name, "parent": name, "root": "--root"}[role]
+        if moment == "between":
+            want_token = name if role != "root" else ".claude-plugin/plugin.json"
+        normal = state == {"file": "regular", "parent": "directory", "root": "directory"}[role]  # nothing to change
+        if moment == "check" and not normal:
+            if role == "file":
+                git(repo, "rm", "-q", "--", name)
+                os.makedirs(os.path.dirname(os.path.join(repo, *name.split("/"))), exist_ok=True)  # git rm drops an empty parent
+                guards.update(self.place(os.path.join(repo, *name.split("/")), state, {"": old[name]}))
+            elif role == "parent":
+                kept = dict((n, get(repo, name + "/" + n)) for n in os.listdir(os.path.join(repo, name)))
+                git(repo, "rm", "-q", "-r", "--", name)
+                guards.update(self.place(os.path.join(repo, name), state, kept))
+            else:
+                stray = os.path.join(self.work, "stray-%d" % self.n)
+                if state == "absent":
+                    root_arg = os.path.join(self.work, "nope-%d" % self.n)
+                elif state in ("regular", "symlink-file", "fifo"):
+                    guards.update(self.place(stray, "regular" if state != "fifo" else "fifo", {}))
+                    root_arg = stray
+                    if state == "symlink-file":
+                        root_arg = os.path.join(self.work, "rootlink-%d" % self.n)
+                        os.symlink(stray, root_arg)
+                elif state == "symlink-top":
+                    root_arg = os.path.join(self.work, "rootlink-%d" % self.n)
+                    os.symlink(repo, root_arg)
+                elif state == "symlink-dir-out":
+                    root_arg = os.path.join(self.work, "rootlink-%d" % self.n)
+                    os.symlink(out_dir, root_arg)
+                elif state == "name-0xff":
+                    root_arg = os.path.join(self.work, "r\udcff")  # the byte 0xff, as os.fsdecode spells it
+                    try:
+                        build(root_arg)
+                        ctx["final"] = root_arg
+                    except OSError as e:
+                        if e.errno != errno.EILSEQ:
+                            raise
+                        note = "untestable: this file system refuses the name (EILSEQ); the refused-absent variant ran"
+                else:
+                    raise AssertionError(state)
+            if role != "root" and state != "fifo":
+                self.commit(repo)
+        want = pm_expected(role, name, state, moment)
+        if moment == "check" and role == "root" and state == "name-0xff" and note:
+            want = 1
+        if moment == "between" and not normal:
+            hold = os.path.join(self.work, "moved-%d" % self.n)
+
+            def before(root, rel):
+                if role == "file":
+                    path = os.path.join(root, *name.split("/"))
+                    data = get(root, name)
+                    os.unlink(path)
+                    guards.update(self.place(path, state, {"": data}))
+                elif role == "parent":
+                    kept = dict((n, get(root, name + "/" + n)) for n in os.listdir(os.path.join(root, name)))
+                    os.rename(os.path.join(root, name), hold)
+                    guards.update(self.place(os.path.join(root, name), state, kept))
+                else:
+                    os.rename(root, hold)
+                    if state == "symlink-top":
+                        os.symlink(hold, root)
+                        ctx["final"] = hold
+                    elif state == "symlink-dir-out":
+                        os.symlink(out_dir, root)
+                    elif state == "symlink-file":
+                        guards.update(self.place(hold + "-file", "regular", {}))
+                        os.symlink(hold + "-file", root)
+                    else:
+                        guards.update(self.place(root, state, {}))
+                ctx["calls"].append(rel)
+                ctx["out"] = snapshot(out_dir)
+            real = managed._write
+
+            def wrapped(root, rel, text):
+                hit = (rel == name) if role == "file" else rel.startswith(name + "/") if role == "parent" else True
+                if hit and not ctx["calls"]:
+                    before(root, rel)
+                return real(root, rel, text)
+            patch = mock.patch.object(managed, "_write", wrapped)
+        else:
+            patch = contextlib.nullcontext()
+        ctx.setdefault("out", snapshot(out_dir))
+        snap = snapshot(self.work) if moment == "check" else None
+        self.guard(root_arg)
+        with patch:
+            code, out, err = bounded("path matrix cell %r" % ((role, name, state, moment),),
+                                     lambda: self.call(["0.1.0", "--date", DATE, "--root", root_arg]), 60)
+        if moment == "between" and not normal:
+            self.assertEqual(len(ctx["calls"]), 1, "the wrapper ran once, just before the write")
+        if want is None:
+            self.assertIn(code, (0, 1))
+            return "observed exit %d (verdict not settled by the rule)" % code
+        self.assertEqual(code, want, err)
+        if code == 0:
+            self.assertEqual(err, "")
+            for rel in PM_FILES:
+                path = os.path.join(ctx["final"], *rel.split("/"))
+                self.assertTrue(stat.S_ISREG(os.lstat(path).st_mode), rel)
+                self.assertEqual(get(ctx["final"], rel), expected_new(rel, old[rel]), rel)
+        else:
+            self.assertEqual(out, "")
+            self.assertIn(want_token, err)
+            if moment == "check":
+                self.assertEqual(snapshot(self.work), snap)
+        for dest, data in guards.items():
+            self.assertEqual(get(os.path.dirname(dest), os.path.basename(dest)), data, "a byte went through a link")
+        self.assertEqual(snapshot(out_dir), ctx["out"], "a byte outside the root changed")
+        return note
+
+    def test_generated_path_matrix(self):  # PM: every cell of pm_cells, in the order a fixed seed shuffles them to
+        cells = pm_cells()
+        self.assertEqual(len(cells), len(set(cells)))
+        random.Random(20261128).shuffle(cells)
+        notes = {}
+        for cell in cells:
+            with self.subTest(cell=cell):
+                note = self.cell(*cell)
+                if note:
+                    notes[cell] = note
+        # the cells the rule leaves open and the one this file system cannot hold are named, never silently passed
+        open_cell = ("root", "", "symlink-dir-out", "between")  # a root swapped for a link to another directory
+        self.assertIn(open_cell, notes)
+        self.assertLessEqual(set(notes) - {open_cell}, {("root", "", "name-0xff", "check")})
 
 
 # --------------------------------------------------------------------------- G2: generated changelogs

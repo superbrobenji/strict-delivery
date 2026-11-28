@@ -46,6 +46,7 @@ _DATE = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})\Z")
 _NEAR_MISS = re.compile(r"#+ *unreleased", re.ASCII | re.IGNORECASE)
 _CONFIG_KEY = "framework_version:"
 _CONFIG_LINE = re.compile(r'framework_version: "([^"\r\n]*)"\r?')
+_PRINTABLE_ASCII = re.compile(r"[\x20-\x7e]*")
 _BOM = "\N{ZERO WIDTH NO-BREAK SPACE}"
 _USAGE = "usage: python3 scripts/release.py <X.Y.Z> [--date YYYY-MM-DD] [--root R]"
 
@@ -185,10 +186,36 @@ def _read(root: str, rel: str) -> str:
         raise _Refusal("%s: is not valid UTF-8" % rel) from None
 
 
+class _IntText(str):
+    """The text of a JSON integer literal, kept as text: no ``int()`` runs on file text, so the 4300-digit limit of
+    Python 3.11+ (and ``PYTHONINTMAXSTRDIGITS``) cannot change a verdict. A ``str`` subclass, so ``type(x) is str`` is
+    false for it and a number is still not taken for a version string."""
+
+
+def _parse_int(rel: str):
+    def parse(literal: str) -> _IntText:
+        if len(literal.lstrip("-")) > plugin.MAX_DIGITS:
+            raise _Refusal("%s: holds an integer of more than %d digits" % (rel, plugin.MAX_DIGITS))
+        return _IntText(literal)
+    return parse
+
+
+def _no_repeated_key(rel: str):
+    def pairs(items: list) -> dict:
+        out: dict = {}
+        for key, value in items:
+            if key in out:
+                raise _Refusal('%s: repeated key "%s"' % (rel, key))
+            out[key] = value
+        return out
+    return pairs
+
+
 def _json_object(rel: str, kind: str, text: str):
     """``(data, object)``: the parsed file and the object that holds the version of this repository's plugin."""
     try:
-        data = json.loads(text[1:] if text.startswith(_BOM) else text)
+        data = json.loads(text[1:] if text.startswith(_BOM) else text, parse_int=_parse_int(rel),
+                          object_pairs_hook=_no_repeated_key(rel))
     except (ValueError, RecursionError):
         raise _Refusal("%s: is not valid JSON" % rel) from None
     if type(data) is not dict:
@@ -381,6 +408,9 @@ def _run(argv: list) -> None:
     dirty = gitinfo.dirty_paths(root)
     if dirty:
         raise _Refusal("the tree is not clean: %s" % ", ".join(_safe(p) for p in dirty[:10]))
+    for what, name in (("the current branch", branch), ("base_branch", base)):
+        if _PRINTABLE_ASCII.fullmatch(name) is None:
+            raise _Refusal("%s %s holds a character outside printable ASCII (U+0020-U+007E)" % (what, _shown(name)))
     plan = [(rel, texts[rel], _bumped(rel, kind, texts[rel], current, version)) for rel, kind in RELEASE_SITES]
     plan.append((CHANGELOG, changelog, new_changelog))
     _write_all(root, plan)
