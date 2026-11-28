@@ -1,0 +1,29 @@
+schema: finding/1
+id: F-20261126-t9pu
+status: open
+source: residual final review 1 (residual/final-review-1.md, F-FR-2)
+severity: LOW
+class: "load parity with the pre-request load, rel type through load: a str subclass paths.context (old load returned the row, new load raises TypeError; only member: int, None and bytes fail in os.path.join before and after)"
+siblings: []
+cites:
+  - file: gates/lib/context.py
+    lines: "232"
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+  - file: gates/lib/context.py
+    lines: 240-243
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: residual-batch-1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: d665a6f8e6d6be86118d29c56fc10dadfdd59731
+    by: stream-residual
+review_round: 1
+caused_by_change: true
+dimension: "load parity: rel type"

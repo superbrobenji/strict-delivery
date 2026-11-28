@@ -2746,12 +2746,13 @@ class ProgramBlocksTest(unittest.TestCase):
             bad = other_para(disk(role), label, token, "Budget.")
             self.assertTrue(resume_problems(role, bad), (role, label, token))
 
-    def test_rq_5_5_is_not_contradicted(self):                     # PR15: Block 5 later inserts the drift steps
+    def test_rq_5_5_is_not_contradicted(self):                     # PR15; Task R1.1 (D-R1-Q2 (a)) lands the drift steps
         t = disk("program_controller")
         sync = paragraph(t, "Sync.")
         for text in (sync, paragraph(t, "Merge relay.")):
-            for phrase in ("git push", "push the base", "rebase the", "git merge --ff-only", "check drift", "drift report"):
+            for phrase in ("git push", "push the base", "rebase the", "git merge --ff-only"):
                 self.assertNotIn(phrase, text)
+        self.assertIn("git -C <that checkout> merge --ff-only", sync)
         self.assertIn("never by a rebase", sync)
         self.assertLess(sync.index("merge the base branch into the integration branch"), sync.index("`SYNC` line"))
         self.assertLess(sync.index("combined") if "combined" in sync else sync.index("test the streams together"),
@@ -2783,6 +2784,318 @@ class ProgramBlocksTest(unittest.TestCase):
             self.assertIn(s, scn)
         for t in (pcn, scn):
             self.assertIn("Never return while a child you dispatched still runs", t)
+
+
+# Task R1.1 (Rq-5-5, plan :5075 and :6310; input-domain table task-R1.1-domain.md, decisions D-R1-Q1..Q8): the sync steps in
+# the `Sync.` paragraph of program_controller.md. Every expected value below is typed by hand from the plan, not read from
+# the file or from prose_check.
+SYNC_FETCH = "`git -C <checkout that has the base branch> fetch <remote>`"
+SYNC_FF = "`git -C <that checkout> merge --ff-only <remote>/<base_branch>`"
+SYNC_DRIFT = "`python3 -m gates check drift --program <p>`"
+SYNC_REPORT = "`python3 -m gates drift report --program <p>`"
+SYNC_AGAIN = "run the drift check again"
+SYNC_PHRASES = ("merge --ff-only", "check drift", "drift report", "fetch", "--host", "over", "owner batch")   # D-R1-Q6 (b)
+# (name, regex): counted once in Sync. and zero times in the other paragraphs
+SYNC_FACTS = (
+    ("fetch command", re.escape(SYNC_FETCH)),
+    ("fast-forward command", re.escape(SYNC_FF)),
+    ("first drift check", re.escape(SYNC_DRIFT)),
+    ("drift report command", re.escape(SYNC_REPORT)),
+    ("word fetch", r"\bfetch\b"),
+    ("merge --ff-only", r"merge --ff-only"),
+    ("check drift", r"check drift"),
+    ("drift report", r"drift report"),
+    ("--host", r"--host"),
+    ("over span", r"`over`"),
+    ("over word", r"\bover\b"),
+    ("owner batch", r"owner batch"),
+    ("first update", r"first update the local base branch"),
+    ("own command", r"each as its own command"),
+    ("FAIL lines", r"its FAIL lines list what the sync must fix"),
+    ("run again", r"(?<!never )" + SYNC_AGAIN),
+    ("put over lines", r"(?<!never )put each `over` line in the sync.s owner batch"),
+    ("expect PASS", r"expect PASS"),
+    ("GitHub", r"where the remote is GitHub"),
+    ("before SYNC line", r"all before the `SYNC` line"),
+)
+# the existing sentences of Sync., kept byte for byte (D-R1-Q3 (a), D-R1-Q8 (a)); each once
+SYNC_OLD = (
+    "You mint ids and write the program files and global records only through `program`, `questions` and `decisions`, "
+    "run with the integration worktree as the root, and never by hand.",
+    "You run the syncs: merge the base branch into the integration branch, update each stream branch from the base "
+    "branch by merging it, never by a rebase, test the streams together by merging stream heads into the integration "
+    "branch, and never merge the integration branch into any other branch.",
+    "Refresh only at a sync, when every stream is at a checkpoint.",
+    "After each sync append the `SYNC` line to the sync log.",
+    "At every sync, and whenever you dispatch or reap a child, rewrite the program facts of the status page: "
+    "`Batch-cut:`, `Agent:` and `Integration:`.",
+    "You never implement and never review.",
+)
+# sha256 of the first three lines and of each other paragraph at the commit before R1.1 (D-R1-Q3 (a)), computed by hashlib
+# and again by shasum on the file's lines
+SYNC_UNCHANGED = (
+    ("first three lines", "d170dd1a78322108e0a9a2197f08f1dc2931e8b1cdcfcb59f44aaebdcd7ec284"),
+    ("Verification method.", "cdfe5f35952a3d355e601ffc1bce43eec51285cf5071e48bd1e4205c140a89a2"),
+    ("Dispatch discipline.", "249234fbe03de3acd8c4034c48ae49af6b02033603e4d4e370c5e526250d14c9"),
+    ("Merge relay.", "48bc6e37f950a76e88635f6d97ffa3828f3b48a3e9c6df1a03fcc48fafeaebeb"),
+    ("Owner-only decisions.", "c1a4235f2f6d0c3cfb1482b4db6d5ea67151cd261190cb957e07f96aebf8f4df"),
+    ("Continuation.", "f41686f6e73c8aafd2a03404fcd5c1f1faf14d30708fef3d54f6f805f598d8e5"),
+    ("Budget.", "e7ba7cf9490b69535c51f75708ae6be6aa6fbad3cc4929c14666e1d59cb566c6"),
+    ("Background work.", "7b806027a546591d490568e32e4f1c96437ec9c2a45855dfadde189b69d17c74"),
+    ("Report contract.", "42ed636bfe503c4ef9e596474c2ea5ab4a9a89bb2e09ce587a8249225a1eb4d7"),
+)
+
+
+def sync_step_problems(text):
+    """The Task R1.1 checks on a program_controller text: each Rq-5-5 fact once in Sync. and nowhere else, the order of the
+    steps, the two commands separate, no fact beyond Rq-5-5, each existing Sync. sentence kept once."""
+    out = []
+    try:
+        sync = paragraph(text, "Sync.")
+    except ValueError:
+        return ["Sync. is missing"]
+    rest = text.replace(sync, "")
+    for name, rx in SYNC_FACTS:
+        n, m = len(re.findall(rx, sync)), len(re.findall(rx, rest))
+        if n != 1:
+            out.append("%s: %d times in Sync." % (name, n))
+        if m:
+            out.append("%s: %d times outside Sync." % (name, m))
+    for s in SYNC_OLD:
+        if sync.count(s) != 1:
+            out.append("existing sentence changed: %s" % s[:30])
+    for phrase in SYNC_PHRASES:
+        if not whole_token(phrase, sync):
+            out.append("%s is not a whole token" % phrase)
+    order = (SYNC_FETCH, SYNC_FF, SYNC_DRIFT, SYNC_OLD[1], SYNC_AGAIN, "--host", "expect PASS", SYNC_REPORT, "`over`",
+             "owner batch", "`SYNC` line", SYNC_OLD[2], SYNC_OLD[3])
+    try:
+        at = [sync.index(s) for s in order]
+        if at != sorted(set(at)):
+            out.append("steps out of order")
+        if sync.index("`SYNC` line") <= sync.index(SYNC_REPORT):         # D-R1-Q4 (a): the report runs before the SYNC line
+            out.append("the first SYNC line comes before drift report")
+        between = sync[sync.index(SYNC_FETCH) + len(SYNC_FETCH):sync.index(SYNC_FF)]
+        if between != " and then " or "&&" in sync:
+            out.append("fetch and merge are not two separate commands")
+    except ValueError as e:
+        out.append("missing: %s" % e)
+    for extra in ("git pull", "git push", "branch.<", ".remote", "no owner approval"):                 # S11
+        if extra in sync:
+            out.append("fact beyond Rq-5-5: %s" % extra)
+    return out
+
+
+def sync_with(text, fn):
+    return in_para(text, "Sync.", fn)
+
+
+class SyncStepsTest(unittest.TestCase):
+    """Task R1.1 rows S1-S14, O1-O12, K1-K10, F1-F12, V1-V3 of task-R1.1-domain.md."""
+
+    def test_program_controller_names_sync_steps(self):                   # S1 S2 S6 S9 K1 K2 K9 K10, plan :6310
+        t = disk("program_controller")
+        sync = paragraph(t, "Sync.")
+        for phrase in ("merge --ff-only", "check drift", "drift report"):
+            self.assertTrue(whole_token(phrase, sync), phrase)
+        for phrase in SYNC_PHRASES:
+            self.assertTrue(whole_token(phrase, sync), phrase)
+        for span in (SYNC_FETCH, SYNC_FF, SYNC_DRIFT, SYNC_REPORT, "`--host`", "`over`"):
+            self.assertEqual(sync.count(span), 1, span)
+        self.assertEqual(sync_step_problems(t), [])
+        self.assertEqual(pin_problems("program_controller", t), [])
+        self.assertEqual(resume_problems("program_controller", t), [])
+        self.assertEqual(key_problems("program_controller", t), [])
+
+    def test_sync_steps_each_own_command(self):                            # S3
+        t = disk("program_controller")
+        sync = paragraph(t, "Sync.")
+        self.assertIn(SYNC_FETCH + " and then " + SYNC_FF + ", each as its own command", sync)
+        for name, a, b in (("&&", SYNC_FETCH + " and then ", SYNC_FETCH + " && "),
+                           ("semicolon in between", SYNC_FETCH + " and then ", SYNC_FETCH + "; then "),
+                           ("one span", SYNC_FETCH + " and then `git", SYNC_FETCH[:-1] + " && git")):
+            with self.subTest(case=name):
+                self.assertTrue(sync_step_problems(sync_with(t, lambda p: p.replace(a, b))))
+        self.assertTrue(sync_step_problems(sync_with(t, lambda p: p.replace(", each as its own command", ""))))
+
+    def test_sync_steps_order(self):                                        # S4 S5 S7 S9 (D-R1-Q1 (b), D-R1-Q4 (a))
+        t = disk("program_controller")
+        sync = paragraph(t, "Sync.")
+        ordered = (SYNC_FETCH, SYNC_FF, SYNC_DRIFT, "merge the base branch into the integration branch",
+                   "never merge the integration branch into any other branch", SYNC_AGAIN, SYNC_REPORT, "`SYNC` line",
+                   "Refresh only at a sync")
+        at = [sync.index(s) for s in ordered]
+        self.assertEqual(at, sorted(at))
+        self.assertEqual(sync.count("`SYNC` line"), 2)
+        self.assertLess(sync.index("`SYNC` line"), sync.index("After each sync append the `SYNC` line"))
+        swapped = t.replace(SYNC_FETCH, "@@F@@").replace(SYNC_FF, SYNC_FETCH).replace("@@F@@", SYNC_FF)
+        self.assertNotEqual(swapped, t)
+        self.assertTrue(sync_step_problems(swapped))
+        swapped = t.replace(SYNC_DRIFT, "@@F@@").replace(SYNC_REPORT, SYNC_DRIFT).replace("@@F@@", SYNC_REPORT)
+        self.assertTrue(sync_step_problems(swapped))
+        late = sync_with(t, lambda p: p.replace(" and put each", " all before the `SYNC` line and put each", 1))
+        self.assertTrue(sync_step_problems(late))
+
+    def test_sync_steps_each_fact_once(self):                               # S6-S10 S12 K7
+        t = disk("program_controller")
+        sync = paragraph(t, "Sync.")
+        for name, rx in SYNC_FACTS:
+            with self.subTest(fact=name):
+                self.assertEqual(len(re.findall(rx, sync)), 1)
+                self.assertEqual(len(re.findall(rx, t.replace(sync, ""))), 0)
+        block_a = sync[sync.index("At each sync, first update"):sync.index("You run the syncs:")]
+        block_b = sync[sync.index("After the merges and updates"):sync.index("Refresh only at a sync")]
+        self.assertTrue(block_a and block_b)
+        for frag in (block_a, block_b):
+            self.assertTrue(sync_step_problems(sync_with(t, lambda p: p.replace(frag, frag + frag))))
+        self.assertTrue(sync_step_problems(sync_with(t, lambda p: p.replace(block_a, "").replace(block_b, ""))))
+
+    def test_sync_steps_no_extra_facts(self):                               # S11
+        t = disk("program_controller")
+        for extra in ("`git pull`", "`git push`", "Here `<remote>` is `branch.<base_branch>.remote`.",
+                      "There is no owner approval."):
+            with self.subTest(extra=extra):
+                self.assertTrue(sync_step_problems(sync_with(t, lambda p: p.replace("You never implement",
+                                                                                       extra + " You never implement"))))
+
+    def test_sync_steps_in_sync_paragraph_only(self):                       # S13
+        t = disk("program_controller")
+        for phrase in ("merge --ff-only", "check drift", "drift report", "fetch", "--host", "`over`", "owner batch"):
+            with self.subTest(phrase=phrase):
+                moved = other_para(t, "Sync.", phrase, "Merge relay.")
+                self.assertTrue(sync_step_problems(moved))
+                self.assertEqual(block_problems(moved.encode("ascii"), "program_controller"), [])   # only this test names it
+        self.assertEqual(labels(t), list(LABELS["program_controller"]))
+        new_para = t.replace("\n\nMerge relay. ", "\n\nSync steps. x\n\nMerge relay. ")
+        self.assertIn("labels", kinds(new_para.encode("ascii"), "program_controller"))
+
+    def test_sync_existing_sentences_kept(self):                            # S14
+        t = disk("program_controller")
+        sync = paragraph(t, "Sync.")
+        for s in SYNC_OLD:
+            with self.subTest(sentence=s[:30]):
+                self.assertEqual(sync.count(s), 1)
+                self.assertTrue(sync_step_problems(sync_with(t, lambda p: p.replace(s, s[:-1] + " now."))))
+
+    def test_other_paragraphs_unchanged(self):                              # O1-O12
+        import hashlib
+        t = disk("program_controller")
+        raw = t.encode("ascii")
+        self.assertEqual(hashlib.sha256("\n".join(t.split("\n")[:3]).encode("ascii")).hexdigest(), SYNC_UNCHANGED[0][1])
+        for label, want in SYNC_UNCHANGED[1:]:
+            with self.subTest(label=label):
+                self.assertEqual(hashlib.sha256(paragraph(t, label).encode("ascii")).hexdigest(), want)
+                bad = in_para(t, label, lambda p: p + " x")
+                self.assertNotEqual(hashlib.sha256(paragraph(bad, label).encode("ascii")).hexdigest(), want)
+        self.assertEqual(len(SYNC_UNCHANGED), 9)                             # first three lines and eight paragraphs
+        self.assertEqual(labels(t), list(LABELS["program_controller"]))            # O10
+        self.assertEqual(len(labels(t)), 9)
+        self.assertTrue(raw.endswith(b"\n") and not raw.endswith(b"\n\n") and b"\r" not in raw)   # O11
+        self.assertEqual(t.count("\n\n"), 10)                                # first line, intro, nine paragraphs
+        self.assertEqual(t.split("\n")[0], "# Strict block: program_controller")
+
+    def test_sync_steps_phrase_mutants(self):                               # K3 K4 K5 K6 K8
+        t = disk("program_controller")
+        for phrase in SYNC_PHRASES:
+            for name, fn in (("deleted", lambda p: p.replace(phrase, "zzz")),
+                             ("glued before", lambda p: p.replace(phrase, "x" + phrase, 1)),
+                             ("glued after", lambda p: p.replace(phrase, phrase + "x", 1)),
+                             ("glued dash", lambda p: p.replace(phrase, phrase + "-x", 1)),
+                             ("underscore before", lambda p: p.replace(phrase, "_" + phrase, 1)),
+                             ("upper", lambda p: p.replace(phrase, phrase.upper(), 1))):
+                with self.subTest(phrase=phrase, case=name):
+                    self.assertTrue(sync_step_problems(sync_with(t, fn)))
+            with self.subTest(phrase=phrase, case="moved"):
+                self.assertTrue(sync_step_problems(other_para(t, "Sync.", phrase, "Budget.")))
+        for name, a, b in (("never update", "first update the local base branch", "never update the local base branch"),
+                           ("expect FAIL", "expect PASS", "expect FAIL"),
+                           ("not again", SYNC_AGAIN, "never " + SYNC_AGAIN),
+                           ("no batch", "put each `over` line in", "never put each `over` line in")):
+            with self.subTest(case=name):
+                self.assertTrue(sync_step_problems(sync_with(t, lambda p: p.replace(a, b))))
+
+    def test_sync_steps_forbidden_mutants(self):                            # F1-F5 F7 F8 F11 F12
+        t = disk("program_controller")
+
+        def plus(word):
+            return sync_with(t, lambda p: p.replace("You never implement", word + " You never implement"))
+        for word, name in (("Opus", "model-name"), ("sonnet", "model-name"), ("HAIKU", "model-name"),
+                           ("fable", "model-name"), ("opus4", "model-name"), ("benji", "owner-handle"),
+                           ("superbrobenji", "owner-handle"), ("/home/u/x/run", "absolute-path"),
+                           ("/Users/benji/x/run", "absolute-path"), ("test_*.py", "test-filename"),
+                           ("*.spec.ts", "test-filename"), ("lap-timer", "lap-timer"), ("D12", "spec-clause"),
+                           ("R5-X-1", "row-id"), ("tools/gates", "old-paths"), ("firmware", "hardware"),
+                           ("DEC-12", "old-decision-number")):
+            with self.subTest(word=word):
+                self.assertIn(name, [h[0] for h in forbidden_hits(plus(word))])
+        for ok in ("Sonnets", "/usr/bin/python3", "~/Users/x/y/z"):
+            with self.subTest(word=ok):
+                self.assertEqual(forbidden_hits(plus(ok)), [])
+        for mark, kind in (("<b>", "angle bracket outside code span"), ("\\x", "backslash outside code span"),
+                           ("a](b", "link syntax"), ("a]: b", "link syntax"), ("http://x", "extended autolink"),
+                           ("www.x", "extended autolink"), ("`unpaired", "multi-line code span")):
+            with self.subTest(mark=mark):
+                self.assertIn((9, "refused: " + kind), pc.placeholder_hits(plus(mark)))
+        sync = paragraph(t, "Sync.")                                        # F7: every placeholder sits in a code span
+        self.assertEqual(pc.placeholder_hits(t), [])
+        self.assertNotIn("<", re.sub(r"`[^`]*`", "", sync))
+        for placeholder in ("<remote>", "<base_branch>", "<p>", "<checkout that has the base branch>", "<that checkout>"):
+            self.assertIn(placeholder, sync)
+        self.assertTrue(pc.placeholder_hits(sync_with(t, lambda p: p.replace(SYNC_FETCH, SYNC_FETCH.replace("`", "")))))
+        self.assertIsNone(re.search("you implement|you review the", t, re.I))                  # F11
+        for phrase in ("git push", "push the base", "rebase the", "git merge --ff-only"):     # F12
+            self.assertNotIn(phrase, sync)
+            self.assertNotIn(phrase, paragraph(t, "Merge relay."))
+        self.assertIn("git -C <that checkout> merge --ff-only", sync)
+        self.assertEqual(forbidden_hits(t), [])
+
+    def test_sync_steps_char_mutants(self):                                 # F6
+        t = disk("program_controller")
+        for name, ch, block_kind in (("tab", "\t", "control"), ("CR", "\r", "line-ending"), ("DEL", "\x7f", "control"),
+                                     ("NUL", "\x00", "control"), ("U+00A7", "§", "encoding"),
+                                     ("U+00E9", "é", "encoding"), ("U+00A0", " ", "encoding")):
+            with self.subTest(char=name):
+                bad = sync_with(t, lambda p: p.replace("You never implement", ch + "You never implement"))
+                self.assertTrue(any(x.startswith(block_kind) for x in block_problems(bad.encode("utf-8"), "program_controller")))
+                if ch != "§":
+                    self.assertEqual([h[0] for h in forbidden_hits(bad)], [pc.CHAR_KIND])
+
+    def test_sync_steps_digit_runs_same(self):                              # V1a (no int() on text)
+        t = disk("program_controller")
+        got = []
+        for n in (1, 4300, 4301):
+            with self.subTest(digits=n):
+                one = []
+                for old, new in (("`--host`", "`--host`" + "9" * n), ("gates drift report", "gates drift report" + "9" * n),
+                                 ("<remote>/<base_branch>", "<remote" + "9" * n + ">/<base_branch>")):
+                    bad = sync_with(t, lambda p: p.replace(old, new))
+                    one.append((block_problems(bad.encode("ascii"), "program_controller"), forbidden_hits(bad),
+                                pc.placeholder_hits(bad), key_problems("program_controller", bad)))
+                    self.assertEqual(one[-1], ([], [], [], []))
+                got.append(one)
+        self.assertEqual(got[0], got[1])
+        self.assertEqual(got[1], got[2])
+        glued = sync_with(t, lambda p: p.replace("gates drift report", "gates drift report" + "9" * 4301))
+        self.assertFalse(whole_token("drift report", paragraph(glued, "Sync.")))
+        self.assertTrue(sync_step_problems(glued))
+
+    def test_sync_steps_version_code_point_refused(self):                   # V2a V2b
+        t = disk("program_controller")
+        for cp in (0x2C2F, 0x0870, 0x1FAE8, 0xA7C0, 0x017F, 0x212A):
+            with self.subTest(cp="U+%04X" % cp):
+                bad = sync_with(t, lambda p: p.replace("You never implement", "s" + chr(cp) + "onnet You never implement"))
+                self.assertTrue(any(x.startswith("encoding") for x in block_problems(bad.encode("utf-8"), "program_controller")))
+                self.assertEqual(forbidden_hits(bad), [(pc.CHAR_KIND, 9, "U+%04X" % cp)])
+                self.assertEqual(pc.placeholder_hits(bad), [(9, "refused: " + pc.CHAR_KIND)])
+                with self.assertRaises(ValueError):
+                    paragraph(bad, "Sync.")
+
+    def test_sync_steps_source_has_no_unicode_table_calls(self):            # V2c V3
+        import inspect
+        src = inspect.getsource(SyncStepsTest) + inspect.getsource(sync_step_problems)
+        for part in (("is", "printable"), ("uni", "codedata"), ("Base", "ExceptionGroup"), ("split", "lines"),
+                     (".lo", "wer("), ("\\", "w")):
+            self.assertNotIn("".join(part), src, part)
 
 
 if __name__ == "__main__":

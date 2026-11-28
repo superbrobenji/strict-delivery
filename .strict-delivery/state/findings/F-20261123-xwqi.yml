@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261123-xwqi
+status: open
+source: 6E.1 fix review (records/6E.1-review-5-fix.md, finding 2)
+severity: LOW
+class: "input-domain table verdicts superseded by decisions: task-6E.1-domain.md RN14, RN15, RN16 state the pre-decision probe verdicts (TypeError, IndexError, ValueError, cwd=None); D-1-Q5 (a) and D-1-Q4 (a) make them GateError, as the tests assert"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6E.1
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f7e7ea2534c786d7be1fe36eef92129fd515ff40
+    by: stream-records
+review_round: 6
+caused_by_change: false
+dimension: table verdict column

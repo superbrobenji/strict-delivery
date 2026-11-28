@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-29yc
+status: open
+source: PR-5b final review 2 (records/PR-5b-final-review-2.md, F-C; out-of-repo records)
+severity: LOW
+class: "input-domain table test column vs test defs (same class as F-20261123-npq3): task-6K.1-domain.md RA10-RA12, V1b, V1c, V3; task-5b.1-domain.md LP30; task-5b.2-domain.md V8, V15, I11, I14, O3, V1a-c, V3b"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e15bb062c9f3545ee63be9dfb9cd8e7d3b9722ce
+    by: stream-records
+review_round: 6
+caused_by_change: false
+dimension: input-domain-coverage

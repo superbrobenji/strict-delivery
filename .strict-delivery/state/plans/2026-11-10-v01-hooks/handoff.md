@@ -1,5 +1,6 @@
 ---
 schema: handoff/1
+block: 5a
 ---
 # Stream hooks handoff (program 20261110-v01, sub-blocks 3b and 5a)
 

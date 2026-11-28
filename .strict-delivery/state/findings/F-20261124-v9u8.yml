@@ -1,0 +1,19 @@
+schema: finding/1
+id: F-20261124-v9u8
+status: open
+source: "PR-5b final review 2 (records/PR-5b-final-review-2.md, U-1; pre-existing on main 855b4aa); owner: the program controller"
+severity: MEDIUM
+class: "tracked handoff.md failing handoff/1, so SessionStart prints a FAIL handoff line and no resume line, and INDEX reads their body spec lists as Todo: 2026-10-31-strict-delivery-framework-b, 2026-11-10-v01-hooks, 2026-11-10-v01-runtime (the framework handoff is F-20261124-cfhv)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: roadmap
+  plan: 2026-10-31-strict-delivery-framework
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e15bb062c9f3545ee63be9dfb9cd8e7d3b9722ce
+    by: stream-records

@@ -26,23 +26,24 @@ from tests.helpers import (E128, TOP, GitIsolatedTestCase, check_root_forms, com
                            minimal_config, root_forms, write_record)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIVE = ("schema", "register", "decisions", "claims", "cites")
-BASE_ONES = ("register", "decisions", "claims")
+SIX = ("schema", "register", "decisions", "claims", "cites", "evidence")   # the gates of standard and strict
+BASE_ONES = ("register", "decisions", "claims", "evidence")
 CONFIG = ".strict-delivery/config.yml"
 UNSET = object()
 HAS_EG = hasattr(builtins, "ExceptionGroup")
-PASS5 = "".join("PASS %s.ok\n" % g for g in FIVE)
+PASS6 = "".join("PASS %s.ok\n" % g for g in SIX)
 VERSION_PASS = "PASS run_all.version\n"   # Task 3d.1: the last line; config framework_version "0.0.0" = the plugin's
-# the 32 lines the five real gates give on a valid strict fixture repository, written by hand (as in O4)
+# the 43 lines the six real gates give on a valid strict fixture repository, written by hand (as in O4)
 REAL_PASS = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
-             "PASS schema.request\nPASS schema.streams\nPASS schema.status\nPASS schema.sync-log\nPASS schema.merged-log\nPASS schema.breakdown\n"
-             "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\n"
+             "PASS schema.request\nPASS schema.streams\nPASS schema.context\nPASS schema.status\nPASS schema.sync-log\nPASS schema.merged-log\nPASS schema.breakdown\n"
+             "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\nPASS schema.finding-index\nPASS schema.mutation-transcript\nPASS schema.review-report\n"
              "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
              "PASS register.evidence\nPASS register.epic\nPASS register.report\n"
              "PASS decisions.schema\nPASS decisions.store\nPASS decisions.base\nPASS decisions.landed\n"
              "PASS decisions.refs\nPASS decisions.open-ref\nPASS decisions.scan\n"
              "PASS claims.schema\nPASS claims.store\nPASS claims.document\nPASS claims.stale\nPASS claims.base\n"
-             "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n")
+             "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n"
+             "PASS evidence.config\nPASS evidence.scope\n")
 # B6: the values of the class "starts with a dash (or is a control)"; the last two are the table's controls
 DASH_VALUES = ("-r", "-x", "-h", "--root", "--base", "--json", "--x=y", "-", "--", "-1", "^x")
 
@@ -113,7 +114,7 @@ class RunAllCase(GitIsolatedTestCase):
         return check
 
     def all_pass(self, **lines):
-        for g in FIVE:
+        for g in SIX:
             self.fake(g, self.recorder(g, lines.get(g)))
 
     def called(self):
@@ -163,8 +164,8 @@ class RunAllCase(GitIsolatedTestCase):
 class ConstantsTest(unittest.TestCase):
     def test_profile_gates_literal(self):  # K1
         want = {"light": ("schema", "register", "decisions"),
-                "standard": ("schema", "register", "decisions", "claims", "cites"),
-                "strict": ("schema", "register", "decisions", "claims", "cites")}
+                "standard": ("schema", "register", "decisions", "claims", "cites", "evidence"),
+                "strict": ("schema", "register", "decisions", "claims", "cites", "evidence")}
         self.assertIs(type(run_all.PROFILE_GATES), dict)
         self.assertEqual(run_all.PROFILE_GATES, want)
         self.assertEqual(set(run_all.PROFILE_GATES), {"light", "standard", "strict"})
@@ -173,20 +174,66 @@ class ConstantsTest(unittest.TestCase):
 
     def test_base_gates_literal(self):  # K2
         self.assertIs(type(run_all.BASE_GATES), tuple)
-        self.assertEqual(run_all.BASE_GATES, ("decisions", "register", "claims"))
+        self.assertEqual(run_all.BASE_GATES, ("decisions", "register", "claims", "evidence"))
 
     def test_profile_gates_registered(self):  # K3
         names = {g for v in run_all.PROFILE_GATES.values() for g in v}
-        self.assertEqual(names, set(FIVE))
+        self.assertEqual(names, set(SIX))
         for g in names:
             self.assertIn(g, gates_main.GATES)
 
     def test_excluded_gates_absent(self):  # K4
         names = {g for v in run_all.PROFILE_GATES.values() for g in v}
-        for g in ("dispatch", "streams", "context", "drift", "checkpoint", "cleanup", "index", "evidence",
-                  "run_all"):
+        for g in ("dispatch", "streams", "context", "drift", "checkpoint", "cleanup", "index", "run_all"):   # Rq-6-3: evidence joined
             self.assertNotIn(g, names)
         self.assertNotIn("run_all", gates_main.GATES)
+
+
+class LazyEvidenceTest(unittest.TestCase):
+    def loaded(self, body):
+        src = "import sys\n" + body + "sys.stdout.write('LOADED=%s' % ('gates.gate_evidence' in sys.modules))\n"
+        p = subprocess.run([sys.executable, "-c", src], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return p.stdout.decode()
+
+    def test_gate_evidence_imported_lazily(self):  # R3 (Rq-6-1)
+        self.assertTrue(self.loaded("import gates.__main__\n").endswith("LOADED=False"))
+        self.assertTrue(self.loaded("import gates.run_all\n").endswith("LOADED=False"))
+        self.assertTrue(self.loaded("from gates import __main__ as m\nm.main(['check', 'evidence', '--bogus'])\n")
+                        .endswith("LOADED=True"))
+
+
+class EvidenceProfileTest(RunAllCase):
+    """Task R2.3, Rq-6-3: ``evidence`` joins standard, strict and BASE_GATES, never light (literals written by hand)."""
+
+    def test_evidence_in_standard_strict_and_base(self):  # T1, T2
+        self.assertEqual(run_all.PROFILE_GATES["light"], ("schema", "register", "decisions"))
+        for profile in ("standard", "strict"):
+            self.assertEqual(run_all.PROFILE_GATES[profile],
+                             ("schema", "register", "decisions", "claims", "cites", "evidence"))
+        self.assertEqual(run_all.BASE_GATES, ("decisions", "register", "claims", "evidence"))
+
+    def test_light_profile_does_not_call_evidence(self):  # T3
+        self.all_pass()
+        root = self.fixture("light")
+        self.expect(["--root", root], ok_lines("schema", "register", "decisions"), 0, ["schema", "register", "decisions"])
+        self.assertNotIn("evidence", self.called())
+
+    def test_standard_and_strict_call_evidence_last(self):  # T1 through the production path
+        self.all_pass()
+        for profile in ("standard", "strict"):
+            with self.subTest(profile=profile):
+                del self.seen[:]
+                root = self.fixture(profile)
+                self.expect(["--root", root], PASS6, 0, ["schema", "register", "decisions", "claims", "cites", "evidence"])
+
+    def test_evidence_lines_on_a_real_fixture(self):  # R1 through run_all, real gates
+        root = self.fixture("strict")
+        out, code = self.run_main(["--root", root])
+        self.assertEqual(code, 0)
+        self.assertIn("PASS evidence.config\nPASS evidence.scope\n", out)
+        light = self.fixture("light")
+        out, code = self.run_main(["--root", light])
+        self.assertNotIn("evidence.", out)
 
 
 class ProfileTest(RunAllCase):
@@ -199,12 +246,12 @@ class ProfileTest(RunAllCase):
     def test_standard_runs_profile_gates_in_order(self):  # P2
         self.all_pass()
         root = self.fixture("standard")
-        self.expect(["--root", root], PASS5, 0, list(FIVE))
+        self.expect(["--root", root], PASS6, 0, list(SIX))
 
     def test_strict_runs_profile_gates_in_order(self):  # P3
         self.all_pass()
         root = self.fixture("strict")
-        self.expect(["--root", root], PASS5, 0, list(FIVE))
+        self.expect(["--root", root], PASS6, 0, list(SIX))
 
     def test_bad_profile_is_input_fail(self):  # P4
         reason = ".strict-delivery/config.yml: profile: must be one of light, standard, strict"
@@ -224,7 +271,7 @@ class GateListTest(RunAllCase):
         self.expect(["--root", root],
                     ok_lines("schema", "register", "decisions")
                     + "FAIL run_all.missing.claims: not registered in gates.__main__.GATES\n"
-                    + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                    + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_import_failure_is_missing(self):  # G2
         root = self.fixture()
@@ -249,8 +296,8 @@ class GateListTest(RunAllCase):
                     reason = "import of %s raised %s" % (name, why)
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
-                            + "FAIL run_all.missing.claims: %s\n" % reason + ok_lines("cites"), 1,
-                            ["schema", "register", "decisions", "cites"])
+                            + "FAIL run_all.missing.claims: %s\n" % reason + ok_lines("cites", "evidence"), 1,
+                            ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_import_keyboardinterrupt_propagates(self):  # G3
         root = self.fixture()
@@ -286,7 +333,7 @@ class GateListTest(RunAllCase):
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
                             + "FAIL run_all.missing.claims: reading %s.check raised SystemExit\n" % mod.__name__
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_check_read_baseexception_propagates(self):  # F-1: reading module.check
         root = self.fixture()
@@ -320,7 +367,7 @@ class GateListTest(RunAllCase):
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
                             + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % modname
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_module_not_found_without_a_module_name_is_import_failure(self):  # F-5: e.name None or not a module
         root = self.fixture()
@@ -335,7 +382,7 @@ class GateListTest(RunAllCase):
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
                             + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % modname
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def package_module(self, body, init=""):
         """A module ``<package>.gate_x`` as files on the scratch import path; its dotted name is returned."""
@@ -375,8 +422,8 @@ class GateListTest(RunAllCase):
                 self.put(gates_main.GATES, "claims", name)
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
-                            + "FAIL run_all.missing.claims: %s\n" % reason + ok_lines("cites"), 1,
-                            ["schema", "register", "decisions", "cites"])
+                            + "FAIL run_all.missing.claims: %s\n" % reason + ok_lines("cites", "evidence"), 1,
+                            ["schema", "register", "decisions", "cites", "evidence"])
 
     def spec_finder(self, name, second):
         """A meta_path finder: the first lookup of ``name`` raises ``ModuleNotFoundError(name=name)``; the second
@@ -444,7 +491,7 @@ class GateListTest(RunAllCase):
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
                             + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % name
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
                 os.environ.pop("TESTS_BROKEN_PARENT", None)
 
     def test_find_spec_systemexit_is_import_failure(self):  # G2b (v), SystemExit as in G2 and G3
@@ -461,7 +508,7 @@ class GateListTest(RunAllCase):
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
                             + "FAIL run_all.missing.claims: import of %s raised ModuleNotFoundError\n" % name
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def assert_find_spec_baseexception_propagates(self, members):
         """G2b (v) x G12: a non-Exception BaseException raised inside ``find_spec`` propagates out of both entry
@@ -505,8 +552,8 @@ class GateListTest(RunAllCase):
         root = self.fixture()
         self.expect(["--root", root],
                     ok_lines("schema", "register", "decisions")
-                    + "FAIL run_all.missing.claims: %s has no check\n" % mod.__name__ + ok_lines("cites"), 1,
-                    ["schema", "register", "decisions", "cites"])
+                    + "FAIL run_all.missing.claims: %s has no check\n" % mod.__name__ + ok_lines("cites", "evidence"), 1,
+                    ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_check_attribute_read_raising_is_missing(self):  # G4 sibling: reading check raises
         self.all_pass()
@@ -518,7 +565,7 @@ class GateListTest(RunAllCase):
         self.expect(["--root", root],
                     ok_lines("schema", "register", "decisions")
                     + "FAIL run_all.missing.claims: reading %s.check raised ValueError\n" % mod.__name__
-                    + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                    + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_uncallable_check_is_missing(self):  # G5
         root = self.fixture()
@@ -530,7 +577,7 @@ class GateListTest(RunAllCase):
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions")
                             + "FAIL run_all.missing.claims: %s.check is not callable (%s)\n" % (mod.__name__, tname)
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_raising_gate_fails(self):  # G6
         root = self.fixture()
@@ -548,7 +595,7 @@ class GateListTest(RunAllCase):
                 self.fake("claims", boom)
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions") + "FAIL claims.input: %s\n" % why
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_gate_keyboardinterrupt_propagates(self):  # G7
         root = self.fixture()
@@ -620,7 +667,7 @@ class GateListTest(RunAllCase):
         root = self.fixture()
         self.expect(["--root", root],
                     ok_lines("schema", "register", "decisions") + "FAIL claims.empty: the gate produced no lines\n"
-                    + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                    + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_non_result_fails(self):  # G9
         root = self.fixture()
@@ -635,7 +682,7 @@ class GateListTest(RunAllCase):
                 self.fake("claims", lambda args, value=value: value)
                 self.expect(["--root", root],
                             ok_lines("schema", "register", "decisions") + "FAIL claims.input: %s\n" % why
-                            + ok_lines("cites"), 1, ["schema", "register", "decisions", "cites"])
+                            + ok_lines("cites", "evidence"), 1, ["schema", "register", "decisions", "cites", "evidence"])
 
     def test_lines_kept_verbatim_in_order(self):  # G10
         class Bad(str):
@@ -655,19 +702,19 @@ class GateListTest(RunAllCase):
                 + r"PASS r.lit\\n" + "\n" + r"FAIL r.two: a\nb\\n" + "\n"
                 + r"FAIL d.bad: rea\\son" + "\n" + "PASS d.after\n"
                 + "PASS 7\nFAIL 9: 5\n"
-                + "PASS cites.a\nPASS cites.b\nFAIL cites.c: z\n")
-        self.expect(["--root", root], want, 1, list(FIVE))
+                + "PASS cites.a\nPASS cites.b\nFAIL cites.c: z\nPASS evidence.ok\n")
+        self.expect(["--root", root], want, 1, list(SIX))
 
     def test_each_gate_gets_fresh_args(self):  # G11
         root = self.fixture()
-        for mutator in ("schema", "register", "decisions", "claims"):
+        for mutator in ("schema", "register", "decisions", "claims", "evidence"):
             with self.subTest(mutator=mutator):
                 del self.seen[:]
-                for g in FIVE:
+                for g in SIX:
                     self.fake(g, self.recorder(g, mutate=(g == mutator)))
                 self.run_main(["--root", root, "--base", "x"])
                 got = dict(self.seen)
-                for g in FIVE:
+                for g in SIX:
                     want = ["--root=" + root] + (["--base=x"] if g in BASE_ONES else [])
                     self.assertEqual(got[g], want, g)
 
@@ -687,7 +734,7 @@ class BaseTest(RunAllCase):
         self.all_pass()
         root = self.fixture()
         self.run_main(["--root", root])
-        self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in FIVE})
+        self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in SIX})
 
     def test_base_forwarded_exactly(self):  # B3
         self.all_pass()
@@ -708,7 +755,7 @@ class BaseTest(RunAllCase):
     def test_absent_base_ref_real_gates(self):  # B4
         root = self.fixture()
         want = ""
-        for g in FIVE:
+        for g in SIX:
             alone, _ = self.sub(["--root", root] + (["--base", "nosuchref"] if g in BASE_ONES else []),
                                 command=("check", g))
             want += alone
@@ -765,7 +812,7 @@ class BaseTest(RunAllCase):
                         with mock.patch.dict(os.environ, env):
                             out, code = self.run_main(argv)
                         alone = ""
-                        for g in FIVE:
+                        for g in SIX:
                             text, rc = self.alone_in_process(g, argv, env)
                             self.assertEqual(rc, 0, g)
                             alone += text
@@ -785,13 +832,13 @@ class BaseTest(RunAllCase):
             with self.subTest(value=value):
                 why = "ref must not start with '%s'" % ("^" if value.startswith("^") else "-")   # spec 13, spec:648
                 want = (schema + "".join("FAIL %s.input: %s\n" % (g, why) for g in ("register", "decisions", "claims"))
-                        + cites)
+                        + cites + "FAIL evidence.input: %s\n" % why)
                 out, code = self.run_main(["--root", root, "--base=" + value])
                 self.assertEqual(out, want + VERSION_PASS)
                 self.assertEqual(code, 1)
                 self.assertNotIn("expected one argument", out)
                 alone = ""
-                for g in FIVE:
+                for g in SIX:
                     text, rc = self.alone_in_process(
                         g, ["--root", root] + (["--base=" + value] if g in BASE_ONES else []))
                     alone += text
@@ -799,6 +846,75 @@ class BaseTest(RunAllCase):
                 text, rc = self.sub(["--root", root, "--base=" + value], command=("check", "decisions"))
                 self.assertEqual((text, rc), ("FAIL decisions.input: %s\n" % why, 1))
 
+
+
+class EvidenceBaseTest(RunAllCase):
+    """Task R2.3, Rq-6-4 (Q-B6plan-1 (a)): ``--base`` reaches ``evidence`` exactly, like the other BASE_GATES."""
+
+    def test_base_forwarded_to_evidence(self):  # B1
+        self.all_pass()
+        for profile in ("standard", "strict"):
+            with self.subTest(profile=profile):
+                del self.seen[:]
+                root = self.fixture(profile)
+                self.run_main(["--root", root, "--base", "x"])
+                self.assertEqual(self.args_of()["evidence"], ["--root=" + root, "--base=x"])
+
+    def test_no_base_gives_evidence_no_base(self):  # B2
+        self.all_pass()
+        root = self.fixture()
+        self.run_main(["--root", root])
+        self.assertEqual(self.args_of()["evidence"], ["--root=" + root])
+
+    def test_base_values_forwarded_exactly_to_evidence(self):  # B3
+        self.all_pass()
+        root = self.fixture()
+        for value in ("", " ", " x ", "-x", "main~1", "\U0001f6dd", "a=b"):
+            with self.subTest(value=value):
+                del self.seen[:]
+                self.run_main(["--root", root, "--base=" + value])
+                self.assertEqual(self.args_of()["evidence"], ["--root=" + root, "--base=" + value])
+
+    def test_pc1_numeric_base_forwarded_to_every_base_gate(self):  # P1
+        self.all_pass()
+        root = self.fixture()
+        for n in (4300, 4301):
+            with self.subTest(digits=n):
+                del self.seen[:]
+                self.run_main(["--root", root, "--base", "7" * n])
+                got = self.args_of()
+                for g in ("decisions", "register", "claims", "evidence"):
+                    self.assertEqual(got[g], ["--root=" + root, "--base=" + "7" * n], g)
+
+    def test_pc1_unicode_base_forwarded_byte_identical(self):  # P2
+        # U+1F6DD is Cn (unassigned) on 3.9 (Unicode 13) and So on 3.13 (Unicode 15.1); the value is forwarded either way
+        self.all_pass()
+        root = self.fixture()
+        ch = "\U0001f6dd"
+        self.run_main(["--root", root, "--base", ch])
+        self.assertEqual(self.args_of()["evidence"][1].encode("utf-8"), b"--base=\xf0\x9f\x9b\x9d")
+
+    def test_pc1_evidence_baseexception_propagates(self):  # P3, G12 semantics
+        if hasattr(builtins, "BaseExceptionGroup"):
+            def boom(args):
+                raise BaseExceptionGroup("g", [KeyboardInterrupt()])
+            want = BaseExceptionGroup
+        else:
+            self.assertFalse(hasattr(builtins, "BaseExceptionGroup"))   # Python < 3.11: use a BaseException subclass
+
+            class Odd(BaseException):
+                pass
+
+            def boom(args):
+                raise Odd()
+            want = Odd
+        self.all_pass()
+        self.fake("evidence", boom)
+        root = self.fixture()
+        with self.assertRaises(want):
+            run_all.check(["--root", root])
+        with self.assertRaises(want):
+            self.run_main(["--root", root])
 
 
 class ArgvTest(RunAllCase):
@@ -812,12 +928,13 @@ class ArgvTest(RunAllCase):
                 lines = [{"status": "PASS", "id": g + ".ok", "reason": ""} for g in ("schema", "register", "decisions")]
                 lines.append({"status": "FAIL", "id": "claims.x", "reason": "a\\b\nc"})
                 lines.append({"status": "PASS", "id": "cites.ok", "reason": ""})
+                lines.append({"status": "PASS", "id": "evidence.ok", "reason": ""})
                 lines.append({"status": "PASS", "id": "run_all.version", "reason": ""})
                 self.assertEqual(json.loads(out), {"gate": "run_all", "ok": False, "lines": lines})
                 self.assertTrue(out.endswith("}\n"))
                 self.assertEqual(out.count("\n"), 1)
                 self.assertEqual(code, 1)
-                self.assertEqual(self.called(), list(FIVE))
+                self.assertEqual(self.called(), list(SIX))
 
     def test_json_first_text_literal(self):  # A1, byte form
         self.all_pass()
@@ -841,8 +958,8 @@ class ArgvTest(RunAllCase):
         self.all_pass()
         root = self.fixture()
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": root}):
-            self.expect([], PASS5, 0, list(FIVE))
-        self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in FIVE})
+            self.expect([], PASS6, 0, list(SIX))
+        self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in SIX})
         del self.seen[:]
         cwd = os.getcwd()
         self.addCleanup(os.chdir, cwd)
@@ -852,8 +969,8 @@ class ArgvTest(RunAllCase):
                 del self.seen[:]
                 os.environ.pop("CLAUDE_PROJECT_DIR", None)
                 with mock.patch.dict(os.environ, {} if env is None else {"CLAUDE_PROJECT_DIR": env}):
-                    self.expect([], PASS5, 0, list(FIVE))
-                self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in FIVE})
+                    self.expect([], PASS6, 0, list(SIX))
+                self.assertEqual(self.args_of(), {g: ["--root=" + root] for g in SIX})
         del self.seen[:]
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": os.path.join(root, "nodir")}):
             self.expect([], input_fail("CLAUDE_PROJECT_DIR is not a directory"), 1, [])
@@ -875,18 +992,18 @@ class ArgvTest(RunAllCase):
                 with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": env}):
                     self.assertEqual(result.repo_root(), env)
                     out, code = self.run_main([])
-                self.assertEqual((out, code), (PASS5 + VERSION_PASS, 0))
-                self.assertEqual(self.args_of(), {g: ["--root=" + env] for g in FIVE})
+                self.assertEqual((out, code), (PASS6 + VERSION_PASS, 0))
+                self.assertEqual(self.args_of(), {g: ["--root=" + env] for g in SIX})
         del self.seen[:]
         os.chdir(root)
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "."}):
-            self.expect([], PASS5, 0, list(FIVE))
-            self.assertEqual(self.args_of(), {g: ["--root=."] for g in FIVE})
+            self.expect([], PASS6, 0, list(SIX))
+            self.assertEqual(self.args_of(), {g: ["--root=."] for g in SIX})
         del self.seen[:]
         with mock.patch.dict(os.environ, {}):
             os.environ.pop("CLAUDE_PROJECT_DIR", None)
-            self.expect([], PASS5, 0, list(FIVE))
-            self.assertEqual(self.args_of(), {g: ["--root=" + result.repo_root()] for g in FIVE})
+            self.expect([], PASS6, 0, list(SIX))
+            self.assertEqual(self.args_of(), {g: ["--root=" + result.repo_root()] for g in SIX})
 
     def test_root_repeated_refused(self):  # A4
         self.all_pass()
@@ -905,9 +1022,9 @@ class ArgvTest(RunAllCase):
                 del self.seen[:]
                 out, code = self.run_main(["--root", path])
                 if verdict == "ok":
-                    self.assertEqual(out, PASS5 + VERSION_PASS)
+                    self.assertEqual(out, PASS6 + VERSION_PASS)
                     self.assertEqual(code, 0)
-                    self.assertEqual(self.args_of(), {g: ["--root=" + path] for g in FIVE})
+                    self.assertEqual(self.args_of(), {g: ["--root=" + path] for g in SIX})
                 else:
                     self.assertEqual(out, input_fail(verdict))
                     self.assertEqual(code, 1)
@@ -950,7 +1067,7 @@ class ArgvTest(RunAllCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(gates_main.main(["run_all", "--root", root]), 0)
-        self.assertEqual(out.getvalue(), PASS5 + VERSION_PASS)
+        self.assertEqual(out.getvalue(), PASS6 + VERSION_PASS)
 
     def test_module_run_end_to_end(self):  # A9
         root = self.fixture()
@@ -963,7 +1080,7 @@ class ArgvTest(RunAllCase):
                 self.assertEqual(got, want)
         out, code = self.sub(["--root", root, "--base", "HEAD"])
         self.assertEqual(code, 0)
-        self.assertEqual(len(out.splitlines()), 39)   # the 38 real-gate lines (six more kinds, P2.2) and the version line
+        self.assertEqual(len(out.splitlines()), 44)   # the 43 real-gate lines (six more kinds, P2.2; the context kind, Rq-5-2; the two evidence kinds, Rq-6-2; the two evidence lines, Rq-6-3) and the version line
 
 
 class ConfigTest(RunAllCase):
@@ -1012,7 +1129,7 @@ class OutputTest(RunAllCase):
         self.all_pass(schema=[Line("PASS", "s.a"), Line("PASS", "s.b")], cites=[Line("PASS", "c.a")])
         root = self.fixture()
         self.expect(["--root", root], "PASS s.a\nPASS s.b\nPASS register.ok\nPASS decisions.ok\n"
-                                      "PASS claims.ok\nPASS c.a\n", 0, list(FIVE))
+                                      "PASS claims.ok\nPASS c.a\nPASS evidence.ok\n", 0, list(SIX))
 
     def test_any_fail_exit_1_no_short_circuit(self):  # O2
         root = self.fixture()
@@ -1020,24 +1137,25 @@ class OutputTest(RunAllCase):
             with self.subTest(bad=bad):
                 del self.seen[:]
                 self.all_pass(**{bad: [Line("FAIL", bad + ".bad", "nope")]})
-                want = "".join(("FAIL %s.bad: nope\n" % g) if g == bad else "PASS %s.ok\n" % g for g in FIVE)
-                self.expect(["--root", root], want, 1, list(FIVE))
+                want = "".join(("FAIL %s.bad: nope\n" % g) if g == bad else "PASS %s.ok\n" % g for g in SIX)
+                self.expect(["--root", root], want, 1, list(SIX))
 
     def test_real_gates_pass_on_fixture_repo(self):  # O4
         root = self.fixture()
         out, code = self.run_main(["--root", root, "--base", "HEAD"])
         want = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
-                "PASS schema.request\nPASS schema.streams\nPASS schema.status\nPASS schema.sync-log\n"
+                "PASS schema.request\nPASS schema.streams\nPASS schema.context\nPASS schema.status\nPASS schema.sync-log\n"
                 "PASS schema.merged-log\nPASS schema.breakdown\n"
                 "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
-                "PASS schema.finding-index\n"
+                "PASS schema.finding-index\nPASS schema.mutation-transcript\nPASS schema.review-report\n"
                 "PASS register.schema\nPASS register.store\nPASS register.base\nPASS register.transition\n"
                 "PASS register.evidence\nPASS register.epic\nPASS register.report\n"
                 "PASS decisions.schema\nPASS decisions.store\nPASS decisions.base\nPASS decisions.landed\n"
                 "PASS decisions.refs\nPASS decisions.open-ref\nPASS decisions.scan\n"
                 "PASS claims.schema\nPASS claims.store\nPASS claims.document\nPASS claims.stale\n"
                 "PASS claims.base\n"
-                "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n")
+                "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n"
+             "PASS evidence.config\nPASS evidence.scope\n")
         self.assertEqual(out, want + VERSION_PASS)
         self.assertEqual(code, 0)
 
@@ -1067,7 +1185,7 @@ class VersionLineTest(RunAllCase):
 
     def test_version_line_passes_when_equal(self):  # A1; Q-B2plan-24 (a)
         self.all_pass()
-        for profile, gates in (("light", ("schema", "register", "decisions")), ("standard", FIVE), ("strict", FIVE)):
+        for profile, gates in (("light", ("schema", "register", "decisions")), ("standard", SIX), ("strict", SIX)):
             with self.subTest(profile=profile):
                 root = self.fixture(profile)
                 out, code = self.run_main(["--root", root])
@@ -1084,14 +1202,14 @@ class VersionLineTest(RunAllCase):
         out, code = self.run_main(["--root", root])
         self.assertEqual(out, "FAIL schema.bad: nope\nPASS register.ok\nPASS decisions.ok\n"
                               "FAIL run_all.missing.claims: not registered in gates.__main__.GATES\n"
-                              "PASS cites.ok\nPASS run_all.version\n")
+                              "PASS cites.ok\nPASS evidence.ok\nPASS run_all.version\n")
         self.assertEqual(code, 1)
 
     def test_version_mismatch_names_upgrade(self):  # A3
         self.all_pass()
         root = self.fixture(config=dict(minimal_config(), framework_version="0.1.0"))
         out, code = self.run_main(["--root", root])
-        self.assertEqual(out, PASS5 + self.MISMATCH)
+        self.assertEqual(out, PASS6 + self.MISMATCH)
         self.assertEqual(code, 1)
         self.assertIn("/strict-delivery:upgrade", out)
 
@@ -1102,7 +1220,7 @@ class VersionLineTest(RunAllCase):
                 root = self.fixture(config=dict(minimal_config(), framework_version=fv))
                 out, code = self.run_main(["--root", root])
                 shown = fv.replace("\n", "\\n")
-                self.assertEqual(out, PASS5 + "FAIL run_all.version: framework_version %s does not match the plugin "
+                self.assertEqual(out, PASS6 + "FAIL run_all.version: framework_version %s does not match the plugin "
                                               "version 0.0.0; run /strict-delivery:upgrade\n" % shown)
                 self.assertEqual(code, 1)
 
@@ -1149,7 +1267,7 @@ class VersionLineTest(RunAllCase):
             with self.subTest(label):
                 self.plugin_dir(body)
                 out, code = self.run_main(["--root", root])
-                self.assertEqual(out, PASS5 + "FAIL run_all.version: %s: %s\n" % (pm, why))
+                self.assertEqual(out, PASS6 + "FAIL run_all.version: %s: %s\n" % (pm, why))
                 self.assertEqual(code, 1)
         with self.subTest("M1 .claude-plugin absent"):
             d = os.path.join(self.tmp, "fwnodir")
@@ -1157,12 +1275,12 @@ class VersionLineTest(RunAllCase):
             shutil.copytree(os.path.join(REPO, "profiles"), os.path.join(d, "profiles"))  # Task 4a.2 (see plugin_dir)
             with mock.patch.object(plugin, "framework_dir", return_value=d):
                 self.assertEqual(self.run_main(["--root", root]),
-                                 (PASS5 + "FAIL run_all.version: %s: cannot be read (FileNotFoundError)\n" % pm, 1))
+                                 (PASS6 + "FAIL run_all.version: %s: cannot be read (FileNotFoundError)\n" % pm, 1))
         with self.subTest("M1 directory at the path"):
             d = self.plugin_dir(None)
             os.mkdir(os.path.join(d, ".claude-plugin", "plugin.json"))
             self.assertEqual(self.run_main(["--root", root]),
-                             (PASS5 + "FAIL run_all.version: %s: is not a regular file\n" % pm, 1))
+                             (PASS6 + "FAIL run_all.version: %s: is not a regular file\n" % pm, 1))
 
     def test_bad_manifest_as_subprocess_has_no_traceback(self):  # A4
         root = self.fixture()
@@ -1185,11 +1303,11 @@ class VersionLineTest(RunAllCase):
         self.all_pass()
         self.plugin_dir({"version": "0.1.0"})
         equal = self.fixture(config=dict(minimal_config(), framework_version="0.1.0"))
-        self.assertEqual(self.run_main(["--root", equal]), (PASS5 + VERSION_PASS, 0))
+        self.assertEqual(self.run_main(["--root", equal]), (PASS6 + VERSION_PASS, 0))
         other = self.fixture()   # framework_version 0.0.0 against the installed 0.1.0
         want = ("FAIL run_all.version: framework_version 0.0.0 does not match the plugin version 0.1.0; "
                 "run /strict-delivery:upgrade\n")
-        self.assertEqual(self.run_main(["--root", other]), (PASS5 + want, 1))
+        self.assertEqual(self.run_main(["--root", other]), (PASS6 + want, 1))
         self.assertNotEqual(os.path.realpath(plugin.framework_dir()), os.path.realpath(other))
 
     def test_missing_config_has_no_version_line(self):  # A6
@@ -1214,7 +1332,7 @@ class VersionLineTest(RunAllCase):
         self.assertEqual(code, 0)
         self.assertTrue(doc["ok"])
         self.assertEqual(doc["lines"][-1], {"status": "PASS", "id": "run_all.version", "reason": ""})
-        self.assertEqual(len(doc["lines"]), 6)
+        self.assertEqual(len(doc["lines"]), 7)   # Rq-6-3: the evidence line
         bad = self.fixture(config=dict(minimal_config(), framework_version="0.1.0"))
         out, code = self.run_main(["--json", "--root", bad])
         doc = json.loads(out)
@@ -1240,7 +1358,7 @@ class VersionLineTest(RunAllCase):
                      "https://github.com/o/n", "not a url"):
             with self.subTest(repository=repo):
                 self.plugin_dir({"version": "0.0.0", "repository": repo})
-                self.assertEqual(self.run_main(["--root", root]), (PASS5 + VERSION_PASS, 0))
+                self.assertEqual(self.run_main(["--root", root]), (PASS6 + VERSION_PASS, 0))
                 for fn in (plugin.repository_url, plugin.repository_slug):
                     if repo in ("https://github.com/o/n",):
                         self.assertIn("o", fn(plugin.framework_dir()))
@@ -1262,7 +1380,7 @@ class VersionLineTest(RunAllCase):
         root = self.fixture()
         self.plugin_dir(b'{"version": "0.0.0\\u0007\\\\"}')
         out, code = self.run_main(["--root", root])
-        self.assertEqual(out, PASS5 + "FAIL run_all.version: .claude-plugin/plugin.json: version 0.0.0\\x07\\\\ is "
+        self.assertEqual(out, PASS6 + "FAIL run_all.version: .claude-plugin/plugin.json: version 0.0.0\\x07\\\\ is "
                                       "not of the form X.Y.Z\n")
 
 
@@ -1272,14 +1390,14 @@ class Pc1Test(RunAllCase):
     def test_pc1_long_number_base(self):  # S1
         root = self.fixture()
         schema_ok = ("PASS schema.kinds\nPASS schema.config\nPASS schema.decision\nPASS schema.finding\nPASS schema.claim\n"
-                     "PASS schema.request\nPASS schema.streams\nPASS schema.status\nPASS schema.sync-log\n"
+                     "PASS schema.request\nPASS schema.streams\nPASS schema.context\nPASS schema.status\nPASS schema.sync-log\n"
                      "PASS schema.merged-log\nPASS schema.breakdown\n"
                      "PASS schema.overview\nPASS schema.in-force\nPASS schema.decision-index\n"
-                     "PASS schema.finding-index\n")
+                     "PASS schema.finding-index\nPASS schema.mutation-transcript\nPASS schema.review-report\n")
         cites_ok = "PASS cites.doc\nPASS cites.line\nPASS cites.anchor\nPASS cites.landed\n"
         why = "ref must not hold more than 40 hex digits in a row"
         want = (schema_ok + "FAIL register.input: %s\nFAIL decisions.input: %s\nFAIL claims.input: %s\n"
-                % (why, why, why) + cites_ok)   # expect() appends the version line
+                % (why, why, why) + cites_ok + "FAIL evidence.input: %s\n" % why)   # expect() appends the version line
         for n in (4300, 4301):
             with self.subTest(digits=n):
                 self.expect(["--root", root, "--base", "7" * n], want, 1)
@@ -1318,10 +1436,10 @@ class Pc1Test(RunAllCase):
                             # a quoted number is a non-empty string: config.load accepts it (see the report); it is
                             # not the plugin's version, so the version line is the mismatch
                             out, code = self.run_main(["--root", root])
-                            self.assertEqual(out, PASS5 + "FAIL run_all.version: framework_version %s does not match "
+                            self.assertEqual(out, PASS6 + "FAIL run_all.version: framework_version %s does not match "
                                                   "the plugin version 0.0.0; run /strict-delivery:upgrade\n"
                                                   % ("7" * n))
-                            self.assertEqual((code, self.called()), (1, list(FIVE)))
+                            self.assertEqual((code, self.called()), (1, list(SIX)))
 
     def test_pc1_long_number_sub_gate_line(self):  # S4
         root = self.fixture()
@@ -1331,7 +1449,7 @@ class Pc1Test(RunAllCase):
                 self.all_pass(claims=[Line("FAIL", "c." + digits, "r" + digits)])
                 out, code = self.run_main(["--root", root])
                 self.assertEqual(out, ok_lines("schema", "register", "decisions")
-                                 + "FAIL c.%s: r%s\n" % (digits, digits) + ok_lines("cites") + VERSION_PASS)
+                                 + "FAIL c.%s: r%s\n" % (digits, digits) + ok_lines("cites", "evidence") + VERSION_PASS)
                 self.assertEqual(code, 1)
 
     def test_pc1_long_number_int_id_kept_as_the_gate_alone_renders_it(self):  # S4, int id
@@ -1343,7 +1461,7 @@ class Pc1Test(RunAllCase):
                 self.all_pass(claims=[line])
                 out, code = self.run_main(["--root", root])
                 alone = result.run_check("claims", lambda a: Result("claims", [line]), []).render(False)
-                self.assertEqual(out, ok_lines("schema", "register", "decisions") + alone + ok_lines("cites")
+                self.assertEqual(out, ok_lines("schema", "register", "decisions") + alone + ok_lines("cites", "evidence")
                                  + VERSION_PASS)
                 self.assertEqual(code, 0)
                 if digits == 4300:   # renderable on both interpreters: the same digits
@@ -1362,11 +1480,11 @@ class Pc1Test(RunAllCase):
         make_repo(root, minimal_config())
         out, code = self.run_main(["--root", root, "--base", ch])
         self.assertEqual(out, "FAIL schema.%s: r%s\nPASS register.ok\nFAIL decisions.echo: %s\nPASS claims.ok\n"
-                              "PASS cites.ok\nPASS run_all.version\n" % (esc, esc, "--base=" + esc))
+                              "PASS cites.ok\nPASS evidence.ok\nPASS run_all.version\n" % (esc, esc, "--base=" + esc))
         self.assertEqual(code, 1)
         out, code = self.run_main(["--root", root])
         self.assertEqual(out, "FAIL schema.%s: r%s\nPASS register.ok\nFAIL decisions.echo: %s\nPASS claims.ok\n"
-                              "PASS cites.ok\nPASS run_all.version\n" % (esc, esc, "--root=" + root.replace(ch, esc)))
+                              "PASS cites.ok\nPASS evidence.ok\nPASS run_all.version\n" % (esc, esc, "--root=" + root.replace(ch, esc)))
         out, code = self.run_main(["--json", "--root", root, "--base", ch])
         got = json.loads(out)["lines"]
         self.assertEqual((got[0]["id"], got[0]["reason"]), ("schema." + ch, "r" + ch))
@@ -1395,8 +1513,8 @@ class Pc1Test(RunAllCase):
         root = self.fixture()
         self.expect(["--root", root],
                     ok_lines("schema", "register", "decisions")
-                    + "FAIL claims.input: ExceptionGroup: g (1 sub-exception)\n" + ok_lines("cites"), 1,
-                    ["schema", "register", "decisions", "cites"])
+                    + "FAIL claims.input: ExceptionGroup: g (1 sub-exception)\n" + ok_lines("cites", "evidence"), 1,
+                    ["schema", "register", "decisions", "cites", "evidence"])
 
 
 class LiveProgramTest(RunAllCase):  # Task P2.3: RA1-RA4, RA9, RA11 (the live program is a branch <p>/integration holding streams.yml)

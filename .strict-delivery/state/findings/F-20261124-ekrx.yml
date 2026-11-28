@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-ekrx
+status: open
+source: PR-5b final review 2 (records/PR-5b-final-review-2.md, F-B)
+severity: LOW
+class: "output-consistency: a path listed in two states: overlapping configured directories: paths.plans == paths.specs (gates/tools/index.py:296-302; row PL35 untested; extends F-20261124-6ht7)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: e15bb062c9f3545ee63be9dfb9cd8e7d3b9722ce
+    by: stream-records
+review_round: 6
+caused_by_change: true
+dimension: output-consistency

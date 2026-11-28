@@ -26,6 +26,7 @@ from typing import Optional
 from gates import gate_dispatch
 from gates.lib import batch, checkpoints, config, decisions, dispatch, gitinfo, ids, programs
 from gates.lib.result import GateError, _GateParser, safe_text
+from gates.lib import tipread
 from gates.tools import index, questions_cli
 from gates.tools.claims_cli import _once, _root_arg
 
@@ -92,7 +93,7 @@ def _read_text(root: str, ref: Optional[str], rel: str) -> tuple:
     """``(text, problem)``: from the working tree of ``root`` (``ref`` None) or from ``ref``."""
     if ref is not None:
         try:
-            text = gitinfo.show(root, ref, rel)
+            text = tipread.show_file(root, ref, rel)
         except GateError as e:
             return None, "%s: %s" % (rel, e)
         return (text, "") if text is not None else (None, "%s: missing at %s" % (rel, ref))

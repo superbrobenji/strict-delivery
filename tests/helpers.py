@@ -91,12 +91,15 @@ def git(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -
 
 
 def make_repo(tmp: str, config: Optional[dict] = None) -> str:
-    """Make tmp a git repository whose first branch is main, with the config committed; return tmp."""
+    """Make tmp a git repository whose first branch is main, with the config and a minimal context.yml committed; return tmp."""
     git(tmp, "init", "-q", "-b", "main")
     git(tmp, "config", "user.email", "fixture@example.invalid")
     git(tmp, "config", "user.name", "Fixture")
     git(tmp, "config", "commit.gpgsign", "false")
+    git(tmp, "config", "maintenance.auto", "false")  # no detached auto-maintenance or auto-gc writing into .git while a test runs
+    git(tmp, "config", "gc.auto", "0")
     write_record(tmp, ".strict-delivery/config.yml", config if config is not None else minimal_config())
+    write_record(tmp, ".strict-delivery/context.yml", {"schema": "context/1"})  # the gate_context producer makes this file required (Rq-5-2)
     commit_all(tmp, "fixture")
     return tmp
 

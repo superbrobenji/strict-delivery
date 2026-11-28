@@ -14,6 +14,7 @@ from unittest import mock
 from gates import __main__ as entry
 from gates.lib import config, gitinfo, yamlsub
 from tests.helpers import E128, GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, root_forms
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 from tests.test_programs_lib import (BDX, MERGED_HEAD, NAME, PG, PS, SEP, STATUS_TEXT, ckpt, ledger, mline, row, stream)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1509,6 +1510,145 @@ class RowsD(Fx):
             self.assertIn("FAIL streams.map.%s: " % NAME, out)
             self.assertNotIn("streams.input", out)                                          # never a traceback-shaped ValueError line
             self.assertNotIn("ValueError", out)
+
+
+class TipKinds(Fx):
+    """Task 5b.3 rows F9-F13: a non-regular entry where the gate reads a file at a revision is a named reason, never absent."""
+    LED = PS + "/a-plan/ledger.md"
+
+    def led_text(self):
+        return ledger(ckpt("a1", "a1.1", git(self.root, "rev-parse", "--short=7", "HEAD")))
+
+    def counted(self, kind):
+        """A counted pull request whose head holds the ledger as ``kind``; ``(head, merge)``."""
+        text = self.led_text()
+        git(self.root, "checkout", "-q", "-b", "p1", "main")
+        head = set_entry(self.root, "refs/heads/p1", self.LED, kind, text)
+        git(self.root, "reset", "-q", "--hard", "p1")
+        git(self.root, "checkout", "-q", "main")
+        git(self.root, "merge", "-q", "--no-ff", "-m", "Merge p1", "p1")
+        return head, git(self.root, "rev-parse", "HEAD")
+
+    def test_ledger_head_entry_kinds(self):  # F10 (gate_streams.py:239); the working-tree read (programs._fs_text) refuses the same kinds
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                head, m = self.counted(kind)
+                self.program(merged=MERGED_HEAD + mline(1, head, m, "a", "a1") + "\n")
+                out = self.run_gate()[0]
+                self.assertIn("pr 1: ledger %s at %s: %s" % (self.LED, head[:7], refusal(head, self.LED)), out)
+                git(self.root, "branch", "-D", INT)
+                git(self.root, "reset", "-q", "--hard", "HEAD~1")
+                git(self.root, "branch", "-D", "p1")
+        with self.subTest("regular"):
+            head, m = self.counted("regular")
+            self.program(merged=MERGED_HEAD + mline(1, head, m, "a", "a1") + "\n")
+            out = self.run_gate()[0]
+            self.assertNotIn("not a regular file", out)
+            self.assertIn("PASS streams.map." + NAME, out)
+
+    def fresh_sa(self):
+        git(self.root, "checkout", "-q", "main")
+        if git(self.root, "branch", "--list", SA):
+            git(self.root, "branch", "-D", SA)
+        self.branch(SA)
+
+    def sa_entry(self, rel, kind, text):
+        sha = set_entry(self.root, "refs/heads/" + SA, rel, kind, text)
+        git(self.root, "reset", "-q", "--hard", SA)
+        return sha
+
+    def test_read_ref_entry_kinds(self):  # F9 (gate_streams.py:90): the program files at the integration tip; ref None: programs._fs_text refuses them
+        self.program()
+        ref = "refs/heads/" + INT
+        for rel, text in ((PG + "/program-plan.md", PROGRAM_PLAN), (PS + "/program-plan/breakdown.yml", yamlsub.emit(BD))):
+            for kind, mode in BAD_KINDS:
+                with self.subTest("%s %s" % (kind, rel)):
+                    set_entry(self.root, ref, rel, kind, text)
+                    self.fresh_sa()
+                    out = self.run_gate()[0]
+                    self.assertIn("FAIL streams.map.%s: " % NAME, out)
+                    self.assertIn(refusal(ref, rel), out)
+            set_entry(self.root, ref, rel, "regular", text)
+
+    def test_plan_hunk_entry_kinds(self):  # F12 (gate_streams.py:316-317); the working-tree read of b=None refuses the same kinds
+        path = PG + "/a-plan.md"
+        self.program()
+        for kind, mode in BAD_KINDS:
+            with self.subTest("b " + kind):
+                self.fresh_sa()
+                c = self.sa_entry(path, kind, PLAN_A)
+                out = self.run_gate()[0]
+                self.assertIn(refusal(c, path), out)
+                self.assertIn("FAIL streams.owned.%s: %s (" % (path, refusal(c, path)), out)  # R2-3: the handler's line, not a crash line
+                self.assertNotIn("created or deleted", out)
+        with self.subTest("regular"):
+            self.fresh_sa()
+            self.sa_entry(path, "regular", PLAN_A.replace("body one", "body ONE"))
+            out = self.run_gate()[0]
+            self.assertNotIn("not a regular file", out)
+            self.assertNotIn("created or deleted", out)
+        with self.subTest("absent"):
+            self.fresh_sa()
+            self.sa_entry(path, "absent", "")
+            self.assertIn("the plan file is created or deleted", self.run_gate()[0])
+        for kind, mode in BAD_KINDS:
+            with self.subTest("a " + kind):
+                git(self.root, "checkout", "-q", "main")
+                a = set_entry(self.root, "refs/heads/main", path, kind, PLAN_A)
+                git(self.root, "reset", "-q", "--hard", "main")
+                self.fresh_sa()
+                self.sa_entry(path, "regular", PLAN_A.replace("body one", "body ONE"))
+                out = self.run_gate()[0]
+                self.assertIn(refusal(a, path), out)
+                self.assertIn("FAIL streams.owned.%s: %s (" % (path, refusal(a, path)), out)  # R2-3: the handler's line, not a crash line
+                self.assertNotIn("created or deleted", out)
+                set_entry(self.root, "refs/heads/main", path, "regular", PLAN_A)
+                git(self.root, "reset", "-q", "--hard", "main")
+
+    def test_shared_file_entry_kinds(self):  # F13 (gate_streams.py:484-485): never "is deleted"
+        sh = [{"path": "reg.md", "rule": "append-rows"}]
+        text = "| h |\n| r1 |\n"
+        self.commit({"reg.md": text})
+        self.program(streams=streams_row(shared=sh))
+        for kind, mode in BAD_KINDS:
+            with self.subTest("b " + kind):
+                self.fresh_sa()
+                c = self.sa_entry("reg.md", kind, text + "| r2 |\n")
+                out = self.run_gate()[0]
+                self.assertIn(refusal(c, "reg.md"), out)
+                self.assertIn("FAIL streams.shared.reg.md: %s (" % refusal(c, "reg.md"), out)  # R2-3: the handler's line, not a crash line
+                self.assertNotIn("is deleted", out)
+        with self.subTest("regular"):
+            self.fresh_sa()
+            self.sa_entry("reg.md", "regular", text + "| r2 |\n")
+            self.assertIn("PASS streams.shared", self.run_gate()[0])
+        with self.subTest("absent"):
+            self.fresh_sa()
+            self.sa_entry("reg.md", "absent", "")
+            self.assertIn("shared file reg.md is deleted (append-rows)", self.run_gate()[0])
+        for kind, mode in BAD_KINDS:
+            with self.subTest("a " + kind):
+                git(self.root, "checkout", "-q", "main")
+                a = set_entry(self.root, "refs/heads/main", "reg.md", kind, text)
+                git(self.root, "reset", "-q", "--hard", "main")
+                self.fresh_sa()
+                self.sa_entry("reg.md", "regular", text + "| r2 |\n")
+                out = self.run_gate()[0]
+                self.assertIn(refusal(a, "reg.md"), out)
+                self.assertIn("FAIL streams.shared.reg.md: %s (" % refusal(a, "reg.md"), out)  # R2-3: the handler's line, not a crash line
+                set_entry(self.root, "refs/heads/main", "reg.md", "regular", text)
+                git(self.root, "reset", "-q", "--hard", "main")
+
+    def test_ledger_base_entry_kinds(self):  # F11 (gate_streams.py:247): the same ledger at the base tip
+        head, m = self.counted("regular")
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, "refs/heads/main", self.LED, kind, self.led_text())
+                if git(self.root, "branch", "--list", INT):
+                    git(self.root, "branch", "-D", INT)
+                self.program(merged=MERGED_HEAD + mline(1, head, m, "a", "a1") + "\n")
+                out = self.run_gate()[0]
+                self.assertIn("pr 1: ledger %s at main: %s" % (self.LED, refusal("refs/heads/main", self.LED)), out)
 
 
 if __name__ == "__main__":

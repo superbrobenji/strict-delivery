@@ -10,10 +10,10 @@ from gates.lib import config, gitinfo, plugin, programs, result
 
 PROFILE_GATES: dict = {
     "light": ("schema", "register", "decisions"),
-    "standard": ("schema", "register", "decisions", "claims", "cites"),
-    "strict": ("schema", "register", "decisions", "claims", "cites"),
+    "standard": ("schema", "register", "decisions", "claims", "cites", "evidence"),
+    "strict": ("schema", "register", "decisions", "claims", "cites", "evidence"),
 }
-BASE_GATES: tuple = ("decisions", "register", "claims")
+BASE_GATES: tuple = ("decisions", "register", "claims", "evidence")
 # Task P2.3 (controller ruling, plan P:2843): appended to the profile's list while a program is live or the current branch
 # is a program branch, whatever the profile; ``streams`` is not in ``BASE_GATES`` (decision D-Q6 (a)).
 LIVE_PROGRAM_GATES: tuple = ("streams",)

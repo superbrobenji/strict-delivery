@@ -26,6 +26,7 @@ import sys
 
 from gates.lib import checkpoints, config, gitinfo, programs, yamlsub
 from gates.lib.result import GateError, Result, _Once, gate_args, repo_root, run_gate
+from gates.lib import tipread
 
 PRODUCES: tuple = ()
 
@@ -87,7 +88,7 @@ class _Fail:
 
 
 def _read(root: str, ref, rel: str):
-    return programs._fs_text(root, rel) if ref is None else gitinfo.show(root, ref, rel)
+    return programs._fs_text(root, rel) if ref is None else tipread.show_file(root, ref, rel)
 
 
 def _ref(b: str) -> str:
@@ -236,7 +237,7 @@ class _Run:
             if (ln["head"], rel) not in seen:
                 seen.add((ln["head"], rel))
                 try:
-                    text = gitinfo.show(self.root, ln["head"], rel)
+                    text = tipread.show_file(self.root, ln["head"], rel)
                 except GateError as e:
                     text = None
                     out.append("pr %d: ledger %s at %s: %s" % (ln["pr"], rel, _short(ln["head"]), e))
@@ -244,7 +245,7 @@ class _Run:
                     out += ["pr %d: ledger %s at %s: %s" % (ln["pr"], rel, _short(ln["head"]), e)
                             for e in checkpoints.ledger_errors(text, self.cfg, self.plan_text, sids)]
             try:
-                base_text = gitinfo.show(self.root, _ref(self.base_name), rel)
+                base_text = tipread.show_file(self.root, _ref(self.base_name), rel)
             except GateError as e:
                 base_text = None
                 out.append("pr %d: ledger %s at %s: %s" % (ln["pr"], rel, self.base_name, e))
@@ -313,8 +314,11 @@ class _Run:
                 tasks = {t for t in s.get("tasks") or [] if type(t) is str}
         if self.bd is None:
             return "breakdown.yml cannot be read, so the task sections of stream %s are unknown" % sid
-        old = gitinfo.show(self.root, a, path) if a is not None else None
-        new = gitinfo.show(self.root, b, path) if b is not None else programs._fs_text(self.root, path)
+        try:
+            old = tipread.show_file(self.root, a, path) if a is not None else None
+            new = tipread.show_file(self.root, b, path) if b is not None else programs._fs_text(self.root, path)
+        except GateError as e:
+            return str(e)  # a symlink, tree or gitlink at a revision is refused by name, never "created or deleted"
         if old is None or new is None:
             return "the plan file is created or deleted: a hunk at line 1 lies outside the task sections of stream %s" % sid
         hunks = gitinfo.file_hunks(self.root, a, b, path)
@@ -481,8 +485,11 @@ class _Run:
 
     def shared_problem(self, path: str, a, b, sid: str) -> str:
         rule = programs.shared_rule(self.streams, path)
-        old = gitinfo.show(self.root, a, path) if a is not None else None
-        new = gitinfo.show(self.root, b, path) if b is not None else programs._fs_text(self.root, path)
+        try:
+            old = tipread.show_file(self.root, a, path) if a is not None else None
+            new = tipread.show_file(self.root, b, path) if b is not None else programs._fs_text(self.root, path)
+        except GateError as e:
+            return str(e)  # a symlink, tree or gitlink at a revision is refused by name, never "is deleted"
         if new is None:
             return "shared file %s is deleted (%s)" % (path, rule)
         if rule == "append-rows":

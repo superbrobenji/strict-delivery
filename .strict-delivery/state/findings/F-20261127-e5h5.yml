@@ -1,0 +1,31 @@
+schema: finding/1
+id: F-20261127-e5h5
+status: closed
+source: 5b.3 round-5 task review (records/5b.3-review-6.md, finding 1)
+severity: LOW
+class: "path-to-name matching of the tipread kind read (table row R6-1): tipread.show_file path and tipread.is_file path match a listed entry by os.fsencode bytes, so a str whose fsencode bytes differ from its UTF-8 reading (surrogate alias in the file name, in a folder component, or mixed; regular, symlink, tree and gitlink entries) names an existing entry: is_file True and show_file a false 'changed while it was being read', where main's gitinfo.show / blob_exists give None / False (from 5168d4f)"
+siblings: []
+cites:
+  - file: gates/lib/tipread.py
+    lines: "50"
+    sha: 81d344d753518a96533387996e410237ae1091f2
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence:
+  - 681753a48629e364e7084cba245a90e73b83e118
+history:
+  - status: open
+    sha: 81d344d753518a96533387996e410237ae1091f2
+    by: stream-records
+  - status: closed
+    sha: 8e7092de8e1ed657cad7109af7f0cce3dfcb50ac
+    by: stream-records
+review_round: 7
+caused_by_change: true
+dimension: path-to-name matching of the tipread kind read
+resolved_by: 2026-10-31-strict-delivery-framework

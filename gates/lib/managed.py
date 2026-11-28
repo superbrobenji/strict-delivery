@@ -11,7 +11,6 @@ import errno
 import os
 import re
 import stat
-import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
@@ -24,6 +23,7 @@ HASH = "hash"
 KINDS = {"claude-block": 1, "gitignore-block": 1}
 _KIND_FILE = {"claude-block": "CLAUDE.md", "gitignore-block": ".gitignore"}
 _KIND_STYLE = {"claude-block": HTML, "gitignore-block": HASH}
+_PATH_STYLE = {_KIND_FILE[k]: _KIND_STYLE[k] for k in KINDS}  # the path of a kind -> the style its block is parsed in
 
 _OPENER = {HTML: "<!-- ", HASH: "# "}
 _CLOSER = {HTML: " -->", HASH: ""}
@@ -234,9 +234,45 @@ def _encodable(path: str, text: str) -> None:
         raise ManagedError("%s: text is not encodable as UTF-8" % path) from None
 
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+class _NotDirectory(Exception):
+    """A parent component is not a directory (a symlink, a file or a FIFO); the text is its path below the root."""
+
+
+def _open_parents(root: str, parents: list, create: bool) -> int:
+    """The descriptor of the directory ``parents`` below ``root``: ``root`` is opened ``O_DIRECTORY``, then each
+    component from the descriptor of the one before (``dir_fd``, ``O_DIRECTORY | O_NOFOLLOW``), so no later swap of a
+    component can redirect the walk. An absent component is created with ``os.mkdir(dir_fd=...)`` when ``create`` is
+    set, else ``FileNotFoundError`` is raised; a component that is a symlink or not a directory raises ``_NotDirectory``
+    (``ELOOP`` or ``ENOTDIR``); every other ``OSError`` is raised as it is. Every descriptor but the one returned is
+    closed."""
+    d = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    for i, name in enumerate(parents):
+        try:
+            try:
+                nd = os.open(name, _DIR_FLAGS, dir_fd=d)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(name, dir_fd=d)
+                nd = os.open(name, _DIR_FLAGS, dir_fd=d)
+        except OSError as e:
+            os.close(d)
+            if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                raise _NotDirectory("/".join(parents[:i + 1])) from None
+            raise
+        os.close(d)
+        d = nd
+    return d
+
+
 def _inspect(root: str, path: str):
     """``("absent",)``, ``("conflict", reason)`` or ``("text", content)`` for the target; every component is looked at
-    with ``lstat`` (a symlink is never followed), and only a regular file is opened."""
+    with ``lstat`` first (a symlink is never followed), then reached through descriptors (``_open_parents``, and the
+    last component opened ``O_NOFOLLOW | O_NONBLOCK`` from the parent's descriptor): the descriptor walk decides, so a
+    component swapped after the ``lstat`` is never followed. Only a regular file is read."""
     parts = path.split("/")
     cur = root
     for i, part in enumerate(parts):
@@ -256,11 +292,23 @@ def _inspect(root: str, path: str):
         if not stat.S_ISREG(st.st_mode):
             return ("conflict", _NOT_MANAGED)
     try:
-        fd = os.open(cur, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        d = _open_parents(root, parts[:-1], False)
+    except _NotDirectory as e:  # a parent swapped to a symlink or a file after the lstat
+        return ("conflict", "parent %s is not a directory" % e.args[0])
+    except FileNotFoundError:
+        return ("absent",)
+    except OSError as e:
+        raise ManagedError("%s: cannot read (%s)" % (path, e.strerror)) from None
+    try:
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=d)
+    except FileNotFoundError:
+        return ("absent",)
     except OSError as e:
         if e.errno == errno.ELOOP:  # a symlink put in place after the lstat
             return ("conflict", "is a symlink")
         raise ManagedError("%s: cannot read (%s)" % (path, e.strerror)) from None
+    finally:
+        os.close(d)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return ("conflict", _NOT_MANAGED)
@@ -335,44 +383,69 @@ def plan(root: str, writes: list, version: str) -> tuple:
     return actions, conflicts
 
 
-def _outside(text: str):
-    """``None`` for a text with no block, ``False`` for a malformed one, else ``(before, after, final_newline)``: the
-    text before the begin line, the text after the end line's newline, and whether the end line had a newline."""
+def _outside(p):
+    """``(before, after, final_newline)`` of a parsed block (``_parse``'s tuple): the text before the begin line, the
+    text after the end line's newline, and whether the end line had a newline."""
+    b, e, _k, _n, _v, lines = p
+    return ("".join(line + "\n" for line in lines[:b]), "\n".join(lines[e + 1:]), e != len(lines) - 1)
+
+
+def _well_formed(text: str) -> list:
+    """The styles in which ``text`` holds a well-formed block, each with its parse: ``[]`` for none (a malformed
+    block of a style is not a block of that style), more than one for a text that quotes a block in the other style."""
+    found = []
     for style in (HTML, HASH):
         try:
             p = _parse(text, style)
         except ManagedError:
-            return False
+            continue
         if p is not None:
-            b, e, _k, _n, _v, lines = p
-            return ("".join(line + "\n" for line in lines[:b]), "\n".join(lines[e + 1:]), e != len(lines) - 1)
-    return None
+            found.append((style, p))
+    return found
 
 
-def _accept(current: str, new: str) -> bool:
+def _marker_free(text: str) -> bool:
+    """True when ``text`` has no marker-like line of either style."""
+    try:
+        return _parse(text, HTML) is None and _parse(text, HASH) is None
+    except ManagedError:
+        return False
+
+
+def _accept(current: str, new: str, style: Optional[str] = None) -> bool:
     """May ``new`` replace ``current``? The header marks the file as generated; otherwise the text outside the block
-    must be the same (a block appended to a file without one may add one newline)."""
+    must be the same (a block appended to a file without one may add one newline). The comment style is the kind's
+    own when the path names a kind (``style`` is then ``HTML`` for CLAUDE.md and ``HASH`` for .gitignore, as ``plan``
+    parses only that style); for a path with no kind it is the one in which ``new`` holds a well-formed block, and
+    ``new`` with blocks of both styles is refused. ``current`` is read in that style only, and ``new`` with no block
+    of the style leaves the whole-text rule."""
     if is_generated(current):
         return True
-    cur, nxt = _outside(current), _outside(new)
-    if cur is False:
+    found = _well_formed(new)
+    if style is not None:
+        found = [f for f in found if f[0] == style]
+    if len(found) > 1:
         return False
-    if cur is None:
-        if nxt is None or nxt is False:
-            return current == new
+    if not found:
+        return current == new and _marker_free(current)
+    style, p = found[0]
+    nxt = _outside(p)
+    try:
+        cp = _parse(current, style)
+    except ManagedError:
+        return False
+    if cp is None:
         before, after, final_newline = nxt
         want = current if current == "" or current.endswith("\n") else current + "\n"
         return after == "" and final_newline and before == want
-    if nxt is None or nxt is False:
-        return False
-    return cur == nxt
+    return _outside(cp) == nxt
 
 
 def _recheck(root: str, path: str, new: str) -> Optional[str]:
     state = _inspect(root, path)
     if state[0] == "conflict":
         return state[1]
-    if state[0] == "text" and not _accept(state[1], new):
+    if state[0] == "text" and not _accept(state[1], new, _PATH_STYLE.get(path)):
         return _NOT_MANAGED
     return None
 
@@ -413,6 +486,8 @@ def apply(root: str, actions: list) -> list:
             raise _fail("apply refused: %s: %s" % (path, reason), written)
         try:
             _write(root, path, new)
+        except _NotDirectory as e:  # a parent swapped after the re-check
+            raise _fail("apply refused: %s: parent %s is not a directory" % (path, e.args[0]), written) from None
         except OSError as e:
             raise _fail("%s: cannot write (%s)" % (path, e.strerror), written) from None
         written.append(path)
@@ -425,34 +500,49 @@ def _umask() -> int:
     return old
 
 
+_TEMP_TRIES = 100
+
+
+def _temp(d: int):
+    """``(fd, name)`` of a new temporary file in the directory ``d``: ``O_CREAT | O_EXCL | O_NOFOLLOW``, ``0o600``, a
+    name with the ``.sd-managed-`` prefix and a random part, retried on ``EEXIST`` up to ``_TEMP_TRIES`` times."""
+    for _ in range(_TEMP_TRIES):
+        name = ".sd-managed-" + os.urandom(8).hex()
+        try:
+            return os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=d), name
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST))
+
+
 def _write(root: str, path: str, text: str) -> None:
+    """Write ``text`` to ``path``: every component below ``root`` is reached through descriptors (``_open_parents``,
+    an absent one created), the temporary file is made in the parent's descriptor and moved over the target with
+    ``os.replace`` by descriptor, so no swap of a component can redirect the write outside ``root``. A parent that is
+    a symlink or not a directory raises ``_NotDirectory``."""
     parts = path.split("/")
-    cur = root
-    for part in parts[:-1]:
-        cur = os.path.join(cur, part)
+    d = _open_parents(root, parts[:-1], True)
+    try:
         try:
-            os.lstat(cur)
+            mode = stat.S_IMODE(os.stat(parts[-1], dir_fd=d, follow_symlinks=False).st_mode)
         except FileNotFoundError:
-            os.mkdir(cur)
-    target = os.path.join(root, *parts)
-    try:
-        mode = stat.S_IMODE(os.lstat(target).st_mode)
-    except FileNotFoundError:
-        mode = 0o666 & ~_umask()
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".sd-managed-")
-    try:
+            mode = 0o666 & ~_umask()
+        fd, tmp = _temp(d)
         try:
-            view = memoryview(text.encode("utf-8"))
-            while len(view):
-                view = view[os.write(fd, view):]
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.chmod(tmp, mode)
-        os.replace(tmp, target)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            try:
+                view = memoryview(text.encode("utf-8"))
+                while len(view):
+                    view = view[os.write(fd, view):]
+                os.fsync(fd)
+                os.fchmod(fd, mode)
+            finally:
+                os.close(fd)
+            os.replace(tmp, parts[-1], src_dir_fd=d, dst_dir_fd=d)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=d)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(d)
