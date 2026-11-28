@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261128-pydi
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4d.md R4d-1
 severity: MEDIUM
 class: "exact types of each parameter of each public function 3b.2 adds, no row and no test: bashpolicy.shell_alias_texts(call), shell_alias_texts(aliases), expansion_c_option(call), GitCall(lines), GitCall(argv_C), GitCall(sub), GitCall(args), GitCall(expansion_words), GitCall(expansions), GitCall(env_refused)"
@@ -13,11 +13,22 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - b1e0b4707290e4b73f908aa07545d687fe0164b4
+  - b1e0b4707290e4b73f908aa07545d687fe0164b4:tests/test_bashpolicy.py
 history:
   - status: open
     sha: bec59a4f43e36e95c41bce0ec1d37e1da282af98
     by: stream-hooks-7
+  - status: planned
+    sha: b1e0b4707290e4b73f908aa07545d687fe0164b4
+    by: implementer
+  - status: in-progress
+    sha: b1e0b4707290e4b73f908aa07545d687fe0164b4
+    by: implementer
+  - status: fixed-unpinned
+    sha: b1e0b4707290e4b73f908aa07545d687fe0164b4
+    by: implementer
 review_round: 4
 caused_by_change: false
 dimension: exact types, public-function completeness

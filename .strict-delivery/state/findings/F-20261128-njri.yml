@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261128-njri
-status: open
+status: in-progress
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4d.md R4d-3
 severity: LOW
 class: "exact types: callable parameters whose accepted column names an arity: Policy.state_access (ET25, callable of no arguments), commit_refusals.run_gates (ET31); callable() alone accepts a callable that needs other arguments"
@@ -18,6 +18,12 @@ history:
   - status: open
     sha: bec59a4f43e36e95c41bce0ec1d37e1da282af98
     by: stream-hooks-7
+  - status: planned
+    sha: b1e0b4707290e4b73f908aa07545d687fe0164b4
+    by: implementer
+  - status: in-progress
+    sha: b1e0b4707290e4b73f908aa07545d687fe0164b4
+    by: implementer
 review_round: 4
 caused_by_change: false
 dimension: exact types
