@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-safn
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4a2.md R4-2
+severity: LOW
+class: "env operand-then-option: env NAME=V -i git <sub> for NAME in GIT_INDEX_FILE, GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY, LANG, LC_ALL, TZ judged as git, unpinned (G3C_UNDECIDED skip); the 5 refused operands PATH, GIT_EXEC_PATH, LD_PRELOAD, FOO, a non-ASCII name skipped too"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: fd8e6232d673dc4b2a61a90dc7dec2c3fc77b29f
+    by: stream-hooks-7
+review_round: 4
+caused_by_change: false
+dimension: "env unwrap: option position"

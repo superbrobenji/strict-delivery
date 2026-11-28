@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-pqc4
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk6-3b2-review-4ab.md R4-1
+severity: MEDIUM
+class: "nested shell text: a git write in a shell -c operand split by quotes or backslashes inside the nested layer passes: bash -c 'git p\"\"ush', bash -c 'gi\"\"t push', sh -c \"git p\\ush\", bash -c 'g\\it reset --hard' (bash, sh, zsh, dash, ksh x indicator and git token x \"\", '', \\); waits on owner question Q-HK6-1"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 3b.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: fd8e6232d673dc4b2a61a90dc7dec2c3fc77b29f
+    by: stream-hooks-7
+review_round: 4
+caused_by_change: false
+dimension: "nested shell text: quote and backslash splitting inside a shell's -c operand"
