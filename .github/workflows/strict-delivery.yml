@@ -102,3 +102,141 @@ jobs:
             exit 0
           fi
           python -m gates check cleanup --plan="$PLAN"
+
+  # Task CI3: the mutation tests of a pull request run here once per head, from the tables the pull request adds or changes
+  # (.strict-delivery/mutants/<task-id>.py, read by tests/ci_mutants.py), split over four jobs; mutants-summary collects them.
+  mutants-1:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      lines: ${{ steps.run.outputs.lines }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: py39
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.9"
+      - id: py313
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - id: run
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PY39: ${{ steps.py39.outputs.python-path }}
+          PY313: ${{ steps.py313.outputs.python-path }}
+        run: python -m tests.ci_mutants run --base "origin/$BASE_REF" --head "$HEAD_SHA" --parts 4 --part 1 --python "3.9=$PY39" --python "3.13=$PY313"
+
+  mutants-2:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      lines: ${{ steps.run.outputs.lines }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: py39
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.9"
+      - id: py313
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - id: run
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PY39: ${{ steps.py39.outputs.python-path }}
+          PY313: ${{ steps.py313.outputs.python-path }}
+        run: python -m tests.ci_mutants run --base "origin/$BASE_REF" --head "$HEAD_SHA" --parts 4 --part 2 --python "3.9=$PY39" --python "3.13=$PY313"
+
+  mutants-3:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      lines: ${{ steps.run.outputs.lines }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: py39
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.9"
+      - id: py313
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - id: run
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PY39: ${{ steps.py39.outputs.python-path }}
+          PY313: ${{ steps.py313.outputs.python-path }}
+        run: python -m tests.ci_mutants run --base "origin/$BASE_REF" --head "$HEAD_SHA" --parts 4 --part 3 --python "3.9=$PY39" --python "3.13=$PY313"
+
+  mutants-4:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      lines: ${{ steps.run.outputs.lines }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: py39
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.9"
+      - id: py313
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - id: run
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PY39: ${{ steps.py39.outputs.python-path }}
+          PY313: ${{ steps.py313.outputs.python-path }}
+        run: python -m tests.ci_mutants run --base "origin/$BASE_REF" --head "$HEAD_SHA" --parts 4 --part 4 --python "3.9=$PY39" --python "3.13=$PY313"
+
+  # Task CI3: always runs on a pull request, so a failed, cancelled or skipped mutation job fails it; it reads every job's
+  # result and lines (job outputs) and fails on any NOT_APPLIED, TIMEOUT, ERROR, baseline failure or missing, duplicated or
+  # unknown line, and lists the survivors without failing on them.
+  mutants-summary:
+    needs: [mutants-1, mutants-2, mutants-3, mutants-4]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MUTANT_RESULT_1: ${{ needs.mutants-1.result }}
+          MUTANT_RESULT_2: ${{ needs.mutants-2.result }}
+          MUTANT_RESULT_3: ${{ needs.mutants-3.result }}
+          MUTANT_RESULT_4: ${{ needs.mutants-4.result }}
+          MUTANT_LINES_1: ${{ needs.mutants-1.outputs.lines }}
+          MUTANT_LINES_2: ${{ needs.mutants-2.outputs.lines }}
+          MUTANT_LINES_3: ${{ needs.mutants-3.outputs.lines }}
+          MUTANT_LINES_4: ${{ needs.mutants-4.outputs.lines }}
+        run: python -m tests.ci_mutants summary --base "origin/$BASE_REF" --head "$HEAD_SHA" --parts 4

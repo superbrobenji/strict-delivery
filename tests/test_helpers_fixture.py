@@ -2750,4 +2750,16 @@ LISTED_TESTS = {
     "test_managed.py::ApplyTests.test_apply_precheck_writes_nothing": "N-tree-without-git",
     "test_managed.py::PlanTests.test_plan_writes_nothing": "N-tree-without-git",
     "test_templates.py::TestRender.test_render_writes_nothing": "N-plain-dir",
+    # from main c2ba203 (CI3): SwapAfterCheckTest sets the mtime of its own outside file (os.utime) and compares only that file, never .git
+    "test_ci_mutants.py::SwapAfterCheckTest.test_a_hard_link_swapped_in_at_every_open_of_the_target_is_never_written_through": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_a_hard_link_to_a_file_outside_the_root_keeps_the_outside_bytes_when_the_write_open_is_refused": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_a_parent_at_every_depth_swapped_for_a_symlink_is_never_followed": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_a_parent_at_every_depth_that_is_a_symlink_at_the_check_is_refused": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_a_parent_directory_swapped_for_a_symlink_is_never_followed": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_a_regular_file_renamed_over_the_path_from_elsewhere_in_the_tree_is_an_error": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_o_nofollow_a_symlink_swapped_in_is_never_followed": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_o_nonblock_a_fifo_swapped_in_never_blocks_the_open": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_the_regular_file_check_on_the_opened_file": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_the_write_open_before_the_run_never_follows_a_swap": "N-own-mtime",
+    "test_ci_mutants.py::SwapAfterCheckTest.test_the_write_open_of_the_restore_never_follows_a_swap": "N-own-mtime",
 }

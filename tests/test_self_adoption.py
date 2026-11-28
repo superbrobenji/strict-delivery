@@ -594,7 +594,13 @@ class WorkflowTest(unittest.TestCase):
                                                                                   "actions/setup-python")])
             for repo, (sha, tag) in PINS.items():  # the trailing comment names the tag
                 self.assertIn("uses: %s@%s  # %s\n" % (repo, sha, tag), scope)
-        self.assertEqual(len(uses(self.text)), 6)  # no other action anywhere (CI1 W6: six in all)
+        # no other action anywhere (CI1 W6: six in all); Task CI3 (edited on purpose) adds checkout and two setup-python in each
+        # of four mutation jobs and checkout and one setup-python in the summary job, pinned to the same two shas
+        self.assertEqual(len(uses(self.text)), 6 + 4 * 3 + 2)
+        for scope in [job_text(self.text, "mutants-%d" % k) for k in (1, 2, 3, 4)] + [job_text(self.text, "mutants-summary")]:
+            for value in uses(scope):
+                self.assertRegex(value, r"[^@\s]+@[0-9a-f]{40}")
+                self.assertIn(value, ["%s@%s" % (repo, PINS[repo][0]) for repo in PINS])
 
     def test_workflow_permissions(self):  # W12
         self.assertEqual(top_block(self.text, "permissions"), ["  contents: read"])
@@ -689,7 +695,9 @@ class WorkflowTest(unittest.TestCase):
 
     def test_pr_job_only_on_pull_request(self):  # WF8: github.head_ref is empty on a push, and --branch "" is refused
         self.assertIn("    if: github.event_name == 'pull_request'", code_lines(self.pr()))
-        self.assertEqual(sum("if:" in ln for ln in code_lines(self.text)), 3)  # Task CI1: and the gates job's `if: always()`
+        # Task CI1: and the gates job's `if: always()`; Task CI3 (edited on purpose): and one `if` in each of the four mutation
+        # jobs and the summary job's, each pinned byte for byte in tests/test_ci_mutants.py
+        self.assertEqual(sum("if:" in ln for ln in code_lines(self.text)), 3 + 4 + 1)
         self.assertEqual(code_lines(self.gates).count("        if: github.event_name == 'pull_request'"), 1)  # FR-P3-1
 
     def test_pr_job_runner(self):  # WF13 and the table's D-Q6: ubuntu-24.04, one Python 3.13, nothing else
