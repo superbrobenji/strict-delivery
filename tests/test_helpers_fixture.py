@@ -2354,32 +2354,88 @@ class InheritedEnvTest(Base):
 
 
 class TranscriptCiteTest(unittest.TestCase):
-    """F-20261126-i27y: a ``path:line`` cite in a CI2 mutation transcript names the line the mutant changed, on this head."""
+    """F-20261126-i27y, F-20261128-uu6c (row C1): in every CI2 mutation transcript (``TRANSCRIPTS``, by hand; every
+    transcript whose TEST line names this module is one of them), each ``path:line`` cite is listed in ``CITES`` and
+    its line on this head holds the listed text; a line number in prose is refused (a cite is the only checked form).
+    Rows K1/K2: a line number of more than six digits is reported, never passed to ``int()``; the patterns are ASCII."""
     MUTATIONS = os.path.join(REPO, ".strict-delivery", "state", "plans", "2026-10-31-strict-delivery-framework", "mutations")
-    FINDINGS = ("hqt5", "765j", "ix2g", "fiw5", "zgnj")
-    CITES = {"F-20261125-fiw5.md": [("tests/helpers.py", "if os.path.isdir(src) and not os.path.islink(src):")]}
+    TRANSCRIPTS = ("F-20261125-hqt5.md", "F-20261125-765j.md", "F-20261125-ix2g.md", "F-20261125-fiw5.md",
+                   "F-20261125-zgnj.md", "F-20261126-hk6k.md", "F-20261126-yga8.md", "F-20261126-jth9.md",
+                   "F-20261126-eid2.md", "F-20261126-djav.md", "F-20261126-i27y.md")
+    COPY_LINE = "if os.path.isdir(src) and not os.path.islink(src):"
+    CITES = {"F-20261125-fiw5.md": [("tests/helpers.py", COPY_LINE)], "F-20261126-i27y.md": [("tests/helpers.py", COPY_LINE)]}
 
     def cites(self, text):
-        return re.findall(r"\b((?:tests|gates)/[A-Za-z0-9_/.]+\.py):([0-9]+)\b", text)
+        return re.findall(r"\b((?:tests|gates)/[A-Za-z0-9_/.]+\.py):([0-9]+)\b", text, re.ASCII)
+
+    def prose(self, text):
+        return re.findall(r"\b(?:lines?|l\.)\s+(?:is\s+|was\s+|at\s+|number\s+|no\.\s+)?[0-9]+\b", text,
+                          re.IGNORECASE | re.ASCII)
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def problems(self, name, text, wanted):
+        """Every problem of one transcript's ``text`` against its listed cites ``wanted`` ([(path, text at the line)])."""
+        found = self.cites(text)
+        if [c[0] for c in found] != [w[0] for w in wanted]:
+            return ["%s: cites %r, listed %r" % (name, found, [w[0] for w in wanted])]
+        out = []
+        for (path, line), (_, want) in zip(found, wanted):
+            if len(line) > 6:
+                out.append("%s: %s: a line number of %d digits" % (name, path, len(line)))
+                continue
+            lines = self.read(os.path.join(REPO, path)).split("\n")
+            n = int(line)
+            if not 1 <= n <= len(lines) or want not in lines[n - 1]:
+                out.append("%s: %s:%d does not hold %r" % (name, path, n, want))
+        return out + ["%s: a line number in prose: %r" % (name, p) for p in self.prose(text)]
 
     def test_every_cite_in_the_ci2_transcripts_is_listed_and_points_at_its_line(self):
-        found = {}
-        for fid in self.FINDINGS:
-            name = "F-20261125-%s.md" % fid
-            with open(os.path.join(self.MUTATIONS, name), encoding="utf-8") as fh:
-                found[name] = self.cites(fh.read())
-        self.assertEqual({k: [c[0] for c in v] for k, v in found.items() if v},
-                         {k: [c[0] for c in v] for k, v in self.CITES.items()})  # no unlisted cite
-        for name, wanted in self.CITES.items():
-            for (path, line), (want_path, text) in zip(found[name], wanted):
-                with self.subTest(transcript=name, cite="%s:%s" % (path, line)):
-                    with open(os.path.join(REPO, path), encoding="utf-8") as fh:
-                        lines = fh.read().split("\n")
-                    self.assertIn(text, lines[int(line) - 1])
+        self.assertEqual(set(self.CITES) - set(self.TRANSCRIPTS), set())
+        for name in self.TRANSCRIPTS:
+            with self.subTest(transcript=name):
+                text = self.read(os.path.join(self.MUTATIONS, name))
+                self.assertEqual(self.problems(name, text, self.CITES.get(name, [])), [])
+
+    def test_every_transcript_of_this_module_is_listed(self):
+        mine = [n for n in sorted(os.listdir(self.MUTATIONS))
+                if re.search(r"^TEST tests\.test_helpers_fixture\.", self.read(os.path.join(self.MUTATIONS, n)),
+                             re.MULTILINE)]
+        self.assertEqual(sorted(set(mine) - set(self.TRANSCRIPTS)), [])
+        self.assertEqual(len(set(self.TRANSCRIPTS)), len(self.TRANSCRIPTS))
 
     def test_scan_teeth(self):
         self.assertEqual(self.cites("x tests/helpers.py:218; y gates/lib/a.py:3 and tests/b.py 4"),
                          [("tests/helpers.py", "218"), ("gates/lib/a.py", "3")])
+        self.assertEqual(self.prose("the line is 269 on this head; lines 3; Line 4; at line number 5; l. 6; 102 tests"),
+                         ["line is 269", "lines 3", "Line 4", "line number 5", "l. 6"])
+        copy = [("tests/helpers.py", self.COPY_LINE)]
+        at = self.read(os.path.join(REPO, "tests", "helpers.py")).split("\n").index("        " + self.COPY_LINE) + 1
+        self.assertEqual(self.problems("t", "tests/helpers.py:%d" % at, copy), [])
+        for bad in (at + 1, at - 1, 0, 999999):  # moved by one line either way, before the first line, past the last
+            with self.subTest(line=bad):
+                self.assertEqual(self.problems("t", "tests/helpers.py:%d" % bad, copy),
+                                 ["t: tests/helpers.py:%d does not hold %r" % (bad, self.COPY_LINE)])
+        self.assertEqual(self.problems("t", "no cite", copy), ["t: cites [], listed ['tests/helpers.py']"])
+        self.assertEqual(self.problems("t", "tests/helpers.py:%d, line %d" % (at, at), copy),
+                         ["t: a line number in prose: 'line %d'" % at])
+
+    def test_k1_long_line_numbers_are_reported_without_int(self):
+        """Row K1: 4300 and 4301 digits (3.11+ refuse ``int()`` of more than 4300 digits) give the same report on 3.9."""
+        for digits in (7, 4300, 4301):
+            with self.subTest(digits=digits):
+                text = "tests/helpers.py:" + "1" * digits
+                self.assertEqual(self.problems("t", text, [("tests/helpers.py", self.COPY_LINE)]),
+                                 ["t: tests/helpers.py: a line number of %d digits" % digits])
+
+    def test_k2_code_points_new_since_3_9_do_not_change_a_word_boundary(self):
+        """Row K2: U+1E030 is a letter (Lm) in Unicode 15 (3.13) and unassigned in 3.9's Unicode 13; next to a cite or a
+        prose line number it gives the same matches on both (the patterns are ASCII)."""
+        ch = "\U0001E030"
+        self.assertEqual(self.cites(ch + "tests/helpers.py:274" + ch), [("tests/helpers.py", "274")])
+        self.assertEqual(self.prose(ch + "line 5" + ch), ["line 5"])
 
 
 class MemberOracleTest(Base):
