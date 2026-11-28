@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-qmay
+status: open
+source: 6R.2 review 2 (residual/6R.2-review-2.md) Unrelated 1
+severity: LOW
+class: "JSON values of the site files accepted by release.py and refused by gates/lib/plugin.py: NaN, Infinity, -Infinity, non-finite floats such as 1e400"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6R.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: ce24492aff79a9c418cf98e1672d0a99de8898b8
+    by: residual-controller-9
+review_round: 2
+caused_by_change: false
+dimension: JSON values of the site files

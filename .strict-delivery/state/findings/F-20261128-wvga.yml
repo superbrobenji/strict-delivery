@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-wvga
+status: open
+source: 6R.2 review 2 (residual/6R.2-review-2.md) Finding 3
+severity: LOW
+class: "root path walked again at write time: root x symlink-dir-out x between (writes outside the root), root x symlink-top x between"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6R.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: ce24492aff79a9c418cf98e1672d0a99de8898b8
+    by: residual-controller-9
+review_round: 2
+caused_by_change: false
+dimension: root path walked again at write time

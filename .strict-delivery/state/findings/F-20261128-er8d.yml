@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-er8d
+status: open
+source: 6R.2 review 2 (residual/6R.2-review-2.md) Finding 5
+severity: LOW
+class: "refusal reasons asserted by path or fragment only: test_malformed_or_foreign_block_refused (4 members), test_invalid_config_refused, the merged-config reason, test_missing_block_refused, test_directory_site_refused, test_non_utf8_refused, test_missing_site_refused, test_changelog_missing_refused"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 6R.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: ce24492aff79a9c418cf98e1672d0a99de8898b8
+    by: residual-controller-9
+review_round: 2
+caused_by_change: true
+dimension: refusal reasons pinned by path or fragment
