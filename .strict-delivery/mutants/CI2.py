@@ -1,3 +1,30 @@
+# CI2 mutant table (stream-common :70 as narrowed by the owner on 2026-11-28). Per-operand ids only in risky code of
+# tests/helpers.py (git, make_repo, cached_history, _make_repo_slow, _fast_path_ok, _private_root and _template_root,
+# _overlaps, _umask, the _ISOLATED_GIT_ENV/_REPO_SHAPING env checks), one mutant per distinct message there; elsewhere
+# (_exact, _key_ok, the lock objects) one hand-picked mutant per condition. Refuse-more only (SAFETY, stream-common :65).
+# Excluded operands (each lets a refused input through), F-20261128-jkth's new lines in git: the `str` type and the
+# `k`/`v` value arguments of the two new _exact calls, `env.items()` and the `for` loop over it. The operands excluded
+# before this round are listed in task-CI2-table-report.md (SAFETY RULE: operands left out).
+# dropped ci2-ch-dest-fn: same message as ci2-ch-dest-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-exact-msg-actual-type: _exact is not risky code: one hand-picked mutant for its one condition (ci2-exact-raises-valueerror)
+# dropped ci2-exact-msg-expected-type: _exact is not risky code: one hand-picked mutant for its one condition (ci2-exact-raises-valueerror)
+# dropped ci2-exact-msg-fn-dropped: _exact is not risky code: one hand-picked mutant for its one condition (ci2-exact-raises-valueerror)
+# dropped ci2-exact-msg-name-dropped: _exact is not risky code: one hand-picked mutant for its one condition (ci2-exact-raises-valueerror)
+# dropped ci2-git-arg-fn: same message as ci2-git-arg-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-git-arg-index: same message as ci2-git-arg-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-git-check-fn: same message as ci2-git-check-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-git-env-fn: same message as ci2-git-env-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-git-env-key-fn: same message as ci2-git-env-key-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-git-env-value-fn: same message as ci2-git-env-value-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-git-root-fn: same message as ci2-git-root-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-history-lock-null: lock objects are not risky code and hold no condition: one hand-picked lock mutant (ci2-template-lock-null)
+# dropped ci2-key-ok-bool-dropped: _key_ok is not risky code: its type-set condition keeps ci2-key-ok-str-dropped
+# dropped ci2-key-ok-int-dropped: _key_ok is not risky code: its type-set condition keeps ci2-key-ok-str-dropped
+# dropped ci2-key-ok-none-dropped: _key_ok is not risky code: its type-set condition keeps ci2-key-ok-str-dropped
+# dropped ci2-key-ok-or-and: _key_ok is not risky code: its two conditions keep ci2-key-ok-str-dropped and ci2-key-ok-tuple-only-empty
+# dropped ci2-make-repo-config-fn: same message as ci2-make-repo-config-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-make-repo-tmp-fn: same message as ci2-make-repo-tmp-name (owner 2026-11-28: one mutant per distinct message in a risky function)
+# dropped ci2-umask-lock-null: lock objects are not risky code and hold no condition: one hand-picked lock mutant (ci2-template-lock-null)
 M = {
     "ci2-ch-always-slow": ("tests/helpers.py", "if not _fast_path_ok(dest, root):\n        return dest, build(dest)", "if True:\n        return dest, build(dest)"),
     "ci2-ch-build-in-dest": ("tests/helpers.py", "hit = (built, build(built))", "hit = (built, build(dest))"),
@@ -8,7 +35,6 @@ M = {
     "ci2-ch-copy-first-name-only": ("tests/helpers.py", "for name in os.listdir(hit[0]):", "for name in os.listdir(hit[0])[:1]:"),
     "ci2-ch-copy-isdir-always": ("tests/helpers.py", "if os.path.isdir(src) and not os.path.islink(src):", "if True and not os.path.islink(src):"),
     "ci2-ch-copy-symlinks": ("tests/helpers.py", "shutil.copytree(src, dst, symlinks=True)", "shutil.copytree(src, dst, symlinks=False)"),
-    "ci2-ch-dest-fn": ("tests/helpers.py", "_exact(\"cached_history\", \"dest\", dest, str)", "_exact(\"cached_histor\", \"dest\", dest, str)"),
     "ci2-ch-dest-name": ("tests/helpers.py", "_exact(\"cached_history\", \"dest\", dest, str)", "_exact(\"cached_history\", \"des\", dest, str)"),
     "ci2-ch-facts-index": ("tests/helpers.py", "copy.deepcopy(hit[1])", "copy.deepcopy(hit[0])"),
     "ci2-ch-facts-shared": ("tests/helpers.py", "copy.deepcopy(hit[1])", "hit[1]"),
@@ -28,44 +54,31 @@ M = {
     "ci2-ch-overlap-always": ("tests/helpers.py", "        if _overlaps(real, rroot):\n", "        if True:\n"),
     "ci2-ch-overlap-raise-class": ("tests/helpers.py", "raise ValueError(\"cached_history: %s overlaps", "raise RuntimeError(\"cached_history: %s overlaps"),
     "ci2-ch-slow-facts": ("tests/helpers.py", "        return dest, build(dest)\n", "        return dest, None\n"),
-    "ci2-exact-msg-actual-type": ("tests/helpers.py", "% (fn, name, typ.__name__, type(value).__name__))", "% (fn, name, typ.__name__, typ.__name__))"),
-    "ci2-exact-msg-expected-type": ("tests/helpers.py", "% (fn, name, typ.__name__, type(value).__name__))", "% (fn, name, type(value).__name__, type(value).__name__))"),
-    "ci2-exact-msg-fn-dropped": ("tests/helpers.py", "% (fn, name, typ.__name__, type(value).__name__))", "% (name, name, typ.__name__, type(value).__name__))"),
-    "ci2-exact-msg-name-dropped": ("tests/helpers.py", "% (fn, name, typ.__name__, type(value).__name__))", "% (fn, fn, typ.__name__, type(value).__name__))"),
     "ci2-exact-raises-valueerror": ("tests/helpers.py", "raise TypeError(\"%s: %s must be exactly", "raise ValueError(\"%s: %s must be exactly"),
     "ci2-fast-path-dev-always-slow": ("tests/helpers.py", "return os.stat(tmp).st_dev == os.stat(root).st_dev", "return False"),
     "ci2-fast-path-dir-always-slow": ("tests/helpers.py", "if os.path.islink(tmp) or not os.path.isdir(tmp) or os.listdir(tmp):", "if True:"),
     "ci2-fast-path-env-always-slow": ("tests/helpers.py", "if any(os.environ.get(k) != v for k, v in _ISOLATED_GIT_ENV.items()):", "if True:"),
     "ci2-fast-path-oserror-class": ("tests/helpers.py", "    except OSError:\n        return False\n", "    except KeyError:\n        return False\n"),
     "ci2-fast-path-shaping-always-slow": ("tests/helpers.py", "if names & _REPO_SHAPING or any(k.startswith(\"GIT_CONFIG_KEY_\") or k.startswith(\"GIT_CONFIG_VALUE_\") for k in names):", "if True:"),
-    "ci2-git-arg-fn": ("tests/helpers.py", "_exact(\"git\", \"argument %d\" % i, a, str)", "_exact(\"gi\", \"argument %d\" % i, a, str)"),
-    "ci2-git-arg-index": ("tests/helpers.py", "\"argument %d\" % i, a, str)", "\"argument %d\" % (i + 1), a, str)"),
     "ci2-git-arg-name": ("tests/helpers.py", "_exact(\"git\", \"argument %d\" % i, a, str)", "_exact(\"git\", \"arg %d\" % i, a, str)"),
-    "ci2-git-check-fn": ("tests/helpers.py", "_exact(\"git\", \"check\", check, bool)", "_exact(\"gi\", \"check\", check, bool)"),
     "ci2-git-check-name": ("tests/helpers.py", "_exact(\"git\", \"check\", check, bool)", "_exact(\"git\", \"chec\", check, bool)"),
-    "ci2-git-env-fn": ("tests/helpers.py", "_exact(\"git\", \"env\", env, dict)", "_exact(\"gi\", \"env\", env, dict)"),
+    "ci2-git-env-key-name": ("tests/helpers.py", "_exact(\"git\", \"env key\", k, str)", "_exact(\"git\", \"env ke\", k, str)"),
     "ci2-git-env-name": ("tests/helpers.py", "_exact(\"git\", \"env\", env, dict)", "_exact(\"git\", \"en\", env, dict)"),
+    "ci2-git-env-value-name": ("tests/helpers.py", "_exact(\"git\", \"env value\", v, str)", "_exact(\"git\", \"env valu\", v, str)"),
     "ci2-git-optional-locks-after-env": ("tests/helpers.py", "    full_env[\"GIT_OPTIONAL_LOCKS\"] = \"0\"\n    if env:\n        full_env.update(env)\n", "    if env:\n        full_env.update(env)\n    full_env[\"GIT_OPTIONAL_LOCKS\"] = \"0\"\n"),
     "ci2-git-optional-locks-key": ("tests/helpers.py", "full_env[\"GIT_OPTIONAL_LOCKS\"] = \"0\"", "full_env[\"GIT_OPTIONAL_LOCK\"] = \"0\""),
     "ci2-git-optional-locks-removed": ("tests/helpers.py", "    full_env[\"GIT_OPTIONAL_LOCKS\"] = \"0\"\n", ""),
     "ci2-git-optional-locks-value": ("tests/helpers.py", "full_env[\"GIT_OPTIONAL_LOCKS\"] = \"0\"", "full_env[\"GIT_OPTIONAL_LOCKS\"] = \"1\""),
-    "ci2-git-root-fn": ("tests/helpers.py", "_exact(\"git\", \"root\", root, str)", "_exact(\"gi\", \"root\", root, str)"),
     "ci2-git-root-name": ("tests/helpers.py", "_exact(\"git\", \"root\", root, str)", "_exact(\"git\", \"roo\", root, str)"),
-    "ci2-history-lock-null": ("tests/helpers.py", "_HISTORY_LOCK = threading.Lock()", "_HISTORY_LOCK = contextlib.nullcontext()"),
     "ci2-history-root-initial": ("tests/helpers.py", "_HISTORY_ROOT: list = []", "_HISTORY_ROOT: list = [None]"),
     "ci2-history-root-prefix": ("tests/helpers.py", "os.path.realpath(_private_root(_HISTORY_ROOT, \"sd-fixture-history-\"))", "os.path.realpath(_private_root(_HISTORY_ROOT, \"sd-fixture-histor-\"))"),
     "ci2-isolated-global-key": ("tests/helpers.py", "\"1\", \"GIT_CONFIG_GLOBAL\": \"/dev/null\"}", "\"1\", \"GIT_CONFIG_GLOBA\": \"/dev/null\"}"),
     "ci2-isolated-global-value": ("tests/helpers.py", "\"1\", \"GIT_CONFIG_GLOBAL\": \"/dev/null\"}", "\"1\", \"GIT_CONFIG_GLOBAL\": \"/dev/nul\"}"),
     "ci2-isolated-nosystem-key": ("tests/helpers.py", "_ISOLATED_GIT_ENV = {\"GIT_CONFIG_NOSYSTEM\": \"1\"", "_ISOLATED_GIT_ENV = {\"GIT_CONFIG_NOSYSTE\": \"1\""),
     "ci2-isolated-nosystem-value": ("tests/helpers.py", "_ISOLATED_GIT_ENV = {\"GIT_CONFIG_NOSYSTEM\": \"1\"", "_ISOLATED_GIT_ENV = {\"GIT_CONFIG_NOSYSTEM\": \"11\""),
-    "ci2-key-ok-bool-dropped": ("tests/helpers.py", "type(key) in (str, int, bool, type(None))", "type(key) in (str, int, type(None))"),
-    "ci2-key-ok-int-dropped": ("tests/helpers.py", "type(key) in (str, int, bool, type(None))", "type(key) in (str, bool, type(None))"),
-    "ci2-key-ok-none-dropped": ("tests/helpers.py", "type(key) in (str, int, bool, type(None))", "type(key) in (str, int, bool)"),
-    "ci2-key-ok-or-and": ("tests/helpers.py", "type(key) in (str, int, bool, type(None)) or (type(key) is tuple", "type(key) in (str, int, bool, type(None)) and (type(key) is tuple"),
     "ci2-key-ok-str-dropped": ("tests/helpers.py", "type(key) in (str, int, bool, type(None))", "type(key) in (int, bool, type(None))"),
     "ci2-key-ok-tuple-only-empty": ("tests/helpers.py", "type(key) is tuple and all(_key_ok(k) for k in key)", "type(key) is tuple and not key and all(_key_ok(k) for k in key)"),
     "ci2-make-repo-always-slow": ("tests/helpers.py", "if not _fast_path_ok(tmp, root):\n        return _make_repo_slow(tmp, config)", "if True:\n        return _make_repo_slow(tmp, config)"),
-    "ci2-make-repo-config-fn": ("tests/helpers.py", "_exact(\"make_repo\", \"config\", config, dict)", "_exact(\"make_rep\", \"config\", config, dict)"),
     "ci2-make-repo-config-name": ("tests/helpers.py", "_exact(\"make_repo\", \"config\", config, dict)", "_exact(\"make_repo\", \"confi\", config, dict)"),
     "ci2-make-repo-copy-names": ("tests/helpers.py", "for name in os.listdir(tpl):", "for name in [\".git\"]:"),
     "ci2-make-repo-copy-symlinks": ("tests/helpers.py", "shutil.copytree(os.path.join(tpl, name), os.path.join(tmp, name), symlinks=True)", "shutil.copytree(os.path.join(tpl, name), os.path.join(tmp, name), symlinks=False)"),
@@ -87,7 +100,6 @@ M = {
     "ci2-make-repo-template-stored": ("tests/helpers.py", "            _TEMPLATES[key] = tpl\n", "            pass\n"),
     "ci2-make-repo-text-default": ("tests/helpers.py", "emit(config if config is not None else minimal_config())", "emit(config if config is not None else {})"),
     "ci2-make-repo-text-none-case": ("tests/helpers.py", "emit(config if config is not None else minimal_config())", "emit(config if config is None else minimal_config())"),
-    "ci2-make-repo-tmp-fn": ("tests/helpers.py", "_exact(\"make_repo\", \"tmp\", tmp, str)", "_exact(\"make_rep\", \"tmp\", tmp, str)"),
     "ci2-make-repo-tmp-name": ("tests/helpers.py", "_exact(\"make_repo\", \"tmp\", tmp, str)", "_exact(\"make_repo\", \"tm\", tmp, str)"),
     "ci2-overlaps-above-prefix": ("tests/helpers.py", "root.startswith(real + os.sep)", "root.startswith(real)"),
     "ci2-overlaps-below-prefix": ("tests/helpers.py", "real.startswith(root + os.sep)", "real.startswith(root)"),
@@ -104,7 +116,6 @@ M = {
     "ci2-template-root-holder": ("tests/helpers.py", "_private_root(_TEMPLATE_ROOT, \"sd-fixture-template-\")", "_private_root(_HISTORY_ROOT, \"sd-fixture-template-\")"),
     "ci2-template-root-initial": ("tests/helpers.py", "_TEMPLATE_ROOT: list = []", "_TEMPLATE_ROOT: list = [None]"),
     "ci2-template-root-prefix": ("tests/helpers.py", "_private_root(_TEMPLATE_ROOT, \"sd-fixture-template-\")", "_private_root(_TEMPLATE_ROOT, \"sd-fixture-templat-\")"),
-    "ci2-umask-lock-null": ("tests/helpers.py", "_UMASK_LOCK = threading.Lock()", "_UMASK_LOCK = contextlib.nullcontext()"),
     "ci2-umask-probe-value": ("tests/helpers.py", "old = os.umask(0)\n", "old = os.umask(0o77)\n"),
     "ci2-umask-restore-dropped": ("tests/helpers.py", "        os.umask(old)\n", "        pass\n"),
     "ci2-umask-returns-constant": ("tests/helpers.py", "        os.umask(old)\n    return old\n", "        os.umask(old)\n    return 0o022\n"),
@@ -119,7 +130,6 @@ KILL = {
     "ci2-ch-copy-first-name-only": ("tests.test_helpers_fixture",),
     "ci2-ch-copy-isdir-always": ("tests.test_helpers_fixture",),
     "ci2-ch-copy-symlinks": ("tests.test_helpers_fixture",),
-    "ci2-ch-dest-fn": ("tests.test_helpers_fixture",),
     "ci2-ch-dest-name": ("tests.test_helpers_fixture",),
     "ci2-ch-facts-index": ("tests.test_helpers_fixture",),
     "ci2-ch-facts-shared": ("tests.test_helpers_fixture",),
@@ -139,44 +149,31 @@ KILL = {
     "ci2-ch-overlap-always": ("tests.test_helpers_fixture",),
     "ci2-ch-overlap-raise-class": ("tests.test_helpers_fixture",),
     "ci2-ch-slow-facts": ("tests.test_helpers_fixture",),
-    "ci2-exact-msg-actual-type": ("tests.test_helpers_fixture",),
-    "ci2-exact-msg-expected-type": ("tests.test_helpers_fixture",),
-    "ci2-exact-msg-fn-dropped": ("tests.test_helpers_fixture",),
-    "ci2-exact-msg-name-dropped": ("tests.test_helpers_fixture",),
     "ci2-exact-raises-valueerror": ("tests.test_helpers_fixture",),
     "ci2-fast-path-dev-always-slow": ("tests.test_helpers_fixture",),
     "ci2-fast-path-dir-always-slow": ("tests.test_helpers_fixture",),
     "ci2-fast-path-env-always-slow": ("tests.test_helpers_fixture",),
     "ci2-fast-path-oserror-class": ("tests.test_helpers_fixture",),
     "ci2-fast-path-shaping-always-slow": ("tests.test_helpers_fixture",),
-    "ci2-git-arg-fn": ("tests.test_helpers_fixture",),
-    "ci2-git-arg-index": ("tests.test_helpers_fixture",),
     "ci2-git-arg-name": ("tests.test_helpers_fixture",),
-    "ci2-git-check-fn": ("tests.test_helpers_fixture",),
     "ci2-git-check-name": ("tests.test_helpers_fixture",),
-    "ci2-git-env-fn": ("tests.test_helpers_fixture",),
+    "ci2-git-env-key-name": ("tests.test_helpers_fixture",),
     "ci2-git-env-name": ("tests.test_helpers_fixture",),
+    "ci2-git-env-value-name": ("tests.test_helpers_fixture",),
     "ci2-git-optional-locks-after-env": ("tests.test_helpers_fixture",),
     "ci2-git-optional-locks-key": ("tests.test_helpers_fixture",),
     "ci2-git-optional-locks-removed": ("tests.test_helpers_fixture",),
     "ci2-git-optional-locks-value": ("tests.test_helpers_fixture",),
-    "ci2-git-root-fn": ("tests.test_helpers_fixture",),
     "ci2-git-root-name": ("tests.test_helpers_fixture",),
-    "ci2-history-lock-null": ("tests.test_helpers_fixture",),
     "ci2-history-root-initial": ("tests.test_helpers_fixture",),
     "ci2-history-root-prefix": ("tests.test_helpers_fixture",),
     "ci2-isolated-global-key": ("tests.test_helpers_fixture",),
     "ci2-isolated-global-value": ("tests.test_helpers_fixture",),
     "ci2-isolated-nosystem-key": ("tests.test_helpers_fixture",),
     "ci2-isolated-nosystem-value": ("tests.test_helpers_fixture",),
-    "ci2-key-ok-bool-dropped": ("tests.test_helpers_fixture",),
-    "ci2-key-ok-int-dropped": ("tests.test_helpers_fixture",),
-    "ci2-key-ok-none-dropped": ("tests.test_helpers_fixture",),
-    "ci2-key-ok-or-and": ("tests.test_helpers_fixture",),
     "ci2-key-ok-str-dropped": ("tests.test_helpers_fixture",),
     "ci2-key-ok-tuple-only-empty": ("tests.test_helpers_fixture",),
     "ci2-make-repo-always-slow": ("tests.test_helpers_fixture",),
-    "ci2-make-repo-config-fn": ("tests.test_helpers_fixture",),
     "ci2-make-repo-config-name": ("tests.test_helpers_fixture",),
     "ci2-make-repo-copy-names": ("tests.test_helpers_fixture",),
     "ci2-make-repo-copy-symlinks": ("tests.test_helpers_fixture",),
@@ -198,7 +195,6 @@ KILL = {
     "ci2-make-repo-template-stored": ("tests.test_helpers_fixture",),
     "ci2-make-repo-text-default": ("tests.test_helpers_fixture",),
     "ci2-make-repo-text-none-case": ("tests.test_helpers_fixture",),
-    "ci2-make-repo-tmp-fn": ("tests.test_helpers_fixture",),
     "ci2-make-repo-tmp-name": ("tests.test_helpers_fixture",),
     "ci2-overlaps-above-prefix": ("tests.test_helpers_fixture",),
     "ci2-overlaps-below-prefix": ("tests.test_helpers_fixture",),
@@ -215,7 +211,6 @@ KILL = {
     "ci2-template-root-holder": ("tests.test_helpers_fixture",),
     "ci2-template-root-initial": ("tests.test_helpers_fixture",),
     "ci2-template-root-prefix": ("tests.test_helpers_fixture",),
-    "ci2-umask-lock-null": ("tests.test_helpers_fixture",),
     "ci2-umask-probe-value": ("tests.test_helpers_fixture",),
     "ci2-umask-restore-dropped": ("tests.test_helpers_fixture",),
     "ci2-umask-returns-constant": ("tests.test_helpers_fixture",),
