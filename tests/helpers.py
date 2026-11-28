@@ -126,6 +126,37 @@ CLEARED_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTO
                "GIT_INDEX_FILE", "CLAUDE_PROJECT_DIR")
 
 
+# The global git config of every GitIsolatedTestCase: no detached auto-maintenance and no auto-gc writes into a
+# fixture repository while a test reads it (process learnings B5).
+GITCONFIG_TEXT = "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n"
+
+
+class FixtureGitConfigRefused(Exception):
+    """``fixture_gitconfig`` refused its argument or its target and wrote nothing."""
+
+
+def fixture_gitconfig(home: str) -> str:
+    """Write ``<home>/../gitconfig`` (the file beside ``home``) holding exactly ``GITCONFIG_TEXT`` and return its path.
+    ``home`` must be an exact ``str`` naming an absolute path with a name of its own (never ``/``, ``.`` or ``..``). The
+    file is created by one ``os.open`` with ``O_CREAT | O_EXCL | O_NOFOLLOW``: an existing entry of any kind (a file, a
+    symlink, a dangling symlink, a directory, a FIFO) refuses, nothing is written through a link, nothing blocks. A
+    symlinked parent directory is followed (the file lands in its target)."""
+    if type(home) is not str:
+        raise TypeError("home must be an exact str, got %s" % type(home).__name__)
+    trimmed = home.rstrip("/")
+    holder, name = os.path.split(trimmed)
+    if not os.path.isabs(home) or not trimmed or name in (".", ".."):
+        raise FixtureGitConfigRefused("home must be an absolute path with a name of its own: %s" % home)
+    path = os.path.join(holder, "gitconfig")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as e:
+        raise FixtureGitConfigRefused("%s: %s" % (path, e.strerror)) from None
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+        fh.write(GITCONFIG_TEXT)
+    return path
+
+
 class GitIsolatedTestCase(unittest.TestCase):
     """Base class of every test that runs git: no system or global git config, a private HOME,
     none of the CLEARED_ENV names inherited, and a temp directory as self.tmp."""
@@ -142,7 +173,7 @@ class GitIsolatedTestCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {
             "HOME": home,
             "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_GLOBAL": fixture_gitconfig(home),
         })
         patcher.start()
         self.addCleanup(patcher.stop)
