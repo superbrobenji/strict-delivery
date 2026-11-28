@@ -68,6 +68,25 @@ def _function_of_no_arguments(fn) -> bool:
     return True
 
 
+_SIGNATURE_SOURCES = ("__signature__", "__wrapped__", "_partialmethod", "__partialmethod__")
+
+
+def _function_of_one_argument(run) -> bool:
+    """Row F4d-3r (ET31's accepted column "a callable taking one `str` and returning `Result`", R4d-3 ruling): a Python
+    function or a method of one, each exact, whose signature binds one positional argument; the ``Result`` is read after
+    the call, as before. A function that carries one of ``_SIGNATURE_SOURCES`` is refused too (V1 narrowing): inspect
+    reads those attributes in place of the function's own code, and differently on 3.9 and 3.13 (a ``__signature__``
+    str, ``_partialmethod`` against ``__partialmethod__``, a ``__wrapped__`` chain to ``print``)."""
+    func = run.__func__ if type(run) is types.MethodType else run
+    if type(func) is not types.FunctionType or any(hasattr(func, name) for name in _SIGNATURE_SOURCES):
+        return False
+    try:
+        inspect.signature(run).bind(None)
+    except (TypeError, ValueError):   # no one-argument binding, or (a method of no parameter) an unreadable signature
+        return False
+    return True
+
+
 @dataclasses.dataclass(frozen=True)
 class Policy:
     root: str
@@ -658,6 +677,8 @@ def commit_refusals(text: str, p: Policy, run_gates: Callable, stop: bool = Fals
         raise TypeError("p must be a Policy")
     if not callable(run_gates):   # row ET31: also when no commit word is read
         raise TypeError("run_gates must be callable")
+    if not _function_of_one_argument(run_gates):   # row F4d-3r (R4d-3)
+        raise TypeError("run_gates must be a function or method of one argument")
     if type(stop) is not bool:   # row ET32
         raise TypeError("stop must be a bool")
     if "commit" not in effective_words(text, p.aliases):

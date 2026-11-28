@@ -376,18 +376,19 @@ WAY = "run it with the ! prefix if you must, or ask the owner"  # hand-written, 
 BANG = "the human can run the command with the ! prefix"
 
 
-class Recorder:
-    def __init__(self, fails=()):
-        self.calls = []
-        self.fails = fails
+def Recorder(fails=()):   # F4d-3h (R4d-3, option (a)): a function of one argument, the kind run_gates must be
+    calls = []
 
-    def __call__(self, root):
-        self.calls.append(root)
+    def run(root):
+        calls.append(root)
         res = Result("g")
         res.passed("a.pass")
-        for gid, why in self.fails:
+        for gid, why in fails:
             res.fail(gid, why)
         return res
+    run.calls = calls
+    run.fails = fails
+    return run
 
 
 class ConstantsTest(unittest.TestCase):
@@ -2273,6 +2274,153 @@ class V1Round4dTest(Repo):
                 with self.assertRaises(TypeError) as cm:
                     bp.effective_words("git ci", bad)
                 self.assertEqual(str(cm.exception), msg)
+
+
+# Task 3b.2 fix round 4 part d, run_gates (R4d-3)
+import inspect  # noqa: E402
+
+_RUN_ARITY = "run_gates must be a function or method of one argument"   # row F4d-3r-x (R4d-3 ruling; hand-written)
+_GATE_FAIL = "FAIL hook.bash.gates: x.fail: bad"   # hand-written: the one FAIL line of the accepted members' Result
+
+
+class _ClassRecorder:
+    """The class ``Recorder`` of b1e0b47, kept as a scratch class: a callable object of one argument."""
+
+    def __init__(self, fails=()):
+        self.calls = []
+        self.fails = fails
+
+    def __call__(self, root):
+        self.calls.append(root)
+        res = Result("g")
+        res.passed("a.pass")
+        for gid, why in self.fails:
+            res.fail(gid, why)
+        return res
+
+
+def _gate_result(calls, root):
+    calls.append(root)
+    res = Result("g")
+    res.fail("x.fail", "bad")
+    return res
+
+
+class _GateHolder:
+    def __init__(self):
+        self.calls = []
+
+    def method(self, root):
+        return _gate_result(self.calls, root)
+
+
+def _g0():
+    return None
+
+
+def _g1(root):
+    return root
+
+
+def _g2(self, root):
+    return root
+
+
+def _with(fn, name, value):
+    """A fresh copy of the function ``fn`` that carries the attribute ``name`` (``value`` None: the copy itself)."""
+    copy = types.FunctionType(fn.__code__, fn.__globals__, fn.__name__, fn.__defaults__, fn.__closure__)
+    setattr(copy, name, copy if value is None else value)
+    return copy
+
+
+def _refused_run_gates():
+    """Row F4d-3r-x: callables outside ET31's accepted column as the R4d-3 ruling reads it, then the signature-source
+    narrowing (an attribute that inspect reads instead of the function's own code; probe2.py of ch/hk8-3b2-fix4d3.md: each
+    one marked "3.9 only" or "3.13 only" binds one argument on that interpreter alone without the narrowing)."""
+    def none():
+        return None
+
+    def two(a, b):
+        return None
+    one = inspect.Signature([inspect.Parameter("root", inspect.Parameter.POSITIONAL_ONLY)])
+    return (("no parameter", none), ("no-parameter lambda", lambda: None), ("two required parameters", two),
+            ("keyword-only", lambda *, root: None), ("builtin print", print), ("builtin len", len),
+            ("class", _ClassRecorder), ("partial of two parameters", functools.partial(two, 1)),
+            ("callable object (the old class Recorder)", _ClassRecorder()),
+            ("bound __call__ of __call__(self)", _Call0().__call__),
+            ("MethodType(print, 1)", types.MethodType(print, 1)), ("MethodType(len, 1)", types.MethodType(len, 1)),
+            ("method of a function of no parameter (ValueError)", types.MethodType(none, 1)),
+            ("method of a keyword-only function (ValueError)", types.MethodType(lambda *, k: None, 1)),
+            ("__signature__ 3", _with(_g1, "__signature__", 3)),
+            ("__wrapped__ loop", _with(_g1, "__wrapped__", None)),
+            ("__signature__ of one parameter on a function of none", _with(_g0, "__signature__", one)),
+            ("__signature__ a str (3.13 only)", _with(_g0, "__signature__", "(root)")),
+            ("__wrapped__ of one parameter on a function of none", _with(_g0, "__wrapped__", lambda root: None)),
+            ("__wrapped__ print (3.13 only)", _with(_g1, "__wrapped__", print)),
+            ("_partialmethod of *a (3.9 only)", _with(_g0, "_partialmethod", functools.partialmethod(lambda *a: None))),
+            ("_partialmethod of three (3.13 only)",
+             _with(_g1, "_partialmethod", functools.partialmethod(lambda s, a, b: None))),
+            ("__partialmethod__ of *a (3.13 only)",
+             _with(_g0, "__partialmethod__", functools.partialmethod(lambda *a: None))),
+            ("__partialmethod__ of three (3.9 only)",
+             _with(_g1, "__partialmethod__", functools.partialmethod(lambda s, a, b: None))),
+            ("method of a function whose __wrapped__ is print (3.13 only)",
+             types.MethodType(_with(_g2, "__wrapped__", print), 1)))
+
+
+class RunGatesRound4dTest(Repo):
+    """Rows F4d-3r, F4d-3r-x, F4d-3r-n and F4d-3h (R4d-3, the run_gates member; ET31's accepted column "a callable taking
+    one `str` and returning `Result`"): ``commit_refusals`` takes as ``run_gates`` a Python function, or a method of one,
+    that binds one positional argument, checked at the entry; every verdict is hand-written, so both interpreters (the
+    runner) give the same one."""
+
+    def raises(self, call, msg, label=""):
+        with self.subTest(case=label):
+            with self.assertRaises(TypeError) as cm:
+                call()
+            self.assertEqual(str(cm.exception), msg)
+
+    def test_run_gates_accepted(self):  # F4d-3r: the text's normal verdict; called once on a commit with no refusal
+        d = self.repo()
+        calls = []
+
+        def nested(root):
+            return _gate_result(calls, root)
+        holder = _GateHolder()
+        rec = Recorder([("x.fail", "bad")])
+        for label, run, seen in (("lambda", lambda root: _gate_result(calls, root), calls),
+                                 ("nested function", nested, calls),
+                                 ("defaulted second parameter", lambda root, x=1: _gate_result(calls, root), calls),
+                                 ("varargs", lambda *a: _gate_result(calls, *a), calls),
+                                 ("bound method", holder.method, holder.calls), ("Recorder()", rec, rec.calls),
+                                 ("bound __call__ of the old class Recorder", _ClassRecorder([("x.fail", "bad")]).__call__,
+                                  None)):
+            with self.subTest(ok=label):
+                seen = run.__self__.calls if seen is None else seen
+                del seen[:]
+                self.assertEqual(bp.commit_refusals("ls", pol(root=d, cwd=d), run), [])
+                self.assertEqual(seen, [])
+                self.assertEqual(bp.commit_refusals("git commit -m m", pol(root=d, cwd=d), run), [_GATE_FAIL])
+                self.assertEqual(seen, [d])
+                self.assertEqual(bp.commit_refusals("git commit -n -m m", pol(root=d, cwd=d), run),
+                                 ["FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; " + BANG])
+                self.assertEqual(seen, [d])   # not called after a refusal
+        self.assertEqual(bp.commit_refusals("ls", pol(), pre_bash._run_gates(None)), [])   # F4d-3w: the hook's kind
+
+    def test_run_gates_refused(self):  # F4d-3r-x: at the entry, also when no commit word is read (ET31)
+        for text in ("ls", "git commit -m m"):
+            for label, bad in _refused_run_gates():
+                self.raises(lambda: bp.commit_refusals(text, pol(), bad), _RUN_ARITY, text + ": " + label)
+
+    def test_run_gates_not_callable(self):  # F4d-3r-n: ET31's refused column keeps its error
+        for text in ("ls", "git commit -m m"):
+            for bad in (None, "x", 3):
+                self.raises(lambda: bp.commit_refusals(text, pol(), bad), "run_gates must be callable", text + repr(bad))
+
+    def test_state_access_old_recorder(self):  # F4d-3 invariant: b1e0b47's two Recorder members, as they were
+        for label, bad in (("callable object of one argument", _ClassRecorder()),
+                           ("bound method of one argument", _ClassRecorder().__call__)):
+            self.raises(lambda: pol(state_access=bad), _STATE_ARITY, label)
 
 
 if __name__ == "__main__":
