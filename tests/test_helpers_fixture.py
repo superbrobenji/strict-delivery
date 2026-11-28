@@ -1039,8 +1039,6 @@ def _guard_problems(node, text, own, is_builder):
 
     def guard_path(args, keywords, name):
         kw, idx = GUARD_ARGS[name]
-        if any(isinstance(a, ast.Starred) for a in args) or any(k.arg is None for k in keywords):
-            return "starred"
         return args[idx] if len(args) > idx else next((k.value for k in keywords if k.arg == kw), None)
 
     bad, refs = [], set()
@@ -1048,10 +1046,8 @@ def _guard_problems(node, text, own, is_builder):
         if isinstance(sub, ast.Call):
             callee = _callee(sub.func)
             if callee in GUARD_ARGS and (own or id(sub) in area):
-                arg = guard_path(sub.args, sub.keywords, callee)
-                if arg == "starred":
-                    bad.append("starred arguments")
-                elif arg is None or not accepted(arg, frozenset()):
+                arg = guard_path(sub.args, sub.keywords, callee)  # a starred argument or ``**kw`` is no accepted form: reported
+                if not accepted(arg, frozenset()):  # no path argument at all (None) is no accepted form either
                     bad.append(ast.get_source_segment(text, arg) if arg is not None else "no path argument")
             # a guarded function passed by value: its arguments are the ones after it (after the text for ``self.refused``)
             for i, a in enumerate(sub.args):
@@ -1065,9 +1061,7 @@ def _guard_problems(node, text, own, is_builder):
                         continue
                     rest, kws = sub.args[i + skip:], sub.keywords
                     arg = guard_path(rest, kws, _callee(a))
-                    if arg == "starred":
-                        bad.append("starred arguments")
-                    elif arg is None or not accepted(arg, frozenset()):
+                    if not accepted(arg, frozenset()):
                         bad.append(ast.get_source_segment(text, arg) if arg is not None else "no path argument")
             if own and len(sub.args) > 1 and isinstance(sub.args[0], ast.Name) and sub.args[0].id == "self" \
                     and isinstance(sub.args[1], ast.Constant) and sub.args[1].value in ("tmp", "work"):
@@ -1477,6 +1471,8 @@ class GuardScanTest(Base):
         other = ("class T(Base):\n    def test_x(self):\n        with self.assertRaises(ValueError):\n"
                  "            self.refused(make_repo, 'x', self.tmp)\n")
         self.assertEqual(self.scan(**{self.OTHER: other}), {self.OTHER + "::T.test_x"})
+        wrapped = other.replace("self.tmp", "self.inside(p)")  # `refused` is unknown outside the own file: even a wrapped path is reported
+        self.assertEqual(self.scan(**{self.OTHER: wrapped}), {self.OTHER + "::T.test_x"})
 
     def test_the_own_file_forms_are_not_accepted_in_other_modules_and_inside_is(self):
         for expr in ("self.tmp", "self.work", "self.fresh('a')", "self.sandbox()", "Str(self.tmp)"):
