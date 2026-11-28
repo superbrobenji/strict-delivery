@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import types
 from typing import Callable, Mapping, Optional
 
 from gates.lib import gitinfo, shellscan
@@ -63,6 +64,28 @@ class Policy:
     agent_key: str
     cwd: str
     state_access: Callable
+
+    def __post_init__(self) -> None:
+        """Rows ET20-ET25 (Q-RS4-1 (A), CDP6): every field's exact type; ``env`` is the one named exception (T:101 PO7:
+        a ``dict``, a ``dict`` subclass or a read-only ``types.MappingProxyType``)."""
+        for name in ("root", "cwd"):
+            value = getattr(self, name)
+            if type(value) is not str or not os.path.isabs(value):
+                raise TypeError("Policy.%s must be a str" % name)
+        if self.cfg is not None and type(self.cfg) is not dict:
+            raise TypeError("Policy.cfg must be None or a dict")
+        for name in ("cfg_error", "branch"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not str:
+                raise TypeError("Policy.%s must be None or a str" % name)
+        if not isinstance(self.env, dict) and type(self.env) is not types.MappingProxyType:
+            raise TypeError("Policy.env must be a dict or a read-only mapping")
+        _check_aliases(self.aliases)
+        for name in ("base", "agent_key"):
+            if type(getattr(self, name)) is not str:
+                raise TypeError("Policy.%s must be a str" % name)
+        if not callable(self.state_access):
+            raise TypeError("Policy.state_access must be callable")
 
 
 def _fold(text: str) -> str:
@@ -135,6 +158,8 @@ def text_refusals(text: str, agent_id: Optional[str] = None) -> list:
     """The FAIL lines of the text checks (no config needed), in the order no-verify, hooks-path, git-config-env, home,
     decide; each id at most once."""
     shellscan._check_str(text, "text")
+    if agent_id is not None and (type(agent_id) is not str or agent_id == ""):   # row ET10
+        raise TypeError("agent_id must be None or a non-empty str")
     views = _views(text)
     out = []
     if any(t.startswith("--no-v") for v in views for t in _runs(v)):
@@ -215,9 +240,8 @@ def is_git_write(sub: str, args) -> bool:
         raise TypeError("subcommand must be a str")
     if sub == "":
         raise GateError("an empty git subcommand")
-    args = list(args)
-    if any(type(word) is not str for word in args):
-        raise TypeError("git words must be str")
+    if type(args) is not list or any(type(word) is not str for word in args):   # row ET14
+        raise TypeError("git words must be a list of str")
     if sub in GIT_WRITES:
         return True
     if sub not in WRITE_OPTIONS:
@@ -238,6 +262,8 @@ def write_option_in_text(views) -> bool:
     ``branch``, ``checkout`` or ``switch`` followed, in the same simple command (cut at ``; & | newline ( )``), by one of that
     subcommand's create, move, copy, delete or force options: ``is_git_write`` over the words after it (R2-7, F-20261126-te2b;
     plan :3336 puts those forms in the git writes, :3659 'plain or not'). One pass over the words, linear in the text."""
+    if type(views) is not tuple or len(views) != 2 or any(type(v) is not str for v in views):   # row ET15
+        raise TypeError("views must be a tuple of two str")
     return any(_segment_writes(seg) for view in views for seg in _simple_commands(view))
 
 
@@ -342,6 +368,9 @@ def _resolve(sub: str, rest: list, aliases: dict) -> tuple:
 
 def git_call(scan, aliases: dict) -> Optional[GitCall]:
     """The reading of a plain command; ``None`` when it has no program word."""
+    if type(scan) is not shellscan.Scan:   # row ET17
+        raise TypeError("scan must be a shellscan.Scan")
+    _check_aliases(aliases)   # row ET18 (as ET12)
     lines: list = []
     for name, _value in scan.assignments:
         if name == "GIT_INDEX_FILE":
@@ -400,6 +429,8 @@ def n_flag(args) -> bool:
     """Whether the words of a ``commit`` hold ``-n`` as a short cluster (read left to right; the letters of
     ``_N_SHORT_VALUES`` take the rest of the cluster or the next word as a value, which is skipped; decision CD9: after
     ``--`` the words are still read)."""
+    if type(args) is not list or any(type(word) is not str for word in args):   # row ET16
+        raise TypeError("args must be a list of str")
     n = 0
     while n < len(args):
         word = args[n]
@@ -424,6 +455,12 @@ def target_root(scan, argv_C: Optional[str], p: Policy) -> tuple:
     ``cwd`` and ``realpath``ed), or of ``cwd``; ``root`` is ``None`` when ``fails`` is not empty. The top level must be one
     of the worktrees ``p.state_access()`` (the caller's ``worktrees.allowed`` pair plus its dispatch record) names; a
     ``-C`` together with ``cd`` is refused."""
+    if type(scan) is not shellscan.Scan:   # row ET26 (as ET17)
+        raise TypeError("scan must be a shellscan.Scan")
+    if argv_C is not None and type(argv_C) is not str:   # row ET27
+        raise TypeError("argv_C must be None or a str")
+    if type(p) is not Policy:   # row ET28 (CDP6)
+        raise TypeError("p must be a Policy")
     if argv_C is not None and scan.cd is not None:
         return None, ["FAIL hook.bash.target: -C and cd both name a directory; use one; %s" % _WAY]
     named = argv_C if argv_C is not None else scan.cd
@@ -626,6 +663,12 @@ def commit_refusals(text: str, p: Policy, run_gates: Callable, stop: bool = Fals
     only when the unstaged check found nothing; ``run_gates`` is never called after a refusal. ``stop`` (the target was
     refused, so ``p`` is not the target's policy) returns after step 5, before the config, unstaged and gate steps."""
     shellscan._check_str(text, "text")
+    if type(p) is not Policy:   # row ET30 (CDP6)
+        raise TypeError("p must be a Policy")
+    if not callable(run_gates):   # row ET31: also when no commit word is read
+        raise TypeError("run_gates must be callable")
+    if type(stop) is not bool:   # row ET32
+        raise TypeError("stop must be a bool")
     if "commit" not in effective_words(text, p.aliases):
         return []
     scan = shellscan.scan(text)

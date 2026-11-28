@@ -2738,5 +2738,24 @@ class G4TextTokenHookGeneratedTest(GeneratedHookCase):
         gl.gen_fail(self, "G4 H", gl.GEN_SEED, bad, len(texts))
 
 
+# Task 3b.2 fix round 3 part D: exact-type rows (Q-RS4-1 (A))
+class ExactTypesHookTest(HookCase):
+    """Row ET34 through the hook. A JSON object always parses to an exact ``dict`` (hookio's ``_pairs``), so a ``dict``
+    subclass cannot reach ``pre_bash.handle`` from the hook; a ``null``, list, string or number ``tool_input`` is refused by
+    hookio before any handler runs, exit 2 (fail closed). In process (tests/test_bashpolicy.py ExactTypesHandleTest)
+    ``handle`` gives the ``hook.bash.input`` line for a subclass, ``None`` and a list."""
+
+    LINE = ("FAIL hook.PreToolUse: hook.input: tool_input must be an object; the strict-delivery hook fails closed; the "
+            "human can disable the plugin with /plugin, and !-prefixed commands still run\n")
+
+    def test_exact_types_tool_input_through_the_hook(self):  # ET34
+        self.passes(self.B("ls", tool_input={"command": "ls"}))
+        for tool_input in (None, [], ["ls"], "ls", 3):
+            with self.subTest(tool_input=repr(tool_input)):
+                r = hookrun.run_hook("PreToolUse", hookrun.payload("PreToolUse", self.R, tool_input=tool_input), self.env,
+                                     FW)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", self.LINE))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2685,5 +2685,379 @@ class GeneratorReviewChecksTest(unittest.TestCase):
         self.assertEqual(bp.write_text_refusals("env %s=1 git reset" % cp, {}, "session"), [O_WLINE % "character"])
 
 
+# Task 3b.2 fix round 3 part D: exact-type rows (Q-RS4-1 (A))
+from gates.lib import config as _config  # noqa: E402
+
+_ROOT_ERR = "root must be a string"   # rows ET4, ET6, ET7 (as gitinfo._need_root); hand-written
+_TOP_ERR = "git rev-parse --show-toplevel: root must be the repository top level"
+_UPDATES_ERR = "updates must be a list of (ref, sha, ref) tuples of str"   # row ET8
+_DIGITS = "9" * 4301   # V1: past 3.11's default int digit limit; text, never an int()
+_NEW_CP = "Ꟁ"   # V1: Cn in 3.9's Unicode 13, Lu in 3.13's Unicode 15
+
+
+class _ListSub(list):
+    pass
+
+
+class _TupleSub(tuple):
+    pass
+
+
+class _DictSub(dict):
+    pass
+
+
+class ExactTypesGithooksTest(Repo):
+    """Rows ET4-ET8 and ET19 (table revision 2, draft section 4, "today" NO), the ET5 pin and the ET1-ET3 cases no
+    earlier test pins (ET1/ET2: ``None``, ``int``; ET3: every case): the exact type is accepted, every listed other case
+    is refused with the row's error. D-H: the hardening rows of these roots stay pinned by HooksDirPathsTest (HR8, HR9)
+    and tests/test_hook_bash.py ``test_hardening_*`` (HR1-HR7), unchanged."""
+
+    def run_main(self, argv):
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(b""))), contextlib.redirect_stdout(out):
+            code = githooks.main(argv)
+        return code, out.getvalue()
+
+    def bad_roots(self, d):
+        return (("str subclass", _StrSub(d)), ("bytes", d.encode("utf-8")), ("None", None), ("empty", ""))
+
+    def assert_root_refused(self, call, d):
+        for label, bad in self.bad_roots(d):
+            with self.subTest(root=label):
+                with self.assertRaises(GateError) as cm:
+                    call(bad)
+                self.assertEqual(str(cm.exception), _ROOT_ERR)
+        sub = os.path.join(d, "sub")
+        os.makedirs(sub, exist_ok=True)
+        with self.subTest(root="subdirectory"):   # as today
+            with self.assertRaises(GateError) as cm:
+                call(sub)
+            self.assertEqual(str(cm.exception), _TOP_ERR)
+
+    def test_exact_types_status_result(self):  # ET4 (status returns status_result)
+        d = self.repo()
+        for fn in (githooks.status_result, githooks.status):
+            with self.subTest(fn=fn.__name__):
+                self.assertEqual(fn(d, FRAMEWORK).render(False),
+                                 "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
+                self.assert_root_refused(lambda r: fn(r, FRAMEWORK), d)
+
+    def test_exact_types_status_framework_pin(self):  # ET5 (pin): the framework path, as today
+        d = self.repo()
+        for bad in (_StrSub(FRAMEWORK), FRAMEWORK.encode("utf-8"), None, "relative/path"):
+            for fn in (githooks.status_result, githooks.status):
+                with self.subTest(fn=fn.__name__, framework=repr(bad)):
+                    with self.assertRaises(githooks._FrameworkError) as cm:
+                        fn(d, bad)
+                    self.assertEqual(str(cm.exception), "the framework path must be absolute and hold no control character")
+
+    def test_exact_types_pre_commit_result(self):  # ET6
+        d = self.repo(profile="standard")
+        code, out = self.run_main(["pre-commit", "--root", d])
+        self.assertEqual((code, githooks.pre_commit_result(d).render(False)), (0, out))
+        self.assert_root_refused(githooks.pre_commit_result, d)
+
+    def test_exact_types_pre_push_result_root(self):  # ET7
+        d = self.repo()
+        self.assertTrue(githooks.pre_push_result(d, []).ok())
+        self.assert_root_refused(lambda r: githooks.pre_push_result(r, []), d)
+
+    def test_exact_types_pre_push_result_updates(self):  # ET8
+        d = self.repo()
+        head = git(d, "rev-parse", "HEAD")
+        good = [("refs/heads/feat", head, "refs/heads/feat")]
+        self.assertEqual(githooks.pre_push_result(d, good).render(False), githooks.pre_push_result(d, []).render(False))
+        self.assertEqual(githooks.pre_push_result(d, [("refs/heads/feat", head, "refs/heads/main")]).render(False),
+                         "FAIL githook.base: main is protected; open a pull request\n")
+        for label, bad in (("list subclass", _ListSub(good)), ("tuple for the list", tuple(good)), ("None", None),
+                           ("str", "refs/heads/feat %s refs/heads/feat" % head),
+                           ("tuple subclass element", [_TupleSub(good[0])]), ("list element", [list(good[0])]),
+                           ("2-tuple", [("refs/heads/feat", head)]), ("4-tuple", [good[0] + ("x",)]),
+                           ("int field", [("refs/heads/feat", 1, "refs/heads/feat")]),
+                           ("bytes field", [(b"refs/heads/feat", head, "refs/heads/feat")]),
+                           ("None field", [("refs/heads/feat", head, None)]),
+                           ("str subclass field", [("refs/heads/feat", _StrSub(head), "refs/heads/feat")]),
+                           ("one good, one bad", good + [("refs/heads/x", head)])):
+            with self.subTest(updates=label):
+                with self.assertRaises(GateError) as cm:
+                    githooks.pre_push_result(d, bad)
+                self.assertEqual(str(cm.exception), _UPDATES_ERR)
+
+    def test_exact_types_run_commands_test(self):  # ET19 (private): one direct call per case, and its two callers' paths
+        d = self.repo(profile="strict", commands={"test": "true"})
+        cfg = _config.load(d)
+        for capture in (True, False):
+            line = githooks._run_commands_test(d, cfg, capture)
+            self.assertEqual((line.status, line.id), ("PASS", "githook.test"), capture)
+        line = githooks._run_commands_test(d, cfg)
+        self.assertEqual((line.status, line.id), ("PASS", "githook.test"))
+        for bad in (1, 0, None, "x", ""):
+            with self.subTest(capture=repr(bad)):
+                with self.assertRaises(TypeError) as cm:
+                    githooks._run_commands_test(d, cfg, bad)
+                self.assertEqual(str(cm.exception), "capture must be a bool")
+        last = githooks.pre_commit_result(d).lines[-1]   # caller 1: capture=True
+        self.assertEqual((last.status, last.id), ("PASS", "githook.test"))
+        code, out = self.run_main(["pre-commit", "--root", d])   # caller 2: main, capture=False
+        self.assertEqual(code, 0)
+        self.assertTrue(out.endswith("PASS githook.test\n"), out)
+
+    def test_exact_types_gitinfo_pins(self):  # ET1, ET2 (None, int), ET3 (every case): already refused, pinned here
+        d = self.repo()
+        git(d, "config", "x.k", "v")
+        for bad in (None, 3):
+            with self.subTest(root=repr(bad)):
+                for call in (gitinfo.aliases, lambda r: gitinfo.config_value(r, "x.k")):
+                    with self.assertRaises(GateError) as cm:
+                        call(bad)
+                    self.assertEqual(str(cm.exception), _ROOT_ERR)
+        self.assertEqual(gitinfo.config_value(d, "x.k"), "v")
+        for bad in (_StrSub("x.k"), b"x.k", None, 3, True):
+            with self.subTest(key=repr(bad)):
+                with self.assertRaises(GateError) as cm:
+                    gitinfo.config_value(d, bad)
+                self.assertEqual(str(cm.exception), "config key must be a string of the form section.name")
+
+
+import collections  # noqa: E402
+import types  # noqa: E402
+
+
+class ExactTypesPolicyTest(unittest.TestCase):
+    """Rows ET20-ET25 (CDP6: the checks live in ``Policy.__post_init__``): each field's exact type is accepted, every
+    listed other case is refused with ``TypeError`` naming the field; ET22's read-only mapping (T:101 PO7) is the one
+    named exception (a ``dict`` subclass and ``types.MappingProxyType`` accepted)."""
+
+    def refused(self, field, value, msg):
+        with self.subTest(field=field, value=repr(value)):
+            with self.assertRaises(TypeError) as cm:
+                pol(**{field: value})
+            self.assertEqual(str(cm.exception), msg)
+
+    def test_exact_types_policy_accepted(self):
+        p = pol()
+        self.assertIs(type(p), bp.Policy)
+        for kw in ({"cfg": None}, {"cfg_error": "bad config"}, {"branch": None}, {"env": _DictSub(K="v")},
+                   {"env": types.MappingProxyType({"K": "v"})}, {"aliases": {"ci": "commit"}}, {"agent_key": "a1"},
+                   {"base": "trunk"}, {"root": "/", "cwd": "/x/y"}, {"state_access": dict}):
+            with self.subTest(kw=repr(kw)):
+                p = pol(**kw)
+                for k, v in kw.items():
+                    self.assertIs(getattr(p, k), v)
+
+    def test_exact_types_policy_root_cwd(self):  # ET20
+        for field in ("root", "cwd"):
+            for bad in (_StrSub("/r"), 3, None, "relative", "", b"/r"):
+                self.refused(field, bad, "Policy.%s must be a str" % field)
+
+    def test_exact_types_policy_cfg_fields(self):  # ET21
+        for bad in (_DictSub(), [], "cfg", 0):
+            self.refused("cfg", bad, "Policy.cfg must be None or a dict")
+        for field in ("cfg_error", "branch"):
+            for bad in (_StrSub("x"), b"x", 3, ["x"]):
+                self.refused(field, bad, "Policy.%s must be None or a str" % field)
+
+    def test_exact_types_policy_env(self):  # ET22
+        for bad in (None, "K=v", [("K", "v")], collections.ChainMap({}), 0):
+            self.refused("env", bad, "Policy.env must be a dict or a read-only mapping")
+
+    def test_exact_types_policy_aliases(self):  # ET23 (as ET12)
+        for bad in (_DictSub(), types.MappingProxyType({}), None, []):
+            self.refused("aliases", bad, "aliases must be a dict")
+        for bad in ({_StrSub("ci"): "commit"}, {"ci": _StrSub("commit")}, {"ci": None}, {1: "commit"}):
+            self.refused("aliases", bad, "aliases must map str to str")
+
+    def test_exact_types_policy_base_agent_key(self):  # ET24
+        for field in ("base", "agent_key"):
+            for bad in (_StrSub("main"), None, 3, b"main"):
+                self.refused(field, bad, "Policy.%s must be a str" % field)
+
+    def test_exact_types_policy_state_access(self):  # ET25
+        for bad in (None, "access", (frozenset(), [], None)):
+            self.refused("state_access", bad, "Policy.state_access must be callable")
+
+    def test_exact_types_policy_v1(self):  # V1: digits and a code point new in Unicode 14, exact str and a subclass
+        for value in (_DIGITS, _NEW_CP, "/" + _DIGITS):
+            with self.subTest(value=value[:8]):
+                self.assertEqual(pol(base=value, agent_key=value, branch=value, cfg_error=value).base, value)
+                self.refused("base", _StrSub(value), "Policy.base must be a str")
+        self.assertEqual(pol(root="/" + _NEW_CP, cwd="/" + _DIGITS).root, "/" + _NEW_CP)
+
+
+import dataclasses  # noqa: E402
+
+
+class _PolicySub(bp.Policy):
+    pass
+
+
+def _duck_policy():
+    return types.SimpleNamespace(**dataclasses.asdict(pol()))
+
+
+def _scan_sub(text):
+    s = shellscan.scan(text)
+    return type("_ScanSub", (shellscan.Scan,), {})(*[getattr(s, f.name) for f in dataclasses.fields(s)])
+
+
+def _scan_duck(text):
+    s = shellscan.scan(text)
+    return types.SimpleNamespace(**{f.name: getattr(s, f.name) for f in dataclasses.fields(s)})
+
+
+_NO_TOP = "FAIL hook.bash.target: /nonexistent-root has no git top level; " + WAY
+
+
+class ExactTypesFunctionsTest(unittest.TestCase):
+    """Rows ET10, ET14-ET18, ET26-ET28, ET30-ET32 (each "NO" row narrowed at the function's entry) and the cases of the
+    "yes" rows ET9, ET11-ET13, ET29 no earlier test pins (ET9/ET11/ET29: a ``str`` subclass text; ET29 also ``bytes`` and
+    ``None``; ET12: a ``dict`` subclass, a mappingproxy, a ``str``-subclass key or value, a ``None`` value; ET13: a ``str``
+    subclass). Expected errors are the rows' texts, written by hand."""
+
+    def raises(self, call, msg, label=""):
+        with self.subTest(case=label):
+            with self.assertRaises(TypeError) as cm:
+                call()
+            self.assertEqual(str(cm.exception), msg)
+
+    def test_exact_types_text_refusals_agent_id(self):  # ET10
+        text = "decision decide x"
+        self.assertEqual(ids(bp.text_refusals(text)), [])
+        self.assertEqual(ids(bp.text_refusals(text, None)), [])
+        for agent in ("a1", _DIGITS, _NEW_CP):
+            self.assertEqual(ids(bp.text_refusals(text, agent)), ["hook.bash.decide"], agent[:8])
+        for bad in (b"a1", 1, 0, True, False, "", _StrSub("a1"), ["a1"]):
+            self.raises(lambda: bp.text_refusals(text, bad), "agent_id must be None or a non-empty str", repr(bad))
+            self.raises(lambda: bp.text_refusals("ls", bad), "agent_id must be None or a non-empty str", repr(bad))
+
+    def test_exact_types_yes_row_pins(self):  # ET9, ET11, ET12, ET13, ET29: already refused, pinned here
+        self.raises(lambda: bp.text_refusals(_StrSub("ls")), "text must be str, not _StrSub", "ET9")
+        self.raises(lambda: bp.effective_words(_StrSub("git commit"), {}), "text must be str, not _StrSub", "ET11")
+        for bad in (_DictSub(), types.MappingProxyType({})):
+            self.raises(lambda: bp.effective_words("git commit", bad), "aliases must be a dict", "ET12 " + repr(bad))
+        for bad in ({_StrSub("ci"): "commit"}, {"ci": _StrSub("commit")}, {"ci": None}):
+            self.raises(lambda: bp.effective_words("git ci", bad), "aliases must map str to str", "ET12 " + repr(bad))
+        self.raises(lambda: bp.is_git_write(_StrSub("commit"), []), "subcommand must be a str", "ET13")
+        for bad in (_StrSub("git commit"), b"git commit", None):
+            self.raises(lambda: bp.commit_refusals(bad, pol(), lambda r: None),
+                        "text must be str, not %s" % type(bad).__name__, "ET29 " + repr(bad))
+
+    def test_exact_types_is_git_write(self):  # ET14
+        self.assertIs(bp.is_git_write("branch", ["-D", "x"]), True)
+        self.assertIs(bp.is_git_write("branch", ["--list"]), False)
+        self.assertIs(bp.is_git_write("commit", []), True)
+        self.assertIs(bp.is_git_write("branch", [_DIGITS, _NEW_CP]), False)
+        for bad in (("-D",), _ListSub(["-D"]), (w for w in ["-D"]), "-D", None, [_StrSub("-D")], [b"-D"], ["-D", None],
+                    [_StrSub(_DIGITS)]):
+            self.raises(lambda: bp.is_git_write("branch", bad), "git words must be a list of str", repr(bad))
+            self.raises(lambda: bp.is_git_write("commit", bad), "git words must be a list of str", repr(bad))
+
+    def test_exact_types_write_option_in_text(self):  # ET15
+        self.assertIs(bp.write_option_in_text(("git branch -D x", "git branch -D x")), True)
+        self.assertIs(bp.write_option_in_text(("git branch --list", "git branch --list")), False)
+        self.assertIs(bp.write_option_in_text((_DIGITS, _NEW_CP)), False)
+        for bad in (["git branch -D x", "git branch -D x"], "git branch -D x", None,
+                    _TupleSub(("git branch -D x", "git branch -D x")), (b"git branch -D x", "git branch -D x"),
+                    ("git branch -D x", _StrSub("git branch -D x")), (), ("git branch -D x",),
+                    ("a", "b", "c"), ("a", None)):
+            self.raises(lambda: bp.write_option_in_text(bad), "views must be a tuple of two str", repr(bad))
+
+    def test_exact_types_n_flag(self):  # ET16
+        self.assertIs(bp.n_flag(["-n"]), True)
+        self.assertIs(bp.n_flag(["-m", "-n"]), False)
+        self.assertIs(bp.n_flag([]), False)
+        self.assertIs(bp.n_flag(["-m", _DIGITS, _NEW_CP]), False)
+        for bad in (("-n",), _ListSub(["-n"]), "-n", None, [b"-n"], [None], [_StrSub("-n")], ["-m", _StrSub("x")]):
+            self.raises(lambda: bp.n_flag(bad), "args must be a list of str", repr(bad))
+
+    def test_exact_types_git_call(self):  # ET17, ET18
+        call = bp.git_call(shellscan.scan("git -C w ci -n"), {"ci": "commit"})
+        self.assertEqual((call.argv_C, call.sub, call.args), ("w", "commit", ["-n"]))
+        self.assertIsNone(bp.git_call(shellscan.scan(""), {}))
+        for bad in (_scan_sub("git commit"), _scan_duck("git commit"), None, "git commit"):
+            self.raises(lambda: bp.git_call(bad, {}), "scan must be a shellscan.Scan", repr(bad))
+        for bad in (_DictSub(), types.MappingProxyType({}), None, [], [("ci", "commit")]):
+            self.raises(lambda: bp.git_call(shellscan.scan("git status"), bad), "aliases must be a dict", repr(bad))
+        for bad in ({_StrSub("ci"): "commit"}, {"ci": _StrSub("commit")}, {"ci": None}, {1: "commit"}):
+            self.raises(lambda: bp.git_call(shellscan.scan("git status"), bad), "aliases must map str to str", repr(bad))
+
+    def test_exact_types_target_root(self):  # ET26, ET27, ET28
+        scan = shellscan.scan("git commit")
+        self.assertEqual(bp.target_root(scan, None, pol()), (None, [_NO_TOP]))
+        self.assertEqual(bp.target_root(scan, "", pol()),   # T:139, kept
+                         (None, ["FAIL hook.bash.target: an empty directory has no git top level; " + WAY]))
+        self.assertEqual(bp.target_root(scan, _DIGITS, pol()),
+                         (None, ["FAIL hook.bash.target: /nonexistent-root/%s has no git top level; %s" % (_DIGITS, WAY)]))
+        root, fails = bp.target_root(scan, _NEW_CP, pol())
+        self.assertEqual((root, len(fails), fails[0].startswith("FAIL hook.bash.target: /nonexistent-root/")), (None, 1, True))
+        for bad in (_scan_sub("git commit"), _scan_duck("git commit"), None, "git commit"):
+            self.raises(lambda: bp.target_root(bad, None, pol()), "scan must be a shellscan.Scan", repr(bad))
+        for bad in (_StrSub("w"), b"w", 3, _StrSub(_DIGITS)):
+            self.raises(lambda: bp.target_root(scan, bad, pol()), "argv_C must be None or a str", repr(bad))
+        for bad in (_PolicySub(**dataclasses.asdict(pol())), _duck_policy(), None):
+            self.raises(lambda: bp.target_root(scan, None, bad), "p must be a Policy", repr(type(bad)))
+
+    def test_exact_types_commit_refusals(self):  # ET30, ET31, ET32
+        def run(root):
+            raise AssertionError("the gates must not run")
+        n_line = ("FAIL hook.bash.bypass.n-flag: git commit -n skips the hooks; the human can run the command with the ! "
+                  "prefix")
+        self.assertEqual(bp.commit_refusals("ls", pol(), run), [])
+        self.assertEqual(bp.commit_refusals("ls", pol(), run, False), [])
+        self.assertEqual(bp.commit_refusals("git commit -n -m m", pol(), run, True), [n_line])
+        self.assertEqual(bp.commit_refusals("git commit -m " + _DIGITS, pol(), run, True), [])
+        self.assertEqual(ids(bp.commit_refusals("git commit -m " + _NEW_CP, pol(), run, True)), ["hook.bash.compound"])
+        for text in ("ls", "git commit -n -m m"):   # every check runs at the entry, also when no commit word is read
+            for bad in (_PolicySub(**dataclasses.asdict(pol())), _duck_policy(), None):
+                self.raises(lambda: bp.commit_refusals(text, bad, run), "p must be a Policy", text + repr(type(bad)))
+            for bad in (None, "run"):
+                self.raises(lambda: bp.commit_refusals(text, pol(), bad), "run_gates must be callable", text + repr(bad))
+            for bad in (1, 0, None, "yes", ""):
+                self.raises(lambda: bp.commit_refusals(text, pol(), run, bad), "stop must be a bool", text + repr(bad))
+
+
+_INPUT_LINE = "FAIL hook.bash.input: command must be a string; " + WAY   # rows ET34, ET35 (hand-written)
+
+
+class ExactTypesHandleTest(Repo):
+    """Rows ET33, ET34 (in process; ET34 through the hook in tests/test_hook_bash.py) and the cases of the "yes" row ET35
+    no earlier test pins in process (a ``str`` subclass, ``None``, ``int``, a ``list`` command)."""
+
+    def ctx(self, root, command):
+        raw = {"tool_name": "Bash", "tool_input": {"command": command, "description": "d"}, "session_id": "s1",
+               "cwd": root}
+        return hookio.context("PreToolUse", raw, {"PATH": os.environ["PATH"]}, githooks.framework_dir())
+
+    def test_exact_types_handle_ctx(self):  # ET33
+        d = self.repo()
+        c = self.ctx(d, "ls")
+        self.assertIs(type(c), hookio.HookContext)
+        self.assertEqual(pre_bash.handle(c), hookio.Outcome())
+        values = {f.name: getattr(c, f.name) for f in dataclasses.fields(c)}
+        sub = type("_CtxSub", (hookio.HookContext,), {})(**values)
+        for bad in (sub, types.SimpleNamespace(**values), None, values):
+            with self.subTest(ctx=type(bad).__name__):
+                with self.assertRaises(TypeError) as cm:
+                    pre_bash.handle(bad)
+                self.assertEqual(str(cm.exception), "ctx must be a HookContext")
+
+    def test_exact_types_handle_tool_input(self):  # ET34 (in process): never an exception
+        d = self.repo()
+        for bad in (_DictSub(command="ls"), None, [], ["ls"], _DictSub(command="git commit --no-verify")):
+            with self.subTest(tool_input=repr(bad)):
+                c = self.ctx(d, "ls")
+                c.tool_input = bad
+                self.assertEqual(pre_bash.handle(c), hookio.Outcome(deny=[_INPUT_LINE]))
+
+    def test_exact_types_handle_command_pins(self):  # ET35 (in process), V1
+        d = self.repo()
+        for bad in (_StrSub("ls"), None, 3, ["ls"], b"ls", _StrSub("echo " + _DIGITS)):
+            with self.subTest(command=repr(bad)[:20]):
+                self.assertEqual(pre_bash.handle(self.ctx(d, bad)), hookio.Outcome(deny=[_INPUT_LINE]))
+        for command in ("echo " + _DIGITS, "echo " + _NEW_CP):
+            self.assertEqual(pre_bash.handle(self.ctx(d, command)), hookio.Outcome(), command[:8])
+
+
 if __name__ == "__main__":
     unittest.main()

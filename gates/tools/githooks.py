@@ -148,6 +148,7 @@ def status(root: str, framework: str) -> Result:
 def status_result(root: str, framework: str) -> Result:
     """The ``Result`` of ``status`` (Task 3b.2): returned, never printed; a bad framework path or root is a GateError."""
     _check_framework(framework)
+    gitinfo._need_root(root)   # row ET4 (Q-RS4-1 (A)): an exact non-empty str
     hooks = gitinfo.hooks_dir(root)
     res = Result("githooks")
     for name in NAMES:
@@ -238,6 +239,8 @@ def _run_commands_test(root: str, cfg: dict, capture: bool = False) -> Line:
     """Run ``commands.test`` in ``root`` (Q-B2plan-11 (a)): a string with ``sh -c``, a list as one argv. The child
     inherits stdout and stderr; with ``capture`` (the hook's result functions, decision Q5 (i) (b)) both go to a pipe
     that is dropped, so nothing reaches the caller's stdout."""
+    if type(capture) is not bool:   # row ET19
+        raise TypeError("capture must be a bool")
     commands = cfg.get("commands")
     test = commands.get("test", _UNSET) if type(commands) is dict else _UNSET
     if test is _UNSET:
@@ -336,6 +339,7 @@ def pre_commit_result(root: str) -> Result:
     """The lines ``main pre-commit`` prints for ``root`` (run_all's lines, then the ``githook.test`` line on the strict
     profile), returned and printed by nothing: the test command's own output is captured and dropped (decision Q5). A
     GateError is raised, not turned into a line."""
+    gitinfo._need_root(root)   # row ET6
     blocks: List[Line] = []
     _pre_commit_core(root, lambda res: blocks.extend(res.lines), True)
     return Result("githook", blocks)
@@ -350,6 +354,10 @@ def _pre_push(root: str, stdin: bytes) -> int:
 def pre_push_result(root: str, updates: list) -> Result:
     """The lines ``main pre-push`` prints for ``root`` and the ``(local ref, local sha, remote ref)`` ``updates`` of
     ``_updates`` (Task 3b.2, used by 3b.3). A GateError is raised."""
+    gitinfo._need_root(root)   # row ET7
+    if type(updates) is not list or not all(type(u) is tuple and len(u) == 3 and all(type(f) is str for f in u)
+                                            for u in updates):   # row ET8
+        raise GateError("updates must be a list of (ref, sha, ref) tuples of str")
     return _pre_push_core(root, gitinfo.head_sha(root), updates)
 
 
