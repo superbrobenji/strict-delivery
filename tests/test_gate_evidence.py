@@ -15,7 +15,7 @@ from unittest import mock
 
 from gates import __main__ as gates_main
 from gates import gate_evidence, producers, run_all
-from gates.lib import gitinfo, ids, schema
+from gates.lib import config, gitinfo, ids, schema
 from tests.helpers import (E128, INT_LIMITS, TOP, GitIsolatedTestCase, commit_all, git, int_limit, make_repo)
 from gates.lib.yamlsub import emit
 
@@ -1499,6 +1499,22 @@ class Rerun(Base):
             self.assertNotIn(":", ln)
 
 
+def self_adoption_base(root):
+    """The ``--base`` of a gate run on the checkout ``root``: ``origin/<b>`` when that resolves, else ``<b>``, where
+    ``<b>`` is ``base_branch`` of ``config.load(root)``; ``AssertionError`` naming both refs when neither does (a test
+    that needs a base fails, it is never skipped). ``root`` must be exactly ``str`` (``TypeError``)."""
+    if type(root) is not str:
+        raise TypeError("root must be str, got %s" % type(root).__name__)
+    branch = config.load(root)["base_branch"]
+    refs = ("origin/" + branch, branch)
+    for ref in refs:
+        p = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "-q", ref],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if p.returncode == 0:
+            return ref
+    raise AssertionError("no base ref resolves in %s: neither %s nor %s" % (root, refs[0], refs[1]))
+
+
 # ======================================================================== version rows, producers 11
 class Versions(Base):
     def test_exception_groups(self):
@@ -1573,8 +1589,57 @@ class Versions(Base):
         """Rows: X6."""
         if "evidence" not in run_all.PROFILE_GATES["strict"]:
             self.skipTest("Rq-6-3 not on this branch")
-        out, _ = run_argv(["--root", REPO, "--base", "origin/main"])
+        out, _ = run_argv(["--root", REPO, "--base", self_adoption_base(REPO)])   # F-20261126-beii (was "origin/main")
         self.assertTrue(out.startswith("PASS evidence.config\nPASS evidence.scope"))
+
+    def test_self_adoption_base_forms(self):
+        """Rows: B1. The base is ``origin/<b>`` when that resolves, else ``<b>``, else the test fails naming both."""
+        def fixture(name, cfg=None):
+            root = os.path.join(self.tmp, name)
+            os.mkdir(root)
+            return make_repo(root, cfg)
+
+        def remote(root, name):
+            bare = os.path.join(self.tmp, "%s-%s.git" % (name, os.path.basename(root)))
+            git(self.tmp, "clone", "-q", "--bare", root, bare)
+            git(root, "remote", "add", name, bare)
+            git(root, "fetch", "-q", name)
+        r1 = fixture("f1")
+        remote(r1, "origin")
+        self.assertEqual(git(r1, "rev-parse", "--verify", "-q", "origin/main"), git(r1, "rev-parse", "main"))
+        self.assertEqual(self_adoption_base(r1), "origin/main")
+        self.assertEqual(self_adoption_base(fixture("f2")), "main")
+        r3 = fixture("f3")
+        remote(r3, "up")
+        self.assertEqual(git(r3, "rev-parse", "--verify", "-q", "up/main"), git(r3, "rev-parse", "main"))
+        self.assertEqual(self_adoption_base(r3), "main")
+        r4 = fixture("f4")
+        git(r4, "branch", "-m", "main", "other")
+        with self.assertRaises(AssertionError) as cm:
+            self_adoption_base(r4)
+        self.assertIn("origin/main", str(cm.exception))
+        self.assertIn("neither origin/main nor main", str(cm.exception))
+        tcfg = {"schema": "config/2", "framework_version": "0.0.0", "profile": "strict", "base_branch": "trunk"}
+        r5 = fixture("f5", tcfg)                     # <b> is base_branch, not the literal main
+        git(r5, "branch", "-m", "main", "trunk")
+        remote(r5, "origin")
+        self.assertEqual(self_adoption_base(r5), "origin/trunk")
+
+    def test_self_adoption_base_exact_types(self):
+        """Rows: X2, V3."""
+        class SR(str):
+            pass
+        root = self.make()
+        self.assertEqual(self_adoption_base(root), "main")
+        for bad, name in ((SR(root), "SR"), (root.encode(), "bytes"), (None, "NoneType")):
+            with self.subTest(root=name), self.assertRaises(TypeError) as cm:
+                self_adoption_base(bad)
+            self.assertEqual(str(cm.exception), "root must be str, got %s" % name)
+        import inspect
+        src = inspect.getsource(self_adoption_base)
+        for word in ("unicodedata", "isprintable", "BaseExceptionGroup", "splitlines", ".lower("):
+            with self.subTest(word=word):
+                self.assertNotIn(word, src)
 
 
 # ======================================================================== the 200-fixture generator (PC2)
