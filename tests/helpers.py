@@ -94,12 +94,16 @@ def git(root: str, *args: str, env: Optional[dict] = None, check: bool = True) -
     """Run git in root with a fixed identity and date; return stripped stdout. ``GIT_OPTIONAL_LOCKS=0`` is the
     default, as in ``gates/lib/gitinfo.py``: a probe such as ``git status`` never rewrites ``.git/index`` (a test that
     compares the index across its own probe would see the probe's write); an explicit ``env`` entry wins.
-    Row E1: ``root`` and every argument are exactly ``str``, ``env`` is ``None`` or exactly ``dict``, ``check`` is exactly ``bool``."""
+    Row E1: ``root`` and every argument are exactly ``str``, ``env`` is ``None`` or exactly ``dict`` whose keys and values
+    are exactly ``str``, ``check`` is exactly ``bool``."""
     _exact("git", "root", root, str)
     for i, a in enumerate(args):
         _exact("git", "argument %d" % i, a, str)
     if env is not None:
         _exact("git", "env", env, dict)
+        for k, v in env.items():
+            _exact("git", "env key", k, str)
+            _exact("git", "env value", v, str)
     _exact("git", "check", check, bool)
     full_env = dict(os.environ)
     full_env.update(_IDENTITY)

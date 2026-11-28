@@ -2137,6 +2137,26 @@ class ExactTypeTest(Base):
             with self.subTest(env=type(bad).__name__):
                 self.refused(git, "git: env must be exactly dict", root, "status", env=bad)
 
+    def test_e1_git_env_contents(self):
+        """F-20261128-jkth (row E1, "env: None or an exact dict whose keys and values are exact str"): one case per member
+        of the class, each refused with a named TypeError before git runs (``refused`` fails the test if git is run).
+        Only harmless names (no GIT_* name, no PATH or HOME) and only ``git --version`` in this test's own directory."""
+        root = self.fresh("r")
+        self.assertTrue(git(root, "--version", env={"CI2_X": "v", "CI2_Y": ""}).startswith("git version"))  # exact str accepted
+        cases = (  # (member, env, the message the refusal starts with)
+            ("key str subclass", {Str("CI2_X"): "v"}, "git: env key must be exactly str, not Str"),
+            ("value str subclass", {"CI2_X": Str("v")}, "git: env value must be exactly str, not Str"),
+            ("bytes value", {"CI2_X": b"v"}, "git: env value must be exactly str, not bytes"),
+            ("bytes key", {b"CI2_X": "v"}, "git: env key must be exactly str, not bytes"),
+            ("int key", {1: "v"}, "git: env key must be exactly str, not int"),
+            ("int value", {"CI2_X": 1}, "git: env value must be exactly str, not int"),
+            ("None value", {"CI2_X": None}, "git: env value must be exactly str, not NoneType"),
+            ("a later entry", {"CI2_X": "v", "CI2_Y": 2}, "git: env value must be exactly str, not int"),
+        )
+        for member, env, text in cases:
+            with self.subTest(member=member):
+                self.refused(git, text, root, "--version", env=env)
+
     def test_e1_git_check(self):
         root = make_repo(self.fresh("r"))
         self.assertEqual(git(root, "status", "--porcelain", check=True), "")
