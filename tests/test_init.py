@@ -4698,5 +4698,139 @@ class TestPartBFindings(More):
             self.accepted_pair(root)
 
 
+class TestFix2b(Mig):
+    """4d.2 fix round 2, init side (review 2b): R2B-1 (the conditions of ``_is_reported`` and ``_reported_names``),
+    R2B-2 (``--json`` of ``init.config``), and OQ-4 (a source or a parent swapped between init's file writes and the
+    recomputed ``plan_moves``). Expected lines are written by hand; the init-level path cells are in
+    tests/test_init_path_matrix.py. Mutant ids: ch/4d2-fix2b-operand-mutants-table.py."""
+
+    def make_fw(self, name="fw", **kw):  # ``faults`` makes its fake framework per call: one per test is enough
+        fws = self.__dict__.setdefault("fws", {})
+        if name not in fws:
+            fws[name] = More.make_fw(self, name, **kw)
+        return fws[name]
+
+    def faults(self, expect, ci=False, **paths):
+        """``plan`` and ``apply`` print exactly the lines ``expect`` (one ``FAIL init.conflict`` line each) and leave the
+        tree as it was; ``paths`` are the configured ``paths`` of an initialised repository."""
+        self.init_config(paths=paths)
+        before = snapshot(self.root)
+        fw = self.make_fw("tagged", version="0.1.0")
+        for sub in ("plan", "apply"):
+            with mock.patch.object(plugin, "framework_dir", return_value=fw), \
+                    mock.patch.object(init.gitinfo, "head_sha", side_effect=init.GitNotFound("no git")):
+                code, out, _ = helpers.within(lambda: self.mc(sub, ci=ci))
+            self.assertEqual((code, out), (1, "".join("FAIL init.conflict: %s\n" % e for e in expect)), (paths, sub))
+            self.assertEqual(snapshot(self.root), before, (paths, sub))
+
+    # --- R2B-1: the conditions of ``_is_reported`` and ``_reported_names`` (a conflict is reported once, whatever the
+    # case of its spelling; a string prefix is not a path prefix). Each case is independent of the file system's case
+    # rule: no path of it exists in the repository, or it exists in exactly the spelling it is configured in -----------
+    def test_r2b1_is_reported_folds_the_path_equal(self):  # kills: _is_reported fold of ``path`` in ``==``
+        self.faults([SAME % "CLAUDE.md"], context="CLAUDE.MD", decisions="CLAUDE.md")
+
+    def test_r2b1_is_reported_folds_the_path_below(self):  # kills: _is_reported fold of ``path`` in ``startswith``
+        self.faults([SAME % "CLAUDE.md"], context="CLAUDE.MD/x", decisions="CLAUDE.md")
+
+    def test_r2b1_reported_names_are_folded_equal(self):  # kills: _reported_names fold
+        self.faults([SAME % "CLAUDE.MD"], context="CLAUDE.md", decisions="CLAUDE.MD")
+
+    def test_r2b1_reported_names_are_folded_below(self):  # kills: _reported_names fold
+        self.faults([SAME % "CLAUDE.MD"], context="CLAUDE.md/x", decisions="CLAUDE.MD")
+
+    def test_r2b1_string_prefix_is_not_a_reported_path_state_site(self):  # kills: ``n + "/"`` (the state-overlap call)
+        self.write("CLAUDE.m", "mine\n")  # claims: CLAUDE.m is a fault of its own; decisions: CLAUDE.md is another
+        self.faults(["CLAUDE.m: exists and is not a directory", SAME % "CLAUDE.md"], claims="CLAUDE.m", decisions="CLAUDE.md")
+
+    def test_r2b1_string_prefix_is_not_a_reported_path_context_site(self):  # kills: ``n + "/"`` (the context call)
+        self.write("CLAUDE.m", "mine\n")
+        self.faults(["CLAUDE.m: exists and is not a directory", SAME % "CLAUDE.md"], claims="CLAUDE.m", context="CLAUDE.md")
+
+    def test_r2b1_a_path_below_any_one_reported_name_is_reported(self):  # kills: ``any`` -> ``all`` in _is_reported
+        self.write("CLAUDE.m", "mine\n")
+        self.write(".gitignore", "x\n")  # two faults of _dir_plan; playbooks lies below the second only
+        self.faults(["CLAUDE.m: exists and is not a directory", ".gitignore: exists and is not a directory"],
+                    claims="CLAUDE.m/x", playbooks=".gitignore/y")
+
+    def test_r2b1_upper_case_state_value_with_an_existing_context_file(self):  # the review's reproducer, every key
+        self.write(MATRIX_DEFAULT_CTX, CONTEXT_YML)
+        upper = MATRIX_DEFAULT_CTX.upper()
+        insensitive = os.path.exists(os.path.join(self.root, upper))  # the file system's own rule decides the one line
+        for key in STATE_KEYS:
+            for value in (upper, upper + "/X"):
+                with self.subTest(key=key, value=value):
+                    if insensitive:  # the state directory is the existing file: _dir_plan's line, and nothing else
+                        one = "%s: exists and is not a directory" % upper
+                    else:  # a new directory: the context file lies inside it
+                        one = INSIDE % (MATRIX_DEFAULT_CTX, value)
+                    self.faults([one], **{key: value})
+
+    def test_r2b1_upper_case_hook_path_with_installed_hooks(self):  # an installed hook as a state value, upper case
+        fw = self.make_fw("tagged", version="0.1.0")
+        with mock.patch.object(plugin, "framework_dir", return_value=fw), \
+                mock.patch.object(init.gitinfo, "head_sha", side_effect=init.GitNotFound("no git")):
+            self.assertEqual(self.mc("apply")[0], 0)  # the hooks now exist
+        upper = ".GIT/HOOKS/PRE-COMMIT"
+        insensitive = os.path.exists(os.path.join(self.root, upper))
+        self.faults([("%s: exists and is not a directory" if insensitive else SAME) % upper], claims=upper)
+
+    # --- R2B-2: the ``--json`` shape of ``init.config`` (plan and apply reach it; ``questions`` does not) ---------------
+    def test_json_failure_config_plan_apply(self):  # init.config; kills the ``ns.json`` argument of ``_fail`` for this id
+        helpers.write_record(self.root, ".strict-delivery/config.yml", {
+            "schema": "config/2", "profile": "standard", "commands": answers()["commands"]})  # no framework_version
+        before = snapshot(self.root)
+        want = ('{"id": "init.config", "status": "FAIL", "reason": ".strict-delivery/config.yml: framework_version: '
+                'required key is missing; run /strict-delivery:doctor and /strict-delivery:upgrade"}\n')
+        for sub in ("plan", "apply"):
+            self.assertEqual(self.mc(sub, js=True), (1, want, ""), sub)
+        self.assertEqual(snapshot(self.root), before)
+
+    # --- OQ-4: a source or a parent swapped after init's file writes and before the recomputed ``plan_moves`` (Q16) ----
+    def swapped_after_writes(self, swap):
+        """``apply`` with ``swap()`` run before the second ``docmove.plan_moves`` call (the recompute after the writes)."""
+        self.docs()
+        real, calls = init.docmove.plan_moves, []
+
+        def hooked(root, cfg):
+            calls.append(1)
+            if len(calls) == 2:
+                swap()
+            return real(root, cfg)
+        with mock.patch.object(init.docmove, "plan_moves", hooked):
+            code, out, _ = self.mc("apply", migrate=True)
+        self.assertEqual(len(calls), 2)
+        fails = [l for l in out.splitlines() if l.startswith("FAIL ")]
+        self.assertTrue(os.path.isfile(os.path.join(self.root, ".strict-delivery/config.yml")))  # CD12: the writes stay
+        for dst in (PLAN_NEW, SPEC_NEW):
+            self.assertFalse(os.path.lexists(os.path.join(self.root, dst)), dst)  # nothing moved
+        return code, fails
+
+    def test_oq4_source_swapped_after_the_writes(self):  # init.py:865-869: the one migrate line, exit 1
+        def swap():
+            path = os.path.join(self.root, SPEC_OLD)
+            os.unlink(path)
+            os.mkdir(path)
+        self.assertEqual(self.swapped_after_writes(swap),
+                         (1, ["FAIL init.migrate: docs/superpowers/specs/a.md: not a regular file; not moved"]))
+
+    def test_oq4_source_parent_swapped_after_the_writes(self):
+        def swap():
+            outside = os.path.join(self.tmp, "outside")
+            os.rename(os.path.join(self.root, "docs/superpowers/specs"), outside)
+            os.symlink(outside, os.path.join(self.root, "docs/superpowers/specs"))
+        self.assertEqual(self.swapped_after_writes(swap), (1, [
+            "FAIL init.migrate: docs/superpowers/specs/a.md: parent docs/superpowers/specs is not a directory"]))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, "outside"))), ["a.md"])  # never moved from
+
+    def test_oq4_conflicts_are_joined_by_semicolons(self):  # every conflict of the recompute on the one line
+        def swap():
+            outside = os.path.join(self.tmp, "outside")
+            os.rename(os.path.join(self.root, "docs"), outside)
+            os.symlink(outside, os.path.join(self.root, "docs"))
+        want = "FAIL init.migrate: " + "; ".join(
+            "%s: parent docs is not a directory" % p for p in (PLAN_NEW, SPEC_NEW, PLAN_OLD, SPEC_OLD))
+        self.assertEqual(self.swapped_after_writes(swap), (1, [want]))
+
+
 if __name__ == "__main__":
     unittest.main()

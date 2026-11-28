@@ -58,6 +58,10 @@ def _pair_list(moves: object) -> list:
             if (p.startswith("/") or p.endswith("/") or "\n" in p or "\0" in p
                     or any(s in ("", ".", "..") for s in p.split("/"))):
                 raise GateError("moves: item %d holds a path that is not a normalised repo-relative path" % i)
+            try:
+                p.encode("utf-8")  # a lone surrogate reaches no os call (R2A-1; AM-W8 wording)
+            except UnicodeEncodeError:
+                raise GateError("moves: item %d holds a path that is not encodable as UTF-8" % i) from None
         if src == dst or src in seen_src or dst in seen_dst:
             raise GateError("moves: item %d repeats a path or moves a file onto itself" % i)
         seen_src.add(src)
@@ -159,6 +163,36 @@ def _target_conflicts(top: str, moves: list, tracked: frozenset) -> list:
 
 # ---------------------------------------------------------------- rewrites
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_holder(root: str, parts: list, path: str):
+    """The descriptor of the holder, or a ``_read_text`` verdict tuple: each component is opened from the descriptor of
+    the one before (a parent ``O_NOFOLLOW | O_DIRECTORY``, the file ``O_NOFOLLOW | O_NONBLOCK``), so a component swapped
+    after the ``lstat`` is never followed (OQ-3 (b), H4). A symlink or a non-directory parent is "not a regular file";
+    ENOENT, ENOTDIR and ENAMETOOLONG of the file are "missing" (D-Q22); any other ``OSError`` is "cannot read"."""
+    try:
+        d = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        raise GateError("%s: cannot read (%s)" % (path, e.strerror)) from None
+    parent = True
+    try:
+        for part in parts[:-1]:
+            nd = os.open(part, _DIR_FLAGS, dir_fd=d)
+            os.close(d)
+            d = nd
+        parent = False
+        return os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=d)
+    except OSError as e:
+        if e.errno == errno.ELOOP or (parent and e.errno == errno.ENOTDIR):
+            return ("skip", "%s: not a regular file; not read" % path)
+        if e.errno in _MISSING:
+            return ("absent",)
+        raise GateError("%s: cannot read (%s)" % (path, e.strerror)) from None
+    finally:
+        os.close(d)
+
+
 def _read_text(root: str, path: str) -> tuple:
     """``("text", str)``, ``("skip", note)`` or ``("absent",)`` for a tracked holder; every component is looked at with
     ``lstat`` and never followed, and only a regular file is opened (never a FIFO)."""
@@ -175,12 +209,9 @@ def _read_text(root: str, path: str) -> tuple:
         last = i == len(parts) - 1
         if (not last and not stat.S_ISDIR(st.st_mode)) or (last and not stat.S_ISREG(st.st_mode)):
             return ("skip", "%s: not a regular file; not read" % path)
-    try:
-        fd = os.open(cur, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    except OSError as e:
-        if e.errno == errno.ELOOP:
-            return ("skip", "%s: not a regular file; not read" % path)
-        raise GateError("%s: cannot read (%s)" % (path, e.strerror)) from None
+    fd = _open_holder(root, parts, path)
+    if type(fd) is tuple:
+        return fd
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return ("skip", "%s: not a regular file; not read" % path)
@@ -320,6 +351,10 @@ def _changes_list(changes: object, moves: list) -> list:
         path, text = item
         if (path == "" or path.startswith("/") or "\0" in path or any(s in ("", ".", "..") for s in path.split("/"))):
             raise GateError("changes: item %d path must be a relative path inside the root" % i)
+        try:
+            path.encode("utf-8")  # a lone surrogate reaches no os call (R2A-1; AM-W8 wording)
+        except UnicodeEncodeError:
+            raise GateError("changes: item %d holds a path that is not encodable as UTF-8" % i) from None
         if path in seen:
             raise GateError("changes: two changes name the same path (%s)" % path)
         if path in srcs:
@@ -332,21 +367,32 @@ def _changes_list(changes: object, moves: list) -> list:
     return changes
 
 
+def _moved(done: list) -> str:
+    return "; moved before it: " + ", ".join("%s -> %s" % m for m in done) if done else ""
+
+
+def _target_free(top: str, dst: str, done: list) -> None:
+    """Refuse a target that exists or whose parent is not a directory, looking at every component with ``lstat`` (never
+    followed); the plan's texts, ending in what was moved before it (DP-1, owner decision 2026-11-27)."""
+    tail = _moved(done) or "; nothing was moved"
+    if os.path.lexists(os.path.join(top, *dst.split("/"))):
+        raise GateError("%s: exists%s" % (dst, tail))
+    cur = top
+    for part in dst.split("/")[:-1]:
+        cur = os.path.join(cur, part)
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            break
+        except OSError as e:
+            raise GateError("%s: cannot read (%s)%s" % (dst, e.strerror, _moved(done))) from None
+        if not stat.S_ISDIR(st.st_mode):
+            raise GateError("%s: parent %s is not a directory%s" % (dst, cur[len(top) + 1:], tail))
+
+
 def _preflight(top: str, moves: list) -> None:
-    for src, dst in moves:
-        if os.path.lexists(os.path.join(top, *dst.split("/"))):
-            raise GateError("%s: exists; nothing was moved" % dst)
-        cur = top
-        for part in dst.split("/")[:-1]:
-            cur = os.path.join(cur, part)
-            try:
-                st = os.lstat(cur)
-            except FileNotFoundError:
-                break
-            except OSError as e:
-                raise GateError("%s: cannot read (%s)" % (dst, e.strerror)) from None
-            if not stat.S_ISDIR(st.st_mode):
-                raise GateError("%s: parent %s is not a directory; nothing was moved" % (dst, cur[len(top) + 1:]))
+    for _, dst in moves:
+        _target_free(top, dst, [])
 
 
 def _still_regular(top: str, path: str) -> None:
@@ -363,10 +409,6 @@ def _still_regular(top: str, path: str) -> None:
         want = stat.S_ISREG if i == len(parts) - 1 else stat.S_ISDIR
         if not want(st.st_mode):
             raise GateError("%s: not a regular file" % path)
-
-
-def _moved(done: list) -> str:
-    return "; moved before it: " + ", ".join("%s -> %s" % m for m in done) if done else ""
 
 
 def _require_source(top: str, src: str, before: str) -> None:
@@ -393,6 +435,7 @@ def apply_moves(root: str, moves: list, changes: list) -> None:
     done: list = []
     for src, dst in moves:
         _require_source(top, src, _moved(done))  # and again at the move's turn
+        _target_free(top, dst, done)  # DP-1: every dst component again, before the mkdir
         cur = top
         for part in dst.split("/")[:-1]:
             cur = os.path.join(cur, part)
@@ -401,10 +444,11 @@ def apply_moves(root: str, moves: list, changes: list) -> None:
                     os.mkdir(cur)
                 except OSError as e:
                     raise GateError("%s: cannot write (%s)%s" % (dst, e.strerror, _moved(done))) from None
+        _require_source(top, src, _moved(done))  # OQ-2 (b): and right before git mv
+        _target_free(top, dst, done)  # DP-1: and right before git mv
         p = gitinfo._run(top, "mv", ["mv", "--", src, dst], ok=None, literal=True)
         if p.returncode != 0:
-            before = "; moved before it: " + ", ".join("%s -> %s" % m for m in done) if done else ""
-            raise GateError("git mv failed (exit %d): %s -> %s%s" % (p.returncode, src, dst, before))
+            raise GateError("git mv failed (exit %d): %s -> %s%s" % (p.returncode, src, dst, _moved(done)))
         done.append((src, dst))
     written: list = []
     for path, text in changes:
