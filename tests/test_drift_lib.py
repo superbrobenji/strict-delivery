@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -686,6 +687,27 @@ class Behind(unittest.TestCase):
         self.assertEqual(self.behind("ts"), [])
 
 
+def pair_cells():
+    """The cells of H5 (pair matrix, Q-RC14-1 (a)) as ``(layout, state, mode)``. A layout is the relation of the paths of the
+    main checkout R, the linked worktree A that has main and, where one is named, another linked worktree B: A below R, A
+    outside R, A below B, A above B (B below A), R below A, A listed at R's own path, two entries on main listed at one path,
+    and two entries on main with one directory inside the other (in both orders of the admin names). A state is how the
+    entry on main is left (``usable``, or locked and its ``.git`` gone, its directory moved away, replaced by a file or a
+    FIFO; for the nested pair the two letters ``u`` and ``b`` give parent and child). A mode is the spelling of the paths:
+    ``exact``, the linked directory renamed by case only (``folded-linked``), the root called in another case
+    (``folded-root``)."""
+    cells = []
+    for layout in ("below-root", "outside", "below-linked"):
+        cells += [(layout, s, "exact") for s in ("usable", "gitgone", "missing", "file", "fifo")]
+        cells += [(layout, "usable", "folded-linked"), (layout, "usable", "folded-root")]
+    for layout in ("above-linked", "root-below", "equal-linked"):
+        cells += [(layout, s, "exact") for s in ("usable", "gitgone")]
+    cells.append(("equal-root", "usable", "exact"))
+    for layout in ("nested-parent-first-name", "nested-child-first-name"):
+        cells += [(layout, s, "exact") for s in ("uu", "bu", "ub", "bb")]
+    return cells
+
+
 class Fresh(GitIsolatedTestCase):
     """Rows needing a repository of their own: H13, U1-U14, B-state."""
 
@@ -1299,9 +1321,9 @@ class Fresh(GitIsolatedTestCase):
             admin = os.path.join(root, ".git", "worktrees")
             (entry,) = os.listdir(admin)
             os.rename(os.path.join(admin, entry), os.path.join(admin, entry + ".renamed"))
-        elif kind == "gitfile-other-admin":
+        elif kind in ("gitfile-other-admin", "gitfile-detached-admin"):  # the other worktree is on side, or detached
             side = os.path.join(self.tmp, name + "-side")
-            git(root, "worktree", "add", "-q", "-b", "side", side)
+            git(root, "worktree", "add", "-q", *(("-b", "side") if kind == "gitfile-other-admin" else ("--detach",)), side)
             with open(dotgit, "w") as fh:
                 fh.write("gitdir: %s\n" % os.path.join(root, ".git", "worktrees", os.path.basename(side)))
         elif kind == "gitfile-foreign-repo":
@@ -1324,7 +1346,8 @@ class Fresh(GitIsolatedTestCase):
     def test_base_worktree_unusable(self):
         "C1-C7, C10, C11, H1, H3, H8 (F-20261126-hmyt): a listed, unprunable entry that is not a usable checkout is skipped"
         for kind in ("locked-gitgone", "locked-gitgone-nested", "gitfile-nowhere", "git-dir-empty", "git-dir-other-repo",
-                     "admin-renamed", "gitfile-other-admin", "gitfile-foreign-repo", "gitfile-fifo"):
+                     "admin-renamed", "gitfile-other-admin", "gitfile-detached-admin", "gitfile-foreign-repo",
+                     "gitfile-fifo"):
             with self.subTest(kind):
                 root, wt = self.break_wt(kind, kind)
                 self.verdict(root, [("base", self.NOCO)])
@@ -1608,36 +1631,239 @@ class Fresh(GitIsolatedTestCase):
             with self.subTest(want[1][-1], where=want[0]):
                 self.assertEqual(calls.count(want), 1)
 
+    def break_entry(self, root, path, state):
+        "Break the linked worktree at ``path`` as ``state`` (``usable`` leaves it): git lists it locked, not prunable."
+        if state == "usable":
+            return
+        git(root, "worktree", "lock", path)
+        if state == "gitgone":
+            os.rename(os.path.join(path, ".git"), os.path.join(path, ".git.gone"))
+            return
+        os.rename(path, path + ".moved")
+        if state == "file":
+            open(path, "w").close()
+        elif state == "fifo":
+            os.mkfifo(path)
+        else:
+            self.assertEqual(state, "missing")
+
+    def pair_cell(self, n, layout, state, mode):
+        """Build one H5 cell; returns (the root to call with, the hand-written verdict): the path of the one usable entry
+        on main that is the checkout, ``None`` for the refusal, or ``("first", [paths])`` when the first listed of the
+        usable entries is it. ``n`` makes every directory of the cell unique."""
+        root = self.wcase("mx%d" % n)
+        d = os.path.join(self.tmp, "mx%d-d" % n)
+        call = root
+        if layout in ("below-root", "outside", "below-linked"):
+            if layout == "below-root":
+                a = os.path.join(root, "a")
+            elif layout == "outside":
+                a = os.path.join(d, "a")
+            else:
+                git(root, "worktree", "add", "-q", "-b", "side", os.path.join(d, "b"))
+                a = os.path.join(d, "b", "a")
+            git(root, "worktree", "add", "-q", a, "main")
+            self.break_entry(root, a, state)
+            if mode == "folded-linked":  # the directory is now called in another case, the listing keeps the old one
+                os.rename(a, os.path.join(os.path.dirname(a), os.path.basename(a).upper()))
+            if mode == "folded-root":
+                call = os.path.join(os.path.dirname(root), os.path.basename(root).upper())
+            return call, a if state == "usable" else None
+        if layout == "above-linked":
+            a = os.path.join(d, "a")
+            git(root, "worktree", "add", "-q", a, "main")
+            git(root, "worktree", "add", "-q", "-b", "side", os.path.join(a, "b"))
+            self.break_entry(root, a, state)
+            return call, a if state == "usable" else None
+        if layout == "root-below":  # the main checkout lives inside the linked worktree that has main
+            a = os.path.join(d, "a")
+            git(root, "worktree", "add", "-q", a, "main")
+            moved = os.path.join(a, "r")
+            os.rename(root, moved)
+            git(moved, "worktree", "repair", a)
+            self.break_entry(moved, a, state)
+            return moved, a if state == "usable" else None
+        if layout == "equal-root":  # the entry on main is listed at the path of the main checkout itself
+            a = os.path.join(d, "a")
+            git(root, "worktree", "add", "-q", a, "main")
+            with open(os.path.join(root, ".git", "worktrees", "a", "gitdir"), "w") as fh:
+                fh.write(os.path.join(root, ".git") + "\n")
+            self.assertEqual(git(root, "worktree", "list", "--porcelain").count("worktree " + root + "\n"), 2)
+            return call, None  # the checkout at that path is on elsewhere
+        if layout == "equal-linked":  # two entries on main listed at one path
+            a, b = os.path.join(d, "a"), os.path.join(d, "b")
+            git(root, "worktree", "add", "-q", a, "main")
+            git(root, "worktree", "add", "-q", "-f", b, "main")
+            with open(os.path.join(root, ".git", "worktrees", "b", "gitdir"), "w") as fh:
+                fh.write(os.path.join(a, ".git") + "\n")
+            self.break_entry(root, a, state)
+            return call, a if state == "usable" else None
+        # nested: two entries on main, the child directory inside the parent's; ``state`` is the pair (parent, child)
+        parent_name, child_name = ("a", "b") if layout == "nested-parent-first-name" else ("b", "a")
+        parent = os.path.join(d, parent_name)
+        child = os.path.join(parent, child_name)
+        git(root, "worktree", "add", "-q", parent, "main")
+        git(root, "worktree", "add", "-q", "-f", child, "main")
+        self.break_entry(root, parent, "usable" if state[0] == "u" else "gitgone")
+        self.break_entry(root, child, "usable" if state[1] == "u" else "gitgone")
+        if state == "uu":
+            return call, ("first", [parent, child])
+        return call, {"bu": child, "ub": parent, "bb": None}[state]
+
     def test_base_worktree_pair_matrix(self):
-        """H5: the holder of main is one of three linked worktrees whose paths lie in the relations below the main
-        checkout, outside it, and below another linked worktree; each cell with the holder usable and with it broken (git
-        in a broken one walks up to the checkout above it). The invariant: the path in a printed command is the toplevel git
-        reports in that directory, and a broken holder is never used."""
-        for holder in ("below-root", "outside", "below-linked"):
-            for state in ("usable", "broken"):
-                with self.subTest(holder=holder, state=state):
-                    cell = "mx-%s-%s" % (holder, state)
-                    root = self.wcase(cell)
-                    paths = (("below-root", os.path.join(root, "in")),
-                             ("outside", os.path.join(self.tmp, cell + "-d", "out")),
-                             ("below-linked", os.path.join(self.tmp, cell + "-d", "out", "in")))
-                    for label, path in paths:
-                        if label == holder:
-                            git(root, "worktree", "add", "-q", path, "main")
-                        else:
-                            git(root, "worktree", "add", "-q", "-b", "b-" + label, path)
-                    wt = dict(paths)[holder]
-                    if state == "broken":
-                        git(root, "worktree", "lock", wt)
-                        os.rename(os.path.join(wt, ".git"), os.path.join(wt, ".git.gone"))
-                        self.verdict(root, [("base", self.NOCO)])
-                        continue
-                    self.assertEqual(os.path.realpath(git(wt, "rev-parse", "--show-toplevel")), os.path.realpath(wt))
-                    if self.case_insensitive():
-                        folded = os.path.join(os.path.dirname(root), os.path.basename(root).upper())
-                        got = drift.base_errors(folded, dict(config.load(root), base_branch="main"))
-                        self.assertEqual(got, [("base", self.cmd(wt))])
-                    self.verdict(root, [("base", self.cmd(wt))], follow=True)
+        """H5: the cross product of the checkouts (the main checkout, the linked worktree that has main, another linked
+        worktree) in the relations equal, below and above, in the exact case and case-folded, and with the entry on main
+        usable or broken in each way git lists it (cells: ``pair_cells``). The invariant of every cell: a printed command
+        names the directory whose own top level git reports as itself, run in no other checkout (the follow oracle), and an
+        entry whose own top level is not its path is skipped (the refusal)."""
+        insensitive = self.case_insensitive()
+        ran = 0
+        for n, (layout, state, mode) in enumerate(pair_cells()):
+            if mode.startswith("folded") and not insensitive:
+                continue  # a case-sensitive filesystem has no second spelling of a directory
+            with self.subTest(layout=layout, state=state, mode=mode):
+                call, want = self.pair_cell(n, layout, state, mode)
+                if type(want) is tuple:
+                    listed = subprocess.run(["git", "-C", call, "worktree", "list", "--porcelain", "-z"],
+                                            stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
+                    paths = [f[len("worktree "):] for f in listed if f.startswith("worktree ")]
+                    want = min(want[1], key=paths.index)
+                if want is None:
+                    self.verdict(call, [("base", self.NOCO)])
+                else:
+                    self.assertTrue(os.path.samefile(git(want, "rev-parse", "--show-toplevel"), want))
+                    self.verdict(call, [("base", self.cmd(want))], follow=True)
+                ran += 1
+        self.assertEqual(ran, len([c for c in pair_cells() if insensitive or not c[2].startswith("folded")]))
+
+    def norm_insensitive(self):
+        "True when the filesystem treats the NFC and the NFD spelling of one name as one directory (APFS, HFS+)."
+        os.makedirs(os.path.join(self.tmp, "nfc-né"), exist_ok=True)
+        return os.path.exists(os.path.join(self.tmp, "nfc-né"))
+
+    def test_base_worktree_name_forms(self):
+        "F-20261128-ppe2, -fwn8: characters of the listed path, and a directory git and the listing spell differently"
+        for label, name in (("newline-trail", "wt\n"), ("newline-trail-2", "wt\n\n"), ("space-trail", "wt "),
+                            ("space-lead", " wt"), ("tab-trail", "wt\t"), ("newline-inside", "w\nt")):
+            with self.subTest(label):
+                root = self.wcase("nf-" + label)
+                wt = os.path.join(self.tmp, "nf-%s-d" % label, name)
+                git(root, "worktree", "add", "-q", wt, "main")
+                self.assertTrue(wt.endswith(name))
+                self.verdict(root, [("base", self.cmd(wt))], follow=True)
+        insensitive = self.case_insensitive()
+        with self.subTest("case-renamed", case_insensitive=insensitive):
+            if insensitive:
+                root = self.wcase("nf-case")
+                wt = os.path.join(self.tmp, "nf-case-d", "Case-Wt")
+                git(root, "worktree", "add", "-q", wt, "main")
+                os.rename(wt, os.path.join(self.tmp, "nf-case-d", "case-wt"))
+                self.verdict(root, [("base", self.cmd(wt))], follow=True)
+        with self.subTest("normalization-renamed", norm_insensitive=self.norm_insensitive()):
+            if self.norm_insensitive():
+                root = self.wcase("nf-norm")
+                wt = os.path.join(self.tmp, "nf-norm-d", "café")
+                git(root, "worktree", "add", "-q", wt, "main")
+                os.rename(wt, os.path.join(self.tmp, "nf-norm-d", "café"))
+                self.verdict(root, [("base", self.cmd(wt))], follow=True)
+        with self.subTest("gitfile-folded-admin", case_insensitive=insensitive):
+            # the .git file names the admin directory with the root spelled in another case: git prints that spelling of
+            # the common dir, which is the same directory
+            if insensitive:
+                root, wt = self.linked("nf-gfa")
+                folded = os.path.join(os.path.dirname(root), os.path.basename(root).upper())
+                with open(os.path.join(wt, ".git"), "w") as fh:
+                    fh.write("gitdir: %s\n" % os.path.join(folded, ".git", "worktrees", os.path.basename(wt)))
+                self.assertNotEqual(git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+                                    os.path.join(root, ".git"))
+                self.verdict(root, [("base", self.cmd(wt))], follow=True)
+        with self.subTest("symlink-to-other-worktree"):
+            # H1: the listed directory is a symlink to another checkout of this repository (on side): skipped
+            root, wt = self.linked("nf-sym1")
+            side = os.path.join(self.tmp, "nf-sym1-side")
+            git(root, "worktree", "add", "-q", "-b", "side", side)
+            os.rename(wt, wt + ".moved")
+            os.symlink(side, wt)
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("symlink-to-foreign-repo"):
+            root, wt = self.linked("nf-sym2")
+            foreign = os.path.join(self.tmp, "nf-sym2-foreign")
+            os.mkdir(foreign)
+            make_repo(foreign)
+            os.rename(wt, wt + ".moved")
+            os.symlink(foreign, wt)
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("vanished-between-calls"):
+            # the directory is gone after git printed its top level: the comparison cannot stat it, the entry is skipped
+            root, wt = self.linked("nf-vanish")
+            real = gitinfo._run
+
+            def run(r, name, args, *a, **k):
+                p = real(r, name, args, *a, **k)
+                if r == wt and args[-1] == "--show-toplevel" and "--path-format=absolute" in args:
+                    os.rename(wt, wt + ".gone")
+                return p
+            with mock.patch("gates.lib.gitinfo._run", side_effect=run):
+                self.verdict(root, [("base", self.NOCO)])
+
+    def test_base_worktree_name_generated(self):
+        """F-20261128-ppe2, -fwn8 (stream-common :71): the names of a linked worktree directory drawn by a seeded generator
+        from the classes below, each after ``git worktree add`` left as it is, renamed by case only, or renamed to the other
+        normalization form (only where this filesystem treats both spellings as one directory). Every cell is a usable
+        checkout: the verdict, written by hand, is the command with the path as git lists it, followed (the follow oracle);
+        a non-UTF-8 name keeps the existing refusal of an unreadable listing."""
+        seed, wanted = 20261128, 40
+        classes = {"lower": "wt", "mixed": "Wt-Ab", "space-inside": "a b", "space-lead": " ab", "space-trail": "ab ",
+                   "tab-trail": "ab\t", "newline-lead": "\nab", "newline-inside": "a\nb", "newline-trail": "ab\n",
+                   "newline-trail-2": "ab\n\n", "unicode": "aࡰb", "nfc": "café", "nfd": "café",
+                   "non-utf8": os.fsdecode(b"nu\xff")}
+        case_ci, norm_ci = self.case_insensitive(), self.norm_insensitive()
+        print("test_base_worktree_name_generated: seed=%d cases=%d case-insensitive=%s normalization-insensitive=%s"
+              % (seed, wanted, case_ci, norm_ci), file=sys.stderr)
+        rnd = random.Random(seed)
+        order = list(classes)
+        rnd.shuffle(order)
+        drawn, moves, refused = [], set(), []
+        for i in range(wanted):
+            label = order[i] if i < len(order) else rnd.choice(order)
+            name = classes[label]
+            options = ["none"]
+            if case_ci and name.swapcase() != name:
+                options.append("case")
+            if norm_ci and label in ("nfc", "nfd"):
+                options.append("norm")
+            move = "norm" if i < len(order) and "norm" in options else rnd.choice(options)
+            drawn.append(label)
+            moves.add(move)
+            root = self.wcase("gn%d" % i)
+            wt = os.path.join(self.tmp, "gn%d-d" % i, name)
+            try:
+                git(root, "worktree", "add", "-q", wt, "main")
+            except AssertionError:
+                refused.append(label)  # this filesystem refuses the name (a non-UTF-8 byte on macOS)
+                continue
+            if move == "case":
+                os.rename(wt, os.path.join(os.path.dirname(wt), name.swapcase()))
+            elif move == "norm":
+                other = {"nfc": "café", "nfd": "café"}[label]
+                os.rename(wt, os.path.join(os.path.dirname(wt), other))
+            with self.subTest(seed=seed, case=i, name=label, move=move):
+                if label == "non-utf8":
+                    self.verdict(root, [("base", "update main from the remote: the worktrees cannot be listed: git worktree "
+                                                 "list gave output that is not valid UTF-8, so no update command is given")])
+                else:
+                    # the path as git lists it: the name as given, except that git (core.precomposeunicode, macOS) lists
+                    # an NFD name composed
+                    raw = subprocess.run(["git", "-C", root, "worktree", "list", "--porcelain", "-z"],
+                                         stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
+                    listed = [f[len("worktree "):] for f in raw if f.startswith("worktree ")][1]
+                    self.assertEqual(unicodedata.normalize("NFC", listed), unicodedata.normalize("NFC", wt))
+                    if label != "nfd":
+                        self.assertEqual(listed, wt)
+                    self.verdict(root, [("base", self.cmd(listed))], follow=True)
+        self.assertEqual(set(drawn), set(classes))
+        self.assertEqual(refused, [x for x in refused if x == "non-utf8"])
+        self.assertTrue({"none"} <= moves and (not case_ci or "case" in moves) and (not norm_ci or "norm" in moves), moves)
 
     def test_base_worktree_nonutf8_path(self):
         "H6: a worktree path that is not UTF-8 text keeps the existing GateError text (macOS refuses such a name: skipped)"

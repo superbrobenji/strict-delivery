@@ -179,22 +179,35 @@ def _own_path(path: str, what: str, ok: tuple = (0, 128)) -> Optional[str]:
     p = gitinfo._run(path, "rev-parse " + what, ["rev-parse", "--path-format=absolute", what], ok=ok)
     if p.returncode != 0:
         return None
-    return gitinfo._text(p.stdout, "rev-parse " + what).rstrip("\n")
+    text = gitinfo._text(p.stdout, "rev-parse " + what)
+    # only the one line end git adds: a path may itself end in newlines (5c.3 W10; F-20261128-ppe2), unlike a ref name
+    return text[:-1] if text.endswith("\n") else text
+
+
+def _same_dir(a: str, b: str) -> bool:
+    """True when the paths ``a`` and ``b`` name the same directory: ``os.path.samefile`` (same device and inode, which
+    follows symlinks). Two spellings of one directory are one: a name changed by case only or in another Unicode
+    normalization form on a filesystem that ignores both, a symlink and its target (F-20261128-fwn8; ``os.path.realpath``
+    folds neither). A path that cannot be examined (it vanished between two git calls) is not the same: ``False``."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def _is_checkout(path: str, bb: str, common: str) -> bool:
     """True when git, run in the directory ``path`` that ``git worktree list`` gave, agrees it is a checkout of this
     repository on ``bb``: its own top level is ``path``, its common directory is ``common`` (the repository the listing
-    came from; both compared after ``os.path.realpath``) and ``HEAD`` is ``refs/heads/<bb>``. A directory whose ``.git``
+    came from; both compared as the same directory, ``_same_dir``) and ``HEAD`` is ``refs/heads/<bb>``. A directory whose ``.git``
     is gone, a git file naming a missing, foreign or other worktree's directory, a ``.git`` that is a directory of another
     repository or a FIFO, all fail: git then finds nothing, another repository, or a repository above the path
     (F-20261126-hmyt). Read-only plumbing only (``rev-parse``, ``symbolic-ref``): no hook, fsmonitor or configured program
     runs. Needs git 2.31 (``--path-format``): an older git exits 129, a GateError."""
     top = _own_path(path, "--show-toplevel")
-    if top is None or os.path.realpath(top) != os.path.realpath(path):
+    if top is None or not _same_dir(top, path):
         return False
     own = _own_path(path, "--git-common-dir")
-    if own is None or os.path.realpath(own) != os.path.realpath(common):
+    if own is None or not _same_dir(own, common):
         return False
     p = gitinfo._run(path, "symbolic-ref", ["symbolic-ref", "-q", "HEAD"], ok=(0, 1))
     return p.returncode == 0 and gitinfo._text(p.stdout, "symbolic-ref").rstrip("\n") == _HEADS + bb
