@@ -14,6 +14,7 @@ from gates.lib.result import GateError, Result, repo_root, run_check, run_gate
 from gates.lib.store import Record, Store, base_errors, store_errors
 from tests.helpers import (TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms,
                            write_record)
+from tests.tipkinds import BAD_KINDS, set_entry
 
 DIR = ".strict-delivery/state/decisions"
 FDIR = ".strict-delivery/state/findings"
@@ -1600,3 +1601,29 @@ class RowChangedMigrateTest(GitIsolatedTestCase):
                 with self.subTest(name):
                     got = store_mod._row_changed(rec, {} if name.startswith("I1") else at, "finding")
                     self.assertIs(got, want)
+
+
+class RefListingKinds(GitIsolatedTestCase):
+    """Task 5b.3 row F8: the record files of a directory at a ref (``store._records_at``); a non-regular entry is
+    ignored (owner Q-RC10-1 (b), Q-1a3r-3 (b): the base's own gate refuses it)."""
+
+    def test_ref_listing_entry_kinds(self):
+        root = make_repo(self.work)
+        ref, name = "refs/heads/main", FDIR + "/a.yml"
+        text = yamlsub.emit({"schema": FTAG, "id": FID, "status": "closed"})
+        for kind in ("regular", "executable"):
+            with self.subTest(kind):
+                set_entry(root, ref, name, kind, text)
+                self.assertEqual([n for n, _ in store_mod._records_at(root, ref, FDIR, "main", "")], [name])
+        with self.subTest("absent"):
+            set_entry(root, ref, name, "absent")
+            self.assertEqual(store_mod._records_at(root, ref, FDIR, "main", ""), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):  # row F8: ignored, never a GateError
+                set_entry(root, ref, name, kind, text)
+                self.assertEqual(store_mod._records_at(root, ref, FDIR, "main", ""), [])
+            with self.subTest(kind + " with a non-record name"):
+                set_entry(root, ref, name, "absent")
+                set_entry(root, ref, FDIR + "/notes.txt", kind, text)
+                self.assertEqual(store_mod._records_at(root, ref, FDIR, "main", ""), [])
+                set_entry(root, ref, FDIR + "/notes.txt", "absent")

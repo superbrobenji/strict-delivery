@@ -18,6 +18,7 @@ from typing import Optional
 from gates.lib import checkpoints, config, gitinfo, ids, merge, migrations, schema, store, yamlsub
 from gates.lib.fold_table import CCC, COMPOSE, DECOMP, FOLD
 from gates.lib.result import GateError
+from gates.lib import tipread
 
 PROGRAM_START = "program-start"
 PROGRAM_CLOSE = "program-close"
@@ -1233,7 +1234,7 @@ def _fs_text(root: str, rel: str) -> Optional[str]:
 def _file_text(root: str, rel: str, ref: Optional[str]) -> str:
     """The text of one program file from the working tree (``ref`` ``None``) or from ``ref``; a missing file, a
     non-regular file at the ref, a byte order mark or a CR is a GateError naming it."""
-    text = _fs_text(root, rel) if ref is None else gitinfo.show(root, ref, rel)
+    text = _fs_text(root, rel) if ref is None else tipread.show_file(root, ref, rel)
     if text is None:
         raise GateError("%s: missing" % rel)
     if text.startswith(_BOM):
@@ -1327,7 +1328,8 @@ def load_program(root: str, cfg: dict, name: str, ref: Optional[str]) -> Program
 def live_programs(root: str, cfg: dict) -> list:
     """Every program name ``p`` with a local branch ``<p>/integration`` whose tip holds
     ``<paths.programs>/<p>/streams.yml`` as a regular file, sorted; the tip is read through ``refs/heads/<b>`` (D-A23)
-    and a stray branch name that ``parse_branch`` refuses is skipped (D-A24). The current branch is never read."""
+    and a stray branch name that ``parse_branch`` refuses is skipped (D-A24); a non-regular streams.yml is a
+    GateError. The current branch is never read."""
     directory = _programs_dir(cfg)   # gitinfo.local_branches refuses a root that is not a string
     out = set()
     for b in gitinfo.local_branches(root):
@@ -1337,7 +1339,7 @@ def live_programs(root: str, cfg: dict) -> list:
             continue
         if parsed is None or parsed[0] != "integration":
             continue
-        if gitinfo.show(root, "refs/heads/" + b, "%s/%s/streams.yml" % (directory, parsed[1])) is not None:
+        if tipread.show_file(root, "refs/heads/" + b, "%s/%s/streams.yml" % (directory, parsed[1])) is not None:
             out.add(parsed[1])
     return sorted(out)
 
@@ -1428,7 +1430,7 @@ def counted_lines(program: Program, root: str, cfg: dict, breakdown: dict) -> tu
         rel = "%s/%s/ledger.md" % (p["plan_state"], slug)
         points: list = []
         try:
-            text = gitinfo.show(root, head, rel)
+            text = tipread.show_file(root, head, rel)
             why = "does not exist at %s" % head
         except GateError as e:
             text, why = None, str(e)

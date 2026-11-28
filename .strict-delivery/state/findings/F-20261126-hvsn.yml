@@ -1,0 +1,28 @@
+schema: finding/1
+id: F-20261126-hvsn
+status: closed
+source: 5b.3 task review 3 (records/5b.3-review-3.md, finding 3.1)
+severity: LOW
+class: "restore rule: a dropped existing test case replaced instead of restored: tests/test_drift_lib.py Handoff.test_handoff_absent_fails f2c (members: symlink to a missing target, dropped; symlink to a valid handoff, added; gitlink f2d; folder symlink f2e)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence:
+  - 87b80fc3746970158925c682ebd95ecc20a77db6
+history:
+  - status: open
+    sha: 749af49490de3cf94712cb8ae502e6b724fcaa4e
+    by: stream-records
+  - status: closed
+    sha: 87b80fc3746970158925c682ebd95ecc20a77db6
+    by: stream-records
+review_round: 3
+caused_by_change: true
+dimension: restore rule
+resolved_by: 2026-10-31-strict-delivery-framework

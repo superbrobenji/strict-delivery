@@ -1,0 +1,28 @@
+schema: finding/1
+id: F-20261125-c3k2
+status: closed
+source: 5b.3 task review 2 (records/5b.3-review-2.md, finding 1)
+severity: LOW
+class: "non-regular entry at a branch tip read as absent: decisions_cli.py:407 inlines the record-name predicate and refuses a non-regular index.yml at --since, which is no record (members: index.yml, in-force.md, other _GENERATED names)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence:
+  - aaf0a559bba983170e6eb1304a23d17da3416222
+history:
+  - status: open
+    sha: 0375729cc26c35fb12ef052c20311a23c21acd6f
+    by: stream-records
+  - status: closed
+    sha: 87b80fc3746970158925c682ebd95ecc20a77db6
+    by: stream-records
+review_round: 2
+caused_by_change: true
+dimension: non-regular entry at a branch tip read as absent
+resolved_by: 2026-10-31-strict-delivery-framework

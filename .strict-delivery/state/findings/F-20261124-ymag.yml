@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-ymag
+status: open
+source: 5b.3 task review 1 (records/5b.3-review-1.md, R5-1)
+severity: LOW
+class: "input-domain-coverage: H7 outside-root check prefix boundary (gates/tools/index.py _inside_root; mutant N5 drops + os.sep and survives): an outside dir whose real path starts with the root's name (root /a/r, dir /a/r2), a dir equal to the root, a dir under the root"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 87de47f794baf9d8b99bb055947a1ed1fa11c4aa
+    by: stream-records
+review_round: 1
+caused_by_change: true
+dimension: configured directory resolution

@@ -15,6 +15,7 @@ from gates.lib import config, drift, gitinfo, programs
 from gates.lib.result import GateError
 from gates.lib.store import Record
 from tests.helpers import CLEARED_ENV, GitIsolatedTestCase, commit_all, git, make_repo
+from tests.tipkinds import set_entry
 
 P = "20261101-x"
 ANY = object()
@@ -1259,16 +1260,42 @@ class Handoff(unittest.TestCase):
         self.assertEqual(se(r, s), [])
 
     def test_handoff_absent_fails(self):
-        "F2: no file; a directory at the path; a symlink at the path"
+        "F2: no file (f2a); a directory at the path (f2b); a symlink at the path to a valid handoff, never parsed (f2c); a gitlink (f2d, R2-4); a symlink as the folder (f2e, R2-H); a symlink to a missing target (f2f, restored R3-1); a symlink to a target outside the repository (f2g, R3-H)"
         make_branch("f2a", {})
         make_branch("f2b", {hp("f2b") + "/x": "x\n"})
-        make_branch("f2c", {}, {hp("f2c"): "elsewhere"})
-        for sid in ("f2a", "f2b", "f2c"):
+        # f2c: the symlink points to a regular file of the same folder holding a handoff text (R2-4); a reader that followed
+        # the link would parse it and could not give the one "no handoff at" line
+        make_branch("f2c", {hp("f2c")[:-len("handoff.md")] + "valid.md": handoff_text("f2c", G["BASE"])},
+                    {hp("f2c"): "valid.md"})
+        make_branch("f2d", {})
+        set_entry(G["root"], "refs/heads/%s/f2d/main" % P, hp("f2d"), "gitlink")
+        # f2e (R2-H, a parent component a symlink): the folder of the handoff is a symlink to a folder that holds one;
+        # git does not follow a tree symlink, so the handoff is absent
+        real = ".strict-delivery/state/plans/f2e-real/handoff.md"
+        make_branch("f2e", {real: handoff_text("f2e", G["BASE"])}, {hp("f2e")[:-len("/handoff.md")]: "f2e-real"})
+        # f2f (R3-1): the Task 5c.1 member as it stood at 8ad49d2, kept beside f2c: the symlink points to a missing target
+        make_branch("f2f", {}, {hp("f2f"): "elsewhere"})
+        # f2g (R3-H, outside the root): the symlink target leaves the repository
+        make_branch("f2g", {}, {hp("f2g"): "../../../../../outside/handoff.md"})
+        for sid in ("f2a", "f2b", "f2c", "f2d", "f2e", "f2f", "f2g"):
             with self.subTest(sid=sid):
                 errs = only(se(row(sid), stream(sid)), "handoff")
                 self.assertEqual(len(errs), 1)
                 self.assertEqual(errs[0][0], "handoff." + sid)
                 self.assertIn("no handoff at " + hp(sid), errs[0][1])
+        with self.subTest("f2c target is a valid handoff that is never read"):
+            target = git(G["root"], "show", "%s/f2c/main:%s" % (P, hp("f2c")[:-len("handoff.md")] + "valid.md"))
+            self.assertTrue(target.startswith("---\nschema: handoff/1\n"), target)
+            self.assertEqual(git(G["root"], "ls-tree", "%s/f2c/main" % P, hp("f2c")).split()[0], "120000")
+            self.assertEqual(git(G["root"], "ls-tree", "%s/f2d/main" % P, hp("f2d")).split()[0], "160000")
+            self.assertEqual(only(se(row("f2c"), stream("f2c")), "handoff"),
+                             [("handoff.f2c", "no handoff at %s on %s/f2c/main" % (hp("f2c"), P))])
+        for sid, target in (("f2f", "elsewhere"), ("f2g", "../../../../../outside/handoff.md")):
+            with self.subTest("%s symlink target %s is never read" % (sid, target)):
+                self.assertEqual(git(G["root"], "ls-tree", "%s/%s/main" % (P, sid), hp(sid)).split()[0], "120000")
+                self.assertEqual(git(G["root"], "show", "%s/%s/main:%s" % (P, sid, hp(sid))), target)
+                self.assertEqual(only(se(row(sid), stream(sid)), "handoff"),
+                                 [("handoff." + sid, "no handoff at %s on %s/%s/main" % (hp(sid), P, sid))])
 
     def test_handoff_invalid_front_matter(self):
         "F3"
