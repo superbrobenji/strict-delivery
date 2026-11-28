@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-jkth
+status: open
+source: task-CI2-review-3.md F-R3-3 (CI2 r3)
+severity: LOW
+class: "E1 env contents of git: key str subclass, value str subclass, bytes value, int key or value, None value"
+siblings: []
+cites:
+  - file: tests/helpers.py
+    lines: 100-103
+    sha: e0ad5efadea9c6fadcb6935deae5434f64ac1f07
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 6349460e5daf16605481fe71d58535fc9d527212
+    by: stream-ci
+review_round: 3
+caused_by_change: false
+dimension: E1 exact types of git

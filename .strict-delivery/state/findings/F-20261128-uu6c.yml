@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-uu6c
+status: open
+source: task-CI2-review-3.md F-R3-4 (CI2 r3)
+severity: LOW
+class: "transcript line cites: F-20261126-i27y (269 prose, :218 cite); unpinned F-20261126-hk6k, yga8, jth9, eid2, djav"
+siblings: []
+cites:
+  - file: tests/test_helpers_fixture.py
+    lines: 2263-2263
+    sha: e0ad5efadea9c6fadcb6935deae5434f64ac1f07
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 6349460e5daf16605481fe71d58535fc9d527212
+    by: stream-ci
+review_round: 3
+caused_by_change: true
+dimension: transcript line cites
