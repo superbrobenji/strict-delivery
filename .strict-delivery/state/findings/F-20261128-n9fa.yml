@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-n9fa
+status: open
+source: task-CI2-review-4.md F-R4-2 (CI2 r4)
+severity: LOW
+class: "failed builds leave state behind: make_repo's template directory t<N> after _make_repo_slow raises (bad GIT_* value, git not on PATH, a patched failing git); G1 generator: PATH empty, unset, relative-only"
+siblings: []
+cites:
+  - file: tests/helpers.py
+    lines: 240-247
+    sha: f35daf98d181ac08b8cbb0af5d2d110efb3c38f7
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f35daf98d181ac08b8cbb0af5d2d110efb3c38f7
+    by: stream-ci
+review_round: 4
+caused_by_change: true
+dimension: F6 template build

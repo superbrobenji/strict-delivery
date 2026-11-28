@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-kcwz
+status: open
+source: task-CI2-review-4.md F-R4-3 (CI2 r4)
+severity: LOW
+class: "C1 cite/prose spellings: bare file.py:N, other directories, #L, ': N', ' :N', line #N, line:N, line (N), LN, ln N, Nth line, line no N, NBSP, fullwidth digits, ranges after the first number"
+siblings: []
+cites:
+  - file: tests/test_helpers_fixture.py
+    lines: 2362-2380
+    sha: f35daf98d181ac08b8cbb0af5d2d110efb3c38f7
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f35daf98d181ac08b8cbb0af5d2d110efb3c38f7
+    by: stream-ci
+review_round: 4
+caused_by_change: true
+dimension: C1 transcript cites

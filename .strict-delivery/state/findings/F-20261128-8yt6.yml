@@ -1,0 +1,26 @@
+schema: finding/1
+id: F-20261128-8yt6
+status: open
+source: task-CI2-review-4.md F-R4-1 (CI2 r4)
+severity: HIGH
+class: "tests that need git status to refresh the index through helpers.git's default GIT_OPTIONAL_LOCKS=0: tests/test_githooks.py PreCommitTest.test_fsmonitor_hidden_change_refuses_commit, PrePushTest.test_pre_push_refuses_fsmonitor_hidden_change, UnstagedPathsTest.test_unstaged_paths_ignore_fsmonitor (fsmon_prime / fsmon_hidden); further members only by the CI full suite"
+siblings: []
+cites:
+  - file: tests/helpers.py
+    lines: 107-113
+    sha: f35daf98d181ac08b8cbb0af5d2d110efb3c38f7
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: f35daf98d181ac08b8cbb0af5d2d110efb3c38f7
+    by: stream-ci
+review_round: 4
+caused_by_change: true
+dimension: L1 optional locks
