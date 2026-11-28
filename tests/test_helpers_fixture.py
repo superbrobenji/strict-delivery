@@ -1048,7 +1048,7 @@ def _guard_problems(node, text, own, is_builder):
             if callee in GUARD_ARGS and (own or id(sub) in area):
                 arg = guard_path(sub.args, sub.keywords, callee)  # a starred argument or ``**kw`` is no accepted form: reported
                 if not accepted(arg, frozenset()):  # no path argument at all (None) is no accepted form either
-                    bad.append(ast.get_source_segment(text, arg) if arg is not None else "no path argument")
+                    bad.append("a path that is not an accepted form")
             # a guarded function passed by value: its arguments are the ones after it (after the text for ``self.refused``)
             for i, a in enumerate(sub.args):
                 if isinstance(a, (ast.Name, ast.Attribute)) and _callee(a) in GUARD_ARGS:
@@ -1062,7 +1062,7 @@ def _guard_problems(node, text, own, is_builder):
                     rest, kws = sub.args[i + skip:], sub.keywords
                     arg = guard_path(rest, kws, _callee(a))
                     if not accepted(arg, frozenset()):
-                        bad.append(ast.get_source_segment(text, arg) if arg is not None else "no path argument")
+                        bad.append("a path that is not an accepted form")
             if own and len(sub.args) > 1 and isinstance(sub.args[0], ast.Name) and sub.args[0].id == "self" \
                     and isinstance(sub.args[1], ast.Constant) and sub.args[1].value in ("tmp", "work"):
                 bad.append("rebinds self.%s" % sub.args[1].value)  # setattr(self, "tmp", ..), patch.object(self, "tmp", ..)
