@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-wtjs
+status: open
+source: 5b.3 fix round 1 probe (records/5b.3-fix-1.md, table F4); owner Q-RC9-1 (a)
+severity: MEDIUM
+class: "non-regular entry at a branch tip read as absent: gates/lib/cleanup.py:284 cited_decisions skips a symlink, tree or gitlink path at the commit (read as absent, table F4) (members: symlink, tree, gitlink)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 9b3a1c6d44b9b83902162ff4709824c7773b4062
+    by: stream-records
+review_round: 1
+caused_by_change: false
+dimension: non-regular entry at a branch tip read as absent

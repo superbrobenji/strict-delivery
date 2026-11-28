@@ -24,6 +24,7 @@ from gates.lib import (breakdown, checkpoints, claims, config, decisions, dispat
                        schema, store, yamlsub)
 from gates.lib.result import GateError, _GateParser, safe_text
 from gates.lib.store import Store
+from gates.lib import tipread
 from gates.tools import index
 from gates.tools.claims_cli import _once, _root_arg, _text
 
@@ -286,7 +287,7 @@ def _create(ns) -> int:
         raise GateError("%s already exists in the working tree" % base)
     for ref in ("HEAD", "refs/heads/" + cfg["base_branch"]):
         for name in ("streams.yml", "status.md", "sync-log.md", "merged.md"):
-            if gitinfo.show(root, ref, "%s/%s" % (base, name)) is not None:
+            if tipread.show_file(root, ref, "%s/%s" % (base, name)) is not None:
                 raise GateError("%s already exists at %s" % (base, ref))
     recs = Store(root, "decision", cfg).load()
     ok = [r for r in recs if r.id == decision and type(r.row) is dict and r.row.get("status") == "answered"

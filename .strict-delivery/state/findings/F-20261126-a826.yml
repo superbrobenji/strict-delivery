@@ -1,0 +1,28 @@
+schema: finding/1
+id: F-20261126-a826
+status: closed
+source: PR-5b3 final review (records/PR-5b3-final-review.md, FR-1)
+severity: LOW
+class: "tipread read views under refs/replace: gates/lib/tipread.py:18 lists the kind with --no-replace-objects, :25 reads the blob with replace refs honoured (members: replacement drops the path, adds it, changes its content, turns a symlink regular, turns a regular file into a symlink or a tree; decisions_cli.py:404 cut listing; every tipread.show_file caller)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence:
+  - d2b10e0a08499f5328d1e75138c1b90e4b5a38cf
+history:
+  - status: open
+    sha: 87b80fc3746970158925c682ebd95ecc20a77db6
+    by: stream-records
+  - status: closed
+    sha: 924270d99fc19feb65b7a8a32a135e9d693fdf71
+    by: stream-records
+review_round: 5
+caused_by_change: true
+dimension: tipread read views under refs/replace
+resolved_by: 2026-10-31-strict-delivery-framework

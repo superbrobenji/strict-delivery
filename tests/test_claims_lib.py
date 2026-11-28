@@ -18,6 +18,7 @@ from gates.lib.claims import (ClaimFile, base_errors, document_errors, file_erro
                               validate)
 from gates.lib.result import GateError, run_check
 from tests.helpers import GitIsolatedTestCase, check_root_forms, commit_all, git, make_repo, root_forms, write_record
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 # The tag comes from the kind's schema file (Global Constraints "Test fixtures"); literal tags below are wrong-tag
 # tests, which are exempt.
@@ -743,6 +744,51 @@ class BaseTests(RepoCase):
         git(self.root, "rm", "-q", self.fb)
         os.rename(os.path.join(self.root, "docs", "b.md"), os.path.join(self.tmp, "b.md"))
         self.assertEqual([s for s, _ in self.errs()], ["deleted." + self.fb])
+
+    def test_deleted_claim_document_entry_kinds(self):  # F29: the document at the merge base, never read as absent
+        doc = "docs/b.md"
+        cases = [("regular", "%s exists on HEAD and its document docs/b.md is kept; claim files are never deleted"),
+                 ("absent", "%s exists on HEAD; claim files are never deleted")]
+        for kind, mode in BAD_KINDS:
+            cases.append((kind, None))
+        for kind, want in cases:
+            with self.subTest(kind):
+                mb = set_entry(self.root, "refs/heads/side", doc, kind, "doc\n")
+                git(self.root, "reset", "-q", "--hard", mb)
+                git(self.root, "rm", "-q", self.fb)
+                if want is None:
+                    want = ("%s exists on HEAD and its document docs/b.md cannot be read at the merge base (%s); "
+                            "claim files are never deleted") % ("%s", refusal(mb, doc))
+                self.assertEqual(self.errs(), [("deleted." + self.fb, want % self.fb)])
+        # R4-2 (F-20261126-swwg): the probe never reads the blob, so a regular document whose bytes are not UTF-8 has the
+        # edb6aa7 verdict (gitinfo.blob_exists): kept, the "is kept" line; deleted with the claim file, no line
+        kept = [("deleted." + self.fb, "%s exists on HEAD and its document docs/b.md is kept; claim files are never "
+                                       "deleted" % self.fb)]
+        for kind in ("non-utf8", "regular"):
+            for doc_too, want in ((False, kept), (True, [])):
+                with self.subTest("%s, document %s" % (kind, "deleted too" if doc_too else "kept")):
+                    mb = set_entry(self.root, "refs/heads/side", doc, kind, "doc\n")
+                    git(self.root, "reset", "-q", "--hard", mb)
+                    git(self.root, "rm", "-q", self.fb)
+                    if doc_too:
+                        git(self.root, "rm", "-q", doc)
+                    self.assertEqual(self.errs(), want)
+        # R5-2 (F-20261126-g6un): a sibling of the document whose name is not UTF-8 (git is given b"docs/b\xff.md") changes
+        # nothing: the edb6aa7 verdict (gitinfo.blob_exists listed the document alone). The sibling is at the merge base
+        # only; the index is built without it, since gitinfo.tracked_files decodes every index name (on main too)
+        sib = "docs/b\udcff.md"
+        for doc_too, want in ((False, kept), (True, [])):
+            with self.subTest("regular beside a non-UTF-8 sibling, document %s" % ("deleted too" if doc_too else "kept")):
+                set_entry(self.root, "refs/heads/side", sib, "regular", "s\n")
+                mb = set_entry(self.root, "refs/heads/side", doc, "regular", "doc\n")
+                git(self.root, "reset", "-q", "--soft", mb)
+                git(self.root, "read-tree", mb)
+                git(self.root, "rm", "-q", "--cached", "--", sib)
+                git(self.root, "checkout-index", "-q", "-f", "-a")
+                git(self.root, "rm", "-q", self.fb)
+                if doc_too:
+                    git(self.root, "rm", "-q", doc)
+                self.assertEqual(self.errs(), want)
 
     def test_removed_claim_id_fails(self):  # B5
         self.write("docs--a.yml", self.row(ids=(CID2,)))
@@ -1647,6 +1693,35 @@ class ArgvChunkTests(RepoCase):
 
     def test_bound_constant(self):  # Decision (owner delegation 2026-11-09): 30000 bytes per argv
         self.assertEqual(gitinfo.ARGV_BYTES, 30000)
+
+
+class RefListingKinds(GitIsolatedTestCase):
+    """Task 5b.3 row F7: the claim files of a directory at a ref (``claims._rows_at``); a non-regular entry is
+    ignored (owner Q-RC10-1 (b), Q-1a3r-3 (b): the base's own gate refuses it)."""
+
+    def test_ref_listing_entry_kinds(self):
+        root = make_repo(self.work)
+        ref, d = "refs/heads/main", ".strict-delivery/state/claims"
+        name = d + "/a.yml"
+        text = yamlsub.emit({"schema": TAG, "document": "docs/a.md", "claims": []})
+        for kind in ("regular", "executable"):
+            with self.subTest(kind):
+                set_entry(root, ref, name, kind, text)
+                self.assertEqual([n for n, _ in claims._rows_at(root, ref, d, "main", "")], [name])
+        with self.subTest("absent"):
+            set_entry(root, ref, name, "absent")
+            self.assertEqual(claims._rows_at(root, ref, d, "main", ""), [])
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):  # row F7: ignored, never a GateError
+                set_entry(root, ref, name, kind, text)
+                self.assertEqual(claims._rows_at(root, ref, d, "main", ""), [])
+            with self.subTest(kind + " with a non-claim name"):  # a name that is no claim file stays ignored
+                set_entry(root, ref, name, "absent")
+                set_entry(root, ref, d + "/.hidden.yml", kind, text)
+                set_entry(root, ref, d + "/notes.txt", kind, text)
+                self.assertEqual(claims._rows_at(root, ref, d, "main", ""), [])
+                set_entry(root, ref, d + "/.hidden.yml", "absent")
+                set_entry(root, ref, d + "/notes.txt", "absent")
 
 
 if __name__ == "__main__":

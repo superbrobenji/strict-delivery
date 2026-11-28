@@ -17,11 +17,12 @@ from gates import __main__ as gates_main
 from gates import producers
 from gates.lib import config, decisions, gitinfo, yamlsub
 from gates.lib.result import GateError
-from gates.lib import store
+from gates.lib import store, tipread
 from gates.lib.store import Store
 from gates.tools import decisions_cli, questions_cli
 from tests.helpers import (INT_LIMITS, GitIsolatedTestCase, check_root_forms, commit_all, git, int_limit, make_repo,
                            minimal_config, root_forms, write_record)
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 P = "20261101-x"
@@ -217,7 +218,7 @@ class MainForms(Fx):
                  (["--plan", "a-plan", "--plan", "a-plan", "--ref", "main"] + r, "--plan given more than once"),
                  (["--plan", "a-plan", "--ref", "main", "--ref", "main"] + r, "--ref given more than once")]
         for args, needle in cases:
-            with self.subTest(args=args), mock.patch.object(gitinfo, "show") as show, \
+            with self.subTest(args=args), mock.patch.object(tipread, "show_file") as show, \
                     mock.patch.object(gitinfo, "local_branches") as lb:
                 self.fails(self.run_q("list", *args), needle)
                 self.assertFalse(show.called or lb.called)
@@ -368,13 +369,15 @@ class ProgramSources(Fx):
         git(self.root, "checkout", "-q", "%s/b/main" % P)
         self.put(HB + "/x", "x\n")           # a directory
         commit_all(self.root, "dir")
-        self.fails(self.lst(), want)
+        # 5b.3 F6 (owner Q-RC9-1 (a)): a non-regular handoff entry is refused by name, no longer read as "missing at"
+        refused = "stream b: %s: refs/heads/%s/b/main:%s: cannot be read as a UTF-8 regular file (not a regular file)" % (HB, P, HB)
+        self.fails(self.lst(), refused)
         git(self.root, "rm", "-q", "-r", "-f", HB)
         os.makedirs(os.path.dirname(os.path.join(self.root, *HB.split("/"))), exist_ok=True)
         os.symlink("elsewhere", os.path.join(self.root, *HB.split("/")))  # a symlink
         commit_all(self.root, "link")
         git(self.root, "checkout", "-q", INTEG)
-        self.fails(self.lst(), want)
+        self.fails(self.lst(), refused)
 
     def test_uncommitted_question_not_read(self):  # SP5 (Q-Pplan-8 (a))
         self.hand("a", [Q("q1")])
@@ -552,7 +555,7 @@ class PlanSources(Fx):
     def test_plan_slug_charset(self):  # SR3
         self.hand("a", [Q()])
         for slug in ("", "A", "a/b", "a b", "a:b", "..", "a\nb", "é", "-a", "Ꟁ"):
-            with self.subTest(slug=slug[:12]), mock.patch.object(gitinfo, "show") as show:
+            with self.subTest(slug=slug[:12]), mock.patch.object(tipread, "show_file") as show:
                 self.fails(self.plan("list", "main", slug), "--plan: must match [a-z0-9][a-z0-9-]*")
                 self.assertFalse(show.called)
 
@@ -560,6 +563,25 @@ class PlanSources(Fx):
         self.hand("a", [Q()])
         self.fails(self.plan("list", "main"), "%s/a-plan/handoff.md: missing at main" % PS)
         self.fails(self.plan("list", "no-such"), "--ref: no-such is not a commit")
+
+    def test_tip_handoff_entry_kinds(self):  # 5b.3 F6: a non-regular handoff at the ref is an errors line, never "missing at"
+        rel = PS + "/a-plan/handoff.md"
+        branch = "refs/heads/%s/a/main" % P
+        text = self.handoff_text("a", [Q("q1")])
+        for kind in ("regular", "executable"):
+            with self.subTest(kind):
+                set_entry(self.root, branch, rel, kind, text)
+                self.assertEqual(self.plan("list", "%s/a/main" % P), (0, "pending a-plan:q1 a-plan: Which?\n", ""))
+        with self.subTest("absent"):
+            set_entry(self.root, branch, rel, "absent")
+            self.fails(self.plan("list", "%s/a/main" % P), "plan a-plan: %s: missing at %s/a/main" % (rel, P))
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                set_entry(self.root, branch, rel, kind, text)
+                e = self.fails(self.plan("list", "%s/a/main" % P), "plan a-plan: %s: %s" % (rel, refusal("%s/a/main" % P, rel)))
+                self.assertNotIn("missing at", e)
+                e = self.fails(self.lst(), "stream a: %s: %s" % (rel, refusal(branch, rel)))
+                self.assertNotIn("pending", e)
 
     def test_plan_ref_slug_mismatch(self):  # SR5
         self.hand("a", [Q()], slug="b-plan")
@@ -751,6 +773,8 @@ class QuestionFields(Fx):
         self.hand("a", [Q()])
         grp = getattr(builtins, "ExceptionGroup")("x", [ValueError()])
         with mock.patch.object(gitinfo, "show", side_effect=grp), self.assertRaises(getattr(builtins, "ExceptionGroup")):
+            self.lst()  # R4-3: the edb6aa7 case, kept (the handoff is a regular entry, so the read reaches gitinfo.show)
+        with mock.patch.object(tipread, "show_file", side_effect=grp), self.assertRaises(getattr(builtins, "ExceptionGroup")):
             self.lst()
         self.hand("a", [Q(), Q("q2")])
         bgrp = getattr(builtins, "BaseExceptionGroup")("x", [KeyboardInterrupt()])

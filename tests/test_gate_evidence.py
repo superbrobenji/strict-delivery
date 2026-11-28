@@ -18,6 +18,7 @@ from gates import gate_evidence, producers, run_all
 from gates.lib import gitinfo, ids, schema
 from tests.helpers import (E128, INT_LIMITS, TOP, GitIsolatedTestCase, commit_all, git, int_limit, make_repo)
 from gates.lib.yamlsub import emit
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FS = schema.load_schema(os.path.join(schema.SCHEMAS_DIR, "finding.yml"))
@@ -1207,7 +1208,11 @@ class Transcript(Base):
                 fh.write(text.replace(info.transcript, "%s:%s" % (info.tsha, target)))
             out, _ = self.run_()
             self.assertTrue(bad(out, "transcript." + F), out)
-            self.assertIn("is not a regular file", line(out, "transcript." + F))
+            if target == TDIR + "/gone.md":  # the missing target's text is unchanged: the edb6aa7 assertion, kept
+                self.assertIn("is not a regular file", line(out, "transcript." + F))
+            else:  # R4-3, 5b.3 F15: the directory is refused by name through tipread.show_file
+                self.assertEqual(line(out, "transcript." + F), "FAIL evidence.transcript.%s: transcript %s:%s: %s"
+                                 % (F, info.tsha, target, refusal(info.tsha, target)))
             with open(row, "w", encoding="utf-8") as fh:
                 fh.write(text)
 
@@ -1508,7 +1513,8 @@ class Versions(Base):
         self.make()
         self.pin()
         group = getattr(builtins, "ExceptionGroup")("g", [ValueError()])
-        for target in ("gates.lib.evidence.run_pin", "gates.lib.gitinfo.show"):
+        # R4-3: the edb6aa7 target gitinfo.show (the pinned transcript is a regular entry, so its read reaches it) is kept
+        for target in ("gates.lib.evidence.run_pin", "gates.lib.gitinfo.show", "gates.lib.tipread.show_file"):
             with self.subTest(target), mock.patch(target, side_effect=group):
                 out, code = self.run_()
                 self.assertTrue(out.startswith("FAIL evidence.input: ExceptionGroup: g (1 sub-exception)"), out)
@@ -1632,6 +1638,22 @@ class Generator(Base):
         got = [ln.split(":", 1)[0] for ln in out.splitlines()]
         self.assertEqual(got, expect)
         self.assertEqual(code, 1 if want_fail else 0)
+
+
+class ShowKinds(GitIsolatedTestCase):
+    """Task 5b.3 row F15: ``gate_evidence._show`` on each entry kind at a revision."""
+
+    def test_show_entry_kinds(self):
+        root = make_repo(self.work)
+        path = "docs/x.md"
+        sha = set_entry(root, "refs/heads/main", path, "regular", "text\n")
+        self.assertEqual(gate_evidence._show(root, sha, path), ("text\n", ""))
+        absent = set_entry(root, "refs/heads/main", path, "absent")
+        self.assertEqual(gate_evidence._show(root, absent, path), (None, "%s is not a regular file at %s" % (path, absent)))
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                sha = set_entry(root, "refs/heads/main", path, kind, "text\n")
+                self.assertEqual(gate_evidence._show(root, sha, path), (None, "%s:%s: %s" % (sha, path, refusal(sha, path))))
 
 
 if __name__ == "__main__":

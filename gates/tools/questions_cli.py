@@ -18,6 +18,7 @@ from typing import Optional
 
 from gates.lib import checkpoints, config, decisions, gitinfo, ids, programs, schema
 from gates.lib.result import GateError, _GateParser, safe_text
+from gates.lib import tipread
 from gates.tools import decisions_cli, index
 from gates.tools.claims_cli import _once, _root_arg
 
@@ -75,7 +76,7 @@ def _read(root: str, cfg: dict, ref: str, slug: str, label: str, shown: str, pro
     ``label``, go to ``errors``."""
     rel = "%s/%s/handoff.md" % (cfg["paths"]["plan_state"], slug)
     try:
-        text = gitinfo.show(root, ref, rel)
+        text = tipread.show_file(root, ref, rel)
     except GateError as e:
         errors.append("%s: %s: %s" % (label, rel, e))
         return []

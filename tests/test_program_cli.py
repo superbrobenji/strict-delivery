@@ -14,6 +14,7 @@ from gates import producers
 from gates.lib import programs, yamlsub
 from gates.tools import program_cli
 from tests.helpers import GitIsolatedTestCase, commit_all, git, make_repo, write_record
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 NAME = "20261101-x"
 PG = "docs/strict-delivery/plans"
@@ -234,6 +235,21 @@ class Create(Fx):
         self.write_main(base + "/streams.yml", "schema: streams/1\n")
         commit_all(self.work, "name taken")
         self.refused("already exists")
+
+    def test_create_existing_entry_kinds(self):  # 5b.3 F20: a non-regular program file at HEAD or the base is a named refusal
+        base = ".strict-delivery/state/programs/%s" % NAME
+        for label, ref in (("HEAD", "refs/heads/%s/integration" % NAME), ("refs/heads/main", "refs/heads/main")):
+            for name in ("streams.yml", "status.md", "sync-log.md", "merged.md"):
+                rel = "%s/%s" % (base, name)
+                for kind, mode in BAD_KINDS:
+                    with self.subTest("%s %s %s" % (label, name, kind)):
+                        set_entry(self.iw, ref, rel, kind)
+                        self.refused(refusal(label, rel))
+                        set_entry(self.iw, ref, rel, "absent")
+                with self.subTest("%s %s regular" % (label, name)):
+                    set_entry(self.iw, ref, rel, "regular", "x\n")
+                    self.refused("%s already exists at %s" % (base, label))
+                    set_entry(self.iw, ref, rel, "absent")
 
     def test_refused_off_integration_branch(self):  # PG5
         want = "%s/integration" % NAME
