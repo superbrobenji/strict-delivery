@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261128-5m9s
-status: open
+status: fixed-unpinned
 source: 6R.2 review 2 (residual/6R.2-review-2.md) Finding 6
 severity: LOW
 class: "order of the refusals of _run after base: dirty tree x non-ASCII branch, dirty tree x non-ASCII base_branch, branch == base x non-ASCII name"
@@ -18,6 +18,15 @@ history:
   - status: open
     sha: ce24492aff79a9c418cf98e1672d0a99de8898b8
     by: residual-controller-9
+  - status: planned
+    sha: 0b6e490d90d8b8ad6b1ddaa80a3015d3a68428e2
+    by: residual-implementer-r2
+  - status: in-progress
+    sha: 0b6e490d90d8b8ad6b1ddaa80a3015d3a68428e2
+    by: residual-implementer-r2
+  - status: fixed-unpinned
+    sha: 0b6e490d90d8b8ad6b1ddaa80a3015d3a68428e2
+    by: residual-implementer-r2
 review_round: 2
 caused_by_change: true
 dimension: order of the refusals of _run
