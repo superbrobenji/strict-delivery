@@ -25,14 +25,13 @@ DELTA_CTRL = (
     "review of the whole branch: it covers the merge commit's diff, the base branch's changes to each module a "
     "`Consumes:` line of the branch's tasks names and the branch's uses of them, and one full suite on the new head; "
     "dispatch a fresh review of the whole branch only when the branch's own code changed beyond fix diffs that were "
-    "reviewed, or the merge had a conflict.")
+    "reviewed.")
 DELTA_FR = (
     "When the brief names a delta review after an update from the base branch, review the update instead of the "
     "whole branch: the merge commit's diff, the base branch's changes to each module a `Consumes:` line of the "
     "branch's tasks names and each place the branch uses them, and one full suite you run on the new head.",
     "First check that the only commits after the reviewed head are that merge and fix commits whose diffs were "
-    "reviewed, and that the merge had no conflict; otherwise report BLOCKED naming the commit, since only a review "
-    "of the whole branch can judge it.")
+    "reviewed; otherwise report BLOCKED naming the commit, since only a review of the whole branch can judge it.")
 A2_FIND = (
     "For each finding, search the code for every member of its class, each place its input dimension reaches, record "
     "the search command in the report, and list every member the search finds in its class statement.")
@@ -178,8 +177,7 @@ SE1_NOW = ("blocks no other stream waits on stay on the stream branch and go out
 SE1_ADD = ("An update from the base branch after the final review is reviewed as a delta (process learnings A1; owner "
            "2026-11-24): the review covers the merge's diff, the base branch's changes to the modules the branch's "
            "tasks consume and the branch's uses of them, and one full suite on the new head; a fresh review of the "
-           "whole branch runs only when the branch's own code changed beyond fix diffs that were reviewed, or the "
-           "merge had a conflict.")
+           "whole branch runs only when the branch's own code changed beyond fix diffs that were reviewed.")
 SE2_NOW = "the `final_verifier` tries to break the branch."
 SE2_ADD = ("A reviewer lists in each finding's class statement every member a search of the code finds and records "
            "the search; the implementer's fix tests each listed member; a re-review first runs each search again and "
@@ -198,7 +196,7 @@ PB1_NOW = "and that the branch matches the plan section it was built from."
 PB1_ADD = ("An update from the base branch after this review is reviewed as a delta: the merge's diff, the base "
            "branch's changes to the modules the branch's tasks consume and the branch's uses of them, and one full "
            "suite on the new head; a fresh review of the whole branch runs only when the branch's own code changed "
-           "beyond reviewed fix diffs, or the merge had a conflict.")
+           "beyond reviewed fix diffs.")
 PB2_NOW = ("A class of findings is an epic with child rows, signed off only when every child is resolved and the whole "
            "class is tested and reviewed.")
 PB2_ADD = ("A finding's class statement lists every member a search of the code finds, with the search recorded; the "
