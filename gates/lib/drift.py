@@ -99,10 +99,12 @@ def merged_at(root: str, base: str, tip: str) -> Optional[str]:
     return None
 
 
-def _remote_of(root: str, branch: str) -> str:
+def _remote_of(root: str, branch: str) -> Optional[str]:
+    """``branch.<branch>.remote``, or ``None`` when it is unset or empty (F-20261126-ztfi: no string stands for "unset",
+    so a remote that is really named ``<remote>`` is judged like any other)."""
     p = gitinfo._run(root, "config", ["config", "--get", "branch.%s.remote" % branch], ok=(0, 1))
     name = gitinfo._text(p.stdout, "config").strip() if p.returncode == 0 else ""
-    return name if name else "<remote>"
+    return name if name else None
 
 
 def base_errors(root: str, cfg: dict) -> list:
@@ -123,10 +125,17 @@ def base_errors(root: str, cfg: dict) -> list:
         return [("base", "the upstream of %s cannot be compared with it: %s" % (_shown(bb), _shown(str(e))))]
     remote = _remote_of(root, bb)
     if not _same_name_upstream(root, bb, remote):
-        # plan :5446 states the command only for <remote>/<base_branch>; any other upstream gets a named refusal
+        # plan :5448 states the command only for <remote>/<base_branch>; any other upstream gets a named refusal
         p = gitinfo._run(root, "rev-parse --abbrev-ref", ["rev-parse", "--abbrev-ref", bb + "@{upstream}"])
         return [("base", "update %s from its upstream %s: it is not %s/%s, so no update command is given"
-                 % (_shown(bb), _shown(gitinfo._text(p.stdout, "rev-parse").strip()), _shown(remote), _shown(bb)))]
+                 % (_shown(bb), _shown(gitinfo._text(p.stdout, "rev-parse").strip()),
+                    "<remote>" if remote is None else _shown(remote), _shown(bb)))]
+    full = _short_name_ref(root, remote, bb)
+    if full != "refs/remotes/%s/%s" % (remote, bb):
+        # the printed command names <remote>/<base_branch>, which git must read as that remote branch (F-20261126-gbxh)
+        return [("base", "update %s from the remote: %s/%s names %s, not refs/remotes/%s/%s, so no update command is given"
+                 % (_shown(bb), _shown(remote), _shown(bb), _shown(full) if full else "more than one ref",
+                    _shown(remote), _shown(bb)))]
     try:
         path = _checkout_of(root, bb)
     except GitNotFound:
@@ -141,25 +150,64 @@ def base_errors(root: str, cfg: dict) -> list:
              % (_shown(bb), _shown(bb)))]
 
 
-def _same_name_upstream(root: str, bb: str, remote: str) -> bool:
-    """True when the upstream git resolves for ``bb`` is ``<remote>/<bb>``: ``branch.<bb>.remote`` is set and is not
-    ``.``, and ``git rev-parse --symbolic-full-name <bb>@{upstream}`` (local refs only) prints exactly
-    ``refs/remotes/<remote>/<bb>``. It is the resolved upstream that decides, not the ``git remote`` list or the
-    ``branch.<bb>.merge`` value, so a legacy ``.git/remotes`` remote is accepted, and a several-valued merge, a fetch
-    refspec into another namespace, a ``.git/branches`` remote and a merge naming another branch are not (plan :5446;
-    F-20261124-urap, -9bes, -mev2)."""
-    if remote == "<remote>" or remote == ".":
+def _same_name_upstream(root: str, bb: str, remote: Optional[str]) -> bool:
+    """True when the upstream git resolves for ``bb`` is ``<remote>/<bb>``: ``branch.<bb>.remote`` is not unset or empty
+    (``remote`` is not ``None``) and is not ``.``, and ``git rev-parse --symbolic-full-name <bb>@{upstream}`` (local refs
+    only) prints exactly ``refs/remotes/<remote>/<bb>``. It is the resolved upstream that decides, not the ``git remote``
+    list or the ``branch.<bb>.merge`` value, so a legacy ``.git/remotes`` remote is accepted, and a several-valued merge,
+    a fetch refspec into another namespace, a ``.git/branches`` remote and a merge naming another branch are not (plan
+    :5448; F-20261124-urap, -9bes, -mev2)."""
+    if remote is None or remote == ".":
         return False
     p = gitinfo._run(root, "rev-parse --symbolic-full-name", ["rev-parse", "--symbolic-full-name", bb + "@{upstream}"])
     return gitinfo._text(p.stdout, "rev-parse").rstrip("\n") == "refs/remotes/%s/%s" % (remote, bb)
 
 
+def _short_name_ref(root: str, remote: str, bb: str) -> str:
+    """What git's own lookup makes of the short name ``<remote>/<bb>`` that the printed command uses (local refs only):
+    ``git rev-parse --verify --quiet --symbolic-full-name`` prints the full name, or nothing (exit 0) when the name is
+    ambiguous (a tag, a branch, ``refs/<name>`` or ``$GIT_DIR/<name>`` of that name beside the remote branch; measured with
+    git 2.50.1). Git's lookup order is not re-implemented: git answers (F-20261126-gbxh)."""
+    p = gitinfo._run(root, "rev-parse --symbolic-full-name", ["rev-parse", "--verify", "--quiet", "--symbolic-full-name",
+                                                              "--end-of-options", "%s/%s" % (remote, bb)])
+    return gitinfo._text(p.stdout, "rev-parse").rstrip("\n")
+
+
+def _own_path(path: str, what: str, ok: tuple = (0, 128)) -> Optional[str]:
+    """The one absolute path ``git rev-parse --path-format=absolute <what>`` prints in ``path``; ``None`` when git exits
+    128 there (not a repository, or no work tree); any other failure is a GateError."""
+    p = gitinfo._run(path, "rev-parse " + what, ["rev-parse", "--path-format=absolute", what], ok=ok)
+    if p.returncode != 0:
+        return None
+    return gitinfo._text(p.stdout, "rev-parse " + what).rstrip("\n")
+
+
+def _is_checkout(path: str, bb: str, common: str) -> bool:
+    """True when git, run in the directory ``path`` that ``git worktree list`` gave, agrees it is a checkout of this
+    repository on ``bb``: its own top level is ``path``, its common directory is ``common`` (the repository the listing
+    came from; both compared after ``os.path.realpath``) and ``HEAD`` is ``refs/heads/<bb>``. A directory whose ``.git``
+    is gone, a git file naming a missing, foreign or other worktree's directory, a ``.git`` that is a directory of another
+    repository or a FIFO, all fail: git then finds nothing, another repository, or a repository above the path
+    (F-20261126-hmyt). Read-only plumbing only (``rev-parse``, ``symbolic-ref``): no hook, fsmonitor or configured program
+    runs. Needs git 2.31 (``--path-format``): an older git exits 129, a GateError."""
+    top = _own_path(path, "--show-toplevel")
+    if top is None or os.path.realpath(top) != os.path.realpath(path):
+        return False
+    own = _own_path(path, "--git-common-dir")
+    if own is None or os.path.realpath(own) != os.path.realpath(common):
+        return False
+    p = gitinfo._run(path, "symbolic-ref", ["symbolic-ref", "-q", "HEAD"], ok=(0, 1))
+    return p.returncode == 0 and gitinfo._text(p.stdout, "symbolic-ref").rstrip("\n") == _HEADS + bb
+
+
 def _checkout_of(root: str, bb: str) -> Optional[str]:
     """The path of the first entry of ``git worktree list --porcelain -z`` (one read) whose branch is ``bb``, that git
-    does not list as ``prunable`` and whose path is an existing directory (``os.path.isdir``, which follows symlinks:
-    a locked entry with its directory gone, a path that is now a file or a FIFO are skipped); ``None`` when no entry is
-    left (F-20261124-9v77). Needs git 2.36 (``-z``): an older git exits 129, a GateError. Path and branch are read from
-    the ``worktree `` and ``branch `` fields, the flag from a field ``prunable`` (git 2.31 and later lists it)."""
+    does not list as ``prunable``, whose path is an existing directory (``os.path.isdir``, which follows symlinks: a locked
+    entry with its directory gone, a path that is now a file or a FIFO are skipped, and no git call is made in them) and
+    that git run in it agrees is a usable checkout of this repository on ``bb`` (``_is_checkout``); an entry that fails is
+    skipped and the next one is tried; ``None`` when no entry is left (F-20261124-9v77, F-20261126-hmyt). Needs git 2.36
+    (``-z``): an older git exits 129, a GateError. Path and branch are read from the ``worktree `` and ``branch `` fields,
+    the flag from a field ``prunable`` (git 2.31 and later lists it)."""
     out = gitinfo._text(gitinfo._run(root, "worktree list", ["worktree", "list", "--porcelain", "-z"]).stdout,
                         "worktree list")
     entries: list = []
@@ -171,8 +219,15 @@ def _checkout_of(root: str, bb: str) -> Optional[str]:
             entries[-1][1] = ref[len(_HEADS):] if ref.startswith(_HEADS) else ref
         elif (field == "prunable" or field.startswith("prunable ")) and entries:
             entries[-1][2] = True
+    common = None
     for path, branch, prunable in entries:
-        if branch == bb and not prunable and os.path.isdir(path):
+        if branch != bb:
+            continue
+        if prunable or not os.path.isdir(path):
+            continue
+        if common is None:
+            common = _own_path(root, "--git-common-dir", ok=(0,))
+        if _is_checkout(path, bb, common):
             return path
     return None
 

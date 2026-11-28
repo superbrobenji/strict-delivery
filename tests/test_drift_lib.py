@@ -4,6 +4,7 @@ read with plain ``git`` in the test (``rev-parse``, ``log --first-parent``), nev
 import builtins
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -982,10 +983,17 @@ class Fresh(GitIsolatedTestCase):
         git(other, "push", "-q", "origin", base)
         return root, bare, other
 
+    @staticmethod
+    def heads(root):
+        "Every ``refs/heads/*`` as ``{ref: object}``, read with plain git (the branches are shared by every worktree)."
+        out = git(root, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
+        return dict(line.rsplit(" ", 1) for line in out.split("\n") if line)
+
     def verdict(self, root, want, base="main", follow=False):
         """``base_errors`` equals ``want``; with ``follow`` the two git commands the reason prints are run in the
-        fixture (U14) and ``base_errors`` is then ``[]``."""
+        fixture (U14), ``base_errors`` is then ``[]`` and no branch but the base branch moved (5c.4 oracle)."""
         cfg = dict(config.load(root), base_branch=base)
+        before = self.heads(root)
         got = drift.base_errors(root, cfg)
         self.assertEqual(got, want)
         if follow:
@@ -995,10 +1003,28 @@ class Fresh(GitIsolatedTestCase):
             git(m.group(2), "fetch", "-q", m.group(3))
             git(m.group(4), "merge", "-q", "--ff-only", m.group(5))
             self.assertEqual(drift.base_errors(root, cfg), [])
+            after = self.heads(root)
+            self.assertEqual(set(after), set(before))
+            self.assertEqual({ref for ref in after if after[ref] != before[ref]}, {"refs/heads/" + base})
 
     def refusal(self, upstream, remote, name="main"):
         return [("base", "update %s from its upstream %s: it is not %s/%s, so no update command is given"
                  % (name, upstream, remote, name))]
+
+    def no_call_in(self, root, want, *paths):
+        """``verdict`` with every ``gitinfo._run`` call recorded: no git call is made in any of ``paths`` (an entry the
+        listing or the directory test skips costs no git call: F-20261126-nr8f, mutants X1 and M3)."""
+        roots: list = []
+        real = gitinfo._run
+
+        def run(r, name, args, *a, **k):
+            roots.append(r)
+            return real(r, name, args, *a, **k)
+        with mock.patch("gates.lib.gitinfo._run", side_effect=run):
+            self.verdict(root, want)
+        for path in paths:
+            self.assertNotIn(path, roots)
+        self.assertIn(root, roots)
 
     def test_base_upstream_forms(self):
         "U2, U6-U11, U13, U14, K1: the upstream git resolves decides, not the config values"
@@ -1102,7 +1128,7 @@ class Fresh(GitIsolatedTestCase):
             git(root, "worktree", "add", "-q", wt, "main")
             os.rename(wt, wt + ".moved")
             self.assertIn("prunable", git(root, "worktree", "list", "--porcelain"))
-            self.verdict(root, [("base", self.NOCO)])
+            self.no_call_in(root, [("base", self.NOCO)], wt)
         with self.subTest("git-file-gone"):
             # W12: the directory is present, its .git file is renamed away: git lists the entry prunable while isdir holds
             root = self.wcase("gg")
@@ -1111,7 +1137,7 @@ class Fresh(GitIsolatedTestCase):
             os.rename(os.path.join(wt, ".git"), os.path.join(wt, ".git.gone"))
             self.assertTrue(os.path.isdir(wt))
             self.assertRegex(git(root, "worktree", "list", "--porcelain"), r"(?m)^prunable .+$")
-            self.verdict(root, [("base", self.NOCO)])
+            self.no_call_in(root, [("base", self.NOCO)], wt)
         with self.subTest("locked-missing"):
             root = self.wcase("lm")
             wt = os.path.join(self.tmp, "lm-wt")
@@ -1119,7 +1145,7 @@ class Fresh(GitIsolatedTestCase):
             git(root, "worktree", "lock", wt)
             os.rename(wt, wt + ".moved")
             self.assertNotIn("prunable", git(root, "worktree", "list", "--porcelain"))
-            self.verdict(root, [("base", self.NOCO)])
+            self.no_call_in(root, [("base", self.NOCO)], wt)
         with self.subTest("symlink-dir"):
             root = self.wcase("sd")
             wt = os.path.join(self.tmp, "sd-wt")
@@ -1142,6 +1168,20 @@ class Fresh(GitIsolatedTestCase):
             os.rename(wt, wt + ".moved")
             os.mkfifo(wt)
             self.verdict(root, [("base", self.NOCO)])
+        # 5c.4 P1, P2 (F-20261126-nr8f, mutant X1): a LOCKED entry (git does not list it prunable) whose path is now a
+        # regular file or a FIFO is skipped by the directory test, so no git call is made in it
+        for label, make in (("locked-file", lambda p: open(p, "w").close()), ("locked-fifo", os.mkfifo)):
+            with self.subTest(label):
+                root = self.wcase(label)
+                wt = os.path.join(self.tmp, label + "-wt")
+                git(root, "worktree", "add", "-q", wt, "main")
+                git(root, "worktree", "lock", wt)
+                os.rename(wt, wt + ".moved")
+                make(wt)
+                listing = git(root, "worktree", "list", "--porcelain")
+                self.assertIn("branch refs/heads/main\nlocked", listing)
+                self.assertNotIn("prunable", listing)
+                self.no_call_in(root, [("base", self.NOCO)], wt)
         with self.subTest("symlink-parent"):
             root = self.wcase("sp")
             real = os.path.join(self.tmp, "sp-real")
@@ -1211,7 +1251,12 @@ class Fresh(GitIsolatedTestCase):
         git(root, "worktree", "add", "-q", wt, "main")
         real = gitinfo._run
         group = getattr(builtins, "BaseExceptionGroup", None)
-        for label, hit in (("upstream", lambda a: "--symbolic-full-name" in a), ("listing", lambda a: a[0] == "worktree")):
+        for label, hit in (("upstream", lambda a: "@{upstream}" in a[-1] and "--symbolic-full-name" in a),
+                           ("listing", lambda a: a[0] == "worktree"),
+                           ("short-name", lambda a: "--verify" in a and "--symbolic-full-name" in a),  # 5c.4 Rule G
+                           ("common-dir", lambda a: "--path-format=absolute" in a and a[-1] == "--git-common-dir"),  # Rule C
+                           ("toplevel", lambda a: "--path-format=absolute" in a and a[-1] == "--show-toplevel"),
+                           ("head", lambda a: a[0] == "symbolic-ref")):
             for exc in ([KeyboardInterrupt()] + ([group("g", [KeyboardInterrupt()])] if group else [])):
                 def run(r, name, args, *a, **k):
                     if hit(args):
@@ -1220,6 +1265,390 @@ class Fresh(GitIsolatedTestCase):
                 with self.subTest(label, exc=type(exc).__name__), mock.patch("gates.lib.gitinfo._run", side_effect=run):
                     with self.assertRaises(type(exc)):
                         drift.base_errors(root, self.cfg)
+
+    # -- Task 5c.4 (F-20261126-hmyt, -nr8f, -gbxh, -ztfi): rows C, P, G, Z, T, H, K of records/task-5c.4-domain.md
+    def linked(self, name, nested=False):
+        "A ``wcase`` repository and a linked worktree on main (inside the root when ``nested``). Returns (root, wt)."
+        root = self.wcase(name)
+        wt = os.path.join(root if nested else self.tmp, name + "-wt")
+        git(root, "worktree", "add", "-q", wt, "main")
+        return root, wt
+
+    def listed_unprunable(self, root):
+        "The built state: git lists an entry with branch main and none of the entries prunable."
+        listing = git(root, "worktree", "list", "--porcelain")
+        self.assertIn("branch refs/heads/main", listing)
+        self.assertNotIn("prunable", listing)
+
+    def break_wt(self, kind, name):
+        "A linked worktree on main (see ``linked``) broken as ``kind``, git still listing it, not prunable. (root, wt)."
+        root, wt = self.linked(name, nested=kind.endswith("-nested"))
+        dotgit = os.path.join(wt, ".git")
+        if kind in ("locked-gitgone", "locked-gitgone-nested"):
+            git(root, "worktree", "lock", wt)
+            os.rename(dotgit, dotgit + ".gone")
+        elif kind == "gitfile-nowhere":
+            with open(dotgit, "w") as fh:
+                fh.write("gitdir: %s\n" % os.path.join(self.tmp, "nowhere"))
+        elif kind in ("git-dir-empty", "git-dir-other-repo"):
+            os.rename(dotgit, dotgit + ".gone")
+            os.mkdir(dotgit)
+            if kind == "git-dir-other-repo":
+                git(wt, "init", "-q", "-b", "main")
+        elif kind == "admin-renamed":
+            admin = os.path.join(root, ".git", "worktrees")
+            (entry,) = os.listdir(admin)
+            os.rename(os.path.join(admin, entry), os.path.join(admin, entry + ".renamed"))
+        elif kind == "gitfile-other-admin":
+            side = os.path.join(self.tmp, name + "-side")
+            git(root, "worktree", "add", "-q", "-b", "side", side)
+            with open(dotgit, "w") as fh:
+                fh.write("gitdir: %s\n" % os.path.join(root, ".git", "worktrees", os.path.basename(side)))
+        elif kind == "gitfile-foreign-repo":
+            foreign = os.path.join(self.tmp, name + "-foreign")
+            os.mkdir(foreign)
+            make_repo(foreign)
+            git(foreign, "checkout", "-q", "-b", "elsewhere")
+            fwt = os.path.join(self.tmp, name + "-foreign-wt")
+            git(foreign, "worktree", "add", "-q", fwt, "main")
+            with open(dotgit, "w") as fh:
+                fh.write("gitdir: %s\n" % os.path.join(foreign, ".git", "worktrees", os.path.basename(fwt)))
+        elif kind == "gitfile-fifo":
+            os.rename(dotgit, dotgit + ".gone")
+            os.mkfifo(dotgit)
+        else:
+            raise AssertionError(kind)
+        self.listed_unprunable(root)
+        return root, wt
+
+    def test_base_worktree_unusable(self):
+        "C1-C7, C10, C11, H1, H3, H8 (F-20261126-hmyt): a listed, unprunable entry that is not a usable checkout is skipped"
+        for kind in ("locked-gitgone", "locked-gitgone-nested", "gitfile-nowhere", "git-dir-empty", "git-dir-other-repo",
+                     "admin-renamed", "gitfile-other-admin", "gitfile-foreign-repo", "gitfile-fifo"):
+            with self.subTest(kind):
+                root, wt = self.break_wt(kind, kind)
+                self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("walks-up-to-outer"):
+            # C11: a repository above the broken entry is made inside this test's own sandbox; git walks up to it
+            outer = os.path.join(self.tmp, "outer")
+            os.mkdir(outer)
+            git(outer, "init", "-q", "-b", "main")
+            root = self.wcase("wu")
+            wt = os.path.join(outer, "x", "wt")
+            git(root, "worktree", "add", "-q", wt, "main")
+            git(root, "worktree", "lock", wt)
+            os.rename(os.path.join(wt, ".git"), os.path.join(wt, ".git.gone"))
+            self.assertEqual(git(wt, "rev-parse", "--show-toplevel"), outer)
+            self.listed_unprunable(root)
+            self.verdict(root, [("base", self.NOCO)])
+        with self.subTest("gitfile-symlink"):
+            # H1: the .git file is a symlink: git in the directory is that checkout, so it is used
+            root, wt = self.linked("gs")
+            os.rename(os.path.join(wt, ".git"), os.path.join(wt, ".git.real"))
+            os.symlink(".git.real", os.path.join(wt, ".git"))
+            self.verdict(root, [("base", self.cmd(wt))], follow=True)
+        with self.subTest("root-inside-other-repo"):
+            # C10: the main checkout is the entry on main and lies inside another repository's working tree
+            outer = os.path.join(self.tmp, "o10")
+            os.mkdir(outer)
+            git(outer, "init", "-q", "-b", "main")
+            root, bare, other = self.case("o10/inner")
+            git(root, "fetch", "-q", "origin")
+            self.verdict(root, [("base", self.cmd(root))], follow=True)
+        with self.subTest("no-program-runs"):
+            # the checks run plumbing only: a configured fsmonitor program is never started, for a usable or a broken entry
+            marker = os.path.join(self.tmp, "ran")
+            for kind in (None, "locked-gitgone"):
+                root, wt = self.break_wt(kind, "np-" + kind) if kind else self.linked("np-ok")
+                git(root, "config", "core.fsmonitor", "touch " + marker)
+                self.verdict(root, [("base", self.NOCO if kind else self.cmd(wt))])
+                self.assertFalse(os.path.exists(marker))
+
+    def test_base_two_base_entries(self):
+        "P3, P4 (F-20261126-nr8f, mutant M9): the first USABLE entry on the base branch is the checkout, in both listing orders"
+        for kind in ("prunable", "locked-missing", "locked-gitgone"):
+            firsts = set()
+            for bad_name, good_name in (("a", "b"), ("b", "a")):
+                with self.subTest(kind=kind, bad=bad_name):
+                    root = self.wcase("p3-%s-%s" % (kind, bad_name))
+                    bad = os.path.join(self.tmp, "p3-%s-%s-d" % (kind, bad_name), bad_name)
+                    good = os.path.join(self.tmp, "p3-%s-%s-d" % (kind, bad_name), good_name)
+                    git(root, "worktree", "add", "-q", bad, "main")
+                    git(root, "worktree", "add", "-q", "-f", good, "main")
+                    if kind != "prunable":
+                        git(root, "worktree", "lock", bad)
+                    if kind == "locked-gitgone":
+                        os.rename(os.path.join(bad, ".git"), os.path.join(bad, ".git.gone"))
+                    else:
+                        os.rename(bad, bad + ".moved")
+                    listing = git(root, "worktree", "list", "--porcelain")
+                    firsts.add(listing.index("worktree " + bad) < listing.index("worktree " + good))
+                    self.verdict(root, [("base", self.cmd(good))], follow=True)
+            self.assertEqual(firsts, {True, False}, "each order is built once")
+        with self.subTest("both-usable"):
+            root = self.wcase("p4")
+            one, two = os.path.join(self.tmp, "p4-d", "a"), os.path.join(self.tmp, "p4-d", "b")
+            git(root, "worktree", "add", "-q", one, "main")
+            git(root, "worktree", "add", "-q", "-f", two, "main")
+            listed = subprocess.run(["git", "-C", root, "worktree", "list", "--porcelain", "-z"],
+                                    stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
+            first = [f[len("worktree "):] for f in listed if f.startswith("worktree ")][1]
+            self.assertIn(first, (one, two))
+            self.verdict(root, [("base", self.cmd(first))], follow=True)
+
+    # -- Rule G: the printed short name resolves to the upstream
+    def refuse_g(self, full, remote="origin", name="main"):
+        return [("base", "update %s from the remote: %s/%s names %s, not refs/remotes/%s/%s, so no update command is given"
+                 % (name, remote, name, full, remote, name))]
+
+    def fetched(self, name, remote="origin", base="main"):
+        "A ``case`` fetched: the upstream is ahead of the local base; returns (root, the local (old) tip)."
+        root, bare, other = self.case(name, base=base, remote=remote)
+        git(root, "fetch", "-q", remote)
+        return root, git(root, "rev-parse", "refs/heads/" + base)
+
+    @staticmethod
+    def resolves(root, short):
+        "What git's own dwim prints for the short name (stdout only; an ambiguous name prints nothing, exit 0)."
+        p = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", short],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        return p.stdout.decode().strip()
+
+    def case_insensitive(self):
+        probe = os.path.join(self.tmp, "CaseProbe")
+        open(probe, "w").close()
+        return os.path.exists(os.path.join(self.tmp, "caseprobe"))
+
+    def test_base_short_name_shadowed(self):
+        "G1-G8, K1 (F-20261126-gbxh): a ref that git's dwim puts before refs/remotes/<remote>/<base> gives the Rule G refusal"
+        amb = "more than one ref"
+        for label, make in (
+                ("tag", lambda r, old: git(r, "tag", "origin/main", old)),
+                ("branch", lambda r, old: git(r, "branch", "origin/main", old)),
+                ("refs-top", lambda r, old: git(r, "update-ref", "refs/origin/main", old)),
+                ("tag-annotated", lambda r, old: git(r, "tag", "-a", "-m", "m", "origin/main", old)),
+                ("tag-same-commit", lambda r, old: git(r, "tag", "origin/main", "refs/remotes/origin/main"))):
+            with self.subTest(label):
+                root, old = self.fetched("sh-" + label)
+                make(root, old)
+                self.verdict(root, self.refuse_g(amb))
+        # git does not warn when core.warnAmbiguousRefs is false: it prints the first rule's name, which the text shows
+        for label, make, full in (
+                ("tag-quiet", lambda r, old: git(r, "tag", "origin/main", old), "refs/tags/origin/main"),
+                ("branch-quiet", lambda r, old: git(r, "branch", "origin/main", old), "refs/heads/origin/main"),
+                ("refs-top-quiet", lambda r, old: git(r, "update-ref", "refs/origin/main", old), "refs/origin/main")):
+            with self.subTest(label):
+                root, old = self.fetched("sh-" + label)
+                git(root, "config", "core.warnAmbiguousRefs", "false")
+                make(root, old)
+                self.assertEqual(self.resolves(root, "origin/main"), full)
+                self.verdict(root, self.refuse_g(full))
+        with self.subTest("gitdir-file"):
+            # G4: a top-level $GIT_DIR/origin/main ref file; the verdict is whatever git's own dwim says
+            root, old = self.fetched("sh-gitdir")
+            os.mkdir(os.path.join(root, ".git", "origin"))
+            with open(os.path.join(root, ".git", "origin", "main"), "w") as fh:
+                fh.write(old + "\n")
+            got = self.resolves(root, "origin/main")
+            if got == "refs/remotes/origin/main":
+                self.verdict(root, [("base", self.cmd(root))], follow=True)
+            else:
+                self.verdict(root, self.refuse_g(got or amb))
+        with self.subTest("remotes-head"):
+            # G6: refs/remotes/origin/main/HEAD cannot exist beside refs/remotes/origin/main (a ref is not a directory)
+            root, old = self.fetched("sh-rh")
+            p = subprocess.run(["git", "-C", root, "update-ref", "refs/remotes/origin/main/HEAD", old],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            self.assertNotEqual(p.returncode, 0)
+            self.verdict(root, [("base", self.cmd(root))], follow=True)
+        with self.subTest("casefold"):
+            # G7: a loose refs/tags/ORIGIN/MAIN: ambiguous on a case-insensitive filesystem, absent from the lookup on another
+            root, old = self.fetched("sh-cf")
+            git(root, "update-ref", "refs/tags/ORIGIN/MAIN", old)
+            got = self.resolves(root, "origin/main")
+            if self.case_insensitive():
+                self.assertEqual(got, "")
+                self.verdict(root, self.refuse_g(amb))
+            else:
+                self.assertEqual(got, "refs/remotes/origin/main")
+                self.verdict(root, [("base", self.cmd(root))], follow=True)
+        with self.subTest("no-shadow"):
+            root, old = self.fetched("sh-none")
+            self.verdict(root, [("base", self.cmd(root))], follow=True)
+        for n in (40, 255):
+            with self.subTest("digits-shadow", digits=n):
+                name = "9" * n
+                root, old = self.fetched("sh-d%d" % n, remote=name)
+                git(root, "tag", name + "/main", old)
+                self.verdict(root, self.refuse_g(amb, remote=name[:80]))
+
+    def test_base_short_name_generated(self):
+        "G9, K2: names drawn by a seeded generator (seed printed), each with a random subset of the shadows G1-G3"
+        seed, wanted = 20261126, 40
+        print("test_base_short_name_generated: seed=%d" % seed, file=sys.stderr)
+        rnd = random.Random(seed)
+        alphabet = "abcdefghij0123456789/.-_ࡰ"
+
+        def draw():
+            if rnd.random() < 0.2:
+                return "".join(rnd.choice("0123456789") for _ in range(rnd.randrange(1, 12)))
+            first = rnd.choice("abcdefghij0123456789ࡰ")
+            return first + "".join(rnd.choice(alphabet) for _ in range(rnd.randrange(0, 6)))
+
+        shadows = (("tag", "refs/tags/%s/%s"), ("branch", "refs/heads/%s/%s"), ("refs-top", "refs/%s/%s"))
+        done = tries = 0
+        while done < wanted:
+            tries += 1
+            self.assertLess(tries, 20 * wanted, "the generator found too few usable names")
+            remote, base = draw(), draw()
+            if remote.split("/")[0] in ("heads", "tags", "remotes", "notes", "replace") or base == "main":
+                continue
+            chosen = [s for s in shadows if rnd.random() < 0.5]
+            try:
+                root, old = self.fetched("gen%d" % tries, remote=remote, base=base)
+            except AssertionError:
+                continue  # git refused the name (an invalid ref or remote name): not a case
+            made = []
+            for label, pattern in chosen:
+                p = subprocess.run(["git", "-C", root, "update-ref", pattern % (remote, base), old],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+                if p.returncode == 0:
+                    made.append(label)
+            done += 1
+            with self.subTest(seed=seed, remote=remote, base=base, shadows=made):
+                if made:
+                    self.verdict(root, self.refuse_g("more than one ref", remote=remote, name=base), base=base)
+                else:
+                    self.verdict(root, [("base", self.cmd(root, remote, base))], base=base, follow=True)
+
+    # -- Rule Z: no in-band sentinel
+    def test_base_remote_names(self):
+        "Z1-Z6, K2 (F-20261126-ztfi): a remote is judged like any other, however it is named; an unset one has no sentinel"
+        with self.subTest("sentinel-name"):
+            root, old = self.fetched("z-sent", remote="<remote>")
+            self.verdict(root, [("base", self.cmd(root, "<remote>"))], follow=True)
+        for i, name in enumerate(("a;b", "a$b", "a&b", "a|b", "a>b", "a<b", "a'b", 'a"b', "a`b", "aࡰb")):
+            with self.subTest("shell-chars", remote=name):
+                root, old = self.fetched("z-%d" % i, remote=name)
+                self.verdict(root, [("base", self.cmd(root, name))], follow=True)
+        with self.subTest("dot"):
+            root, old = self.fetched("z-dot")
+            git(root, "branch", "up", "origin/main")
+            git(root, "config", "branch.main.remote", ".")
+            git(root, "config", "branch.main.merge", "refs/heads/up")
+            self.verdict(root, self.refusal("up", "."))
+        with self.subTest("unset"):
+            root, old = self.fetched("z-unset")
+            git(root, "config", "--unset", "branch.main.remote")
+            self.verdict(root, [])
+        with self.subTest("empty-remote"):
+            # Z4, measured with git 2.50.1 (Apple Git-155): ``rev-parse main@{upstream}`` dies of SIGSEGV when
+            # branch.main.remote is the empty string and branch.main.merge is set, so upstream_of raises a GateError; a git
+            # that resolves no upstream gives []. Never a command.
+            root, old = self.fetched("z-empty")
+            git(root, "config", "branch.main.remote", "")
+            cfg = dict(config.load(root), base_branch="main")
+            try:
+                got = drift.base_errors(root, cfg)
+            except GateError:
+                got = []
+            self.assertEqual(got, [])
+        real = gitinfo._run
+
+        def unset(r, name, args, *a, **k):
+            if args[:2] == ["config", "--get"]:
+                return subprocess.CompletedProcess(args, 1, b"", b"")
+            return real(r, name, args, *a, **k)
+        for name in ("<remote>", "None"):
+            with self.subTest("config-unset-remote-named", remote=name):
+                # git says branch.main.remote is unset while the upstream still resolves to refs/remotes/<name>/main: no
+                # sentinel, no text of a missing value is taken for a remote: the refusal, never the command
+                root, old = self.fetched("z-un-" + name.strip("<>"), remote=name)
+                with mock.patch("gates.lib.gitinfo._run", side_effect=unset):
+                    self.verdict(root, self.refusal(name + "/main", "<remote>"))
+
+    def test_base_exact_types(self):
+        "T1-T4: the exact-type rows of base_errors"
+        class S(str):
+            pass
+
+        class D(dict):
+            pass
+        root = self.wcase("ty")
+        cfg = dict(config.load(root))
+        for bad in (S(root), "", root.encode()):
+            with self.subTest(root=bad), self.assertRaises(GateError) as e:
+                drift.base_errors(bad, cfg)
+            self.assertEqual(str(e.exception), "root must be a string")
+        for bad in (D(cfg), dict(cfg, base_branch=S("main"))):
+            with self.subTest(cfg=bad), self.assertRaises(GateError) as e:
+                drift.base_errors(root, bad)
+            self.assertEqual(str(e.exception), "cfg: base_branch must be a non-empty string")
+        self.verdict(root, [("base", self.NOCO)])
+
+    def test_base_new_calls_shape(self):
+        "P5: the git calls 5c.4 adds, each argument list and the directory it runs in (read-only plumbing, local refs only)"
+        root, wt = self.linked("shape")
+        git(root, "fetch", "-q", "origin")
+        calls: list = []
+        real = gitinfo._run
+
+        def run(r, name, args, *a, **k):
+            calls.append((r, list(args), k.get("ok", a[0] if a else (0,))))
+            return real(r, name, args, *a, **k)
+        with mock.patch("gates.lib.gitinfo._run", side_effect=run):
+            self.verdict(root, [("base", self.cmd(wt))])
+        absolute = ["rev-parse", "--path-format=absolute"]
+        for want in ((root, absolute + ["--git-common-dir"], (0,)),
+                     (wt, absolute + ["--show-toplevel"], (0, 128)),
+                     (wt, absolute + ["--git-common-dir"], (0, 128)),
+                     (wt, ["symbolic-ref", "-q", "HEAD"], (0, 1)),
+                     (root, ["rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", "origin/main"],
+                      (0,))):
+            with self.subTest(want[1][-1], where=want[0]):
+                self.assertEqual(calls.count(want), 1)
+
+    def test_base_worktree_pair_matrix(self):
+        """H5: the holder of main is one of three linked worktrees whose paths lie in the relations below the main
+        checkout, outside it, and below another linked worktree; each cell with the holder usable and with it broken (git
+        in a broken one walks up to the checkout above it). The invariant: the path in a printed command is the toplevel git
+        reports in that directory, and a broken holder is never used."""
+        for holder in ("below-root", "outside", "below-linked"):
+            for state in ("usable", "broken"):
+                with self.subTest(holder=holder, state=state):
+                    cell = "mx-%s-%s" % (holder, state)
+                    root = self.wcase(cell)
+                    paths = (("below-root", os.path.join(root, "in")),
+                             ("outside", os.path.join(self.tmp, cell + "-d", "out")),
+                             ("below-linked", os.path.join(self.tmp, cell + "-d", "out", "in")))
+                    for label, path in paths:
+                        if label == holder:
+                            git(root, "worktree", "add", "-q", path, "main")
+                        else:
+                            git(root, "worktree", "add", "-q", "-b", "b-" + label, path)
+                    wt = dict(paths)[holder]
+                    if state == "broken":
+                        git(root, "worktree", "lock", wt)
+                        os.rename(os.path.join(wt, ".git"), os.path.join(wt, ".git.gone"))
+                        self.verdict(root, [("base", self.NOCO)])
+                        continue
+                    self.assertEqual(os.path.realpath(git(wt, "rev-parse", "--show-toplevel")), os.path.realpath(wt))
+                    if self.case_insensitive():
+                        folded = os.path.join(os.path.dirname(root), os.path.basename(root).upper())
+                        got = drift.base_errors(folded, dict(config.load(root), base_branch="main"))
+                        self.assertEqual(got, [("base", self.cmd(wt))])
+                    self.verdict(root, [("base", self.cmd(wt))], follow=True)
+
+    def test_base_worktree_nonutf8_path(self):
+        "H6: a worktree path that is not UTF-8 text keeps the existing GateError text (macOS refuses such a name: skipped)"
+        root = self.wcase("nu")
+        wt = os.path.join(self.tmp, os.fsdecode(b"nu\xff-wt"))
+        try:
+            git(root, "worktree", "add", "-q", wt, "main")
+        except (AssertionError, OSError, UnicodeError) as e:
+            self.skipTest("this filesystem or git refuses a non-UTF-8 name: %s" % type(e).__name__)
+        self.verdict(root, [("base", "update main from the remote: the worktrees cannot be listed: git worktree list gave "
+                                     "output that is not valid UTF-8, so no update command is given")])
 
 
 def make_branch(sid, files, links=None):
