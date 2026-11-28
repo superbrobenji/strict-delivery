@@ -2241,6 +2241,13 @@ def g2_check(aliases, tpl, name, key, why, bad):
     if (got_words, got) != (want_words, want):
         bad.append("%s aliases=%r text=%r want=%r %r got=%r %r" % (why, aliases, text, sorted(want_words), want,
                                                                  sorted(got_words), got))
+    # R4-4 (F-20261128-k98v): the oracle class of the case, for the coverage assertion of each G2 test
+    if want:
+        return "refused, text" if sub is None else "refused, body"
+    return "commit text" if "commit" in want_words else "no indicator"
+
+
+G2_CLASSES = ("refused, text", "refused, body", "commit text", "no indicator")
 
 
 class G2AliasGeneratedTest(unittest.TestCase):
@@ -2248,36 +2255,40 @@ class G2AliasGeneratedTest(unittest.TestCase):
     chains, and the cycles under the 60 s bound (R3-5). Oracle O2: ``effective_words`` and ``write_text_refusals``."""
 
     def test_V1_dicts_x_V4(self):
-        bad, n = [], 0
+        bad, n, classes = [], 0, set()
         for i, values in enumerate(itertools.product(G2_V1, repeat=3)):
             aliases = dict(zip(G2_NAMES, values))
             for tpl in G2_V4:
-                g2_check(aliases, tpl, "A" if i % 2 else "a", ("session", "a1")[i % 2], "V1 dict %d" % i, bad)
+                classes.add(g2_check(aliases, tpl, "A" if i % 2 else "a", ("session", "a1")[i % 2], "V1 dict %d" % i, bad))
                 n += 1
         self.assertEqual(n, 21952)
         gen_fail(self, "G2 V1 x V4", GEN_SEED, bad, n)
+        # R4-4: V1 holds no `!` value, so no body is refused here (the seeded chains and the cycles hold that class)
+        self.assertEqual(classes, set(G2_CLASSES) - {"refused, body"})
 
     def test_seeded_chains(self):
         rng = random.Random(GEN_SEED)
-        bad = []
+        bad, classes = [], set()
         for i in range(5000):
             pool = G2_V1 + tuple(rng.sample(G2_V2, 6)) + G2_NAMES
             aliases = {name: rng.choice(pool) for name in G2_NAMES}
             name = rng.choice(G2_NAMES)
-            g2_check(aliases, rng.choice(G2_V4), name.upper() if rng.random() < 0.5 else name, rng.choice(("session", "a1")),
-                     "seed=%d case %d" % (GEN_SEED, i), bad)
+            classes.add(g2_check(aliases, rng.choice(G2_V4), name.upper() if rng.random() < 0.5 else name,
+                                 rng.choice(("session", "a1")), "seed=%d case %d" % (GEN_SEED, i), bad))
         gen_fail(self, "G2 V2/V3", GEN_SEED, bad, 5000)
+        self.assertEqual(classes, set(G2_CLASSES))   # R4-4: every oracle class of G2 occurs
 
     def test_cycles_end(self):   # V3 cycles a->a, a->b->a, `!git b` <-> `!git a`, under the R3-5 bound
-        bad = []
+        bad, classes = [], set()
 
         def run():
             for aliases in G2_CYCLES:
                 for tpl in G2_V4:
                     for name in G2_NAMES:
-                        g2_check(aliases, tpl, name, "session", "cycle", bad)
+                        classes.add(g2_check(aliases, tpl, name, "session", "cycle", bad))
         bounded(run, CYCLE_BOUND, CYCLE_WHAT)
         gen_fail(self, "G2 cycles", GEN_SEED, bad, len(G2_CYCLES) * 24)
+        self.assertEqual(classes, set(G2_CLASSES))   # R4-4: every oracle class of G2 occurs
 
 
 # G3 (draft 3.2): the plain git command grammar and the target matrix
@@ -2297,9 +2308,14 @@ G3B_DIRS = ("R", "R/sub", "W", "W/sub", "W2", "X", "X/sub", "link to W", "link t
 G3C_OPTIONS = ("-i", "-u A", "-S", "-C", "-0", "-v", "-P", "--", "-iu", "--ignore-environment", "--unset=A", "-uA", "-h")
 G3C_OPERANDS = O_ALLOW + ("PATH", "GIT_EXEC_PATH", "LD_PRELOAD", "FOO", "\u00c9")
 G3C_POSITIONS = ("before", "after NAME=V", "nested env env")
-# draft rule unclear (report, Decision needed): `-i` after a NAME=V operand is read as an option by the code; env(1) reads
-# options only before the first operand, so there `-i` is the program word. Stopped member, not asserted.
-G3C_UNDECIDED = (("-i", "after NAME=V"),)
+# Fix round 4 (R4-2, F-20261128-safn; controller decision Q2): `-i` after a NAME=V operand is read as an option by the code,
+# so `env NAME=V -i git <sub>` with NAME on the allow-list is judged as git (env(1) reads options only before the first
+# operand: `env A=1 -i true` gives 'env: -i: No such file or directory', rc 127, git never runs); a write gets the verdict
+# of the same text without `-i`, which fails closed. Asserted, no longer skipped; the 5 operands off the list stay refused.
+G3C_OPERAND_THEN_I = ("-i", "after NAME=V")
+# R4-4 (F-20261128-k98v): the oracle classes each G3 test asserts to occur in its cases
+G3B_CLASSES = {"not plain", "allowed", "no top level", "not allowed"}
+G3EF_CLASSES = {"G3e not plain", "G3e target", "G3e index", "G3e no line", "G3f not plain", "G3f not git", "G3f git"}
 G3D_LETTERS = "nmFcCtasN1"
 G3D_CONTEXTS = ((), ("-m", "x"), ("-m",), ("--",), ("-F", "f"))
 G3E_NAMES = O_ALLOW + ("GIT_CONFIG_X", "FOO", "git_dir")
@@ -2318,17 +2334,20 @@ class G3GrammarGeneratedTest(Repo):
         cases = [(m, s) for m in members for s in ("status", "log")]
         cases += [(" ".join(rng.choice(members) for _ in range(rng.randint(1, 3))), rng.choice(("status", "log", "reset")))
                   for _ in range(3000)]
-        bad = []
+        bad, classes = [], set()
         for opts, sub in cases:
             text = "git %s %s" % (opts, sub)
             scan = shellscan.scan(text)
             if not scan.plain:   # the scanner's grammar refuses it as one plain command (`-c =v`): RULE-A's (G1)
                 want, got = o_rule_a(text, {}), bp.write_text_refusals(text, {}, "session")
+                classes.add("not plain")
             else:
                 want, got = o_global_ids(text.split()[1:]), ids(bp.git_call(scan, {}).lines)
+                classes.add("option refused" if want else "accepted")
             if got != want:
                 bad.append("seed=%d opts=%r text=%r want=%r got=%r" % (GEN_SEED, opts, text, want, got))
         gen_fail(self, "G3a", GEN_SEED, bad, len(cases))
+        self.assertEqual(classes, {"not plain", "option refused", "accepted"})   # R4-4: every oracle class of G3a occurs
 
     def g3b_tree(self):
         R = self.repo("R")
@@ -2354,7 +2373,7 @@ class G3GrammarGeneratedTest(Repo):
 
     def test_G3b_target_matrix(self):
         R, path, access = self.g3b_tree()
-        bad, n = [], 0
+        bad, n, classes = [], 0, set()
 
         def run():
             nonlocal n
@@ -2371,6 +2390,7 @@ class G3GrammarGeneratedTest(Repo):
                 scan = shellscan.scan(text)
                 if not scan.plain:   # the scanner's grammar refuses it as one plain command: RULE-A's (G1)
                     got, want = bp.write_text_refusals(text, {}, "a1"), [O_WLINE % scan.reason]
+                    classes.add("not plain")
                 else:
                     root, fails = bp.target_root(scan, d if form in ("-C", "-C and cd") else None, p)
                     top = None if form == "-C and cd" or (form and d == "") else o_toplevel(
@@ -2378,17 +2398,17 @@ class G3GrammarGeneratedTest(Repo):
                     ok = top is not None and top in real
                     want = (top if ok else None, not ok, top is not None and not ok)
                     got = (root, bool(fails), all(w in " ".join(fails) for w in why) and bool(fails) and top is not None)
+                    classes.add("allowed" if ok else "no top level" if top is None else "not allowed")
                 if got != want:
                     bad.append("actor=%r form=%r d=%r text=%r want=%r got=%r" % (actor, form, dname, text, want, got))
         bounded(run, 120, "a target check blocked")
         self.assertEqual(n, 360)
         gen_fail(self, "G3b", GEN_SEED, bad, n)
+        self.assertEqual(classes, G3B_CLASSES)   # R4-4: every oracle class of G3b occurs
 
     def test_G3c_env_unwrap(self):
-        bad, n = [], 0
+        bad, n, classes = [], 0, set()
         for opt, name, pos in itertools.product(G3C_OPTIONS, G3C_OPERANDS, G3C_POSITIONS):
-            if (opt, pos) in G3C_UNDECIDED:
-                continue
             n += 1
             operand = name + "=1"
             text = {"before": "env %s %s git reset", "after NAME=V": "env %s %s git reset", "nested env env":
@@ -2396,37 +2416,51 @@ class G3GrammarGeneratedTest(Repo):
             scan = shellscan.scan(text)
             if not scan.plain:
                 got, want = bp.write_text_refusals(text, {}, "session"), [O_WLINE % scan.reason]
+                classes.add("not plain")
             else:
                 # P:3670: any env option other than -i, -u NAME and NAME=V is refused; env(1) reads its options before
-                # the first operand only; a NAME off the allow-list is refused; one level (`env env` runs env, not git)
-                accepted = opt in ("-i", "-u A") and pos == "before" and name in O_ALLOW
+                # the first operand only; a NAME off the allow-list is refused; one level (`env env` runs env, not git);
+                # G3C_OPERAND_THEN_I: judged as git (decision Q2, above), the subcommand read
+                accepted = name in O_ALLOW and ((opt in ("-i", "-u A") and pos == "before")
+                                                or (opt, pos) == G3C_OPERAND_THEN_I)
                 call = bp.git_call(scan, {})
                 refused = call.env_refused or any(ln.startswith("FAIL hook.bash.not-git") for ln in call.lines)
                 want = (not accepted, ["hook.bash.target"] if accepted and name in O_TARGET_NAMES
-                        else ["hook.bash.index"] if accepted and name == "GIT_INDEX_FILE" else [])
-                got = (refused, ids(call.lines) if accepted else [])
+                        else ["hook.bash.index"] if accepted and name == "GIT_INDEX_FILE" else [],
+                        "reset" if accepted else None)
+                got = (refused, ids(call.lines) if accepted else [], call.sub if accepted else None)
+                classes.add("accepted %s" % (want[1] or "no line") if accepted else "refused")
+                if accepted and (opt, pos) == G3C_OPERAND_THEN_I:
+                    classes.add("operand then -i, judged as git")
             if got != want:
                 bad.append("opt=%r operand=%r pos=%r text=%r want=%r got=%r" % (opt, name, pos, text, want, got))
-        self.assertEqual(n, 13 * 13 * 3 - 13)
+        self.assertEqual(n, 13 * 13 * 3)
         gen_fail(self, "G3c", GEN_SEED, bad, n)
+        # R4-4 (F-20261128-k98v): every oracle class of G3c occurs in its cases
+        self.assertEqual(classes, {"not plain", "refused", "accepted no line", "accepted ['hook.bash.target']",
+                                   "accepted ['hook.bash.index']", "operand then -i, judged as git"})
 
     def test_G3d_n_clusters(self):
-        bad, n = [], 0
+        bad, n, classes = [], 0, set()
         for size in (1, 2, 3):
             for letters in itertools.product(G3D_LETTERS, repeat=size):
                 for ctx in G3D_CONTEXTS:
                     args = list(ctx) + ["-" + "".join(letters)]
                     n += 1
+                    classes.add(o_n_flag(args))
                     if bp.n_flag(args) != o_n_flag(args):
                         bad.append("args=%r want=%r" % (args, o_n_flag(args)))
         self.assertEqual(n, 5550)
         gen_fail(self, "G3d", GEN_SEED, bad, n)
+        self.assertEqual(classes, {True, False})   # R4-4: both oracle classes of G3d occur
 
     def test_G3e_assignments_and_G3f_program_word(self):
-        bad = []
+        bad, classes = [], set()
         for name, value, before in itertools.product(G3E_NAMES, ("v", ""), ("git", "env git")):
             text = "%s=%s %s reset" % (name, value, before)
             scan = shellscan.scan(text)
+            classes.add("G3e not plain" if name not in O_ALLOW else "G3e target" if name in O_TARGET_NAMES
+                        else "G3e index" if name == "GIT_INDEX_FILE" else "G3e no line")
             if (name in O_ALLOW) != scan.plain:
                 bad.append("the scanner's allow-list: %r plain=%r" % (text, scan.plain))
             elif not scan.plain:
@@ -2442,14 +2476,17 @@ class G3GrammarGeneratedTest(Repo):
             text = prog + " reset"
             scan = shellscan.scan(text)
             if not scan.plain:
+                classes.add("G3f not plain")
                 if bp.write_text_refusals(text, {}, "session") != [O_WLINE % scan.reason]:
                     bad.append("RULE-A: %r" % text)
                 continue
             not_git = scan.argv[0].rsplit("/", 1)[-1] != "git"
+            classes.add("G3f not git" if not_git else "G3f git")
             call = bp.git_call(scan, {})
             if any(ln.startswith("FAIL hook.bash.not-git") for ln in call.lines) != not_git:
                 bad.append("program word %r: not git %r, lines %r" % (text, not_git, call.lines))
         gen_fail(self, "G3e/G3f", GEN_SEED, bad, len(G3E_NAMES) * 4 + len(G3F_PROGRAMS))
+        self.assertEqual(classes, G3EF_CLASSES)   # R4-4: every oracle class of G3e and G3f occurs
 
 
 # G4 (draft 3.2): the text-token refusals; O5: one matcher per id on the raw text and the test's own quote removal
@@ -2531,12 +2568,16 @@ class G4TextTokenGeneratedTest(unittest.TestCase):
     over spelling x prefix x quote form x neighbour x suffix x agent. TextRefusalsTest stays as written."""
 
     def check(self, cases, name):
-        bad = []
+        bad, classes = [], set()
         for dims, text, agent in cases:
             want, got = o5_lines(text, agent), bp.text_refusals(text, agent)
+            classes.update(k for k in G4_LINES if G4_LINES[k] in want)
+            classes.update(() if want else ("no line",))
             if got != want:
                 bad.append("seed=%d dims=%r text=%r want=%r got=%r" % (GEN_SEED, dims, text, want, got))
         gen_fail(self, name, GEN_SEED, bad, len(cases))
+        # R4-4 (F-20261128-k98v): every oracle class of G4 (each of the five lines, and no line) occurs in the cases
+        self.assertEqual(classes, set(G4_LINES) | {"no line"}, name)
 
     def test_exhaustive_stratum(self):
         cases = [((s, p, a), g4_text(s, p, "none", None, None), a)
@@ -2683,6 +2724,200 @@ class GeneratorReviewChecksTest(unittest.TestCase):
         cp = "\ua7c0"
         self.assertEqual(bp.write_text_refusals("git -c %s.x=1 reset" % cp, {}, "session"), [O_CLINE, O_WLINE % "character"])
         self.assertEqual(bp.write_text_refusals("env %s=1 git reset" % cp, {}, "session"), [O_WLINE % "character"])
+
+
+# Task 3b.2 fix round 4 (review 4: R4-2 to R4-5)
+# Library rows F4-1, F4-2 and V1 of the round's input-domain table, through bashpolicy's public functions; the expected
+# values are hand-written from the rows and the controller's decisions Q2 and Q3 (owner answer Q-HK5-2 (a): a seeded
+# generated-input test over the whole class, seed GEN_SEED, counts asserted, plus hand-written anchors).
+F4_SUBS = O_WORDS + ("status", "log", "diff", "show", "stash", "describe")
+F4_ARGS = ((), ("--hard",), ("-D", "x"), ("-b", "y"), ("-c", "z"), ("-m", "m"), ("--list",), ("-n",))
+F4_I_FORMS = ("-i", "-i -i")
+F4_VALUES = ("1", "", "C", "/x", "a:b", "9" * 4301)
+F4_OTHER_OPERANDS = ("PATH", "GIT_EXEC_PATH", "LD_PRELOAD", "FOO")   # the ASCII operands of G3C_OPERANDS off the allow-list
+F4_OPERAND_LINE = "FAIL hook.bash.not-git: env operand %s is refused; " + O_WAY
+
+
+def f4_env_text(name, value, form, sub, args):
+    return " ".join(["env", "%s=%s" % (name, value)] + ([form] if form else []) + ["git", sub] + list(args))
+
+
+class EnvOperandThenOptionGeneratedTest(unittest.TestCase):
+    """F4-1 (R4-2, F-20261128-safn; controller decision Q2, logged): ``env NAME=V -i git <sub>`` with NAME one of the 8
+    allowed names is judged as git (env(1) would run ``-i`` as the program, so git never runs; the code reads ``-i`` as
+    an option): ``env_refused`` false, no not-git line, the subcommand and its words read, and the lines and the write
+    verdict the same text without ``-i`` gets (a write fails closed). The operands off the allow-list stay refused by
+    the operand check, with ``-i`` after them or not."""
+
+    def check(self, name, value, form, sub, args, bad, why):
+        text, text0 = f4_env_text(name, value, form, sub, args), f4_env_text(name, value, None, sub, args)
+        scan, scan0 = shellscan.scan(text), shellscan.scan(text0)
+        if not (scan.plain and scan0.plain):
+            bad.append("%s: not plain %r" % (why, text))
+            return
+        call, call0 = bp.git_call(scan, {}), bp.git_call(scan0, {})
+        want_ids = (["hook.bash.target"] if name in O_TARGET_NAMES else ["hook.bash.index"] if name == "GIT_INDEX_FILE"
+                    else [])
+        got = (call.env_refused, ids(call.lines), call.sub, call.args, bp.is_git_write(call.sub, call.args))
+        want = (False, want_ids, sub, list(args), bp.is_git_write(sub, list(args)))
+        if got != want or (call.lines, call.sub, call.args, call.env_refused) != (call0.lines, call0.sub, call0.args,
+                                                                                  call0.env_refused):
+            bad.append("%s text=%r want=%r got=%r without -i=%r" % (why, text[:80], want, got, (call0.lines, call0.sub)))
+
+    def test_exhaustive_names_x_subcommands(self):
+        bad, n = [], 0
+        for name, form, sub, args in itertools.product(O_ALLOW, F4_I_FORMS, F4_SUBS, F4_ARGS):
+            self.check(name, "1", form, sub, args, bad, "exhaustive")
+            n += 1
+        self.assertEqual((len(O_ALLOW), len(F4_SUBS), n), (8, 23, 8 * 2 * 23 * 8))
+        gen_fail(self, "F4-1 exhaustive", GEN_SEED, bad, n)
+
+    def test_seeded(self):
+        rng = random.Random(GEN_SEED)
+        bad = []
+        for i in range(3000):
+            self.check(rng.choice(O_ALLOW), rng.choice(F4_VALUES), rng.choice(F4_I_FORMS), rng.choice(F4_SUBS),
+                       rng.choice(F4_ARGS), bad, "seed=%d case %d" % (GEN_SEED, i))
+        gen_fail(self, "F4-1 seeded", GEN_SEED, bad, 3000)
+
+    def test_anchors(self):   # hand-written: the subcommand read and the write verdict, the reproducer's texts
+        for text, sub, write, lines in (("env LANG=C -i git status", "status", False, []),
+                                        ("env TZ=1 -i git reset --hard", "reset", True, []),
+                                        ("env LANG=C -i -i git status", "status", False, []),
+                                        ("env LC_ALL=C -i git branch -D x", "branch", True, []),
+                                        ("env LC_ALL=C -i git branch --list", "branch", False, []),
+                                        ("env GIT_DIR=x -i git reset --hard", "reset", True, ["hook.bash.target"]),
+                                        ("env GIT_INDEX_FILE=x -i git commit -m m", "commit", True, ["hook.bash.index"])):
+            with self.subTest(text=text):
+                call = bp.git_call(shellscan.scan(text), {})
+                self.assertEqual((call.env_refused, ids(call.lines), call.sub, bp.is_git_write(call.sub, call.args)),
+                                 (False, lines, sub, write))
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), [])   # one plain git command: not RULE-A's
+
+    def test_operands_off_the_list_stay_refused(self):
+        n = 0
+        for name, form, (sub, args) in itertools.product(F4_OTHER_OPERANDS, (None,) + F4_I_FORMS,
+                                                         (("reset", ("--hard",)), ("status", ()), ("commit", ("-m", "m")))):
+            text = f4_env_text(name, "1", form, sub, args)
+            with self.subTest(text=text):
+                call = bp.git_call(shellscan.scan(text), {})
+                self.assertEqual((call.env_refused, call.lines, call.sub), (True, [F4_OPERAND_LINE % name], None))
+            n += 1
+        for form, (sub, want) in itertools.product((None,) + F4_I_FORMS, (("reset --hard", [O_WLINE % "character"]),
+                                                                          ("status", []))):
+            text = f4_env_text("É", "1", form, sub, ())   # the non-ASCII operand: the scanner refuses the text
+            with self.subTest(text=text):
+                self.assertFalse(shellscan.scan(text).plain)
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), want)
+            n += 1
+        self.assertEqual(n, 4 * 3 * 3 + 3 * 2)
+
+
+# F4-2 (R4-3, F-20261128-kk36). Controller decision Q3 (logged): an alias name holding a character outside the token class
+# ([0-9A-Za-z_-]) is matched as a bounded substring (shellscan.token_in(view, name, True): no token character on either
+# side), so more texts are refused (fail closed); a token character beside the name breaks the match.
+F4_NAMES = ("a.b", "a/b", "a=b", "A.B", "é", "Ꟁ", "a:b")
+F4_BOUNDED = ("git @; ls", "echo git @", "ls; git @", "git @.c; ls")
+F4_TOKEN_NEIGHBOURS = ("git x@; ls", "git @x; ls")
+F4_ALIAS_VALUES = ("log", "status", "reset --hard", "tag", "branch --list", "")
+F4_PARTS = "abdqz0_"   # no letter of git, ls, x or of a write word's spelling can form one
+F4_SEPS = (".", "/", "=", ":")
+F4_NON_ASCII = ("é", "É", "Ꟁ", "K", "١")
+
+
+def f4_name(rng):
+    def part():
+        return "".join(rng.choice(F4_PARTS) for _ in range(rng.randint(1, 3)))
+    if rng.random() < 0.5:
+        return part() + rng.choice(F4_SEPS) + part() + ("" if rng.random() < 0.5 else rng.choice(F4_SEPS) + part())
+    base = part()
+    k = rng.randint(0, len(base))
+    return base[:k] + rng.choice(F4_NON_ASCII) + base[k:]
+
+
+class G2NonTokenAliasNameGeneratedTest(unittest.TestCase):
+    """F4-2: G2's alias-name dimension extended to names with a non-token character (the listed names, and 3000 seeded
+    names holding ``.``, ``/``, ``=``, ``:`` or a non-ASCII character). The bounded forms get RULE-A's compound line
+    (the scanner's reason; for an ASCII name the same lines as the text with a token name in its place), the forms with
+    a token character beside the name get none."""
+
+    def check(self, name, key_name, tpl, value, key, bad, why):
+        text = tpl.replace("@", name)
+        got = bp.write_text_refusals(text, {key_name: value}, key)
+        want = [O_WLINE % o_reason(text)] if tpl in F4_BOUNDED else []
+        if got != want:
+            bad.append("%s name=%r key=%r text=%r want=%r got=%r" % (why, name, key_name, text, want, got))
+        elif name.isascii() and got != bp.write_text_refusals(tpl.replace("@", "zq"), {"zq": value}, key):
+            bad.append("%s name=%r differs from the token name zq" % (why, name))
+
+    def test_listed_names(self):
+        bad, n = [], 0
+        for name, tpl, value in itertools.product(F4_NAMES, F4_BOUNDED + F4_TOKEN_NEIGHBOURS, F4_ALIAS_VALUES):
+            for spelled in (name, name.swapcase()) if name.isascii() else (name,):   # ASCII fold: A.B matches a.b
+                self.check(spelled, name, tpl, value, ("session", "a1")[n % 2], bad, "listed")
+                n += 1
+        self.assertEqual(n, (5 * 2 + 2) * 6 * 6)
+        gen_fail(self, "F4-2 listed", GEN_SEED, bad, n)
+
+    def test_seeded_names(self):
+        rng = random.Random(GEN_SEED)
+        bad, kinds = [], set()
+        for i in range(3000):
+            name = f4_name(rng)
+            self.assertTrue(any(ch in name for ch in F4_SEPS) or not name.isascii(), name)
+            kinds.add("ascii" if name.isascii() else "non-ASCII")
+            self.check(name, name, rng.choice(F4_BOUNDED + F4_TOKEN_NEIGHBOURS), rng.choice(F4_ALIAS_VALUES),
+                       rng.choice(("session", "a1")), bad, "seed=%d case %d" % (GEN_SEED, i))
+        self.assertEqual(kinds, {"ascii", "non-ASCII"})
+        gen_fail(self, "F4-2 seeded", GEN_SEED, bad, 3000)
+
+    def test_anchors(self):   # hand-written lines, the reproducer's texts
+        for name, text, reason in (("a.b", "git a.b; ls", "operator ;"), ("a.b", "git a.b.c; ls", "operator ;"),
+                                   ("a.b", "echo git a.b", O_NOT_GIT), ("a/b", "ls; git a/b", "operator ;"),
+                                   ("A.B", "git a.b; ls", "operator ;"), ("é", "git é; ls", "character"),
+                                   ("é", "ls; git é", "operator ;"), ("Ꟁ", "echo git Ꟁ", "character"),
+                                   ("a.b", "git xa.b; ls", None), ("a.b", "git a.bx; ls", None),
+                                   ("Ꟁ", "git xꟀ; ls", None)):
+            with self.subTest(name=name, text=text):
+                self.assertEqual(bp.write_text_refusals(text, {name: "log"}, "session"),
+                                 [O_WLINE % reason] if reason else [])
+                self.assertEqual(bp.write_text_refusals(text, {}, "session"), [])   # no indicator without the alias
+
+
+class FixRound4InterpreterRowsTest(unittest.TestCase):
+    """Row V1 of fix round 4 (both interpreters through the runner): 4300 and 4301 digits as an env value and as an alias
+    name (int() is limited at 4300 digits from 3.11); U+A7C0 as an alias name (unassigned in Unicode 13, Lu from 14) is
+    in F4-2's lists; BaseExceptionGroup (absent on 3.9): no file this round's rows reach names it."""
+
+    def test_digits_as_an_env_value(self):
+        for n in (4300, 4301):
+            d = "9" * n
+            call = bp.git_call(shellscan.scan("env LANG=%s -i git reset --hard" % d), {})
+            self.assertEqual((call.env_refused, call.lines, call.sub, call.args), (False, [], "reset", ["--hard"]))
+            self.assertEqual(bp.write_text_refusals("env LANG=%s git reset --hard; ls" % d, {}, "session"),
+                             [O_WLINE % "operator ;"])
+
+    def test_digits_as_an_alias_name(self):
+        for n in (4300, 4301):
+            d = "9" * n
+            self.assertEqual(bp.write_text_refusals("git %s; ls" % d, {d: "log"}, "session"), [O_WLINE % "operator ;"])
+            self.assertEqual(bp.write_text_refusals("git %sx; ls" % d, {d: "log"}, "session"), [])
+            self.assertEqual(bp.write_text_refusals("git %s; ls" % d, {}, "session"), [])
+            self.assertEqual(bp.git_call(shellscan.scan("git " + d), {d: "reset --hard"}).sub, "reset")
+
+    def test_code_point_as_an_alias_name(self):
+        cp = "Ꟁ"
+        for text, want in (("git %s; ls" % cp, [O_WLINE % "character"]), ("git %sx; ls" % cp, []),
+                           ("ls | git %s" % cp, [O_WLINE % "operator |"])):
+            with self.subTest(text=text):
+                self.assertEqual(bp.write_text_refusals(text, {cp: "log"}, "session"), want)
+
+    def test_base_exception_group(self):
+        import builtins
+        self.assertEqual(hasattr(builtins, "BaseExceptionGroup"), sys.version_info >= (3, 11))
+        for path in ("gates/lib/bashpolicy.py", "gates/hooks/pre_bash.py", "gates/lib/gitinfo.py", "gates/lib/shellscan.py"):
+            with open(os.path.join(SRC, path), encoding="utf-8") as fh:
+                self.assertNotIn("ExceptionGroup", fh.read(), path)
 
 
 if __name__ == "__main__":

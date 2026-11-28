@@ -2738,5 +2738,126 @@ class G4TextTokenHookGeneratedTest(GeneratedHookCase):
         gl.gen_fail(self, "G4 H", gl.GEN_SEED, bad, len(texts))
 
 
+# Task 3b.2 fix round 4 (review 4: R4-2 to R4-5)
+# Hook rows F4-1, F4-2, F4-3 and V1 of the round's input-domain table, through the production hook (tests.hookrun.run_hook);
+# every repository and directory is in the test's own mkdtemp sandbox (GitIsolatedTestCase). Expected lines hand-written.
+F4_ENV_NAMES = ("GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "LANG", "LC_ALL", "TZ")
+F4_ENV_HARMLESS = ("LANG", "LC_ALL", "TZ")
+
+
+class EnvOperandThenOptionHookTest(ActorCase):
+    """F4-1 (R4-2, F-20261128-safn; controller decision Q2): ``env NAME=V -i git <sub>`` is judged as git: the hook's answer
+    is the answer to the same text without ``-i`` (a write fails closed); for LANG, LC_ALL and TZ a read passes and a
+    write of a subagent at cwd R gets the cwd-target line. The operands off the allow-list stay refused."""
+
+    def test_allowed_names_judged_as_git(self):
+        actor = self.actors()[1]   # subagent bound to W at cwd R: a write here is refused by the target rule
+        for name in F4_ENV_NAMES:
+            for sub in ("status", "reset --hard"):
+                command, without = "env %s=x -i git %s" % (name, sub), "env %s=x git %s" % (name, sub)
+                with self.subTest(command=command):
+                    r, r0 = self.run_actor(command, actor), self.run_actor(without, actor)
+                    self.assertEqual((r.returncode, r.stdout, r.stderr), (r0.returncode, r0.stdout, r0.stderr))
+                    self.assertNotIn("env option", r.stderr)
+                    if name in F4_ENV_HARMLESS:
+                        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                                         (2, "", self.outside()) if sub != "status" else (0, "", ""))
+                    elif sub != "status":
+                        self.assertEqual(r.returncode, 2)
+                        self.assertIn("FAIL hook.bash.%s: " % ("index" if name == "GIT_INDEX_FILE" else "target"),
+                                      r.stderr)
+
+    def test_operands_off_the_list(self):
+        actor = self.actors()[1]
+        for name in ("PATH", "GIT_EXEC_PATH", "LD_PRELOAD", "FOO"):
+            for form in ("", "-i "):
+                with self.subTest(name=name, form=form):
+                    r = self.run_actor("env %s=x %sgit reset --hard" % (name, form), actor)
+                    self.assertEqual((r.returncode, r.stdout, r.stderr),
+                                     (2, "", "FAIL hook.bash.not-git: env operand %s is refused; %s\n" % (name, WAY)
+                                      + WLINE % NOT_GIT))
+                    self.passes(self.run_actor("env %s=x %sgit status" % (name, form), actor))
+        for form in ("", "-i "):   # the non-ASCII operand: the scanner refuses the text, RULE-A's line
+            r = self.run_actor("env É=x %sgit reset --hard" % form, actor)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % "character"))
+            self.passes(self.run_actor("env É=x %sgit status" % form, actor))
+
+    def test_V1_digits_as_an_env_value(self):   # 4300 and 4301 digits (int() is limited at 4300 from 3.11)
+        actor = self.actors()[1]
+        for n in (4300, 4301):
+            with self.subTest(n=n):
+                self.passes(self.run_actor("env LANG=%s -i git status" % ("9" * n), actor))
+                r = self.run_actor("env LANG=%s -i git reset --hard" % ("9" * n), actor)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", self.outside()))
+
+
+# F4-2 (R4-3, F-20261128-kk36), controller decision Q3 (logged): an alias name with a non-token character is matched as a
+# bounded substring (refuse more). git config takes `alias.<subsection>.<key>` (the key part is lowercased) and refuses a
+# key with `/`, `=`, `:` or a non-ASCII character without a subsection ('error: invalid key: alias.a/b'), so such a listed
+# name is held at the hook as `<name>.x`; `a.b` and `A.B` (held as `A.b`) are held as written.
+F4_HOOK_NAMES = ("a.b", "A.B", "a/b.x", "a=b.x", "a:b.x", "é.x", "Ꟁ.x")
+F4_HOOK_BOUNDED = ("git @; ls", "echo git @", "ls; git @", "git @.c; ls")
+F4_HOOK_NEIGHBOURS = ("git x@; ls", "git @x; ls")
+
+
+def f4_reason(command):   # the scanner's reason for these forms: the construct at the smallest position
+    if command.startswith("ls;"):
+        return "operator ;"
+    if not command.isascii():
+        return "character"
+    return NOT_GIT if command.startswith("echo") else "operator ;"
+
+
+class NonTokenAliasNameHookTest(HookCase):
+    def test_each_listed_name(self):
+        for name in F4_HOOK_NAMES:
+            git(self.R, "config", "alias." + name, "log")
+        for name in F4_HOOK_NAMES:
+            for tpl in F4_HOOK_BOUNDED + F4_HOOK_NEIGHBOURS:
+                command = tpl.replace("@", name)
+                with self.subTest(command=command):
+                    r = self.B(command, timeout=HOOK_BOUND)
+                    if tpl in F4_HOOK_BOUNDED:
+                        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", WLINE % f4_reason(command)))
+                    else:
+                        self.passes(r, command)
+
+
+# F4-3 (R4-5, F-20261128-q4p5): the empty subcommand reached through an alias whose value is `''` (the expansion's one
+# word is empty: bashpolicy.is_git_write raises GateError, pre_bash refuses `hook.bash.git`, as test_empty_git_subcommand
+# asserts for `git ''`); in text that is not one plain command RULE-A refuses first (the alias name is an indicator).
+EMPTY_SUB_LINE = "FAIL hook.bash.git: an empty git subcommand; " + WAY + "\n"
+EMPTY_SUB_MEMBERS = (("alias", "git em"), ("alias_and_args", "git em x y"), ("no_pager", "git --no-pager em"),
+                     ("dash_C", "git -C <D> em"), ("chain", "git ea"))
+
+
+class EmptyAliasSubcommandHookTest(HookCase):
+    def setUp(self):
+        super().setUp()
+        git(self.R, "config", "alias.em", "''")
+        git(self.R, "config", "alias.ea", "eb")   # a chain whose last value is the empty word
+        git(self.R, "config", "alias.eb", "''")
+        self.D = os.path.join(self.R, "sub")
+        os.mkdir(self.D)
+
+    def member(self, command, plain):
+        self.assertTrue(self.D.startswith(self.tmp + os.sep))   # F4-6: the named directory is inside the sandbox
+        command = command.replace("<D>", self.D)
+        r = self.B(command if plain else command + "; ls", timeout=HOOK_BOUND)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", EMPTY_SUB_LINE if plain else WLINE % "operator ;"))
+
+
+def _empty_sub_tests():
+    for label, command in EMPTY_SUB_MEMBERS:
+        for plain in (True, False):
+            def test(self, command=command, plain=plain):
+                self.member(command, plain)
+            test.__doc__ = "F4-3 %s: %s" % ("plain" if plain else "not plain", command)
+            setattr(EmptyAliasSubcommandHookTest, "test_%s_%s" % (label, "plain" if plain else "not_plain"), test)
+
+
+_empty_sub_tests()
+
+
 if __name__ == "__main__":
     unittest.main()
