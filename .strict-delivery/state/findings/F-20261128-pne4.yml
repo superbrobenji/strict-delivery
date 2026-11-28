@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261128-pne4
-status: open
+status: planned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-3b.md table gap
 severity: LOW
 class: "operand table gap: the first argument of _is_reported has no operand id: init.py:507, init.py:612"
@@ -10,7 +10,7 @@ repro: null
 owner:
   kind: plan
   plan: 2026-10-31-strict-delivery-framework
-  task: 4d.2
+  task: 4d.2-F
 pin: null
 ruling: null
 evidence: []
@@ -18,6 +18,9 @@ history:
   - status: open
     sha: 08c1d36def222f7bee3b658221c3800001043deb
     by: stream-config-19
+  - status: planned
+    sha: c3dc370f1abfb20568c79e4596e1edd4f4031e89
+    by: "stream-config-19: 4d.2 LOW_PLATEAU (r3); owner.task 4d.2 -> 4d.2-F (owner answer Q-CFG19-2 (a), 2026-11-28); review_round and caused_by_change are 4d.2's"
 review_round: 3
 caused_by_change: true
 dimension: mutant coverage
