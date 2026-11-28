@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import os
 import re
 import shlex
@@ -200,6 +201,25 @@ def _parse_int(rel: str):
     return parse
 
 
+def _non_finite(rel: str) -> _Refusal:
+    return _Refusal("%s: holds a non-finite number" % rel)
+
+
+def _parse_constant(rel: str):
+    def parse(_name: str):
+        raise _non_finite(rel)
+    return parse
+
+
+def _parse_float(rel: str):
+    def parse(literal: str) -> float:
+        value = float(literal)
+        if not math.isfinite(value):
+            raise _non_finite(rel)
+        return value
+    return parse
+
+
 def _no_repeated_key(rel: str):
     def pairs(items: list) -> dict:
         out: dict = {}
@@ -215,6 +235,7 @@ def _json_object(rel: str, kind: str, text: str):
     """``(data, object)``: the parsed file and the object that holds the version of this repository's plugin."""
     try:
         data = json.loads(text[1:] if text.startswith(_BOM) else text, parse_int=_parse_int(rel),
+                          parse_float=_parse_float(rel), parse_constant=_parse_constant(rel),
                           object_pairs_hook=_no_repeated_key(rel))
     except (ValueError, RecursionError):
         raise _Refusal("%s: is not valid JSON" % rel) from None
@@ -339,10 +360,26 @@ def _roll(text: str, new: str, date: str) -> str:
     return "\n".join(lines)
 
 
+def _root_identity(root: str) -> tuple:
+    """``((dev, ino) of the root path itself, (dev, ino) of what it leads to)``, or the empty tuple when either stat
+    fails (a removed or unreadable root never equals the identity taken before, and an empty one is never accepted)."""
+    try:
+        link, target = os.lstat(root), os.stat(root)
+    except OSError:
+        return ()
+    return (link.st_dev, link.st_ino), (target.st_dev, target.st_ino)
+
+
 def _write_all(root: str, plan: list) -> None:
     """Write ``(path, old text, new text)`` of the plan: every file is read again and compared with the text the plan
     was made from before the first write, and again just before its own write; a mismatch names the file and the
-    files already written."""
+    files already written. The identity of the root path (``lstat`` and ``stat``: the link itself and what it leads to)
+    is taken before the first comparison and compared again just before each write: a root that was swapped (for a
+    link, another directory, a file, or removed) in between is refused naming ``--root`` and the files already written.
+    Stated limit: the window between that last comparison and the write itself stays open (``managed._write`` walks the
+    root path again); closing it needs a descriptor-rooted write (owner question Q-RS9-2, not built here), and a root
+    swapped for a path with the identical identity (a bind mount of the same directory) is not seen."""
+    first = _root_identity(root)
     for rel, old, _new in plan:
         if _read(root, rel) != old:
             raise _Refusal("%s: changed after it was read; nothing written" % rel)
@@ -355,6 +392,8 @@ def _write_all(root: str, plan: list) -> None:
         try:
             if _read(root, rel) != old:
                 raise fail("%s: changed after it was read" % rel)
+            if not first or _root_identity(root) != first:
+                raise fail("--root: %s changed during the run" % root)
             managed._write(root, rel, new)
         except _Refusal as e:
             if written and "written before it" not in e.args[0]:

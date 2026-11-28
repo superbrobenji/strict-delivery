@@ -245,14 +245,17 @@ class ReleaseCase(GitIsolatedTestCase):
             code = release.main(argv)
         return code, out.getvalue(), err.getvalue()
 
-    def refused(self, *args, root="default", repo=None, want=(), unwanted=()):
-        """Run, assert exit 1 with every ``want`` text in stderr, nothing on stdout and no file changed; the stderr."""
+    def refused(self, *args, root="default", repo=None, want=(), unwanted=(), exact=None):
+        """Run, assert exit 1 with every ``want`` text in stderr, nothing on stdout and no file changed; the stderr.
+        ``exact``: the whole reason (R2-F5), typed by hand; stderr is then ``release: <exact>\\n`` and nothing else."""
         repo = repo or self.repo
         before = snapshot(self.work)
         head = git(repo, "rev-parse", "HEAD")
         code, out, err = self.run_release(*args, root=repo if root == "default" else root)
         self.assertEqual(code, 1, err)
         self.assertEqual(out, "")
+        if exact is not None:
+            self.assertEqual(err, "release: %s\n" % exact)
         for text in want:
             self.assertIn(text, err)
         for text in unwanted:
@@ -338,7 +341,8 @@ class VersionRows(ReleaseCase):
                              ("1.2.3", "1.1.9"), ("2.0.0", "1.99.99")):
             with self.subTest(current=current, new=new):
                 repo = self.fresh(versions=dict((s, current) for s in SITES))
-                self.refused(new, "--date", DATE, repo=repo, want=("not greater",))
+                self.refused(new, "--date", DATE, repo=repo,
+                             exact="the version %s is not greater than the current version %s" % (new, current))
 
     def test_higher_each_position(self):  # A6
         for current, new in (("0.0.0", "0.0.1"), ("0.0.0", "0.1.0"), ("0.0.0", "1.0.0"), ("0.9.0", "0.10.0"),
@@ -352,9 +356,9 @@ class VersionRows(ReleaseCase):
 
     def test_second_run_with_the_same_version_refused(self):  # A4
         self.assertEqual(self.run_release("0.1.0", "--date", DATE)[0], 0)
-        self.refused("0.1.0", "--date", DATE, want=("not greater",))
+        self.refused("0.1.0", "--date", DATE, exact="the version 0.1.0 is not greater than the current version 0.1.0")
         self.commit()
-        self.refused("0.1.0", "--date", DATE, want=("not greater",))
+        self.refused("0.1.0", "--date", DATE, exact="the version 0.1.0 is not greater than the current version 0.1.0")
 
     def test_usage_refused(self):
         for argv in ([], ["--date", DATE], ["0.1.0", "0.2.0"], ["0.1.0", "--bogus"], ["0.1.0", "--date"],
@@ -390,17 +394,18 @@ class SiteRows(ReleaseCase):
         for odd in SITES:
             with self.subTest(odd=odd):
                 repo = self.fresh(versions={odd: "0.0.1"})
-                err = self.refused("0.1.0", "--date", DATE, repo=repo, want=(odd, "disagree"),
-                                   unwanted=[s for s in SITES if s != odd])
-                self.assertIn("0.0.1", err)
+                self.refused("0.1.0", "--date", DATE, repo=repo, exact=(
+                    "the sites disagree on the current version (most hold 0.0.0): %s holds 0.0.1" % odd))
 
     def test_two_disagreeing_sites_both_listed(self):  # S2
         repo = self.fresh(versions={MARKET: "0.0.1", CONFIG: "0.0.2"})
-        self.refused("0.1.0", repo=repo, want=(MARKET, CONFIG, "disagree"), unwanted=(PLUGIN, CLAUDE, IGNORE))
+        self.refused("0.1.0", repo=repo, exact="the sites disagree on the current version (most hold 0.0.0): "
+                     ".claude-plugin/marketplace.json holds 0.0.1; .strict-delivery/config.yml holds 0.0.2")
 
     def test_disagreeing_with_the_new_version_still_refused(self):  # S2
         repo = self.fresh(versions={IGNORE: "0.1.0"})
-        self.refused("0.1.0", repo=repo, want=(IGNORE, "disagree"))
+        self.refused("0.1.0", repo=repo,
+                     exact="the sites disagree on the current version (most hold 0.0.0): .gitignore holds 0.1.0")
 
     def test_json_pattern_twice_refused(self):  # S3
         twice = {
@@ -412,7 +417,8 @@ class SiteRows(ReleaseCase):
             with self.subTest(rel=rel):
                 repo = self.fresh(texts={rel: text})
                 self.assertEqual(text.count('"version": "0.0.0"'), 2)
-                self.refused("0.1.0", repo=repo, want=(rel, "matches 2 times"))
+                self.refused("0.1.0", repo=repo,
+                             exact='%s: the text "version": "0.0.0" matches 2 times, not exactly once' % rel)
 
     def test_json_key_repeated_refused(self):  # S3, F4: refused at the parse now, before the text count
         text = (PLUGIN_JSON % "0.0.0").replace('  "license"', '  "version": "0.0.0",\n  "license"')
@@ -533,28 +539,76 @@ class SiteRows(ReleaseCase):
                             self.assertEqual(err, ("release: %s: holds an integer of more than 4300 digits\n" % rel).encode())
                             self.assertEqual(snapshot(self.work), before)
 
+    def test_json_integer_band_under_a_lowered_limit(self):  # R2-F2 (F-20261128-hri6): 641-4300 digits accepted, 4301 refused
+        # Controller decision (round 2): the accepted band stays, as gates/lib/plugin.py's own parser keeps integer text:
+        # "4300 digits accepted, more refused; the same on both interpreters and every PYTHONINTMAXSTRDIGITS value".
+        for digits, accepted in ((641, True), (999, True), (4300, True), (4301, False)):
+            for rel in (PLUGIN, MARKET):
+                with self.subTest(rel=rel, digits=digits):
+                    literal = "1" + "0" * (digits - 1)
+                    text = self.with_literal(rel, "top level", literal)
+                    repo = self.fresh(texts={rel: text})
+                    before = snapshot(self.work)
+                    code, out, err = run_child(["0.1.0", "--date", DATE, "--root", repo], self.work,
+                                               {"PYTHONINTMAXSTRDIGITS": "640"})
+                    if accepted:
+                        self.assertEqual((code, err), (0, b""))
+                        self.assertEqual(get(repo, rel), text.encode("utf-8").replace(
+                            b'"version": "0.0.0"', b'"version": "0.1.0"'))
+                    else:
+                        self.assertEqual((code, out), (1, b""))
+                        self.assertEqual(err, ("release: %s: holds an integer of more than 4300 digits\n" % rel).encode())
+                        self.assertEqual(snapshot(self.work), before)
+
+    def test_json_non_finite_numbers_refused(self):  # R2-U1 (F-20261128-qmay): as gates/lib/plugin.py refuses them
+        for rel in (PLUGIN, MARKET):
+            for where in ("top level", "nested", "array element"):
+                for literal in ("NaN", "Infinity", "-Infinity", "1e400", "-1e400"):
+                    with self.subTest(rel=rel, where=where, literal=literal):
+                        text = self.with_literal(rel, where, literal)
+                        self.assertIn(literal, text)
+                        repo = self.fresh(texts={rel: text})
+                        self.refused("0.1.0", "--date", DATE, repo=repo, exact="%s: holds a non-finite number" % rel)
+
+    def test_json_finite_numbers_accepted(self):  # R2-U1 invariant: a float that is finite is still accepted
+        for literal in ("1.5", "-1.5", "1e308", "-1e308", "1e-400", "0.0", "1E2"):
+            for rel in (PLUGIN, MARKET):
+                with self.subTest(rel=rel, literal=literal):
+                    text = self.with_literal(rel, "top level", literal)
+                    repo = self.fresh(texts={rel: text})
+                    code, _o, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+                    self.assertEqual((code, err), (0, ""))
+                    self.assertEqual(get(repo, rel), text.encode("utf-8").replace(
+                        b'"version": "0.0.0"', b'"version": "0.1.0"'))
+
     def test_json_pattern_nowhere_refused(self):  # S4
         for rel, base in ((PLUGIN, PLUGIN_JSON), (MARKET, MARKET_JSON)):
             for variant in ('"version":"%s"', '"version" : "%s"', '"version":  "%s"'):
                 with self.subTest(rel=rel, variant=variant):
                     repo = self.fresh(texts={rel: (base % "0.0.0").replace('"version": "0.0.0"', variant % "0.0.0")})
-                    self.refused("0.1.0", repo=repo, want=(rel, "matches 0 times"))
+                    self.refused("0.1.0", repo=repo,
+                                 exact='%s: the text "version": "0.0.0" matches 0 times, not exactly once' % rel)
 
     def test_json_without_a_version_refused(self):  # S4
         repo = self.fresh(texts={PLUGIN: (PLUGIN_JSON % "0.0.0").replace('  "version": "0.0.0",\n', "")})
-        self.refused("0.1.0", repo=repo, want=(PLUGIN, "version"))
+        self.refused("0.1.0", repo=repo, exact=".claude-plugin/plugin.json: version is missing or not a string")
 
     def test_json_wrong_shapes_refused(self):  # S4
-        cases = [(PLUGIN, "[]\n"), (PLUGIN, "{not json}\n"), (PLUGIN, '{"version": 1}\n'),
-                 (PLUGIN, '{"version": "0.0"}\n'),
-                 (MARKET, '{"plugins": {}}\n'), (MARKET, '{"plugins": []}\n'),
-                 (MARKET, '{"plugins": [{"name": "other", "version": "0.0.0"}]}\n'),
+        top, mk = ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json"
+        one = "needs exactly one plugins entry named strict-delivery, found "
+        cases = [(PLUGIN, "[]\n", top + ": the top level must be an object"),
+                 (PLUGIN, "{not json}\n", top + ": is not valid JSON"),
+                 (PLUGIN, '{"version": 1}\n', top + ": version is missing or not a string"),
+                 (PLUGIN, '{"version": "0.0"}\n', top + ": version '0.0' is not of the form MAJOR.MINOR.PATCH"),
+                 (MARKET, '{"plugins": {}}\n', mk + ": plugins must be a list"),
+                 (MARKET, '{"plugins": []}\n', mk + ": " + one + "0"),
+                 (MARKET, '{"plugins": [{"name": "other", "version": "0.0.0"}]}\n', mk + ": " + one + "0"),
                  (MARKET, '{"plugins": [{"name": "strict-delivery", "version": "0.0.0"}, {"name": "strict-delivery", '
-                          '"version": "0.0.0"}]}\n')]
-        for rel, text in cases:
+                          '"version": "0.0.0"}]}\n', mk + ": " + one + "2")]
+        for rel, text, reason in cases:
             with self.subTest(rel=rel, text=text):
                 repo = self.fresh(texts={rel: text})
-                self.refused("0.1.0", repo=repo, want=(rel,))
+                self.refused("0.1.0", repo=repo, exact=reason)
 
     def test_json_deeply_nested_refused(self):  # S4 invariant of the parse: RecursionError is a refusal, not a crash
         for rel in (PLUGIN, MARKET):
@@ -576,8 +630,8 @@ class SiteRows(ReleaseCase):
         text = ('{\n  "name": "strict-delivery",\n  "version":"0.0.0",\n  "dependencies": [{"name": "x", '
                 '"version": "0.0.0"}]\n}\n')
         repo = self.fresh(texts={PLUGIN: text})
-        err = self.refused("0.1.0", repo=repo, want=(PLUGIN,))
-        self.assertIn("is not that of", err)
+        self.refused("0.1.0", repo=repo,
+                     exact=".claude-plugin/plugin.json: the version text is not that of the strict-delivery object")
 
     def test_missing_site_refused(self):  # S5
         for rel in SITES + [CHANGELOG]:
@@ -585,26 +639,30 @@ class SiteRows(ReleaseCase):
                 repo = self.fresh()
                 git(repo, "rm", "-q", "--", rel)
                 self.commit(repo)
-                self.refused("0.1.0", "--date", DATE, repo=repo, want=(rel, "missing"))
+                self.refused("0.1.0", "--date", DATE, repo=repo, exact="%s: is missing" % rel)
 
     def test_changelog_missing_refused(self):  # C1
         repo = self.fresh(changelog=None)
-        self.refused("0.1.0", repo=repo, want=(CHANGELOG, "missing"))
+        self.refused("0.1.0", repo=repo, exact="CHANGELOG.md: is missing")
 
     def test_missing_block_refused(self):  # S6
         for rel, text in ((CLAUDE, CLAUDE_HEAD), (IGNORE, IGNORE_HEAD)):
             with self.subTest(rel=rel):
                 repo = self.fresh(texts={rel: text})
-                self.refused("0.1.0", repo=repo, want=(rel, "init"))
+                self.refused("0.1.0", repo=repo,
+                             exact="%s: holds no strict-delivery managed block; run /strict-delivery:init" % rel)
 
-    def test_malformed_or_foreign_block_refused(self):  # S6
-        for rel, text in ((CLAUDE, claude_text("0.0.0").replace("<!-- strict-delivery:end -->\n", "")),
-                          (IGNORE, ignore_text("0.0.0") + ignore_text("0.0.0")),
-                          (CLAUDE, claude_text("0.0.0").replace("claude-block/1", "gitignore-block/1")),
-                          (CLAUDE, claude_text("0.0.0").replace("\n", "\r\n"))):
-            with self.subTest(rel=rel, text=text[:60]):
+    def test_malformed_or_foreign_block_refused(self):  # S6, R2-F5 (F-20261128-er8d): each member's whole reason
+        for rel, text, reason in (
+                (CLAUDE, claude_text("0.0.0").replace("<!-- strict-delivery:end -->\n", ""),
+                 "CLAUDE.md: block: no end marker"),
+                (IGNORE, ignore_text("0.0.0") + ignore_text("0.0.0"), ".gitignore: block: more than one begin marker"),
+                (CLAUDE, claude_text("0.0.0").replace("claude-block/1", "gitignore-block/1"),
+                 "CLAUDE.md: its block is gitignore-block, not claude-block; run /strict-delivery:upgrade"),
+                (CLAUDE, claude_text("0.0.0").replace("\n", "\r\n"), "CLAUDE.md: block: begin marker malformed: line 5")):
+            with self.subTest(rel=rel, reason=reason):
                 repo = self.fresh(texts={rel: text})
-                self.refused("0.1.0", repo=repo, want=(rel,))
+                self.refused("0.1.0", repo=repo, exact=reason)
 
     def test_config_version_line_must_be_exact(self):  # S2
         for text in ('schema: config/2\nframework_version: "0.0.0" # pinned\nprofile: strict\n',
@@ -643,7 +701,7 @@ class SiteRows(ReleaseCase):
 
     def test_invalid_config_refused(self):
         repo = self.fresh(texts={CONFIG: CONFIG_YML % "0.0.0" + "unknown_key: 1\n"})
-        self.refused("0.1.0", repo=repo, want=("unknown_key",))
+        self.refused("0.1.0", repo=repo, exact=".strict-delivery/config.yml: unknown key 'unknown_key'")
 
     def test_crlf_preserved(self):  # S7
         for rel, base in ((PLUGIN, PLUGIN_JSON), (MARKET, MARKET_JSON)):
@@ -680,7 +738,7 @@ class SiteRows(ReleaseCase):
 class ChangelogRows(ReleaseCase):
     def test_no_unreleased_refused(self):  # C2
         repo = self.fresh(changelog="# Changelog\n\n## 0.0.0 - 2026-01-01\n\n- first\n")
-        self.refused("0.1.0", repo=repo, want=("Unreleased",))
+        self.refused("0.1.0", repo=repo, exact="CHANGELOG.md: has no '## Unreleased' heading")
 
     def test_empty_unreleased_refused(self):  # C3
         for text in ("# Changelog\n\n## Unreleased\n\n## 0.0.0 - 2026-01-01\n\n- first\n",
@@ -689,7 +747,7 @@ class ChangelogRows(ReleaseCase):
                      "# Changelog\n\n## Unreleased\n\n# Other\n\n- x\n"):
             with self.subTest(text=text):
                 repo = self.fresh(changelog=text)
-                self.refused("0.1.0", repo=repo, want=("Unreleased", "empty"))
+                self.refused("0.1.0", repo=repo, exact="CHANGELOG.md: the section under '## Unreleased' is empty")
 
     def test_unreleased_last_section(self):  # C4
         for text in ("# Changelog\n\n## 0.0.0 - 2026-01-01\n\n- first\n\n## Unreleased\n\n- note\n",
@@ -705,7 +763,7 @@ class ChangelogRows(ReleaseCase):
 
     def test_two_unreleased_refused(self):  # C5
         repo = self.fresh(changelog=CHANGELOG_TEXT + "\n## Unreleased\n\n- again\n")
-        self.refused("0.1.0", repo=repo, want=("Unreleased", "2"))
+        self.refused("0.1.0", repo=repo, exact="CHANGELOG.md: has 2 '## Unreleased' headings, not one")
 
     def test_changelog_rolled(self):  # C6, D1
         self.assertEqual(self.run_release("0.1.0", "--date", DATE)[0], 0)
@@ -727,7 +785,8 @@ class ChangelogRows(ReleaseCase):
                     for doc in ("\n".join(lines) + "\n", "\n".join(l for l in lines if l != "## Unreleased") + "\n"):
                         repo = self.fresh(changelog=doc)
                         number = doc.split("\n").index(line) + 1
-                        self.refused("0.1.0", repo=repo, want=(CHANGELOG, "line %d" % number))
+                        self.refused("0.1.0", repo=repo, exact="CHANGELOG.md: line %d, %s, is not exactly '## Unreleased'"
+                                     % (number, "'" + line.replace("\t", "\\t") + "'"))
 
     def test_lines_that_are_not_near_misses_are_ignored(self):
         for line in ("- unreleased things", "text ## unreleased", "unreleased", " ## unreleased", "## Released", "## 0.0.0"):
@@ -740,7 +799,8 @@ class ChangelogRows(ReleaseCase):
                      CHANGELOG_TEXT + "\r", "\r" + CHANGELOG_TEXT):
             with self.subTest(text=text[:40]):
                 repo = self.fresh(changelog=text)
-                self.refused("0.1.0", repo=repo, want=(CHANGELOG, "CR"))
+                self.refused("0.1.0", repo=repo,
+                             exact="CHANGELOG.md: holds a carriage return (CR); only LF line ends are read")
 
     def test_shipped_changelog_shape(self):  # C7
         with open(os.path.join(ROOT, CHANGELOG), "rb") as fh:
@@ -792,19 +852,23 @@ class TreeBranchDateRows(ReleaseCase):
             with self.subTest(case=name):
                 repo = self.fresh()
                 make(repo)
-                self.refused("0.1.0", "--date", DATE, repo=repo, want=("not clean",))
+                paths = {"untracked": "stray.txt", "modified": "README.md", "staged": "new.txt", "deleted": "README.md",
+                         "nested": "deep/er/stray.txt"}  # typed by hand: what git lists for each member
+                self.refused("0.1.0", "--date", DATE, repo=repo, exact="the tree is not clean: " + paths[name])
 
     def test_dirty_site_file_refused(self):  # T2
         put(self.repo, PLUGIN, PLUGIN_JSON % "0.0.0" + "\n")
-        self.refused("0.1.0", repo=self.repo, want=("not clean", PLUGIN))
+        self.refused("0.1.0", repo=self.repo, exact="the tree is not clean: .claude-plugin/plugin.json")
 
     def test_on_base_branch_refused(self):  # T3
         git(self.repo, "checkout", "-q", "main")
-        self.refused("0.1.0", repo=self.repo, want=("main",))
+        self.refused("0.1.0", repo=self.repo,
+                     exact="the current branch 'main' is the base branch 'main'; check out a release branch")
 
     def test_non_default_base_branch(self):  # T3
         repo = self.fresh(base="develop", branch="develop")
-        self.refused("0.1.0", repo=repo, want=("develop",))
+        self.refused("0.1.0", repo=repo, exact="the current branch 'develop' is the base branch 'develop'; "
+                     "check out a release branch")
         repo = self.fresh(base="develop", branch="main")
         code, _o, err = self.run_release("0.1.0", "--date", DATE, root=repo)
         self.assertEqual((code, err), (0, ""))
@@ -813,7 +877,7 @@ class TreeBranchDateRows(ReleaseCase):
 
     def test_detached_refused(self):  # T4
         git(self.repo, "checkout", "-q", "--detach")
-        self.refused("0.1.0", repo=self.repo, want=("detached",))
+        self.refused("0.1.0", repo=self.repo, exact="HEAD is detached; check out a release branch")
 
     def test_bad_date_refused(self):  # D2, P2
         for bad in ("2026-02-30", "2026-1-01", "20261201", "2026-13-01", "2026-12-1", "2027-02-29", "0000-01-01",
@@ -907,7 +971,7 @@ class TreeBranchDateRows(ReleaseCase):
             with self.subTest(kw=kw):
                 repo = self.fresh(**kw)
                 err = self.refused("0.1.0", "--date", DATE, repo=repo, want=("printable ASCII",))
-                err.encode("ascii")  # the reason is ASCII even though the name is not
+                err.encode("ascii")  # the reason is ASCII even though the name is not (whole text: the child test)
 
     def test_branch_names_printable_ascii_success_under_ascii_stdout(self):  # F5: the full printout, whatever the stdout
         for encoding in ("ascii", "utf-8"):
@@ -917,6 +981,22 @@ class TreeBranchDateRows(ReleaseCase):
                                            {"PYTHONIOENCODING": encoding})
                 self.assertEqual((code, err), (0, b""))
                 self.assertEqual(out.decode("ascii"), printout("0.0.0", "0.1.0", "feature/rel-0.1_x", "develop"))
+
+    def test_refusal_order_after_base(self):  # R2-F6 (F-20261128-5m9s): the order of _run's refusals after `base`
+        # a dirty tree, or branch == base, is named before the printable-ASCII refusal of a branch name; the reason is the
+        # one each refusal gave before the ASCII check existed (typed by hand)
+        dirty = "the tree is not clean: stray.txt"
+        members = (
+            ("dirty tree, non-ASCII branch", {"branch": "rél"}, True, dirty),
+            ("dirty tree, non-ASCII base_branch", {"base": '"café"'}, True, dirty),
+            ("branch == base, non-ASCII name", {"base": '"café"', "branch": "café"}, False,
+             "the current branch 'caf\\xe9' is the base branch 'caf\\xe9'; check out a release branch"))
+        for label, kw, make_dirty, reason in members:
+            with self.subTest(member=label):
+                repo = self.fresh(**kw)
+                if make_dirty:
+                    put(repo, "stray.txt", "x\n")
+                self.refused("0.1.0", "--date", DATE, repo=repo, exact=reason)
 
     def test_branch_names_printable_ascii_bounds_accepted(self):  # F5 invariant: U+0020 and U+007E are printable
         repo = self.fresh(branch="release-test", base='"a ~b"')
@@ -946,14 +1026,14 @@ class HardeningRows(ReleaseCase):
                         fh.write(data)
                     os.symlink(target, os.path.join(repo, *rel.split("/")))
                     self.commit(repo)
-                    self.refused("0.1.0", "--date", DATE, repo=repo, want=(rel, "symbolic link"))
+                    self.refused("0.1.0", "--date", DATE, repo=repo, exact="%s: is a symbolic link" % rel)
 
     def test_dangling_symlink_site_refused(self):  # H1
         git(self.repo, "rm", "-q", "--", CONFIG)
         os.makedirs(os.path.join(self.repo, ".strict-delivery"), exist_ok=True)
         os.symlink(os.path.join(self.work, "nowhere"), os.path.join(self.repo, *CONFIG.split("/")))
         self.commit()
-        self.refused("0.1.0", want=(CONFIG, "symbolic link"))
+        self.refused("0.1.0", exact=".strict-delivery/config.yml: is a symbolic link")
 
     def test_directory_site_refused(self):  # H2
         for rel in self.targets():
@@ -962,7 +1042,7 @@ class HardeningRows(ReleaseCase):
                 git(repo, "rm", "-q", "--", rel)
                 put(repo, rel + "/inner.txt", "x\n")
                 self.commit(repo)
-                self.refused("0.1.0", "--date", DATE, repo=repo, want=(rel, "directory"))
+                self.refused("0.1.0", "--date", DATE, repo=repo, exact="%s: is a directory" % rel)
 
     def test_fifo_site_refused(self):  # H3
         for rel in self.targets():
@@ -991,7 +1071,9 @@ class HardeningRows(ReleaseCase):
                 git(repo, "rm", "-q", "-r", "--", parent)
                 os.symlink(other, os.path.join(repo, parent))
                 self.commit(repo)
-                self.refused("0.1.0", "--date", DATE, repo=repo, want=(parent + "/", "symbolic link or not a directory"))
+                first = ".claude-plugin/plugin.json" if parent == ".claude-plugin" else ".strict-delivery/config.yml"
+                self.refused("0.1.0", "--date", DATE, repo=repo,
+                             exact="%s: a parent is a symbolic link or not a directory" % first)
 
     def test_swap_between_read_and_write_detected(self):  # H4
         real = release._read
@@ -1063,7 +1145,7 @@ class HardeningRows(ReleaseCase):
         put(self.repo, "sub/file.txt", "x\n")
         put(sub, "extra.txt", "y\n")
         self.commit()
-        self.refused("0.1.0", root=sub, want=("top level",))
+        self.refused("0.1.0", root=sub, exact="--root must be the repository top level")
         self.refused("0.1.0", root=os.path.join(sub, "file.txt"), want=("--root",))
         self.refused("0.1.0", root=os.path.join(self.repo, "missing"), want=("--root",))
 
@@ -1074,13 +1156,27 @@ class HardeningRows(ReleaseCase):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(site_version(self.repo, release.RELEASE_SITES[0]), "0.1.0")
 
+    def test_toplevel_not_utf8_refused(self):  # R2-F1 (F-20261128-k733) G1r: a toplevel with byte 0xff, on any file system
+        real = gitinfo._run
+
+        def fake(root, name, args, *a, **kw):
+            if args == ["rev-parse", "--show-toplevel"]:
+                return subprocess.CompletedProcess(args, 0, b"/x/r\xff\n", b"")
+            return real(root, name, args, *a, **kw)
+        before = snapshot(self.work)
+        with mock.patch.object(gitinfo, "_run", fake):
+            code, out, err = self.run_release("0.1.0", "--date", DATE)
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, "release: --root: git rev-parse --show-toplevel gave output that is not valid UTF-8\n")
+        self.assertEqual(snapshot(self.work), before)
+
     def test_non_utf8_refused(self):  # H6
         for rel in self.targets():
             with self.subTest(rel=rel):
                 repo = self.fresh()
                 put(repo, rel, get(repo, rel) + b"\xff\xfe broken\n")
                 self.commit(repo)
-                self.refused("0.1.0", "--date", DATE, repo=repo, want=(rel, "UTF-8"))
+                self.refused("0.1.0", "--date", DATE, repo=repo, exact="%s: is not valid UTF-8" % rel)
 
     def test_outside_root_refused(self):  # H7
         plain = os.path.join(self.work, "plain")
@@ -1415,6 +1511,54 @@ class WriteSideRows(ReleaseCase):
                 for j, t in enumerate(self.TARGETS):
                     self.assertEqual(get(repo, t), expected_new(t, old[t]) if j < i else old[t], t)
 
+    def test_root_swapped_before_a_later_write_refused(self):  # R2-F3 (F-20261128-wvga) G3r: before each write, not only the first
+        for state in ("symlink-dir-out", "symlink-top", "absent", "regular"):
+            with self.subTest(state=state):
+                repo = self.fresh()
+                out_dir = os.path.join(self.work, "outside-%d" % self.n)
+                os.mkdir(out_dir)
+                put(out_dir, "sentinel", "outside the root\n")
+                outside = snapshot(out_dir)
+                old = dict((t, get(repo, t)) for t in self.TARGETS)
+                hold = os.path.join(self.work, "moved-%d" % self.n)
+                real, reads = release._read, {}
+
+                def swapping(root, rel):
+                    text = real(root, rel)
+                    reads[rel] = reads.get(rel, 0) + 1
+                    if rel == MARKET and reads[rel] == 3:  # the read just before the write of the second site
+                        os.rename(root, hold)
+                        if state == "symlink-dir-out":
+                            os.symlink(out_dir, root)
+                        elif state == "symlink-top":
+                            os.symlink(hold, root)
+                        elif state == "regular":
+                            put(os.path.dirname(root), os.path.basename(root), "a file\n")
+                    return text
+                with mock.patch.object(release, "_read", swapping):
+                    code, out, err = self.run_release("0.1.0", "--date", DATE, root=repo)
+                self.assertEqual((code, out), (1, ""))
+                self.assertEqual(err, "release: --root: %s changed during the run; written before it: %s\n"
+                                 % (repo, PLUGIN))
+                self.assertEqual(snapshot(out_dir), outside)  # no byte outside the root
+                self.assertEqual(get(hold, PLUGIN), expected_new(PLUGIN, old[PLUGIN]))  # written before the swap
+                for rel in self.TARGETS[1:]:
+                    self.assertEqual(get(hold, rel), old[rel], rel)  # the rest untouched
+
+    def test_unchanged_root_is_written(self):  # R2-F3 invariant: an unchanged root, or a link to the top level, writes
+        for via_link in (False, True):
+            with self.subTest(via_link=via_link):
+                repo = self.fresh()
+                root = repo
+                if via_link:
+                    root = os.path.join(self.work, "rootlink-%d" % self.n)
+                    os.symlink(repo, root)
+                old = dict((t, get(repo, t)) for t in self.TARGETS)
+                code, _o, err = self.run_release("0.1.0", "--date", DATE, root=root)
+                self.assertEqual((code, err), (0, ""))
+                for rel in self.TARGETS:
+                    self.assertEqual(get(repo, rel), expected_new(rel, old[rel]), rel)
+
     def test_write_side_mode_kept(self):  # F2: 0644, 0600, 0755 (and a mix) survive the write
         for label, modes in (("0644", [0o644] * 6), ("0600", [0o600] * 6), ("0755", [0o755] * 6),
                              ("mixed", [0o644, 0o600, 0o755, 0o640, 0o700, 0o664])):
@@ -1464,7 +1608,8 @@ def pm_expected(role, name, state, moment):
             return 0 if state == "regular" else 1
         if role == "parent":
             return 0 if state == "directory" else 1
-        return 0 if state in ("directory", "symlink-top", "name-0xff") else 1
+        # name-0xff: the script refuses a toplevel that git prints with a byte that is not UTF-8 (R2-F1, strict decode)
+        return 0 if state in ("directory", "symlink-top") else 1
     if role == "file":
         return 1 if state == "directory" else 0  # os.replace of a file over a directory fails; over a link, FIFO or nothing it works
     if role == "parent":
@@ -1473,9 +1618,9 @@ def pm_expected(role, name, state, moment):
         if state == "absent":
             return 1 if name == ".claude-plugin" else 0  # the second file of .claude-plugin finds it missing
         return 1
-    if state in ("directory", "symlink-top"):
-        return 0
-    return None if state == "symlink-dir-out" else 1
+    # root: swapped after the last comparison, before a write: any change of identity is refused (R2-F3); only the
+    # unchanged directory is accepted. A root swapped for a link to the moved repository (symlink-top) is refused too.
+    return 0 if state == "directory" else 1
 
 
 class PathMatrix(ReleaseCase):
@@ -1529,7 +1674,7 @@ class PathMatrix(ReleaseCase):
         root_arg, note = repo, None
         want_token = {"file": name, "parent": name, "root": "--root"}[role]
         if moment == "between":
-            want_token = name if role != "root" else ".claude-plugin/plugin.json"
+            want_token = name if role != "root" else "--root"
         normal = state == {"file": "regular", "parent": "directory", "root": "directory"}[role]  # nothing to change
         if moment == "check" and not normal:
             if role == "file":
@@ -1570,8 +1715,6 @@ class PathMatrix(ReleaseCase):
             if role != "root" and state != "fifo":
                 self.commit(repo)
         want = pm_expected(role, name, state, moment)
-        if moment == "check" and role == "root" and state == "name-0xff" and note:
-            want = 1
         if moment == "between" and not normal:
             hold = os.path.join(self.work, "moved-%d" % self.n)
 
@@ -1599,14 +1742,27 @@ class PathMatrix(ReleaseCase):
                         guards.update(self.place(root, state, {}))
                 ctx["calls"].append(rel)
                 ctx["out"] = snapshot(out_dir)
-            real = managed._write
+            if role == "root":
+                # R2-F3: the root is swapped after the last comparison read of the first file and before the write (the
+                # read just before the write of the first site, as test_swap_during_the_writes_reported counts it)
+                real_read, reads = release._read, {}
 
-            def wrapped(root, rel, text):
-                hit = (rel == name) if role == "file" else rel.startswith(name + "/") if role == "parent" else True
-                if hit and not ctx["calls"]:
-                    before(root, rel)
-                return real(root, rel, text)
-            patch = mock.patch.object(managed, "_write", wrapped)
+                def swapping(root, rel):
+                    text = real_read(root, rel)
+                    reads[rel] = reads.get(rel, 0) + 1
+                    if rel == PLUGIN and reads[rel] == 3:
+                        before(root, rel)
+                    return text
+                patch = mock.patch.object(release, "_read", swapping)
+            else:
+                real = managed._write
+
+                def wrapped(root, rel, text):
+                    hit = (rel == name) if role == "file" else rel.startswith(name + "/")
+                    if hit and not ctx["calls"]:
+                        before(root, rel)
+                    return real(root, rel, text)
+                patch = mock.patch.object(managed, "_write", wrapped)
         else:
             patch = contextlib.nullcontext()
         ctx.setdefault("out", snapshot(out_dir))
@@ -1630,6 +1786,11 @@ class PathMatrix(ReleaseCase):
         else:
             self.assertEqual(out, "")
             self.assertIn(want_token, err)
+            if role == "root" and moment == "between":  # R2-F3: nothing was written, so the reason says so
+                self.assertEqual(err, "release: --root: %s changed during the run; nothing written\n" % root_arg)
+            if role == "root" and state == "name-0xff" and ctx["final"] != repo:  # R2-F1: the name could be created
+                self.assertEqual(err, "release: --root: git rev-parse --show-toplevel gave output that is not "
+                                      "valid UTF-8\n")
             if moment == "check":
                 self.assertEqual(snapshot(self.work), snap)
         for dest, data in guards.items():
@@ -1647,10 +1808,8 @@ class PathMatrix(ReleaseCase):
                 note = self.cell(*cell)
                 if note:
                     notes[cell] = note
-        # the cells the rule leaves open and the one this file system cannot hold are named, never silently passed
-        open_cell = ("root", "", "symlink-dir-out", "between")  # a root swapped for a link to another directory
-        self.assertIn(open_cell, notes)
-        self.assertLessEqual(set(notes) - {open_cell}, {("root", "", "name-0xff", "check")})
+        # no cell is left open now; the one this file system may not hold (the 0xff name on APFS) is named, never silently passed
+        self.assertLessEqual(set(notes), {("root", "", "name-0xff", "check")})
 
 
 # --------------------------------------------------------------------------- G2: generated changelogs
@@ -1744,15 +1903,30 @@ def e2e_or_skip(tc, root, body):
     body(tc, root)
 
 
+E2E_SECS = {"clone": 300, "git": 120, "release": 120, "run_all": 2400, "doctor": 600}  # seconds per E2E call
+
+
+def e2e_run(label, cmd, cwd, secs):
+    """The completed child of ``cmd`` (stdout and stderr together), or a failure naming ``label`` after ``secs``."""
+    try:
+        return subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              timeout=secs)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("e2e %s did not finish within %d s" % (label, secs)) from None
+
+
 def e2e_body(tc, source):
     """This checkout cloned into a temporary directory with its working files, the script run, then ``run_all`` and
     ``doctor`` on the result: both exit 0."""
     clone = os.path.join(tc.work, "e2e")
-    git(tc.work, "clone", "-q", source, clone)
-    git(clone, "config", "user.email", "fixture@example.invalid")
-    git(clone, "config", "user.name", "Fixture")
-    git(clone, "config", "commit.gpgsign", "false")
-    names = git(source, "ls-files", "-z", "--cached", "--others", "--exclude-standard").split("\0")
+    # mw3y class (round 2): every call is bounded and a hang fails by name: the git calls through ``bounded``, the three
+    # subprocess calls (the release run, ``run_all``, ``doctor``) through ``e2e_run``
+    bounded("e2e git clone", lambda: git(tc.work, "clone", "-q", source, clone), E2E_SECS["clone"])
+    bounded("e2e git config", lambda: git(clone, "config", "user.email", "fixture@example.invalid"), E2E_SECS["git"])
+    bounded("e2e git config", lambda: git(clone, "config", "user.name", "Fixture"), E2E_SECS["git"])
+    bounded("e2e git config", lambda: git(clone, "config", "commit.gpgsign", "false"), E2E_SECS["git"])
+    names = bounded("e2e git ls-files", lambda: git(source, "ls-files", "-z", "--cached", "--others",
+                                                    "--exclude-standard"), E2E_SECS["git"]).split("\0")
     for rel in names:
         src = os.path.join(source, rel)
         if rel == "" or not os.path.isfile(src):
@@ -1761,20 +1935,59 @@ def e2e_body(tc, source):
         os.makedirs(os.path.dirname(to), exist_ok=True)
         with open(src, "rb") as fh, open(to, "wb") as out:
             out.write(fh.read())
-    commit_all(clone, "working files")
-    git(clone, "checkout", "-q", "-b", "release-e2e")
+    bounded("e2e commit", lambda: commit_all(clone, "working files"), E2E_SECS["git"])
+    bounded("e2e git checkout", lambda: git(clone, "checkout", "-q", "-b", "release-e2e"), E2E_SECS["git"])
     run = [sys.executable, os.path.join(clone, "scripts", "release.py"), "0.1.0", "--date", DATE, "--root", clone]
-    p = subprocess.run(run, cwd=clone, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = e2e_run("release run", run, clone, E2E_SECS["release"])
     tc.assertEqual(p.returncode, 0, p.stdout)
-    for cmd in ([sys.executable, "-m", "gates", "run_all", "--root", clone],
-                [sys.executable, "-m", "gates", "doctor", "--root", clone]):
-        p = subprocess.run(cmd, cwd=clone, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for label, cmd in (("run_all", [sys.executable, "-m", "gates", "run_all", "--root", clone]),
+                       ("doctor", [sys.executable, "-m", "gates", "doctor", "--root", clone])):
+        p = e2e_run(label, cmd, clone, E2E_SECS[label])
         tc.assertEqual(p.returncode, 0, p.stdout)
 
 
 class EndToEnd(ReleaseCase):
     def test_run_all_and_doctor_agree_after_bump(self):  # E2E (row E2E; decision: dependency skip, reason below)
         e2e_or_skip(self, ROOT, e2e_body)
+
+    def test_e2e_calls_are_bounded(self):  # mw3y class, G8r: the clone, the release run and run_all/doctor carry a time bound
+        with open(os.path.abspath(__file__), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        funcs = dict((n.name, n) for n in tree.body if isinstance(n, ast.FunctionDef))
+        parents = {}
+        for node in ast.walk(funcs["e2e_body"]):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+
+        def name_of(call):
+            f = call.func
+            return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+
+        def inside_bounded(node):
+            while node in parents:
+                node = parents[node]
+                if isinstance(node, ast.Call) and name_of(node) == "bounded":
+                    return True
+            return False
+        seen = set()
+        for node in ast.walk(funcs["e2e_body"]):
+            if isinstance(node, ast.Call):
+                name = name_of(node)
+                seen.add(name)
+                self.assertNotEqual(name, "run", "e2e_body calls subprocess.run directly (use e2e_run)")
+                if name in ("git", "commit_all"):
+                    self.assertTrue(inside_bounded(node), "an unbounded %s call at line %d" % (name, node.lineno))
+        self.assertLessEqual({"bounded", "e2e_run"}, seen)
+        self.assertEqual(sum(1 for n in ast.walk(funcs["e2e_body"]) if isinstance(n, ast.Call) and name_of(n) == "e2e_run"), 2)
+        runs = [n for n in ast.walk(funcs["e2e_run"]) if isinstance(n, ast.Call) and name_of(n) == "run"]
+        self.assertEqual(len(runs), 1)
+        self.assertIn("timeout", [k.arg for k in runs[0].keywords])
+        # the bound fails by name: a child that outlives it fails the test with the label
+        with self.assertRaises(AssertionError) as cm:
+            e2e_run("probe sleeper", [sys.executable, "-c", "import time; time.sleep(30)"], self.work, 1)
+        self.assertEqual(str(cm.exception), "e2e probe sleeper did not finish within 1 s")
+        p = e2e_run("probe echo", [sys.executable, "-c", "print('ok')"], self.work, 60)
+        self.assertEqual((p.returncode, p.stdout), (0, b"ok\n"))
 
     def test_e2e_skip_condition(self):  # DS
         def fixture(name, doctor, block):
@@ -1807,7 +2020,7 @@ class EndToEnd(ReleaseCase):
         with open(os.path.join(ROOT, "CLAUDE.md"), "rb") as fh:
             self.assertNotIn(b"strict-delivery:begin", fh.read())
         repo = self.fresh(texts={CLAUDE: CLAUDE_HEAD})
-        self.refused("0.1.0", repo=repo, want=(CLAUDE, "init"))
+        self.refused("0.1.0", repo=repo, exact="CLAUDE.md: holds no strict-delivery managed block; run /strict-delivery:init")
 
 
 if __name__ == "__main__":
