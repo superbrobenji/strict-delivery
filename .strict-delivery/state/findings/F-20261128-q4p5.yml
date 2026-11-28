@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261128-q4p5
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4a2.md R4-5
 severity: LOW
 class: "empty subcommand through an alias lost its test: git em (alias value ''), git em args, git --no-pager em, git -C <D> em, an alias chain ending in an empty word (a = b, b = ''), and the same in non-plain text"
@@ -13,11 +13,23 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+  - 9350d63b7c0153d06ef2dd4deb32ff7afff92e88:tests/test_bashpolicy.py
+  - 9350d63b7c0153d06ef2dd4deb32ff7afff92e88:tests/test_hook_bash.py
 history:
   - status: open
     sha: fd8e6232d673dc4b2a61a90dc7dec2c3fc77b29f
     by: stream-hooks-7
+  - status: planned
+    sha: 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+    by: implementer
+  - status: in-progress
+    sha: 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+    by: implementer
+  - status: fixed-unpinned
+    sha: 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+    by: implementer
 review_round: 4
 caused_by_change: true
 dimension: empty subcommand through an alias

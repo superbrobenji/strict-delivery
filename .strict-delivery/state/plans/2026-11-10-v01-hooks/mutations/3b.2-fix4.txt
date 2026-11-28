@@ -1,0 +1,39 @@
+<!-- schema: mutation-transcript/1 -->
+Task 3b.2 fix round 4 (review 4: R4-2 to R4-5): test-only pins, commit 9350d63 (no production change: git diff aaa2a97 9350d63 -- gates is empty).
+Runner (program rule): R = PATH=/Library/Developer/CommandLineTools/usr/bin:$PATH /usr/bin/python3 /Users/benji/projects/personal/strict-delivery-worktrees/_program/par_suite.py
+(both interpreters, /usr/bin/python3 3.9.6 and /opt/homebrew/bin/python3.13, in one call; exit 0 = both OK, exit 1 = a failing shard).
+States. Pin present (RUN 1): the worktree at the content of 9350d63 ("/usr/bin/python3: Ran 627 tests; OK (skipped=0)",
+"/opt/homebrew/bin/python3.13: Ran 627 tests; OK (skipped=0)"). Behaviour mutated (RUN 2): one scratch detached worktree per
+finding at 9350d63 (git worktree add --detach, in the implementer's mktemp scratch, never the worktree), the one mutant of the
+table ch/hk7-3b2-fix4-mutants.py applied there with the Edit tool. Restored (RUN 3): the worktree at the record commit, the same
+two modules (result lines in the report hk7-3b2-fix4.md, claim "RUN 3").
+
+FINDING F-20261128-safn
+TEST tests.test_bashpolicy.G3GrammarGeneratedTest.test_G3c_env_unwrap
+TEST tests.test_bashpolicy.EnvOperandThenOptionGeneratedTest
+MUTANT M4-1: gates/lib/bashpolicy.py `if word == "-i":` -> `if word == "-i" and not operands:` (env NAME=V -i git ... refused as an env option, not judged as git); RUN 2 lines "/usr/bin/python3: Ran 177 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 177 tests; FAILED (skipped=0)": test_G3c_env_unwrap FAIL, EnvOperandThenOptionGeneratedTest test_anchors (7 subtests), test_exhaustive_names_x_subcommands, test_seeded ERROR, FixRound4InterpreterRowsTest.test_digits_as_an_env_value FAIL, on both
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash
+RUN 2 mutant exit=1 command=R --modules tests.test_bashpolicy
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash
+
+FINDING F-20261128-kk36
+TEST tests.test_bashpolicy.G2NonTokenAliasNameGeneratedTest
+MUTANT M4-2: gates/lib/bashpolicy.py `_write_indicated` alias names by token equality (`_fold(name) in _runs(_fold(view))`) instead of `shellscan.token_in(view, name, True)` (decision Q3's bounded match lost); RUN 2 lines "/usr/bin/python3: Ran 177 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 177 tests; FAILED (skipped=0)": G2NonTokenAliasNameGeneratedTest test_listed_names, test_seeded_names, test_anchors (8 subtests), FixRound4InterpreterRowsTest.test_code_point_as_an_alias_name (2), WriteTextRefusalsTest.test_version_digits_and_code_points (3 alias-name subtests) FAIL, on both
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash
+RUN 2 mutant exit=1 command=R --modules tests.test_bashpolicy
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash
+
+FINDING F-20261128-k98v
+TEST tests.test_bashpolicy.G1RuleAGeneratedTest.test_V1_digits_in_a_command
+TEST tests.test_bashpolicy.FixRound4InterpreterRowsTest.test_digits_as_an_alias_name
+MUTANT M4-12 (row V1 (C), interpreter-dependent): gates/lib/bashpolicy.py `write_text_refusals` reads `int(w)` for every digit word of the text (ValueError over 4300 digits from 3.11); RUN 2 lines "/usr/bin/python3: Ran 177 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 177 tests; FAILED (skipped=0)": on 3.13 test_V1_digits_in_a_command, test_digits_as_an_alias_name, WriteTextRefusalsTest.test_version_digits_and_code_points ERROR; on both ConstantsTest.test_no_unicode_db_calls FAIL (the mutant's str.isdigit). The other F4-4 rows' mutants (M4-4..M4-11) are for the controller's batch; each was probed in its own scratch copy through the production hook (report, claim "mutant probes")
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash
+RUN 2 mutant exit=1 command=R --modules tests.test_bashpolicy
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash
+
+FINDING F-20261128-q4p5
+TEST tests.test_hook_bash.EmptyAliasSubcommandHookTest
+MUTANT M4-3: gates/lib/bashpolicy.py `_resolve` skips an empty expansion word (`or words[n] == ""` in the leading-option loop), so the `''` alias resolves to no subcommand; RUN 2 lines "/usr/bin/python3: Ran 450 tests; FAILED (skipped=0)", "/opt/homebrew/bin/python3.13: Ran 450 tests; FAILED (skipped=0)": exactly the five plain members fail on both (test_alias_plain, test_alias_and_args_plain, test_no_pager_plain, test_dash_C_plain, test_chain_plain: they pass instead of hook.bash.git); the five not-plain members keep RULE-A's line and pass
+RUN 1 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash
+RUN 2 mutant exit=1 command=R --modules tests.test_hook_bash
+RUN 3 fix exit=0 command=R --modules tests.test_bashpolicy tests.test_hook_bash

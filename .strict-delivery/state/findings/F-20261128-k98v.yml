@@ -1,6 +1,6 @@
 schema: finding/1
 id: F-20261128-k98v
-status: open
+status: fixed-unpinned
 source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/hk7-3b2-review-4a2.md R4-4
 severity: LOW
 class: "mutation evidence: row without a killing run: A2, A5, A8, A12 (hook level, RawViewGitTokenTest), B8, B9, V1 (A), V1 (B), V1 (C); generators G2, G3, G4 without a coverage assertion"
@@ -13,11 +13,23 @@ owner:
   task: 3b.2
 pin: null
 ruling: null
-evidence: []
+evidence:
+  - 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+  - 9350d63b7c0153d06ef2dd4deb32ff7afff92e88:tests/test_bashpolicy.py
+  - 9350d63b7c0153d06ef2dd4deb32ff7afff92e88:tests/test_hook_bash.py
 history:
   - status: open
     sha: fd8e6232d673dc4b2a61a90dc7dec2c3fc77b29f
     by: stream-hooks-7
+  - status: planned
+    sha: 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+    by: implementer
+  - status: in-progress
+    sha: 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+    by: implementer
+  - status: fixed-unpinned
+    sha: 9350d63b7c0153d06ef2dd4deb32ff7afff92e88
+    by: implementer
 review_round: 4
 caused_by_change: true
 dimension: mutation evidence per row
