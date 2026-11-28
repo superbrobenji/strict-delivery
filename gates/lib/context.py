@@ -221,11 +221,18 @@ def load(root: str, cfg: dict) -> dict:
     ``/strict-delivery:init``) and one listing every problem otherwise."""
     _need_root(root)
     gitinfo._require_toplevel(root)
-    rel = cfg["paths"]["context"]
-    if isinstance(rel, str) and type(rel) is not str:
-        # exactly str, as load_text takes it: a subclass can change how the path is joined, formatted or read, and
-        # config.load never yields one; non-str values are left to os.path.join, as before
-        raise TypeError("rel: a str subclass is refused, got %s" % type(rel).__name__)
+    if type(cfg) is not dict:
+        raise TypeError("cfg must be dict, got %s" % type(cfg).__name__)
+    paths = cfg["paths"]
+    if type(paths) is not dict:
+        raise TypeError("cfg.paths must be dict, got %s" % type(paths).__name__)
+    rel = paths["context"]
+    if type(rel) is not str:
+        # exactly str, as load_text takes it, refused before any use of rel: a subclass can change how the path is
+        # joined, formatted or read, a PathLike is joined and read as a path; config.load yields a plain str only
+        if issubclass(type(rel), str):
+            raise TypeError("rel: a str subclass is refused, got %s" % type(rel).__name__)
+        raise TypeError("rel must be str, got %s" % type(rel).__name__)
     path = os.path.join(root, rel)
     if not os.path.lexists(path):
         raise GateError("%s: missing; run /strict-delivery:init" % rel)

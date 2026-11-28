@@ -3,8 +3,13 @@ exactly as ``context.load`` validates the bytes it reads; ``load`` = read + ``lo
 by hand; today's ``load`` texts (measured before the change, including the doubled ``<rel>: <rel>: `` prefix of a YAML
 error) are pinned by literal."""
 import builtins
+import collections.abc
 import copy
+import errno
+import inspect
 import os
+import pathlib
+import random
 import sys
 import tempfile
 import unittest
@@ -328,14 +333,27 @@ class SAttr(str):           # a plain subclass whose instance carries an attribu
         return inst
 
 
+class FspathStr:            # not a str; os.path.join accepts it as a path
+    def __init__(self, p):
+        self.p = p
+
+    def __fspath__(self):
+        return self.p
+
+
+class FspathBytes(FspathStr):   # os.path.join refuses to mix its bytes with a str root
+    def __fspath__(self):
+        return self.p.encode()
+
+
 SCHEMA_ERR = ": schema: expected context/1, got context/2; run /strict-delivery:upgrade"
 
 
 class LoadRelSubclass(Base):
     """RS: ``load`` with a ``paths.context`` that is an instance of a ``str`` subclass (RS-s): every such member, on every
     path, is refused with a ``TypeError`` naming ``rel`` and the type before anything is looked up or read; an exact
-    ``str`` is passed on unchanged (RS-x); a non-str value is left as it was (RS-n). The expected values are written by
-    hand."""
+    ``str`` is passed on unchanged (RS-x); every other non-str value is refused the same way, with ``rel must be str``
+    (RS-n). The expected values are written by hand."""
     REFUSED = "rel: a str subclass is refused, got %s"
 
     def via_load(self, cls, data, name=REL):
@@ -376,37 +394,298 @@ class LoadRelSubclass(Base):
             err = ("TypeError", self.REFUSED % cls.__name__)
             self.check(cls, {"valid": err, "schema": err, "yaml": err, "nonutf8": err, "missing": err})
 
-    def test_every_str_subclass_is_refused_before_any_read(self):  # RS-s: nothing is looked up or read
+    def refused_untouched(self, value, want):
+        """``load`` with ``paths.context`` = ``value`` raises ``TypeError(want)`` and no use of ``value`` happened: no
+        ``os.path.join`` call received it (every join call is recorded; the real join runs, so ``_need_root`` and
+        ``_require_toplevel`` keep working), and ``lexists``, the read and ``load_text`` were never called."""
+        cfg = copy.deepcopy(self.cfg)
+        cfg["paths"]["context"] = value
+        with mock.patch.object(yamlsub, "_read_regular_file", side_effect=AssertionError("read")) as rd, \
+                mock.patch.object(context.os.path, "lexists", side_effect=AssertionError("lexists")) as lx, \
+                mock.patch.object(context, "load_text", side_effect=AssertionError("load_text")) as lt, \
+                mock.patch.object(context.os.path, "join", wraps=os.path.join) as jn:
+            with self.assertRaises(TypeError) as cm:
+                load(self.root, cfg)
+        self.assertEqual(str(cm.exception), want)
+        self.assertEqual((rd.call_count, lx.call_count, lt.call_count), (0, 0, 0))
+        self.assertEqual([c for c in jn.call_args_list if any(a is value for a in c.args)], [])
+
+    def test_join_recorder_sees_rel(self):  # the recorder of refused_untouched works: an exact str is joined
+        self.put(TAG)
+        cfg = copy.deepcopy(self.cfg)
+        with mock.patch.object(context.os.path, "join", wraps=os.path.join) as jn:
+            self.assertEqual(load(self.root, cfg), ROW)
+        rel = cfg["paths"]["context"]
+        self.assertEqual([c for c in jn.call_args_list if any(a is rel for a in c.args)], [mock.call(self.root, REL)])
+
+    def test_every_str_subclass_is_refused_before_any_read(self):  # RS-s, G1: nothing is joined, looked up or read
         self.put(TAG)
         for letter, cls in self.MEMBERS:
-            cfg = copy.deepcopy(self.cfg)
-            cfg["paths"]["context"] = cls(REL)
-            with self.subTest(member=letter), \
-                    mock.patch.object(yamlsub, "_read_regular_file", side_effect=AssertionError("read")) as rd, \
-                    mock.patch.object(context.os.path, "lexists", side_effect=AssertionError("lexists")) as lx, \
-                    mock.patch.object(context, "load_text", side_effect=AssertionError("load_text")) as lt:
-                with self.assertRaises(TypeError) as cm:
-                    load(self.root, cfg)
-            self.assertEqual(str(cm.exception), self.REFUSED % cls.__name__)
-            self.assertEqual((rd.call_count, lx.call_count, lt.call_count), (0, 0, 0))
+            with self.subTest(member=letter):
+                self.refused_untouched(cls(REL), self.REFUSED % cls.__name__)
 
-    def test_non_str_rel_is_unchanged(self):  # RS-n: today's os.path.join refusal (same text before request 78ff2e6, 3.9 and 3.13)
+    NONSTR = "rel must be str, got %s"
+
+    def test_non_str_rel_is_refused_before_any_read(self):  # RS-n, G2 (F-20261126-8g9c): refused at the guard, nothing used
+        # was test_non_str_rel_is_unchanged: None, 5, bytearray, 1.5, ["a"] expected "join() argument must be str, bytes,
+        # or os.PathLike object, not '<type>'" and bytes "Can't mix strings and bytes in path components"; now all
+        # of them, and the PathLike members added, expect "rel must be str, got <type>" with no call of join (with rel),
+        # lexists, the read or load_text
         self.put(TAG)
-        join = "join() argument must be str, bytes, or os.PathLike object, not '%s'"
-        for value, want in ((None, join % "NoneType"), (5, join % "int"), (bytearray(b"x"), join % "bytearray"),
-                            (1.5, join % "float"), (["a"], join % "list"),
-                            (REL.encode(), "Can't mix strings and bytes in path components")):
-            cfg = copy.deepcopy(self.cfg)
-            cfg["paths"]["context"] = value
-            with self.subTest(value=type(value).__name__), self.assertRaises(TypeError) as cm:
+        for value, name in ((None, "NoneType"), (5, "int"), (bytearray(b"x"), "bytearray"), (1.5, "float"),
+                            (["a"], "list"), (REL.encode(), "bytes"), (pathlib.PurePosixPath(REL), "PurePosixPath"),
+                            (pathlib.PureWindowsPath(REL), "PureWindowsPath"), (pathlib.Path(REL), "PosixPath"),
+                            (FspathStr(REL), "FspathStr"), (FspathBytes(REL), "FspathBytes")):
+            with self.subTest(value=name):
+                self.refused_untouched(value, self.NONSTR % name)
+
+    def test_generated_rel_types_refused_before_any_read(self):  # G4: seeded generated classes and instances
+        rng = random.Random(20261128)
+        self.put(TAG)
+        results = (REL, REL.encode(), 5, None, SubText(REL), "")
+
+        def method(r):
+            def f(self, *args):
+                if r is None:
+                    raise ValueError("boom")
+                return r
+            return f
+        bases = ((object, lambda c: c()), (int, lambda c: c(5)), (float, lambda c: c(1.5)),
+                 (bytes, lambda c: c(b"x")), (bytearray, lambda c: c(b"x")), (list, lambda c: c(["a"])),
+                 (tuple, lambda c: c(("a",))), (dict, lambda c: c({"a": 1})),
+                 (pathlib.PurePosixPath, lambda c: c(REL)), (str, lambda c: c(REL)))
+        seen_str = 0
+        for i in range(240):
+            base, make = bases[rng.randrange(len(bases))] if i >= 10 else bases[i]   # every base at least once
+            attrs = {}
+            for name in ("__fspath__", "__str__", "__format__"):
+                if rng.random() < 0.5:
+                    attrs[name] = method(rng.choice(results))
+            cls = type("G%d%s" % (i, base.__name__.capitalize()), (base,), attrs)
+            want = (self.REFUSED if base is str else self.NONSTR) % cls.__name__
+            seen_str += base is str
+            with self.subTest(case=i, cls=cls.__name__):
+                self.refused_untouched(make(cls), want)
+        self.assertGreater(seen_str, 0)
+
+    def test_load_takes_exact_types(self):  # X1 (owner Q-RS4-1 (A)): exact str root, exact dict cfg and cfg["paths"]
+        class SR(str):
+            pass
+
+        class DC(dict):
+            pass
+
+        class Map(collections.abc.Mapping):     # a Mapping that is not a dict; any use of it is a failure
+            def __getitem__(self, k):
+                raise AssertionError("used")
+
+            def __iter__(self):
+                raise AssertionError("used")
+
+            def __len__(self):
+                raise AssertionError("used")
+        self.put(TAG)
+        self.assertIs(type(self.cfg), dict)             # config.load, the only source of both callers, gives plain dicts
+        self.assertIs(type(self.cfg["paths"]), dict)
+        self.assertEqual(load(self.root, self.cfg), ROW)
+        for root in (SR(self.root), self.root.encode(), None, ""):
+            with self.subTest(root=type(root).__name__), self.assertRaises(GateError) as cm:
+                load(root, self.cfg)
+            self.assertEqual(str(cm.exception), "root must be a string")
+        for cfg in (DC(self.cfg), Map(), None):
+            with self.subTest(cfg=type(cfg).__name__), self.assertRaises(TypeError) as cm:
                 load(self.root, cfg)
-            self.assertEqual(str(cm.exception), want)
+            self.assertEqual(str(cm.exception), "cfg must be dict, got %s" % type(cfg).__name__)
+        for paths in (DC(self.cfg["paths"]), Map(), None, [("context", REL)]):
+            cfg = dict(self.cfg)
+            cfg["paths"] = paths
+            with self.subTest(paths=type(paths).__name__), self.assertRaises(TypeError) as cm:
+                load(self.root, cfg)
+            self.assertEqual(str(cm.exception), "cfg.paths must be dict, got %s" % type(paths).__name__)
+        with self.assertRaises(GateError) as cm:        # the root checks run first, whatever cfg is
+            load("", None)
+        self.assertEqual(str(cm.exception), "root must be a string")
+
+    def test_missing_keys_stay_key_errors(self):  # invariant of the replaced line: cfg["paths"]["context"] unchanged
+        for cfg, key in (({}, "paths"), ({"paths": {}}, "context")):
+            with self.subTest(key=key), self.assertRaises(KeyError) as cm:
+                load(self.root, cfg)
+            self.assertEqual(cm.exception.args, (key,))
+
+    def test_digit_rel_same_on_both(self):  # V1: no int() on the text; 4300 and 4301 digits give one text
+        for n in (4300, 4301):
+            rel = "9" * n
+            cfg = copy.deepcopy(self.cfg)
+            cfg["paths"]["context"] = rel
+            with self.subTest(n=n), self.assertRaises(GateError) as cm:
+                load(self.root, cfg)
+            self.assertEqual(str(cm.exception), rel + ": missing; run /strict-delivery:init")
+
+    def test_version_dependent_rel_same_on_both(self):  # V2: U+2C2F is Cn on 3.9 and Lu on 3.13
+        rel = "Ⱟ.yml"
+        cfg = copy.deepcopy(self.cfg)
+        cfg["paths"]["context"] = rel
+        with self.assertRaises(GateError) as cm:
+            load(self.root, cfg)
+        self.assertEqual(str(cm.exception), rel + ": missing; run /strict-delivery:init")
+
+    def test_changed_lines_name_no_unicode_tables(self):  # V3
+        for fn in (load,):
+            src = inspect.getsource(fn)
+            for word in ("unicodedata", "isprintable", "BaseExceptionGroup", "splitlines", ".lower("):
+                with self.subTest(fn=fn.__name__, word=word):
+                    self.assertNotIn(word, src)
 
     def test_load_text_still_refuses_subclass(self):  # T4 unchanged: load_text itself is not widened
         for _, cls in self.MEMBERS:
             with self.subTest(cls=cls.__name__), self.assertRaises(TypeError) as cm:
                 load_text(TAG, cls(REL), self.cfg)
             self.assertEqual(str(cm.exception), "rel must be str, got %s" % cls.__name__)
+
+
+# ---------------------------------------------------------------- PM: the path matrix of load's read of <root>/<rel>
+# Verdicts typed by hand from the docstrings of load ("a GateError for a missing file ... and one listing every problem")
+# and yamlsub._read_regular_file ("The bytes of the regular file at path; any problem is a YamlError naming shown";
+# "Anything but a regular file ... is refused"; a missing or non-directory parent is the OSError's strerror).
+# Cells the docstrings do not settle, pinned as observed (reported as Decision needed): a symlink to a regular file at
+# the target, and a holder that is a symlink to a directory, are followed (os.stat and lstat follow / resolve them).
+ROW2 = {"schema": "context/1", "every": []}
+MISSING = REL + ": missing; run /strict-delivery:init"
+TARGET_STATES = ("absent", "file", "dir", "symlink-in", "symlink-out", "fifo")
+HOLDER_STATES = ("absent", "file", "dir", "symlink-file-in", "symlink-file-out", "fifo", "symlink-dir-in",
+                 "symlink-dir-out")
+
+
+def cant(why):
+    return ("err", REL + ": " + REL + ": cannot read file (" + why + ")")
+
+
+NOTREG = cant("not a regular file")
+GONE = cant("No such file or directory")
+NOTDIR = cant("Not a directory")
+ROWOK = ("ok", ROW)
+ROW2OK = ("ok", ROW2)
+GATE_MISSING = ("err", MISSING)
+CELLS = (
+    # (role, state, moment, verdict)
+    ("target", "absent", "check", GATE_MISSING), ("target", "file", "check", ROWOK),
+    ("target", "dir", "check", NOTREG), ("target", "symlink-in", "check", ROWOK),
+    ("target", "symlink-out", "check", ROWOK), ("target", "fifo", "check", NOTREG),
+    ("target", "name-0xff", "check", ROWOK),
+    ("target", "absent", "between", GONE), ("target", "file", "between", ROW2OK),
+    ("target", "dir", "between", NOTREG), ("target", "symlink-in", "between", ROW2OK),
+    ("target", "symlink-out", "between", ROW2OK), ("target", "fifo", "between", NOTREG),
+    ("holder", "absent", "check", GATE_MISSING), ("holder", "file", "check", GATE_MISSING),
+    ("holder", "dir", "check", ROWOK), ("holder", "symlink-file-in", "check", GATE_MISSING),
+    ("holder", "symlink-file-out", "check", GATE_MISSING), ("holder", "fifo", "check", GATE_MISSING),
+    ("holder", "symlink-dir-in", "check", ROWOK), ("holder", "symlink-dir-out", "check", ROWOK),
+    ("holder", "name-0xff", "check", ROWOK),
+    ("holder", "absent", "between", GONE), ("holder", "file", "between", NOTDIR),
+    ("holder", "dir", "between", ROW2OK), ("holder", "symlink-file-in", "between", NOTDIR),
+    ("holder", "symlink-file-out", "between", NOTDIR), ("holder", "fifo", "between", NOTDIR),
+    ("holder", "symlink-dir-in", "between", ROW2OK), ("holder", "symlink-dir-out", "between", ROW2OK),
+)
+
+
+class PathMatrix(Base):
+    def setup_cell(self, role, state, content, sb):
+        """Put the ``role`` (the target file or its holder directory) of ``sb`` into ``state``; the previous thing at
+        that path is renamed into the sandbox's trash, never deleted."""
+        holder = os.path.join(sb["root"], ".strict-delivery")
+        target = os.path.join(holder, "context.yml")
+        where = holder if role == "holder" else target
+        if os.path.lexists(where):
+            sb["n"] += 1
+            os.rename(where, os.path.join(sb["trash"], "n%d" % sb["n"]))
+
+        def write(p, data):
+            with open(p, "wb") as fh:
+                fh.write(data)
+
+        def dir_with_target(p):
+            os.mkdir(p)
+            write(os.path.join(p, "context.yml"), content)
+        if state == "absent":
+            return
+        if role == "target":
+            if not os.path.isdir(holder):
+                os.mkdir(holder)
+            if state == "file":
+                write(target, content)
+            elif state == "dir":
+                os.mkdir(target)
+            elif state in ("symlink-in", "symlink-out"):
+                real = os.path.join(sb["root"] if state == "symlink-in" else sb["other"], "real.yml")
+                write(real, content)
+                os.symlink(real, target)
+            elif state == "fifo":
+                os.mkfifo(target)
+            return
+        if state == "file":
+            write(holder, b"x")
+        elif state == "dir":
+            dir_with_target(holder)
+        elif state in ("symlink-file-in", "symlink-file-out"):
+            real = os.path.join(sb["root"] if state.endswith("-in") else sb["other"], "realfile")
+            write(real, b"x")
+            os.symlink(real, holder)
+        elif state == "fifo":
+            os.mkfifo(holder)
+        elif state in ("symlink-dir-in", "symlink-dir-out"):
+            real = os.path.join(sb["root"] if state.endswith("-in") else sb["other"], "altdir")
+            dir_with_target(real)
+            os.symlink(real, holder)
+
+    def run_cell(self, role, state, moment, want):
+        top = tempfile.mkdtemp(dir=self.work)
+        root = os.path.join(top, "repo")
+        os.mkdir(root)
+        make_repo(root)
+        sb = {"root": root, "other": os.path.join(top, "other"), "trash": os.path.join(top, "trash"), "n": 0}
+        os.mkdir(sb["other"])
+        os.mkdir(sb["trash"])
+        cfg = copy.deepcopy(self.cfg)
+        content = TAG
+        if state == "name-0xff":                    # a name holding byte 0xff, built with os.fsdecode
+            try:
+                broot = os.fsencode(root)
+                if role == "holder":
+                    rel_b = b".strict-delivery\xff/context.yml"
+                    os.rename(os.path.join(broot, b".strict-delivery"), os.path.join(broot, b".strict-delivery\xff"))
+                else:
+                    rel_b = b".strict-delivery/context\xff.yml"
+                    os.rename(os.path.join(broot, b".strict-delivery/context.yml"), os.path.join(broot, rel_b))
+            except OSError as e:
+                if e.errno == errno.EILSEQ:
+                    self.skipTest("APFS refuses non-UTF-8 names (EILSEQ)")
+                raise
+            cfg["paths"]["context"] = os.fsdecode(rel_b)
+        else:
+            with open(os.path.join(root, REL), "wb") as fh:
+                fh.write(TAG)
+            if moment == "check":
+                self.setup_cell(role, state, TAG, sb)
+        real_read = yamlsub._read_regular_file
+        done = []
+
+        def swap(path, shown):
+            if shown == REL and not done:           # not the schema loader's own read
+                done.append(1)
+                self.setup_cell(role, state, TAG + b"every: []\n", sb)
+            return real_read(path, shown)
+        try:
+            with mock.patch.object(yamlsub, "_read_regular_file", side_effect=swap if moment == "between" else real_read):
+                return ("ok", load(root, cfg))
+        except GateError as e:
+            return ("err", str(e))
+
+    def test_generated_path_matrix_load(self):  # PM, H1-H7: every cell, seeded order
+        cells = list(CELLS)
+        random.Random(20261128).shuffle(cells)
+        self.assertEqual(len(cells), 30)
+        for role, state, moment, want in cells:
+            with self.subTest(role=role, state=state, moment=moment):
+                self.assertEqual(self.run_cell(role, state, moment, want), want)
 
 
 if __name__ == "__main__":
