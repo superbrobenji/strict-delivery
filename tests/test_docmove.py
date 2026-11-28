@@ -1,6 +1,7 @@
 """Tests of gates/lib/docmove.py (Task 4d.2 part A). This file is an exempt site of the old-path literal (spec section 4).
 Fixture repositories come only from tests/helpers.py; expected values are written by hand from the plan and the domain
 table (task-4d.2-domain.md, row ids in each test's comment). Nothing here reads the code under test back."""
+import collections
 import copy
 import errno
 import inspect
@@ -1270,6 +1271,358 @@ class VersionRowsTest(Repo):
         self.assertEqual(docmove.rewrites(self.r, [M1], [])[0], [("docs/h.md", u + D + u + ".md" + u + "\n")])  # RW-D5
         with self.assertRaises(GateError):
             docmove.plan_moves(self.r, {"paths": {"specs": "d/" + u, "plans": "p"}})
+
+
+def fail_open(name, number):
+    """Patch ``os.open`` to raise ``OSError(number)`` for the open of the component ``name`` below a directory
+    descriptor (the holder's own open in ``_read_text``)."""
+    real = os.open
+
+    def fake(p, flags, *a, **k):
+        if k.get("dir_fd") is not None and p == name:
+            raise OSError(number, os.strerror(number))
+        return real(p, flags, *a, **k)
+    return mock.patch("os.open", side_effect=fake)
+
+
+def as_device(rel, kind):
+    """Patch ``os.lstat`` so that the path ending in ``/rel`` is a device of ``kind`` (``S_IFCHR`` or ``S_IFBLK``);
+    no root is needed (the ``fail_lstat`` pattern); the file underneath stays."""
+    real = os.lstat
+
+    def fake(p, *a, **k):
+        st = real(p, *a, **k)
+        if str(p).endswith("/" + rel):
+            return os.stat_result((kind | 0o600,) + tuple(st)[1:])
+        return st
+    return mock.patch("os.lstat", side_effect=fake)
+
+
+SURROGATES = ("\ud800", "\udcff")
+ENC = "%s: item 0 holds a path that is not encodable as UTF-8"
+PRE = "docs/strict-delivery/plans/q.md"
+
+
+class Round2Test(ApplyBase):
+    """4d.2 fix round 2, docmove side (R2A-1 to R2A-5, DP-1, OQ-2, OQ-3, OQ-8)."""
+
+    def pair(self):
+        top = self.new([S + "a.md", PL + "q.md"])
+        return top, docmove.plan_moves(top, CFG)[0]  # [plans/q.md -> .., specs/a.md -> ..]
+
+    def aside_link(self, top, member):
+        """Move the directory ``member`` into a directory of our own and put a symlink to it in its place; returns that
+        directory."""
+        out = tempfile.mkdtemp(dir=self.tmp)
+        os.rename(os.path.join(top, *member.split("/")), os.path.join(out, "c"))
+        os.symlink(os.path.join(out, "c"), os.path.join(top, *member.split("/")))
+        return out
+
+    def test_r2a1_lone_surrogate_members(self):  # R2A-1 (H6): every member refused before any os call, both surrogates
+        for sur in SURROGATES:
+            members = (
+                ("src name", [(S + "a" + sur + ".md", D + "a.md")], [], "moves"),
+                ("src parent", [(S + "s" + sur + "/a.md", D + "a.md")], [], "moves"),
+                ("dst parent", [(S + "a.md", SD + "s" + sur + "/a.md")], [], "moves"),
+                ("dst name", [(S + "a.md", D + "a" + sur + ".md")], [], "moves"),
+                ("changes path", [], [("docs/h" + sur + ".md", "t\n")], "changes"),
+            )
+            for name, moves, changes, kind in members:
+                with self.subTest(member=name, surrogate=repr(sur)):
+                    top = self.new([S + "a.md"])
+                    before = snap(top)
+                    with mock.patch("os.lstat", side_effect=AssertionError("os.lstat reached")), \
+                            mock.patch("os.mkdir", side_effect=AssertionError("os.mkdir reached")), \
+                            mock.patch("os.open", side_effect=AssertionError("os.open reached")):
+                        with self.assertRaises(GateError) as cm:
+                            docmove.apply_moves(top, moves, changes)
+                    self.assertEqual(str(cm.exception), (ENC % kind))
+                    if moves:  # rewrites shares the moves check (no os call either)
+                        with self.assertRaisesRegex(GateError, "^" + ENC % "moves" + "$"):
+                            docmove.rewrites(top, moves, [])
+                    self.assertEqual(snap(top), before)
+
+    def test_r2a3_holder_open_errno(self):  # R2A-3 (D-Q22): ENOENT, ENOTDIR, ENAMETOOLONG of the holder's open are missing
+        self.put("docs/h.md", "see " + S + "a.md\n")
+        commit_all(self.r, "h")
+        for number in (errno.ENOENT, errno.ENOTDIR, errno.ENAMETOOLONG):
+            with self.subTest(errno=number), fail_open("h.md", number):
+                changes, notes, conflicts = docmove.rewrites(self.r, [M1], [])
+                self.assertNotIn("docs/h.md", dict(changes))
+                self.assertEqual([n for n in notes if "h.md" in n], [])
+        with fail_open("h.md", errno.EIO), self.assertRaisesRegex(GateError, r"^docs/h\.md: cannot read \(Input/output error\)$"):
+            docmove.rewrites(self.r, [M1], [])
+        with fail_open("h.md", errno.ELOOP):
+            got = docmove.rewrites(self.r, [M1], [])
+        self.assertIn("docs/h.md: not a regular file; not read", got[1])
+
+    def test_oq3_holder_parent_swapped_before_open(self):  # OQ-3 (b), H4: a parent swapped after the lstat is never followed
+        top = self.new(["sub/h.md"])
+        with open(os.path.join(top, "sub/h.md"), "w") as fh:
+            fh.write("see " + S + "a.md\n")
+        commit_all(top, "h")
+        moves = [M1]
+        out = tempfile.mkdtemp(dir=self.tmp)
+        os.mkdir(os.path.join(out, "c"))
+        with open(os.path.join(out, "c", "h.md"), "w") as fh:
+            fh.write("see " + S + "a.md\n")
+        real, opened = os.open, []
+
+        def spy(p, flags, *a, **k):
+            if p == "sub" and k.get("dir_fd") is not None and "sub" not in opened:  # the descent into sub: swap it now
+                os.rename(os.path.join(top, "sub"), os.path.join(tempfile.mkdtemp(dir=self.tmp), "aside"))
+                os.symlink(os.path.join(out, "c"), os.path.join(top, "sub"))
+            opened.append(p)
+            fd = real(p, flags, *a, **k)
+            if os.fstat(fd).st_ino == os.stat(os.path.join(out, "c", "h.md")).st_ino:
+                raise AssertionError("the outside file was opened")
+            return fd
+        before = snap(out, False)
+        with mock.patch("os.open", side_effect=spy):
+            changes, notes, conflicts = docmove.rewrites(top, moves, [])
+        self.assertIn("sub", opened)
+        self.assertNotIn("sub/h.md", dict(changes))
+        self.assertIn("sub/h.md: not a regular file; not read", notes)
+        self.assertEqual(snap(out, False), before)
+
+    def test_oq3_swap_members(self):  # OQ-3 (b), H3, H4: the parent or the file swapped after the lstat, one member each
+        out = tempfile.mkdtemp(dir=self.tmp)
+        with open(os.path.join(out, "o.md"), "w") as fh:
+            fh.write("see " + S + "a.md\n")
+
+        def to_file(p):
+            os.rename(p, os.path.join(tempfile.mkdtemp(dir=self.tmp), "aside"))
+            with open(p, "w") as fh:
+                fh.write("a file\n")
+
+        def to_fifo(p):
+            os.rename(p, os.path.join(tempfile.mkdtemp(dir=self.tmp), "aside"))
+            os.mkfifo(p)
+
+        def removed(p):
+            os.rename(p, os.path.join(tempfile.mkdtemp(dir=self.tmp), "aside"))
+
+        def to_link(p):
+            os.rename(p, os.path.join(tempfile.mkdtemp(dir=self.tmp), "aside"))
+            os.symlink(os.path.join(out, "o.md"), p)
+        skip, silent = "sub/h.md: not a regular file; not read", None
+        for name, target, make, want in (("parent to file", "sub", to_file, skip), ("parent to fifo", "sub", to_fifo, skip),
+                                         ("parent removed", "sub", removed, silent), ("file removed", "sub/h.md", removed, silent),
+                                         ("file to symlink", "sub/h.md", to_link, skip), ("file to fifo", "sub/h.md", to_fifo, skip)):
+            with self.subTest(member=name):
+                top = self.new(["sub/h.md"])
+                with open(os.path.join(top, "sub/h.md"), "w") as fh:
+                    fh.write("see " + S + "a.md\n")
+                commit_all(top, "h")
+                real, hit = os.open, []
+
+                def spy(p, flags, *a, **k):
+                    if p == target.rsplit("/", 1)[-1] and k.get("dir_fd") is not None and not hit:
+                        hit.append(1)
+                        make(os.path.join(top, target))
+                    return real(p, flags, *a, **k)
+                with mock.patch("os.open", side_effect=spy):
+                    kind, got = watched(lambda: docmove.rewrites(top, [M1], []))
+                self.assertEqual(kind, "ok", got)
+                self.assertEqual(hit, [1])
+                self.assertEqual([n for n in got[1] if "h.md" in n], [want] if want else [])
+                self.assertNotIn("sub/h.md", dict(got[0]))
+                self.assertEqual(slurp(os.path.join(out, "o.md")), "see " + S + "a.md\n")
+
+    def test_r2a3_root_open_fails(self):  # R2A-3 sibling: the descriptor walk starts at the root; its error is named
+        self.put("docs/h.md", "see " + S + "a.md\n")
+        commit_all(self.r, "h")
+        real = os.open
+
+        def fake(p, flags, *a, **k):
+            if p == self.r and k.get("dir_fd") is None:
+                raise OSError(errno.EIO, os.strerror(errno.EIO))
+            return real(p, flags, *a, **k)
+        with mock.patch("os.open", side_effect=fake), \
+                self.assertRaisesRegex(GateError, r"^\.strict-delivery/config\.yml: cannot read \(Input/output error\)$"):
+            docmove.rewrites(self.r, [M1], [])  # the first holder in path order names the failure
+
+    def test_moved_lists_every_move(self):  # AM-F1 text rule: the suffix lists each move done before, in order, ", " apart
+        top = self.new([S + "a.md", S + "b.md", S + "c.md"])
+        moves = docmove.plan_moves(top, CFG)[0]
+        real, hit = docmove.gitinfo._run, []
+
+        def run(root, name, *a, **k):
+            p = real(root, name, *a, **k)
+            if name == "mv":
+                hit.append(1)
+                if len(hit) == 2:  # after the second move, the third target appears
+                    with open(os.path.join(top, D + "c.md"), "w") as fh:
+                        fh.write("late\n")
+            return p
+        with mock.patch("gates.lib.gitinfo._run", side_effect=run), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), D + "c.md: exists; moved before it: " + S + "a.md -> " + D + "a.md, "
+                         + S + "b.md -> " + D + "b.md")
+
+    def test_r2a4_exact_types(self):  # R2A-4 (owner Q-RS4-1 (A)): every subclass member refused with its existing text
+        class L(list):
+            pass
+
+        class T(tuple):
+            pass
+
+        class Str(str):
+            pass
+
+        class D2(dict):
+            pass
+        NT = collections.namedtuple("NT", "src dst")
+        pair = "^moves: item 0 must be a \\(src, dst\\) pair of non-empty strings$"
+        chg = "^changes: item 0 must be a \\(path, text\\) pair of strings$"
+        sd = "^state_dirs: must be a list of non-empty strings$"
+        top = self.new([S + "a.md"])
+        for name, call, rx in (
+                ("state_dirs list subclass", lambda: docmove.rewrites(top, [M1], L(["a"])), sd),
+                ("state_dirs str-element subclass", lambda: docmove.rewrites(top, [M1], [Str("a")]), sd),
+                ("moves item tuple subclass", lambda: docmove.apply_moves(top, [T(M1)], []), pair),
+                ("moves item namedtuple", lambda: docmove.apply_moves(top, [NT(*M1)], []), pair),
+                ("moves dst str subclass", lambda: docmove.apply_moves(top, [(M1[0], Str(M1[1]))], []), pair),
+                ("moves src str subclass", lambda: docmove.apply_moves(top, [(Str(M1[0]), M1[1])], []), pair),
+                ("moves item tuple subclass (rewrites)", lambda: docmove.rewrites(top, [T(M1)], []), pair),
+                ("changes item tuple subclass", lambda: docmove.apply_moves(top, [], [T(("docs/h.md", "t\n"))]), chg),
+                ("changes path str subclass", lambda: docmove.apply_moves(top, [], [(Str("docs/h.md"), "t\n")]), chg),
+                ("changes text str subclass", lambda: docmove.apply_moves(top, [], [("docs/h.md", Str("t\n"))]), chg)):
+            with self.subTest(member=name), self.assertRaisesRegex(GateError, rx):
+                call()
+        cfg = copy.deepcopy(CFG)
+        for name, bad in (("cfg dict subclass", D2(cfg)), ("cfg paths dict subclass", dict(cfg, paths=D2(cfg["paths"])))):
+            with self.subTest(member=name), self.assertRaisesRegex(GateError, "^cfg: paths.specs is missing$"):
+                docmove.plan_moves(top, bad)
+        docmove.plan_moves(top, cfg)  # the exact types are accepted
+
+    def test_r2a5_device_members(self):  # R2A-5 (RW-F8, RB-2, RB-3, H3): a character or block device, no root needed
+        for kind in (stat.S_IFCHR, stat.S_IFBLK):
+            with self.subTest(kind=stat.S_IFMT(kind)):
+                top = self.new([S + "a.md", "docs/h.md"])
+                with as_device(S + "a.md", kind):  # _source_state: plan and apply
+                    moves, conflicts, _ = docmove.plan_moves(top, CFG)
+                    self.assertEqual(conflicts, [NOT_REG % (S + "a.md")])
+                    self.assertEqual(moves, [M1])
+                    with self.assertRaises(GateError) as cm:
+                        docmove.apply_moves(top, moves, [])
+                    self.assertEqual(str(cm.exception), NOT_REG % (S + "a.md"))
+                with as_device("docs/h.md", kind):  # _read_text
+                    changes, notes, _ = docmove.rewrites(top, [M1], [])
+                    self.assertEqual(notes, ["docs/h.md: not a regular file; not read"])
+                    self.assertEqual(changes, [])
+                with as_device("docs/h.md", kind), self.assertRaisesRegex(GateError, "^docs/h.md: not a regular file$"):
+                    docmove.apply_moves(top, [], [("docs/h.md", "n\n")])  # _still_regular
+                self.assertTrue(os.path.exists(os.path.join(top, S + "a.md")))
+
+    def test_dp1_dst_parent_swapped_between_moves(self):  # R2A-2 / DP-1: every dst component is looked at again per move
+        top, moves = self.pair()
+        out = tempfile.mkdtemp(dir=self.tmp)
+        real, hit = docmove.gitinfo._run, []
+
+        def run(root, name, *a, **k):
+            p = real(root, name, *a, **k)
+            if name == "mv" and not hit:
+                hit.append(1)
+                os.symlink(out, os.path.join(top, "docs/strict-delivery/specs"))  # after the first move
+            return p
+        with mock.patch("gates.lib.gitinfo._run", side_effect=run), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), NOT_DIR % (D + "a.md", "docs/strict-delivery/specs")
+                         + "; moved before it: " + PL + "q.md -> " + PRE)
+        self.assertEqual(os.listdir(out), [])
+        self.assertTrue(os.path.exists(os.path.join(top, S + "a.md")))
+
+    def test_dp1_dst_parent_swapped_after_preflight(self):  # R2A-2 / DP-1: the swap before the first mkdir
+        top, moves = self.pair()
+        out = tempfile.mkdtemp(dir=self.tmp)
+        real = docmove._preflight
+
+        def preflight(t, m):
+            real(t, m)
+            os.symlink(out, os.path.join(top, "docs/strict-delivery"))
+        with mock.patch("gates.lib.docmove._preflight", side_effect=preflight), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), PRE + ": parent docs/strict-delivery is not a directory; nothing was moved")
+        self.assertEqual(os.listdir(out), [])
+        self.assertTrue(os.path.exists(os.path.join(top, PL + "q.md")))
+
+    def test_dp1_dst_parent_swapped_before_git_mv(self):  # R2A-2 / DP-1: the swap after the mkdirs, right before git mv
+        top, moves = self.pair()
+        out = tempfile.mkdtemp(dir=self.tmp)
+        real = os.mkdir
+
+        def mkdir(p, *a, **k):
+            real(p, *a, **k)
+            if p.endswith("strict-delivery/plans"):  # the last parent of move 1 was just made: swap it
+                os.rmdir(p)
+                os.symlink(out, p)
+        with mock.patch("os.mkdir", side_effect=mkdir), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), PRE + ": parent docs/strict-delivery/plans is not a directory; nothing was moved")
+        self.assertEqual(os.listdir(out), [])
+        self.assertTrue(os.path.exists(os.path.join(top, PL + "q.md")))
+
+    def test_oq2_source_swapped_before_git_mv(self):  # OQ-2 (b): _require_source runs again right before git mv
+        top, moves = self.pair()
+        calls = self.trace()
+        real, hit, outs = os.mkdir, [], []
+
+        def mkdir(p, *a, **k):
+            if not hit:
+                hit.append(1)
+                outs.append(self.aside_link(top, "docs/superpowers/plans"))  # between the two source checks
+            return real(p, *a, **k)
+        with mock.patch("os.mkdir", side_effect=mkdir), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), NOT_DIR % (PL + "q.md", "docs/superpowers/plans"))
+        self.assertEqual(os.listdir(os.path.join(outs[0], "c")), ["q.md"])  # the outside file stayed
+        self.assertEqual([c for c in calls() if "mv" in c], [])  # git mv never ran
+
+    def test_oq8_dst_appears_after_a_move(self):  # OQ-8: a dst that exists after move 1 is "exists; moved before it: ..."
+        top, moves = self.pair()
+        real, hit = docmove.gitinfo._run, []
+
+        def run(root, name, *a, **k):
+            p = real(root, name, *a, **k)
+            if name == "mv" and not hit:
+                hit.append(1)
+                os.makedirs(os.path.join(top, "docs/strict-delivery/specs"))
+                with open(os.path.join(top, D + "a.md"), "w") as fh:
+                    fh.write("late\n")
+            return p
+        with mock.patch("gates.lib.gitinfo._run", side_effect=run), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), D + "a.md: exists; moved before it: " + PL + "q.md -> " + PRE)
+        self.assertEqual(slurp(os.path.join(top, D + "a.md")), "late\n")
+        self.assertTrue(os.path.exists(os.path.join(top, S + "a.md")))
+
+    def test_oq8_dangling_symlink_dst_appears(self):  # OQ-8: a dangling link at the dst exists (lexists, never followed)
+        top, moves = self.pair()
+        real = docmove._preflight
+
+        def preflight(t, m):
+            real(t, m)
+            os.makedirs(os.path.join(top, "docs/strict-delivery/plans"))
+            os.symlink(os.path.join(self.tmp, "no-such-name"), os.path.join(top, PRE))
+        with mock.patch("gates.lib.docmove._preflight", side_effect=preflight), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), PRE + ": exists; nothing was moved")
+        self.assertTrue(os.path.exists(os.path.join(top, PL + "q.md")))
+
+    def test_oq8_dst_appears_after_preflight(self):  # OQ-8: before move 1 nothing was moved
+        top, moves = self.pair()
+        real = docmove._preflight
+
+        def preflight(t, m):
+            real(t, m)
+            os.makedirs(os.path.join(top, "docs/strict-delivery/plans"))
+            with open(os.path.join(top, PRE), "w") as fh:
+                fh.write("late\n")
+        with mock.patch("gates.lib.docmove._preflight", side_effect=preflight), self.assertRaises(GateError) as cm:
+            docmove.apply_moves(top, moves, [])
+        self.assertEqual(str(cm.exception), PRE + ": exists; nothing was moved")
+        self.assertEqual(slurp(os.path.join(top, PRE)), "late\n")
 
 
 if __name__ == "__main__":
