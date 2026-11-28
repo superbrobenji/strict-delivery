@@ -1,0 +1,32 @@
+schema: finding/1
+id: F-20261126-9fc6
+status: closed
+source: task-CI3-review-2.md F-R2-1 (CI3 r2; mutants p1, p2 SURVIVED)
+severity: LOW
+class: "T5 swapped-after-check parent components in open_target (tests/ci_mutants.py:531-534): first-level parent (tested); second-level and deeper parents (untested); any mutated path with 2 or more parent directories (untested)"
+siblings: []
+cites:
+  - file: tests/ci_mutants.py
+    lines: 531-534
+    sha: 745604371476e7a838bf55aa196f190375631328
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: CI3
+pin: null
+ruling: null
+evidence:
+  - c790c0ca99f1237d0eaa122dfa8e8798035d51c5
+  - "c790c0ca99f1237d0eaa122dfa8e8798035d51c5:tests/test_ci_mutants.py"
+history:
+  - status: open
+    sha: 745604371476e7a838bf55aa196f190375631328
+    by: stream-ci
+  - status: closed
+    sha: c790c0ca99f1237d0eaa122dfa8e8798035d51c5
+    by: stream-ci-6a
+resolved_by: 2026-10-31-strict-delivery-framework
+review_round: 2
+caused_by_change: true
+dimension: "T5 hardening: swapped after the check"
