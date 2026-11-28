@@ -2222,59 +2222,135 @@ class ExactTypeTest(Base):
 
 
 class InheritedEnvTest(Base):
-    """Row G1 (owner Q-HK5-2 (a), 2026-11-26): F4's inherited environment is pinned by a seeded generated-input test:
-    for every generated set of GIT_* variables, ``make_repo`` equals a raw slow build made under the same environment,
-    and the fast path is taken exactly when none of the variables moves or reshapes the repository (the rule of the table:
-    isolated config only; every other GIT_* name is part of the template key). The seed is in every failure text."""
-    SEEDS = tuple(range(1, 17))
-    SLOW = ("GIT_TEMPLATE_DIR", "GIT_CONFIG_COUNT", "GIT_DEFAULT_HASH", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
-            "GIT_CONFIG_PARAMETERS", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+    """Rows G1 and G1a (owner Q-HK5-2 (a), 2026-11-26; F-20261128-bd56): F4's inherited environment, pinned by a seeded
+    generated-input test over the whole class. The members (``members``): every name of the guard's set, written here by
+    hand (``SHAPING``, an oracle independent of ``helpers._REPO_SHAPING``; ``test_g1a_...`` pins the two equal),
+    GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n for n = 0 and a generated n >= 1, PATH and HOME values (HOME also unset),
+    GIT_CONFIG_GLOBAL empty, unset and with unusual characters, GIT_CONFIG_NOSYSTEM other than "1" and unset, other GIT_*
+    names, and the K1 / K2 texts (names and values of 4300 and 4301 digits, the code point U+1FAE0). Seed ``s`` draws the
+    member ``s`` mod the member count and, from the second round on, up to two more of other names, each with a
+    generated value. Expected decision (row G1, written here, not read from helpers): never the fast path for a SHAPING
+    name or a GIT_CONFIG_KEY_ / GIT_CONFIG_VALUE_ name (checked through ``_fast_path_ok`` alone: git never runs under
+    them); otherwise the fast path exactly under the isolated pair (GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1),
+    and the result equals a slow build made with raw git under the same environment. The seed, the drawn members and
+    the environment are in every failure text."""
+    SHAPING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+               "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_INDEX_FILE", "GIT_TEMPLATE_DIR", "GIT_DEFAULT_HASH",
+               "GIT_DEFAULT_REF_FORMAT", "GIT_EXEC_PATH", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+               "GIT_CONFIG_SYSTEM")
+    ROUNDS = 2
+    K2 = "\U0001fae0"  # unassigned in 3.9's Unicode, a symbol in 3.13's
+    TEXTS = ("", "1", "a b", "n\nl", "t\tb", "=x=", "é", K2, "9" * 4300, "1" + "0" * 4300, "/")
 
-    def pool(self):
-        tdir = self.fresh("gittemplate")
-        self.write(tdir, "marker.txt", b"from the template dir\n")
-        self.write(self.tmp, "gcfg", b"[core]\n\tautocrlf = true\n")
-        return {
-            "GIT_TEMPLATE_DIR": [tdir], "GIT_CONFIG_COUNT": ["0"], "GIT_DEFAULT_HASH": ["sha1"],
-            "GIT_CONFIG_KEY_0": ["a.b"], "GIT_CONFIG_VALUE_0": ["c"], "GIT_CONFIG_PARAMETERS": ["'a.b=c'"],
-            "GIT_NAMESPACE": ["zz"], "GIT_CEILING_DIRECTORIES": [self.tmp],
-            "GIT_CONFIG_GLOBAL": ["/dev/null", os.path.join(self.tmp, "gcfg")], "GIT_CONFIG_NOSYSTEM": ["1", "0"],
-            "GIT_SOMETHING_ELSE": ["1", "2"], "GIT_OPTIONAL_LOCKS": ["0", "1"], "GIT_EDITOR": ["e1", "e2"],
-            "GIT_TERMINAL_PROMPT": ["0"],
-        }
+    def members(self):
+        """``{label: function(rng) -> {name: value, or None to unset}}``; every path a value names lies in this test's
+        directory. The first word of a label is its name family: one draw never holds two members of one family."""
+        odd = self.fresh("odd dir é " + self.K2 + " =x")
+        self.write(odd, ".gitconfig", b"[core]\n\tautocrlf = true\n[init]\n\tdefaultBranch = other\n")
+        cfg = os.path.join(odd, "global config é" + self.K2)
+        self.write(odd, os.path.basename(cfg), b"[core]\n\tautocrlf = true\n")
+        missing = os.path.join(self.tmp, "missing")
+        texts = self.TEXTS + (odd,)
+        number = lambda rng: rng.choice(("1", "7", str(rng.randint(2, 10 ** 9)), "9" * 4300, "1" + "0" * 4300))  # noqa: E731
+        other = {"GIT_SOMETHING_ELSE": texts, "GIT_EDITOR": texts, "GIT_OPTIONAL_LOCKS": ("0", "1"),
+                 "GIT_TERMINAL_PROMPT": ("0", "1")}
+        out = {}
+        for name in self.SHAPING:
+            out[name] = lambda rng, name=name: {name: rng.choice(texts)}
+        out.update({
+            "GIT_CONFIG_KEY_0": lambda rng: {"GIT_CONFIG_KEY_0": rng.choice(("a.b", "core.autocrlf") + texts)},
+            "GIT_CONFIG_KEY_n": lambda rng: {"GIT_CONFIG_KEY_" + number(rng): rng.choice(("a.b",) + texts)},
+            "GIT_CONFIG_VALUE_0": lambda rng: {"GIT_CONFIG_VALUE_0": rng.choice(texts)},
+            "GIT_CONFIG_VALUE_n": lambda rng: {"GIT_CONFIG_VALUE_" + number(rng): rng.choice(texts)},
+            "PATH value": lambda rng: {"PATH": rng.choice((odd, missing, os.path.dirname(helpers.shutil.which("git"))))
+                                       + os.pathsep + os.environ["PATH"]},
+            "HOME value": lambda rng: {"HOME": rng.choice((odd, "", missing))},
+            "HOME unset": lambda rng: {"HOME": None},
+            "GIT_CONFIG_GLOBAL empty": lambda rng: {"GIT_CONFIG_GLOBAL": ""},
+            "GIT_CONFIG_GLOBAL unset": lambda rng: {"GIT_CONFIG_GLOBAL": None},
+            "GIT_CONFIG_GLOBAL unusual": lambda rng: {"GIT_CONFIG_GLOBAL": rng.choice((cfg, missing + " \n" + self.K2,
+                                                                                         " /dev/null", "/dev/null "))},
+            "GIT_CONFIG_NOSYSTEM other": lambda rng: {"GIT_CONFIG_NOSYSTEM": rng.choice(("0", "", "true", "yes"))},
+            "GIT_CONFIG_NOSYSTEM unset": lambda rng: {"GIT_CONFIG_NOSYSTEM": None},
+            "GIT_other name": lambda rng: (lambda n: {n: rng.choice(other[n])})(rng.choice(sorted(other))),
+            "K1 GIT_CONFIG_KEY_ of 4301 digits": lambda rng: {"GIT_CONFIG_KEY_" + "1" + "0" * 4300: "a.b"},
+            "K1 GIT_CONFIG_VALUE_ of 4300 digits": lambda rng: {"GIT_CONFIG_VALUE_" + "9" * 4300: "c"},
+            "K1 GIT_ name of 4300 digits": lambda rng: {"GIT_" + "9" * 4300: rng.choice(("x", "9" * 4300))},
+            "K1 GIT_ value of 4301 digits": lambda rng: {"GIT_CI2_K1": "1" + "0" * 4300},
+            "K2 GIT_ value": lambda rng: {"GIT_CI2_K2": "a" + self.K2},
+            "K2 GIT_DIR value": lambda rng: {"GIT_DIR": os.path.join(odd, self.K2)},
+        })
+        return out
 
-    def draw(self, seed, pool):
+    def draw(self, seed, members):
+        """``(labels, environment)`` for ``seed``: a function of the seed (and of this test's directory) only."""
         rng = random.Random(seed)
-        names = rng.sample(sorted(pool), rng.randint(1, 3))
-        return {n: rng.choice(pool[n]) for n in names}
+        labels = sorted(members)
+        chosen = [labels[seed % len(labels)]]
+        if seed >= len(labels):
+            for label in rng.sample(labels, rng.randint(0, 2)):
+                if label.split()[0] not in {c.split()[0] for c in chosen}:
+                    chosen.append(label)
+        env = {}
+        for label in chosen:
+            env.update(members[label](rng))
+        return chosen, env
+
+    def expected_fast(self):
+        """Row G1 by hand, on the environment as it now is: ``(moved, fast)``."""
+        present = {k for k in os.environ if k.startswith("GIT_")}
+        moved = any(k in self.SHAPING or k.startswith("GIT_CONFIG_KEY_") or k.startswith("GIT_CONFIG_VALUE_")
+                    for k in present)
+        isolated = os.environ.get("GIT_CONFIG_GLOBAL") == "/dev/null" and os.environ.get("GIT_CONFIG_NOSYSTEM") == "1"
+        return moved, not moved and isolated
 
     def test_g1_generated_environments_equal_a_slow_build(self):
-        pool = self.pool()
-        isolated = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
-        decisions = collections.Counter()
-        for seed in self.SEEDS:
-            env = self.draw(seed, pool)
-            where = "seed %d, environment %r" % (seed, env)
-            slow = any(n in self.SLOW for n in env) or any(env.get(n, v) != v for n, v in isolated.items())
-            decisions["slow" if slow else "fast"] += 1
-            with self.subTest(seed=seed), mock.patch.dict(os.environ, env):
+        members = self.members()
+        seeds = range(self.ROUNDS * len(members))
+        drawn, guarded, built, decisions = (collections.Counter() for _ in range(4))
+        for seed in seeds:
+            labels, env = self.draw(seed, members)
+            where = "seed %d, members %r, environment %r" % (seed, labels, env)
+            drawn.update(labels)
+            with self.subTest(seed=seed), mock.patch.dict(os.environ, {k: v for k, v in env.items() if v is not None}):
+                for k in [k for k, v in env.items() if v is None]:
+                    os.environ.pop(k, None)
+                moved, fast = self.expected_fast()
+                decisions["fast" if fast else "slow"] += 1
                 a = self.fresh("a%d" % seed)
-                self.assertEqual(helpers._fast_path_ok(a, helpers._template_root()), not slow, where)
-                if slow:
+                self.assertEqual(helpers._fast_path_ok(a, helpers._template_root()), fast, where)
+                if moved:  # a name that moves or reshapes a repository: the decision is all, git is never run under it
+                    guarded.update(labels)
+                    continue
+                built.update(labels)
+                if fast:
+                    with mock.patch.object(helpers.shutil, "copytree", wraps=helpers.shutil.copytree) as copied:
+                        make_repo(a)
+                    self.assertGreater(copied.call_count, 0, where)
+                else:
                     with self.no_copy():
                         make_repo(a)
-                else:
-                    make_repo(a)
                 b = self.fresh("b%d" % seed)
                 slow_build(b)
                 self.assertEqual(facts(a), facts(b), where)
-        self.assertGreater(decisions["slow"], 0)  # the generator reaches both decisions
+        moving = [m for m in members if m in self.SHAPING or m.startswith(("GIT_CONFIG_KEY", "GIT_CONFIG_VALUE", "K1 GIT_CONFIG"))
+                  or m == "K2 GIT_DIR value"]
+        self.assertEqual(sorted(drawn), sorted(members))  # every member is drawn
+        self.assertEqual(sorted(m for m in moving if guarded[m] == 0), [])  # each moving member reaches the decision
+        self.assertEqual(sorted(m for m in members if m not in moving and built[m] == 0), [])  # each other one a build
+        self.assertGreater(decisions["slow"], 0)
         self.assertGreater(decisions["fast"], 0)
 
     def test_g1_the_draw_is_a_function_of_the_seed(self):
-        pool = self.pool()
-        self.assertEqual([self.draw(s, pool) for s in self.SEEDS], [self.draw(s, pool) for s in self.SEEDS])
-        self.assertGreater(len({repr(self.draw(s, pool)) for s in self.SEEDS}), 8)
+        members = self.members()
+        seeds = range(self.ROUNDS * len(members))
+        self.assertEqual([self.draw(s, members) for s in seeds], [self.draw(s, members) for s in seeds])
+        self.assertGreater(len({repr(self.draw(s, members)) for s in seeds}), len(members))
+
+    def test_g1a_the_guard_set_is_the_hand_list(self):
+        self.assertEqual(len(set(self.SHAPING)), 16)
+        self.assertIs(type(helpers._REPO_SHAPING), frozenset)
+        self.assertEqual(sorted(helpers._REPO_SHAPING), sorted(self.SHAPING))
 
 
 class TranscriptCiteTest(unittest.TestCase):
