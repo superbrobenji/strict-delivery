@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-exvv
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-3a.md R3A-2
+severity: LOW
+class: "descriptor close calls in docmove without a mutant id or a test: os.close(d) in the _open_holder descent loop (docmove.py:182), os.close(d) in its finally (:193), pre-existing os.close(fd) of _read_text (:227); dropping :193 leaks 4 descriptors per rewrites call"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 08c1d36def222f7bee3b658221c3800001043deb
+    by: stream-config-19
+review_round: 3
+caused_by_change: true
+dimension: mutants / resource handling

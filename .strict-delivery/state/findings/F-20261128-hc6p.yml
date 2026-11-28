@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261128-hc6p
+status: open
+source: .superpowers/sdd/2026-10-31-strict-delivery-framework/ch/4d2-review-3b.md U-1
+severity: LOW
+class: "conflict-line path cut at the first ': ' (caused by fix round 1 be667b0): init.py:487, init.py:612; paths 'a: b' and 'a: c' lose one FAIL line through init.main on both interpreters"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 4d.2
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 08c1d36def222f7bee3b658221c3800001043deb
+    by: stream-config-19
+review_round: 3
+caused_by_change: true
+dimension: conflict-line path parsing
