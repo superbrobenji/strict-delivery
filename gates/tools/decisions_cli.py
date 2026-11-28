@@ -14,10 +14,11 @@ import re
 import sys
 from typing import List, Optional
 
-from gates.lib import config, decisions, gitinfo, ids, schema
+from gates.lib import config, decisions, gitinfo, ids, schema, store
 from gates.lib import batch
 from gates.lib.result import GateError, _Once, gate_args, safe_text
 from gates.lib.store import Store
+from gates.lib import tipread
 from gates.tools import index
 
 PRODUCES = ("decision",)
@@ -399,7 +400,12 @@ def _batch(ns) -> int:
     if ns.since is None:
         new, also, note = open_, [], _NO_CUT
     elif _is_ancestor(root, ns.since):
-        at_cut = set(gitinfo.ls_tree(root, ns.since, cfg["paths"]["decisions"]))
+        at_cut = set()
+        for mode, _, name in tipread.entries(root, ns.since, cfg["paths"]["decisions"]):
+            if mode in ("100644", "100755"):
+                at_cut.add(name)
+            elif store._is_record_name(name.rpartition("/")[2]):
+                tipread.show_file(root, ns.since, name)  # a symlink, tree or gitlink with a record name: refused by name
         files = {r.id: r.file for r in decs}
         new = [(i, row) for i, row in open_ if files[i] not in at_cut]
         also = [(i, row) for i, row in open_ if files[i] in at_cut]

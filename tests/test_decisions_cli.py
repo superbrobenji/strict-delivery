@@ -19,6 +19,7 @@ from gates.lib.store import Store
 from gates.tools import decisions_cli
 from tests.helpers import E128, TOP, GitIsolatedTestCase, commit_all, git, make_repo, minimal_config, write_record
 from tests.test_fold_table import FORTY
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEC = ".strict-delivery/state/decisions"
@@ -1005,6 +1006,102 @@ class Batch(Base):
         c1 = git(self.root, "rev-parse", "HEAD")
         self.put(dec(DB, "open"), commit=True)
         return c1
+
+    def test_since_cut_entry_kinds(self):  # 5b.3 F22: a non-regular record entry at the cut is a refusal, never "not at the cut"
+        self.put(dec(DA, "open"), dec(DB, "open"), commit=True)
+        path = "%s/%s.yml" % (DEC, DB)
+        text = git(self.root, "show", "HEAD:" + path) + "\n"
+        for kind in ("regular", "executable"):
+            with self.subTest(kind):
+                cut = set_entry(self.root, "refs/heads/main", path, kind, text)
+                set_entry(self.root, "refs/heads/main", path, "regular", text)
+                out = self.ok("--since", cut)
+                self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+        with self.subTest("absent"):
+            cut = set_entry(self.root, "refs/heads/main", path, "absent")
+            set_entry(self.root, "refs/heads/main", path, "regular", text)
+            out = self.ok("--since", cut)
+            self.assertEqual((new_ids(out), also_ids(out)), ([DB], [DA]))
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                cut = set_entry(self.root, "refs/heads/main", path, kind, text)
+                set_entry(self.root, "refs/heads/main", path, "regular", text)
+                self.refused(("batch", "--since", cut), refusal(cut, path))
+            with self.subTest(kind + " with a non-record name"):  # stays ignored: not a record file
+                set_entry(self.root, "refs/heads/main", DEC + "/notes.txt", kind, text)
+                cut = set_entry(self.root, "refs/heads/main", path, "regular", text)
+                out = self.ok("--since", cut)
+                self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+                set_entry(self.root, "refs/heads/main", DEC + "/notes.txt", "absent")
+        # R2-1 (5b.3 fix round 2, F-20261125-c3k2): only a record name is refused; a generated name (index.yml,
+        # in-force.md), a dot name and a name that is not .yml stay ignored, as at 9b3a1c6, at every kind (R2-H: a name
+        # with a space or with U+0870 (Cn on 3.9, Lo on 3.13) has the verdict of its kind)
+        for name in ("index.yml", "in-force.md", ".hidden.yml", "notes.txt", "a b.txt", "ࡰ.txt", ".ࡰ.yml"):
+            for kind, _ in BAD_KINDS:
+                with self.subTest("%s %s ignored" % (name.encode("ascii", "backslashreplace").decode(), kind)):
+                    try:
+                        set_entry(self.root, "refs/heads/main", DEC + "/" + name, kind, text)
+                        cut = set_entry(self.root, "refs/heads/main", path, "regular", text)
+                        out = self.ok("--since", cut)
+                        self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+                    finally:
+                        set_entry(self.root, "refs/heads/main", DEC + "/" + name, "absent")
+        # R2-1b, R2-H, R2-K: a record name (<anything>.yml that is no generated or dot name) is refused by name at every
+        # kind, whatever its characters; a name of 4300 or 4301 digits is a record name like any other
+        for label, name, shown in (("space", "a b.yml", "a b.yml"), ("u0870", "ࡰ.yml", "\\u0870.yml"),
+                                   ("digits4300", "9" * 4300 + ".yml", "9" * 4300 + ".yml"),
+                                   ("digits4301", "9" * 4301 + ".yml", "9" * 4301 + ".yml")):
+            for kind, _ in BAD_KINDS:
+                with self.subTest("%s %s refused" % (label, kind)):
+                    try:
+                        cut = set_entry(self.root, "refs/heads/main", DEC + "/" + name, kind, text)
+                    finally:
+                        set_entry(self.root, "refs/heads/main", DEC + "/" + name, "absent")
+                    err = self.refused(("batch", "--since", cut),
+                                       "%s:%s/%s: cannot be read as a UTF-8 regular file (not a regular file)" % (cut, DEC, shown))
+                    self.assertEqual(err, "decisions batch: %s:%s/%s: cannot be read as a UTF-8 regular file "
+                                          "(not a regular file)\n" % (cut, DEC, shown))
+        # R5-2b (F-20261126-g6un): a name in the decisions folder at the cut that is not UTF-8 (git is given b"b\xff...")
+        # keeps main's verdict: gitinfo.ls_tree at 9b3a1c6 decoded every listed name, so the cut listing is refused
+        for name in ("b\udcff.yml", "b\udcff.txt"):
+            with self.subTest("non-UTF-8 name " + name.encode("utf-8", "backslashreplace").decode("ascii")):
+                try:
+                    cut = set_entry(self.root, "refs/heads/main", DEC + "/" + name, "regular", text)
+                finally:
+                    set_entry(self.root, "refs/heads/main", DEC + "/" + name, "absent")
+                err = self.refused(("batch", "--since", cut), "not valid UTF-8")
+                self.assertEqual(err, "decisions batch: git ls-tree gave output that is not valid UTF-8\n")
+        # R2-H, parent component a symlink: paths.decisions itself is a symlink at the cut; git does not follow it, so the
+        # listing at the cut is empty and every open record is new (exit 0, as at 9b3a1c6). Last: it replaces the directory.
+        with self.subTest("paths.decisions symlink"):
+            cut = set_entry(self.root, "refs/heads/main", DEC, "symlink", "x\n")
+            out = self.ok("--since", cut)
+            self.assertEqual((new_ids(out), also_ids(out)), ([DA, DB], []))
+
+    def test_since_cut_replace_view(self):  # R4-1b (F-20261126-a826): the cut is listed in gitinfo.ls_tree's view at 9b3a1c6
+        self.put(dec(DA, "open"), dec(DB, "open"), commit=True)
+        path = "%s/%s.yml" % (DEC, DB)
+        text = git(self.root, "show", "HEAD:" + path) + "\n"
+        # (label, the record at the cut, the record in the cut's replacement, the ids (new, also) without the replace ref)
+        for label, kind1, kind2, control in (("added by the replacement", "absent", "regular", ([DB], [DA])),
+                                             ("made a symlink by the replacement", "regular", "symlink", ([], [DA, DB]))):
+            with self.subTest(label):
+                cut = set_entry(self.root, "refs/heads/main", path, kind1, text)
+                git(self.root, "update-ref", "refs/heads/repl", git(self.root, "rev-parse", cut + "^"))
+                repl = set_entry(self.root, "refs/heads/repl", path, kind2, text)
+                set_entry(self.root, "refs/heads/main", path, "regular", text)
+                out = self.ok("--since", cut)
+                self.assertEqual((new_ids(out), also_ids(out)), control)
+                git(self.root, "replace", cut, repl)
+                try:
+                    if kind2 == "regular":  # a record the replacement adds is at the cut
+                        out = self.ok("--since", cut)
+                        self.assertEqual((new_ids(out), also_ids(out)), ([], [DA, DB]))
+                    else:  # a record the replacement makes a symlink is refused by name (row F22)
+                        err = self.refused(("batch", "--since", cut), refusal(cut, path))
+                        self.assertEqual(err, "decisions batch: %s\n" % refusal(cut, path))
+                finally:
+                    git(self.root, "replace", "-d", cut)
 
     def test_batch_since_ancestor_splits_new_and_also_open(self):  # C3, C4, C28, C35, C37
         c1 = self.two_commits()

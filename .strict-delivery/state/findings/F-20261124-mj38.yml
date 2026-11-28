@@ -1,0 +1,23 @@
+schema: finding/1
+id: F-20261124-mj38
+status: open
+source: 5b.3 task review 1 (records/5b.3-review-1.md, U2); owner Q-RC9-1 (a)
+severity: LOW
+class: "non-regular entry at a branch tip read as absent: gates/lib/cleanup.py:140-146 _own_specs reads a symlinked own handoff as absent (members: symlink, tree, gitlink)"
+siblings: []
+cites: []
+repro: null
+owner:
+  kind: plan
+  plan: 2026-10-31-strict-delivery-framework
+  task: 5b.3
+pin: null
+ruling: null
+evidence: []
+history:
+  - status: open
+    sha: 2d49bc0dd3eefdeb11fa85d976a9e374ba03784e
+    by: stream-records
+review_round: 1
+caused_by_change: false
+dimension: repository state files render loads

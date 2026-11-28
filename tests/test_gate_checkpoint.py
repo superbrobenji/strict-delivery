@@ -23,6 +23,7 @@ from gates import gate_checkpoint, producers
 from gates.lib import checkpoints, gitinfo, yamlsub
 from tests.helpers import (INT_LIMITS, TOP, GitIsolatedTestCase, check_root_forms, commit_all, git, int_limit, make_repo, minimal_config,
                            root_forms, write_record)
+from tests.tipkinds import BAD_KINDS, refusal, set_entry
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PYS = ("/usr/bin/python3", "/opt/homebrew/bin/python3.13")
@@ -532,6 +533,19 @@ class Files(Fx):
         self.rewrite(head=self.base[:7], resume=resume_text(PLAN, "P1.2", "block/p1", self.base[:7]))  # the plan is not in that commit
         out, _ = self.chk()
         self.assertEqual(line_of(out, "ledger"), "FAIL checkpoint.ledger: plan text: %s is absent at %s" % (PLAN, self.base[:7]))
+
+    def test_plan_text_head_entry_kinds(self):  # 5b.3 F14: a non-regular plan at the handoff head is a reason, never "is absent at"
+        self.build()
+        for kind, mode in BAD_KINDS:
+            with self.subTest(kind):
+                head = set_entry(self.root, "refs/heads/side", PLAN, kind, "## Block P1: basic\n")[:7]
+                self.rewrite(head=head, resume=resume_text(PLAN, "P1.2", "block/p1", head))
+                out, _ = self.chk()
+                self.assertEqual(line_of(out, "ledger"), "FAIL checkpoint.ledger: plan text: %s" % refusal(head, PLAN))
+        with self.subTest("regular"):
+            head = set_entry(self.root, "refs/heads/side", PLAN, "regular", "## Block P1: basic\n")[:7]
+            self.rewrite(head=head, resume=resume_text(PLAN, "P1.2", "block/p1", head))
+            self.assertNotIn("plan text", line_of(self.chk()[0], "ledger"))
 
     def test_plan_text_read_at_checkpoint_head(self):  # LG6, D-Q3 (a)
         self.build(lines=["Prose.", CK, "MERGED pr=3 head=%s merge=%s merged_by=a at=2026-11-02T08:59:36Z final=no stream=a block=P2 approval=host" % ("a" * 40, "b" * 40)])

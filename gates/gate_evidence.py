@@ -14,6 +14,7 @@ from typing import Optional
 from gates.gate_decisions import _keys, _root
 from gates.lib import config, evidence, findings, gitinfo
 from gates.lib.result import GateError, Result, _Once, gate_args, run_gate
+from gates.lib import tipread
 from gates.lib.store import Store, _merge_base_rows, _row_changed
 
 PRODUCES: tuple = ("mutation-transcript", "review-report")
@@ -29,7 +30,7 @@ def _show(root: str, sha: str, path: str):
     """``(text, problem)``: the blob at ``sha:path``, or why it cannot be read (a GateError of ``show`` is a problem of
     this row, never of the run: Q9)."""
     try:
-        text = gitinfo.show(root, sha, path)
+        text = tipread.show_file(root, sha, path)
     except GateError as e:
         return None, "%s:%s: %s" % (sha, path, e)
     if text is None:

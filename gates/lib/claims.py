@@ -18,6 +18,7 @@ from typing import List, Optional
 
 from gates.lib import gitinfo, ids, migrations, schema, store, yamlsub
 from gates.lib.result import GateError, _raw
+from gates.lib import tipread
 
 KIND = "claim"
 _SCHEMA_FILE = os.path.join(schema.SCHEMAS_DIR, "claim.yml")
@@ -355,7 +356,14 @@ def base_errors(root: str, cfg: dict, files: list, base: str) -> list:
                     removed.setdefault(cid, file)
             continue
         doc = row.get("document")
-        existed = type(doc) is str and _path_ok(doc) and gitinfo.blob_exists(root, mb, doc)
+        existed = False
+        if type(doc) is str and _path_ok(doc):
+            try:
+                existed = tipread.is_file(root, mb, doc)
+            except GateError as e:  # a symlink, tree or gitlink document at the merge base is named, never read as absent
+                out.append(("deleted." + file, "%s exists on %s and its document %s cannot be read at the merge base (%s); "
+                            "claim files are never deleted" % (file, base, doc, e)))
+                continue
         if not (existed and doc not in tracked):
             kept = " and its document %s is kept" % doc if type(doc) is str and doc in tracked else ""
             out.append(("deleted." + file, "%s exists on %s%s; claim files are never deleted" % (file, base, kept)))
