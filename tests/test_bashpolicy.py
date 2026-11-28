@@ -1773,7 +1773,8 @@ class ExactTypesPolicyTest(unittest.TestCase):
         self.assertIs(type(p), bp.Policy)
         for kw in ({"cfg": None}, {"cfg_error": "bad config"}, {"branch": None}, {"env": _DictSub(K="v")},
                    {"env": types.MappingProxyType({"K": "v"})}, {"aliases": {"ci": "commit"}}, {"agent_key": "a1"},
-                   {"base": "trunk"}, {"root": "/", "cwd": "/x/y"}, {"state_access": dict}):
+                   {"base": "trunk"}, {"root": "/", "cwd": "/x/y"},
+                   {"state_access": lambda: (frozenset(), [], None)}):   # R4d-3: `dict` has no readable signature
             with self.subTest(kw=repr(kw)):
                 p = pol(**kw)
                 for k, v in kw.items():
@@ -1990,6 +1991,288 @@ class ExactTypesHandleTest(Repo):
                 self.assertEqual(pre_bash.handle(self.ctx(d, bad)), hookio.Outcome(deny=[_INPUT_LINE]))
         for command in ("echo " + _DIGITS, "echo " + _NEW_CP):
             self.assertEqual(pre_bash.handle(self.ctx(d, command)), hookio.Outcome(), command[:8])
+
+
+# Task 3b.2 fix round 4 part d (review 4d: R4d-1 to R4d-6)
+import functools  # noqa: E402
+
+_CALL_ERR = "call must be a GitCall"   # rows F4d-1a, F4d-1b (hand-written)
+_STATE_ARITY = "Policy.state_access must be a function or method of no arguments"   # row F4d-3 (ET25, R4d-3 ruling)
+_AGENT_EMPTY = "Policy.agent_key must be a non-empty str"   # row F4d-2
+_ALIAS_NOVERIFY = "FAIL hook.bash.bypass.no-verify: an alias holds --no-verify; " + BANG
+
+
+class _GitCallSub(bp.GitCall):
+    pass
+
+
+def _gc_fields(**kw):
+    d = dict(lines=[], argv_C=None, sub="status", args=[], expansion_words=[], expansions=[], env_refused=False)
+    d.update(kw)
+    return d
+
+
+def _bad_aliases():
+    """ET12's refused cases with their errors (hand-written)."""
+    return ((_DictSub(), "aliases must be a dict"), (types.MappingProxyType({}), "aliases must be a dict"),
+            (None, "aliases must be a dict"), ([], "aliases must be a dict"),
+            ({_StrSub("ci"): "commit"}, "aliases must map str to str"), ({"ci": _StrSub("commit")}, "aliases must map str to str"),
+            ({"ci": None}, "aliases must map str to str"), ({1: "commit"}, "aliases must map str to str"))
+
+
+class _Call0:
+    def __call__(self):
+        return frozenset(), [], None
+
+
+def _unreadable_signature():   # inspect.signature raises TypeError on 3.9 and 3.13 (row F4d-3)
+    return frozenset(), [], None
+
+
+_unreadable_signature.__signature__ = 3
+
+
+def _wrapper_loop():   # inspect.signature raises ValueError ("wrapper loop") on 3.9 and 3.13 (row F4d-3)
+    return frozenset(), [], None
+
+
+_wrapper_loop.__wrapped__ = _wrapper_loop
+
+
+class ExactTypesRound4dTest(unittest.TestCase):
+    """Rows F4d-1 to F4d-5 of fix round 4 part d: ``shell_alias_texts`` and ``expansion_c_option`` take an exact
+    ``GitCall`` (R4d-1); ``GitCall.__post_init__`` checks every field; ``Policy.agent_key`` is a non-empty ``str`` (R4d-2,
+    the stricter row ET10) and each Policy field has the verdict of the function that reads it; ``state_access`` is a
+    Python function or method binding no arguments (ET25's accepted column, R4d-3 ruling); ``Policy`` and ``GitCall`` are
+    frozen (R4d-5, F4d-5b)."""
+
+    def raises(self, call, msg, label="", exc=TypeError):
+        with self.subTest(case=label):
+            with self.assertRaises(exc) as cm:
+                call()
+            self.assertEqual(str(cm.exception), msg)
+
+    def test_shell_alias_texts_exact_types(self):  # F4d-1a
+        al = {"ci": "!git commit"}
+        call = bp.git_call(shellscan.scan("git ci"), al)
+        self.assertIs(type(call), bp.GitCall)
+        self.assertEqual(bp.shell_alias_texts(call, al), ["git commit"])
+        sub = _GitCallSub(**{f.name: getattr(call, f.name) for f in dataclasses.fields(call)})
+        for bad in (sub, types.SimpleNamespace(expansions=["!x y"]), None, "git ci"):
+            self.raises(lambda: bp.shell_alias_texts(bad, al), _CALL_ERR, "call " + type(bad).__name__)
+        for bad, msg in _bad_aliases():
+            self.raises(lambda: bp.shell_alias_texts(call, bad), msg, "aliases " + repr(bad))
+
+    def test_expansion_c_option_exact_types(self):  # F4d-1b
+        call = bp.git_call(shellscan.scan("git st"), {"st": "-c a=b status"})
+        self.assertIs(bp.expansion_c_option(call), True)
+        self.assertIs(bp.expansion_c_option(bp.git_call(shellscan.scan("git status"), {})), False)
+        sub = _GitCallSub(**{f.name: getattr(call, f.name) for f in dataclasses.fields(call)})
+        for bad in (sub, types.SimpleNamespace(expansions=["-c a=b status"]), None, "-c a=b status"):
+            self.raises(lambda: bp.expansion_c_option(bad), _CALL_ERR, type(bad).__name__)
+
+    def test_git_call_fields_exact_types(self):  # F4d-1c
+        accepted = (_gc_fields(), _gc_fields(argv_C="", sub=""), _gc_fields(argv_C="d", sub=None, env_refused=True),
+                    _gc_fields(lines=["FAIL x"], args=["-m", _DIGITS], expansion_words=[_NEW_CP], expansions=["a"]))
+        for kw in accepted:
+            with self.subTest(kw=repr(kw)[:60]):
+                self.assertEqual(dataclasses.asdict(bp.GitCall(**kw)), kw)
+        self.assertEqual(bp.GitCall([], None, None, [], []).expansions, [])   # the two defaults
+        for field in ("lines", "args", "expansion_words", "expansions"):
+            for bad in (_ListSub(), (), None, "x", ["x", 1], [_StrSub("x")], [b"x"], [None]):
+                self.raises(lambda: bp.GitCall(**_gc_fields(**{field: bad})), "GitCall.%s must be a list of str" % field,
+                            field + " " + repr(bad))
+        for field in ("argv_C", "sub"):
+            for bad in (_StrSub("d"), b"d", 3, ["d"]):
+                self.raises(lambda: bp.GitCall(**_gc_fields(**{field: bad})), "GitCall.%s must be None or a str" % field,
+                            field + " " + repr(bad))
+        for bad in (0, 1, None, "yes", []):
+            self.raises(lambda: bp.GitCall(**_gc_fields(env_refused=bad)), "GitCall.env_refused must be a bool", repr(bad))
+
+    def test_git_call_construction_sites(self):  # F4d-1c: each GitCall(...) of git_call passes the exact types
+        al = {"ci": "commit -m " + _DIGITS}
+        for text, want in (("env -i", (None, None, False)), ("ls", (None, None, False)),
+                           ("env -x git commit", (None, None, True)), ("git -C d", ("d", None, False)),
+                           ("git -C d ci", ("d", "commit", False)), ("git '' commit", (None, "", False))):
+            with self.subTest(text=text):
+                call = bp.git_call(shellscan.scan(text), al)
+                self.assertIs(type(call), bp.GitCall)
+                self.assertEqual((call.argv_C, call.sub, call.env_refused), want)
+        call = bp.git_call(shellscan.scan("git -C d ci"), al)
+        self.assertEqual((call.args, call.expansion_words, call.expansions),
+                         (["-m", _DIGITS], ["-m", _DIGITS], ["commit -m " + _DIGITS]))
+
+    def test_policy_agent_key_non_empty(self):  # F4d-2 (ET24 narrowed to ET10's verdict on "")
+        self.raises(lambda: pol(agent_key=""), _AGENT_EMPTY, "empty")
+        self.assertEqual(pol(base="").base, "")   # base keeps ET24 (no stricter reader)
+
+    def test_policy_agent_key_reader_relation(self):  # F4d-2: Policy.agent_key against text_refusals.agent_id (ET10)
+        for bad in ("", _StrSub("a1"), b"a1", 3, True):
+            with self.subTest(agent=repr(bad)):
+                with self.assertRaises(TypeError) as reader:
+                    bp.text_refusals("ls", bad)
+                self.assertEqual(str(reader.exception), "agent_id must be None or a non-empty str")
+                with self.assertRaises(TypeError):
+                    pol(agent_key=bad)
+        for key in ("session", "a1", _DIGITS, _NEW_CP):   # accepted at construction: the reader runs, no exception
+            with self.subTest(agent=key[:8]):
+                p = pol(agent_key=key, aliases={"ci": "commit --no-verify"})
+                self.assertEqual(bp.commit_refusals("git ci", p, lambda r: None, True), [_ALIAS_NOVERIFY])
+
+    def test_policy_aliases_reader_relation(self):  # F4d-2: Policy.aliases against effective_words and git_call (ET12)
+        for bad, msg in _bad_aliases():
+            for label, call in (("Policy", lambda: pol(aliases=bad)),
+                                ("effective_words", lambda: bp.effective_words("git ci", bad)),
+                                ("git_call", lambda: bp.git_call(shellscan.scan("git ci"), bad))):
+                self.raises(call, msg, label + " " + repr(bad))
+
+    def test_policy_root_reader_relation(self):  # F4d-2: Policy.root refused at construction (gitinfo's reader: UF-A/ET36)
+        for bad in (_StrSub("/r"), b"/r", None, 3, ""):
+            self.raises(lambda: pol(root=bad), "Policy.root must be a str", "Policy " + repr(bad))
+
+    def test_policy_cwd_reader_relation(self):  # F4d-2: Policy.cwd has no stricter reader: target_root reads it
+        for cwd, shown in (("/nonexistent-" + _DIGITS[:200], "/nonexistent-" + _DIGITS[:200]),
+                           ("/nonexistent-" + _NEW_CP, "/nonexistent-\\ua7c0")):   # safe_text's table escapes U+A7C0
+            with self.subTest(cwd=cwd[:16]):
+                self.assertEqual(bp.target_root(shellscan.scan("git commit"), None, pol(cwd=cwd)),
+                                 (None, ["FAIL hook.bash.target: %s has no git top level; %s" % (shown, WAY)]))
+
+    def test_policy_state_access_arity(self):  # F4d-3 (ET25: "a callable of no arguments"; R4d-3 ruling: a Python
+        #                                           function or method, so the verdict is the same on 3.9 and 3.13)
+        def nested():
+            return frozenset(), [], None
+        for label, ok in (("lambda", lambda: (frozenset(), [], None)), ("default", lambda x=1: (frozenset(), [], x)),
+                          ("varargs", lambda *a: (frozenset(), [], None)), ("nested function", nested),
+                          ("bound method", _Call0().__call__), ("pre_bash._state_access", pre_bash._state_access(None))):
+            with self.subTest(ok=label):
+                self.assertIs(pol(state_access=ok).state_access, ok)
+        for label, bad in (("one argument", lambda x: x), ("keyword-only", lambda *, k: k),
+                           ("bound method of one argument", Recorder().__call__), ("callable object", _Call0()),
+                           ("callable object of one argument", Recorder()), ("class", _Call0),
+                           ("partial", functools.partial(nested)), ("builtin dict", dict), ("builtin str", str),
+                           ("builtin print", print), ("builtin frozenset", frozenset), ("builtin method", [].copy),
+                           ("method of a builtin print", types.MethodType(print, 1)),
+                           ("method of a builtin len", types.MethodType(len, 1)),
+                           ("unreadable signature (TypeError)", _unreadable_signature),
+                           ("unreadable signature (ValueError)", _wrapper_loop)):
+            self.raises(lambda: pol(state_access=bad), _STATE_ARITY, label)
+        for bad in (None, "access"):   # ET25's refused cases keep their error
+            self.raises(lambda: pol(state_access=bad), "Policy.state_access must be callable", repr(bad))
+
+    def test_git_call_frozen(self):  # F4d-5b: every GitCall field, after construction
+        call = bp.git_call(shellscan.scan("git -C d ci -m m"), {"ci": "commit"})
+        names = [f.name for f in dataclasses.fields(bp.GitCall)]
+        self.assertEqual(names, ["lines", "argv_C", "sub", "args", "expansion_words", "expansions", "env_refused"])
+        for name in names:
+            before = getattr(call, name)
+            for value in (before, None, 3):
+                with self.subTest(field=name, value=repr(value)[:20]):
+                    with self.assertRaises(dataclasses.FrozenInstanceError):
+                        setattr(call, name, value)
+                    self.assertIs(getattr(call, name), before)
+            with self.subTest(field=name, op="del"):
+                with self.assertRaises(dataclasses.FrozenInstanceError):
+                    delattr(call, name)
+
+    def test_policy_frozen(self):  # F4d-5: every field, after construction
+        p = pol()
+        names = [f.name for f in dataclasses.fields(bp.Policy)]
+        self.assertEqual(names, ["root", "cfg", "cfg_error", "env", "aliases", "branch", "base", "agent_key", "cwd",
+                                 "state_access"])
+        for name in names:
+            before = getattr(p, name)
+            for value in (before, None, 3):
+                with self.subTest(field=name, value=repr(value)[:20]):
+                    with self.assertRaises(dataclasses.FrozenInstanceError):
+                        setattr(p, name, value)
+                    self.assertIs(getattr(p, name), before)
+            with self.subTest(field=name, op="del"):
+                with self.assertRaises(dataclasses.FrozenInstanceError):
+                    delattr(p, name)
+
+
+class V1Round4dTest(Repo):
+    """Row F4d-4 (V1, R4d-4): a 4301-digit string and U+A7C0 (``Cn`` on 3.9, ``Lu`` on 3.13) through the githooks result
+    functions, ``git_call`` and ``effective_words``; each verdict is written by hand, so both interpreters (the runner)
+    give the same one; the ``str`` subclass of each accepted value is refused."""
+
+    def test_v1_status_result_and_status(self):
+        d = self.repo(name="r" + _NEW_CP)
+        for fn in (githooks.status_result, githooks.status):
+            with self.subTest(fn=fn.__name__):
+                self.assertEqual(fn(d, FRAMEWORK).render(False),
+                                 "FAIL githooks.pre-commit: missing\nFAIL githooks.pre-push: missing\n")
+                self.raises_gate(lambda: fn("/" + _DIGITS, FRAMEWORK), "git rev-parse --show-toplevel failed (exit 128)")
+                for bad in (_StrSub(d), _StrSub("/" + _DIGITS)):
+                    self.raises_gate(lambda: fn(bad, FRAMEWORK), _ROOT_ERR)
+
+    def raises_gate(self, call, msg):
+        with self.subTest(msg=msg):
+            with self.assertRaises(GateError) as cm:
+                call()
+            self.assertEqual(str(cm.exception), msg)
+
+    def test_v1_pre_commit_result(self):
+        d = self.repo(name="r" + _NEW_CP, profile="standard")
+        self.assertTrue(githooks.pre_commit_result(d).ok(), githooks.pre_commit_result(d).render(False))
+        self.raises_gate(lambda: githooks.pre_commit_result("/" + _DIGITS), "git rev-parse --show-toplevel failed (exit 128)")
+        for bad in (_StrSub(d), _StrSub("/" + _DIGITS)):
+            self.raises_gate(lambda: githooks.pre_commit_result(bad), _ROOT_ERR)
+
+    def test_v1_pre_push_result(self):
+        d = self.repo(name="r" + _NEW_CP)
+        head = git(d, "rev-parse", "HEAD")
+        self.assertTrue(githooks.pre_push_result(d, []).ok())
+        self.raises_gate(lambda: githooks.pre_push_result("/" + _DIGITS, []),
+                         "git rev-parse --show-toplevel failed (exit 128)")
+        self.raises_gate(lambda: githooks.pre_push_result(_StrSub(d), []), _ROOT_ERR)
+        ref = "refs/heads/f" + _DIGITS[:200]
+        self.assertTrue(githooks.pre_push_result(d, [(ref, head, ref)]).ok())
+        self.assertEqual(githooks.pre_push_result(d, [("refs/heads/f" + _NEW_CP, head, "refs/heads/main")]).render(False),
+                         "FAIL githook.base: main is protected; open a pull request\n")
+        self.assertEqual(githooks.pre_push_result(d, [("refs/heads/feat", _DIGITS, "refs/heads/feat")]).render(False),
+                         "FAIL githook.push-sha: refs/heads/feat: pushes %s, not HEAD %s; check out the branch to push it\n"
+                         % (_DIGITS, head))
+        for bad in ([("refs/heads/feat", _StrSub(_DIGITS), "refs/heads/feat")],
+                    [(_StrSub("refs/heads/f" + _NEW_CP), head, "refs/heads/main")]):
+            self.raises_gate(lambda: githooks.pre_push_result(d, bad), _UPDATES_ERR)
+
+    def test_v1_git_call(self):
+        al = {"ci": "commit -m " + _DIGITS, _NEW_CP: "push"}
+        call = bp.git_call(shellscan.scan("git ci"), al)
+        self.assertEqual((call.sub, call.args, call.expansions), ("commit", ["-m", _DIGITS], ["commit -m " + _DIGITS]))
+        self.assertEqual(bp.git_call(shellscan.scan("git " + _DIGITS), {}).sub, _DIGITS)
+        self.assertIsNone(bp.git_call(shellscan.scan("git " + _NEW_CP), al))   # not plain (character): no argv
+        for bad in (_scan_sub("git " + _DIGITS), _scan_sub("git " + _NEW_CP)):
+            with self.subTest(scan="subclass"):
+                with self.assertRaises(TypeError) as cm:
+                    bp.git_call(bad, al)
+                self.assertEqual(str(cm.exception), "scan must be a shellscan.Scan")
+        for bad, msg in ((_DictSub(al), "aliases must be a dict"), ({"ci": _StrSub(_DIGITS)}, "aliases must map str to str"),
+                         ({_StrSub(_NEW_CP): "push"}, "aliases must map str to str")):
+            with self.subTest(aliases=type(bad).__name__):
+                with self.assertRaises(TypeError) as cm:
+                    bp.git_call(shellscan.scan("git ci"), bad)
+                self.assertEqual(str(cm.exception), msg)
+
+    def test_v1_effective_words(self):
+        self.assertEqual(bp.effective_words("git commit " + _DIGITS, {}), {"commit"})
+        self.assertEqual(bp.effective_words("git " + _NEW_CP + " ci", {"ci": "push"}), {"push"})
+        self.assertEqual(bp.effective_words("git ci", {"ci": "merge " + _DIGITS}), {"merge"})
+        self.assertEqual(bp.effective_words("git " + _NEW_CP, {_NEW_CP: "push"}), set())   # not an ASCII token
+        for bad, msg in ((_StrSub("git commit " + _DIGITS), "text must be str, not _StrSub"),
+                         (_StrSub("git " + _NEW_CP), "text must be str, not _StrSub")):
+            with self.subTest(text="subclass"):
+                with self.assertRaises(TypeError) as cm:
+                    bp.effective_words(bad, {})
+                self.assertEqual(str(cm.exception), msg)
+        for bad, msg in ((_DictSub({"ci": "merge " + _DIGITS}), "aliases must be a dict"),
+                         ({"ci": _StrSub("merge " + _DIGITS)}, "aliases must map str to str"),
+                         ({_StrSub(_NEW_CP): "push"}, "aliases must map str to str")):
+            with self.subTest(aliases=type(bad).__name__):
+                with self.assertRaises(TypeError) as cm:
+                    bp.effective_words("git ci", bad)
+                self.assertEqual(str(cm.exception), msg)
 
 
 if __name__ == "__main__":

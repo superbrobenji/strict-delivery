@@ -11,6 +11,7 @@ first and builds that policy from the root it returns, decision CD2); ``git_call
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import os
 import types
 from typing import Callable, Mapping, Optional
@@ -52,7 +53,22 @@ _NOT_UTF8 = "git diff --name-only gave output that is not valid UTF-8"  # gitinf
 UNSTAGED_REASON = "tracked file has unstaged changes; stage it or stash it, so the gates read the tree being committed"
 
 
-@dataclasses.dataclass
+def _function_of_no_arguments(fn) -> bool:
+    """Row F4d-3 (ET25's accepted column "a callable of no arguments", R4d-3 ruling): a Python function
+    (``types.FunctionType``) or a method of one (``types.MethodType`` whose ``__func__`` is a ``types.FunctionType``), each
+    exact, whose signature binds no arguments. A builtin, a class, a ``functools.partial`` and a callable object are
+    refused, so the verdict is the same on 3.9 and 3.13 (``inspect.signature(print)`` is unreadable on 3.9 only)."""
+    target = fn.__func__ if type(fn) is types.MethodType else fn
+    if type(target) is not types.FunctionType:
+        return False
+    try:
+        inspect.signature(fn).bind()
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+@dataclasses.dataclass(frozen=True)
 class Policy:
     root: str
     cfg: Optional[dict]
@@ -67,7 +83,8 @@ class Policy:
 
     def __post_init__(self) -> None:
         """Rows ET20-ET25 (Q-RS4-1 (A), CDP6): every field's exact type; ``env`` is the one named exception (T:101 PO7:
-        a ``dict``, a ``dict`` subclass or a read-only ``types.MappingProxyType``)."""
+        a ``dict``, a ``dict`` subclass or a read-only ``types.MappingProxyType``). Rows F4d-2, F4d-3 and F4d-5: a
+        non-empty ``agent_key`` (ET10's verdict), a ``state_access`` of no arguments, and no assignment after this."""
         for name in ("root", "cwd"):
             value = getattr(self, name)
             if type(value) is not str or not os.path.isabs(value):
@@ -84,8 +101,12 @@ class Policy:
         for name in ("base", "agent_key"):
             if type(getattr(self, name)) is not str:
                 raise TypeError("Policy.%s must be a str" % name)
+        if self.agent_key == "":   # row F4d-2 (R4d-2)
+            raise TypeError("Policy.agent_key must be a non-empty str")
         if not callable(self.state_access):
             raise TypeError("Policy.state_access must be callable")
+        if not _function_of_no_arguments(self.state_access):   # row F4d-3 (R4d-3)
+            raise TypeError("Policy.state_access must be a function or method of no arguments")
 
 
 def _fold(text: str) -> str:
@@ -302,7 +323,7 @@ def _segment_writes(words: list) -> bool:
     return False
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class GitCall:
     """What the words of one plain command say about git: ``lines`` of steps 2-4 (not-git, index, target, global
     options), the ``-C`` directory, the alias-resolved subcommand and its words."""
@@ -314,6 +335,20 @@ class GitCall:
     expansions: list = dataclasses.field(default_factory=list)  # the alias values followed, in order (R1-3)
     env_refused: bool = False  # the ``env`` wrapper was refused: an option, an operand off the allow-list, or a name that is
     #                            not ASCII (U1, F-20261126-ej5r); its not-git line stands for a git write too
+
+    def __post_init__(self) -> None:
+        """Row F4d-1c (R4d-1): every field's exact type, as each construction in ``git_call`` passes it; row F4d-5b: no
+        assignment after this."""
+        for name in ("lines", "args", "expansion_words", "expansions"):
+            value = getattr(self, name)
+            if type(value) is not list or any(type(word) is not str for word in value):   # row F4d-1c
+                raise TypeError("GitCall.%s must be a list of str" % name)
+        for name in ("argv_C", "sub"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not str:   # row F4d-1c
+                raise TypeError("GitCall.%s must be None or a str" % name)
+        if type(self.env_refused) is not bool:   # row F4d-1c
+            raise TypeError("GitCall.env_refused must be a bool")
 
 
 def _env_unwrap(argv: tuple, lines: list) -> tuple:
@@ -520,6 +555,9 @@ def shell_alias_texts(call: GitCall, aliases: dict) -> list:
     """The shell texts a plain call reaches through ``!`` aliases (decision U-1, F-20261126-g6mw): the body of each ``!``
     value ``call`` followed (without the ``!``) and the texts that body reaches (``_reached_texts``; chains followed through
     both views, cycles end). The caller judges each as a text it cannot parse as one plain command."""
+    if type(call) is not GitCall:   # row F4d-1a (R4d-1)
+        raise TypeError("call must be a GitCall")
+    _check_aliases(aliases)   # row F4d-1a (as ET12)
     out: list = []
     for value in call.expansions:
         if value.startswith("!"):
@@ -545,6 +583,8 @@ def expansion_c_option(call: GitCall) -> bool:
     """Whether a plain (not ``!``) alias value that ``call`` followed holds ``-c`` among its leading options (``alias.x = -c
     a=b status``): the global options of the command after alias resolution (ruling N1). ``-C`` and the options of
     ``_VALUE_OPTIONS`` take a value, which is skipped as ``_resolve`` skips it."""
+    if type(call) is not GitCall:   # row F4d-1b (R4d-1)
+        raise TypeError("call must be a GitCall")
     for value in call.expansions:
         if value.startswith("!"):
             continue
