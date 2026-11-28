@@ -2400,7 +2400,7 @@ class DocstringTest(unittest.TestCase):  # F-20261126-pwu6: the docs of the path
             texts += [ast.get_docstring(n) or "" for n in ast.walk(tree)
                       if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))]
             for text in texts:
-                for sentence in re.split(r"(?<=[.;:])\s+", " ".join(text.split())):
+                for sentence in re.split(r"(?<=[.;])\s+"," ".join(text.split())):
                     if re.search("baselin", sentence, re.I):  # every sentence of a docstring or comment that names the baseline
                         self.assertIsNone(stale.search(sentence), (rel, sentence))
 
